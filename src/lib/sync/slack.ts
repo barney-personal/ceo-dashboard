@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
 import { okrUpdates, syncLog } from "@/lib/db/schema";
 import { getChannelHistory, getChannelName, getUserName } from "@/lib/integrations/slack";
-import { llmParseOkrUpdate } from "@/lib/integrations/llm-okr-parser";
+import { llmParseOkrUpdate, buildSquadContext, buildSystemPromptFromContext } from "@/lib/integrations/llm-okr-parser";
+import { seedSquads } from "@/lib/data/seed-squads";
 import { eq, and, desc } from "drizzle-orm";
 
 /** Map channel name to pillar for grouping */
@@ -41,7 +42,8 @@ function isLikelyUpdate(text: string, subtype?: string): boolean {
  */
 async function syncChannel(
   channelId: string,
-  lastSyncTs?: string
+  lastSyncTs: string | undefined,
+  systemPrompt: string
 ): Promise<number> {
   const channelName = await getChannelName(channelId);
   const pillar = derivePillar(channelName);
@@ -65,7 +67,8 @@ async function syncChannel(
     // LLM parse with author context
     const parsed = await llmParseOkrUpdate(
       msg.text,
-      `${channelContext}\nAuthor: ${authorName}`
+      `${channelContext}\nAuthor: ${authorName}`,
+      systemPrompt
     );
     if (!parsed || parsed.krs.length === 0) continue;
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
@@ -142,6 +145,11 @@ export async function syncAllSlackOkrs(): Promise<{
     .returning();
 
   try {
+    // Seed squads and build LLM context once
+    await seedSquads();
+    const squadContext = await buildSquadContext();
+    const systemPrompt = buildSystemPromptFromContext(squadContext);
+
     const lastSync = await db
       .select({ completedAt: syncLog.completedAt })
       .from(syncLog)
@@ -160,7 +168,7 @@ export async function syncAllSlackOkrs(): Promise<{
 
     for (const channelId of channelIds) {
       try {
-        const count = await syncChannel(channelId, lastSyncTs);
+        const count = await syncChannel(channelId, lastSyncTs, systemPrompt);
         totalRecords += count;
       } catch (err) {
         const message = `Failed to sync channel ${channelId}: ${err instanceof Error ? err.message : String(err)}`;
