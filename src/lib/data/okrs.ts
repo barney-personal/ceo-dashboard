@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { okrUpdates } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 
 export interface OkrSummary {
   pillar: string;
