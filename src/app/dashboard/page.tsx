@@ -4,133 +4,115 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users } from "lucide-react";
 import Link from "next/link";
+
+function SectionLink({
+  href,
+  icon: Icon,
+  title,
+  description,
+}: {
+  href: string;
+  icon: React.ElementType;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex items-center gap-3 rounded-lg border border-border/60 bg-card p-4 shadow-warm transition-all duration-200 hover:shadow-warm-lg"
+    >
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/5 text-primary transition-colors group-hover:bg-primary/10">
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-foreground">{title}</span>
+          <ArrowUpRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-all group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+        </div>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+    </Link>
+  );
+}
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-10">
       <PageHeader
         title="Overview"
         description="Key metrics across the business"
       />
 
-      {/* Top-level metrics */}
+      {/* Hero metrics — one from each section, role-gated */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <PermissionGate role={role} requiredRole="ceo">
-          <MetricCard
-            label="LTV:CAC"
-            value="—"
-            subtitle="awaiting data"
-            delay={0}
-          />
+        <PermissionGate role={role} requiredRole="leadership">
+          <MetricCard label="LTV:CAC" value="—" subtitle="awaiting data" delay={0} />
         </PermissionGate>
         <PermissionGate role={role} requiredRole="ceo">
-          <MetricCard
-            label="Revenue"
-            value="—"
-            subtitle="awaiting data"
-            delay={50}
-          />
+          <MetricCard label="Revenue" value="—" subtitle="awaiting data" delay={50} />
         </PermissionGate>
         <PermissionGate role={role} requiredRole="leadership">
-          <MetricCard
-            label="DAU"
-            value="—"
-            subtitle="awaiting data"
-            delay={100}
-          />
+          <MetricCard label="DAU" value="—" subtitle="awaiting data" delay={100} />
         </PermissionGate>
-        <MetricCard
-          label="OKR Progress"
-          value="—"
-          subtitle="awaiting data"
-          delay={150}
-        />
+        <MetricCard label="OKR Progress" value="—" subtitle="awaiting data" delay={150} />
       </div>
 
-      {/* Section cards */}
+      {/* Sections grid */}
+      <div className="space-y-3">
+        <h3 className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
+          Sections
+        </h3>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <PermissionGate role={role} requiredRole="leadership">
+            <SectionLink
+              href="/dashboard/unit-economics"
+              icon={Calculator}
+              title="Unit Economics"
+              description="LTV, CAC, ARPU, retention"
+            />
+          </PermissionGate>
+          <PermissionGate role={role} requiredRole="ceo">
+            <SectionLink
+              href="/dashboard/financial"
+              icon={PoundSterling}
+              title="Financial"
+              description="Management accounts, FP&A"
+            />
+          </PermissionGate>
+          <PermissionGate role={role} requiredRole="leadership">
+            <SectionLink
+              href="/dashboard/product"
+              icon={BarChart3}
+              title="Product"
+              description="Usage, activation, retention"
+            />
+          </PermissionGate>
+          <SectionLink
+            href="/dashboard/okrs"
+            icon={Target}
+            title="OKRs"
+            description="Company, pillar, and squad objectives"
+          />
+          <PermissionGate role={role} requiredRole="leadership">
+            <SectionLink
+              href="/dashboard/people"
+              icon={Users}
+              title="People"
+              description="Performance, engagement"
+            />
+          </PermissionGate>
+        </div>
+      </div>
+
+      {/* OKR snapshot + Activity — visible to all */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <PermissionGate role={role} requiredRole="ceo">
-          <SectionCard
-            title="Unit Economics"
-            description="LTV, CAC, and acquisition efficiency"
-            action={
-              <Link
-                href="/dashboard/unit-economics"
-                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                View all
-                <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            }
-          >
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                <span className="text-lg text-muted-foreground">📊</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Connect Mode Analytics to populate unit economics.
-              </p>
-            </div>
-          </SectionCard>
-        </PermissionGate>
-
-        <PermissionGate role={role} requiredRole="ceo">
-          <SectionCard
-            title="Financial"
-            description="Management accounts and FP&A"
-            action={
-              <Link
-                href="/dashboard/financial"
-                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                View all
-                <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            }
-          >
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                <span className="text-lg text-muted-foreground">£</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Upload financials or connect Mode to populate this view.
-              </p>
-            </div>
-          </SectionCard>
-        </PermissionGate>
-
-        <PermissionGate role={role} requiredRole="leadership">
-          <SectionCard
-            title="Product"
-            description="Usage, activation, and retention"
-            action={
-              <Link
-                href="/dashboard/product"
-                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                View all
-                <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            }
-          >
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                <span className="text-lg text-muted-foreground">📈</span>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Connect Mode Analytics to view product metrics.
-              </p>
-            </div>
-          </SectionCard>
-        </PermissionGate>
-
         <SectionCard
-          title="OKRs"
-          description="Company objectives and key results"
+          title="OKR Snapshot"
+          description="Active company objectives"
           action={
             <Link
               href="/dashboard/okrs"
@@ -141,7 +123,7 @@ export default async function DashboardOverview() {
             </Link>
           }
         >
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {[
               { name: "Ship CEO Dashboard v1", status: "on_track" as const },
               { name: "Q2 revenue target", status: "at_risk" as const },
@@ -158,30 +140,22 @@ export default async function DashboardOverview() {
           </div>
         </SectionCard>
 
-        <PermissionGate role={role} requiredRole="leadership">
-          <SectionCard
-            title="People"
-            description="Team metrics and engagement"
-            action={
-              <Link
-                href="/dashboard/people"
-                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-              >
-                View all
-                <ArrowUpRight className="h-3 w-3" />
-              </Link>
-            }
-          >
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                <span className="text-lg text-muted-foreground">👥</span>
+        <SectionCard title="Recent Activity" description="Latest updates">
+          <div className="space-y-3">
+            {[
+              { text: "Dashboard created", time: "Just now", dot: "bg-primary" },
+              { text: "Awaiting data source connections", time: "Set up pending", dot: "bg-warning" },
+            ].map((activity) => (
+              <div key={activity.text} className="flex items-start gap-3">
+                <div className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${activity.dot}`} />
+                <div className="flex-1">
+                  <p className="text-sm text-foreground">{activity.text}</p>
+                  <p className="text-xs text-muted-foreground">{activity.time}</p>
+                </div>
               </div>
-              <p className="text-sm text-muted-foreground">
-                Connect HiBob and Culture Amp to view people metrics.
-              </p>
-            </div>
-          </SectionCard>
-        </PermissionGate>
+            ))}
+          </div>
+        </SectionCard>
       </div>
     </div>
   );
