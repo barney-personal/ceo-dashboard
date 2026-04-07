@@ -1,16 +1,12 @@
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { getUserRole, hasAccess } from "@/lib/auth/roles";
+import { getCurrentUserRole, hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { Upload } from "lucide-react";
 
 export default async function FinancialsPage() {
-  const { sessionClaims } = await auth();
-  const role = getUserRole(
-    (sessionClaims?.publicMetadata as Record<string, unknown>) ?? {}
-  );
+  const role = await getCurrentUserRole();
 
   if (!hasAccess(role, "ceo")) {
     redirect("/dashboard");
