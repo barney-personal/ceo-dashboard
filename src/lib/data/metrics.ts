@@ -24,18 +24,6 @@ export function formatCompact(value: number): string {
 }
 
 /**
- * Get the latest row from a query (typically the most recent period).
- */
-function latestRow(
-  data: Awaited<ReturnType<typeof getReportData>>,
-  queryName: string
-): Record<string, unknown> | null {
-  const match = data.find((d) => d.queryName === queryName);
-  if (!match || match.rows.length === 0) return null;
-  return match.rows[match.rows.length - 1];
-}
-
-/**
  * Get the first row from a query (for single-value queries).
  */
 function firstRow(
@@ -54,7 +42,6 @@ export async function getUnitEconomicsMetrics() {
 
   const ltv = firstRow(kpis, "36M LTV");
   const arpu = firstRow(kpis, "ARPU Annualized");
-  const margins = firstRow(kpis, "Margins");
   const cpa = firstRow(kpis, "CPA");
   const cvr = firstRow(kpis, "M11 Plus CVR, past 7 days");
   const subscribers = firstRow(kpis, "Subscribers at end of period: Growth accounting");
