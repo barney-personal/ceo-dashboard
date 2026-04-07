@@ -11,7 +11,7 @@ import { getChartEmbeds } from "@/lib/integrations/mode-config";
 import {
   getActiveEmployees,
   getPeopleMetrics,
-  groupByFunctionAndSquad,
+  groupByPillarAndSquad,
   getTenureDistribution,
 } from "@/lib/data/people";
 
@@ -33,13 +33,15 @@ export default async function PeoplePage() {
 
   const metrics = getPeopleMetrics(employees, allRows);
   const tenureData = getTenureDistribution(employees);
-  const byFunction = groupByFunctionAndSquad(employees);
+  const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
 
   // Serialize for client component (strip email/manager — not needed in directory UI)
-  const serializedFunctions = byFunction.map((fn) => ({
-    name: fn.name,
-    squads: fn.squads.map((sq) => ({
+  const serializedPillars = byPillar.map((pillar) => ({
+    name: pillar.name,
+    count: pillar.count,
+    isProduct: pillar.isProduct,
+    squads: pillar.squads.map((sq) => ({
       name: sq.name,
       people: sq.people.map((p) => ({
         name: p.name,
@@ -129,7 +131,7 @@ export default async function PeoplePage() {
 
       {/* Team directory */}
       {employees.length > 0 && (
-        <PeopleDirectory functions={serializedFunctions} />
+        <PeopleDirectory pillars={serializedPillars} />
       )}
 
       {/* Mode report links */}
