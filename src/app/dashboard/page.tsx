@@ -21,7 +21,7 @@ export default async function DashboardOverview() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <PermissionGate role={role} requiredRole="ceo">
           <MetricCard
-            label="Revenue"
+            label="LTV:CAC"
             value="—"
             subtitle="awaiting data"
             delay={0}
@@ -29,7 +29,7 @@ export default async function DashboardOverview() {
         </PermissionGate>
         <PermissionGate role={role} requiredRole="ceo">
           <MetricCard
-            label="Burn Rate"
+            label="Revenue"
             value="—"
             subtitle="awaiting data"
             delay={50}
@@ -37,7 +37,7 @@ export default async function DashboardOverview() {
         </PermissionGate>
         <PermissionGate role={role} requiredRole="leadership">
           <MetricCard
-            label="Headcount"
+            label="DAU"
             value="—"
             subtitle="awaiting data"
             delay={100}
@@ -55,11 +55,36 @@ export default async function DashboardOverview() {
       <div className="grid gap-4 lg:grid-cols-2">
         <PermissionGate role={role} requiredRole="ceo">
           <SectionCard
-            title="Financials"
-            description="Revenue, P&L, and management accounts"
+            title="Unit Economics"
+            description="LTV, CAC, and acquisition efficiency"
             action={
               <Link
-                href="/dashboard/financials"
+                href="/dashboard/unit-economics"
+                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                View all
+                <ArrowUpRight className="h-3 w-3" />
+              </Link>
+            }
+          >
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                <span className="text-lg text-muted-foreground">📊</span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Connect Mode Analytics to populate unit economics.
+              </p>
+            </div>
+          </SectionCard>
+        </PermissionGate>
+
+        <PermissionGate role={role} requiredRole="ceo">
+          <SectionCard
+            title="Financial"
+            description="Management accounts and FP&A"
+            action={
+              <Link
+                href="/dashboard/financial"
                 className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 View all
@@ -72,8 +97,7 @@ export default async function DashboardOverview() {
                 <span className="text-lg text-muted-foreground">£</span>
               </div>
               <p className="text-sm text-muted-foreground">
-                Connect Mode Analytics or upload financials to populate this
-                view.
+                Upload financials or connect Mode to populate this view.
               </p>
             </div>
           </SectionCard>
@@ -81,11 +105,11 @@ export default async function DashboardOverview() {
 
         <PermissionGate role={role} requiredRole="leadership">
           <SectionCard
-            title="People"
-            description="Team metrics and engagement"
+            title="Product"
+            description="Usage, activation, and retention"
             action={
               <Link
-                href="/dashboard/people"
+                href="/dashboard/product"
                 className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 View all
@@ -95,10 +119,10 @@ export default async function DashboardOverview() {
           >
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                <span className="text-lg text-muted-foreground">👥</span>
+                <span className="text-lg text-muted-foreground">📈</span>
               </div>
               <p className="text-sm text-muted-foreground">
-                Connect HiBob to see headcount, attrition, and team metrics.
+                Connect Mode Analytics to view product metrics.
               </p>
             </div>
           </SectionCard>
@@ -134,34 +158,30 @@ export default async function DashboardOverview() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Recent Activity" description="Latest updates">
-          <div className="space-y-3">
-            {[
-              {
-                text: "Dashboard created",
-                time: "Just now",
-                dot: "bg-primary",
-              },
-              {
-                text: "Awaiting data source connections",
-                time: "Set up pending",
-                dot: "bg-warning",
-              },
-            ].map((activity) => (
-              <div key={activity.text} className="flex items-start gap-3">
-                <div
-                  className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${activity.dot}`}
-                />
-                <div className="flex-1">
-                  <p className="text-sm text-foreground">{activity.text}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {activity.time}
-                  </p>
-                </div>
+        <PermissionGate role={role} requiredRole="leadership">
+          <SectionCard
+            title="People"
+            description="Team metrics and engagement"
+            action={
+              <Link
+                href="/dashboard/people"
+                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                View all
+                <ArrowUpRight className="h-3 w-3" />
+              </Link>
+            }
+          >
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                <span className="text-lg text-muted-foreground">👥</span>
               </div>
-            ))}
-          </div>
-        </SectionCard>
+              <p className="text-sm text-muted-foreground">
+                Connect HiBob and Culture Amp to view people metrics.
+              </p>
+            </div>
+          </SectionCard>
+        </PermissionGate>
       </div>
     </div>
   );
