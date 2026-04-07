@@ -1,5 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
-import { getUserRole } from "@/lib/auth/roles";
+import { getCurrentUserRole } from "@/lib/auth/roles";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -9,10 +8,7 @@ import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 
 export default async function DashboardOverview() {
-  const { sessionClaims } = await auth();
-  const role = getUserRole(
-    (sessionClaims?.publicMetadata as Record<string, unknown>) ?? {}
-  );
+  const role = await getCurrentUserRole();
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">

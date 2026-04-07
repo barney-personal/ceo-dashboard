@@ -1,6 +1,5 @@
-import { auth } from "@clerk/nextjs/server";
 import { UserButton } from "@clerk/nextjs";
-import { getUserRole } from "@/lib/auth/roles";
+import { getCurrentUserRole } from "@/lib/auth/roles";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Bell } from "lucide-react";
 
@@ -9,10 +8,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { sessionClaims } = await auth();
-  const role = getUserRole(
-    (sessionClaims?.publicMetadata as Record<string, unknown>) ?? {}
-  );
+  const role = await getCurrentUserRole();
 
   return (
     <div className="flex flex-1">
