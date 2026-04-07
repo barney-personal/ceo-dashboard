@@ -28,20 +28,20 @@ export async function getLatestOkrUpdates(): Promise<
     .from(okrUpdates)
     .orderBy(desc(okrUpdates.postedAt));
 
-  // Dedupe: for each squad, only keep KRs from their most recent update
-  // This avoids naming drift across weeks (same KR gets different names)
-  const latestUpdatePerSquad = new Map<string, Date>();
+  // Dedupe: for each squad, only keep KRs from their most recent Slack message.
+  // Uses slackTs as the identity of an update — all KRs in the same message share one ts.
+  const latestTsPerSquad = new Map<string, string>();
   const deduped: OkrSummary[] = [];
 
   for (const row of rows) {
     const squad = row.squadName;
-    const existing = latestUpdatePerSquad.get(squad);
+    const existing = latestTsPerSquad.get(squad);
 
     if (!existing) {
-      // First time seeing this squad — this is their latest update
-      latestUpdatePerSquad.set(squad, row.postedAt);
-    } else if (row.postedAt.getTime() < existing.getTime() - 24 * 60 * 60 * 1000) {
-      // This row is from an older update (>1 day gap) — skip
+      // First time seeing this squad (rows ordered desc) — this is the latest
+      latestTsPerSquad.set(squad, row.slackTs);
+    } else if (row.slackTs !== existing) {
+      // Different message — skip older updates
       continue;
     }
 
