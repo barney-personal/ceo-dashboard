@@ -1,10 +1,10 @@
 import { getReportData } from "./mode";
 
 /**
- * Format a number as currency (GBP).
+ * Format a number as currency (USD).
  */
 export function formatCurrency(value: number, decimals = 2): string {
-  return `£${value.toLocaleString("en-GB", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
 }
 
 /**
@@ -24,15 +24,22 @@ export function formatCompact(value: number): string {
 }
 
 /**
- * Get the first row from a query (for single-value queries).
+ * Get a row from a named query.
+ * Pass `match` to pick a specific row (e.g. a time period); otherwise returns the first row.
  */
-function firstRow(
+function getQueryRow(
   data: Awaited<ReturnType<typeof getReportData>>,
-  queryName: string
+  queryName: string,
+  match?: Record<string, unknown>
 ): Record<string, unknown> | null {
-  const match = data.find((d) => d.queryName === queryName);
-  if (!match || match.rows.length === 0) return null;
-  return match.rows[0];
+  const query = data.find((d) => d.queryName === queryName);
+  if (!query || query.rows.length === 0) return null;
+  if (!match) return query.rows[0];
+  return (
+    query.rows.find((row) =>
+      Object.entries(match).every(([k, v]) => row[k] === v)
+    ) ?? null
+  );
 }
 
 // --- Unit Economics Metrics ---
@@ -40,11 +47,11 @@ function firstRow(
 export async function getUnitEconomicsMetrics() {
   const kpis = await getReportData("unit-economics", "kpis");
 
-  const ltv = firstRow(kpis, "36M LTV");
-  const arpu = firstRow(kpis, "ARPU Annualized");
-  const cpa = firstRow(kpis, "CPA");
-  const cvr = firstRow(kpis, "M11 Plus CVR, past 7 days");
-  const subscribers = firstRow(kpis, "Subscribers at end of period: Growth accounting");
+  const ltv = getQueryRow(kpis, "36M LTV");
+  const arpu = getQueryRow(kpis, "ARPU Annualized");
+  const cpa = getQueryRow(kpis, "CPA", { time_period: "Previous 365 days" });
+  const cvr = getQueryRow(kpis, "M11 Plus CVR, past 7 days");
+  const subscribers = getQueryRow(kpis, "Subscribers at end of period: Growth accounting");
 
   const ltvValue = ltv?.user_pnl_36m as number | undefined;
   const arpuValue = arpu?.arpmau as number | undefined;

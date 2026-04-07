@@ -15,7 +15,7 @@ export interface LineChartSeries {
 type YFormatType = "currency" | "percent" | "number" | "months";
 
 const Y_FORMATTERS: Record<YFormatType, (v: number) => string> = {
-  currency: (v) => `£${v.toFixed(0)}`,
+  currency: (v) => `$${v.toFixed(0)}`,
   percent: (v) => `${v.toFixed(0)}%`,
   number: (v) => v.toLocaleString(),
   months: (v) => `${v.toFixed(0)}m`,
