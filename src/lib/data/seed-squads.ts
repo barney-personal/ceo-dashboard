@@ -53,32 +53,26 @@ export async function seedSquads(): Promise<number> {
   let count = 0;
 
   for (const seed of SQUAD_SEEDS) {
-    const existing = await db
-      .select()
-      .from(squads)
-      .where(eq(squads.name, seed.name))
-      .limit(1);
-
-    if (existing.length === 0) {
-      await db.insert(squads).values({
+    const result = await db
+      .insert(squads)
+      .values({
         name: seed.name,
         pillar: seed.pillar,
         channelId: seed.channelId,
         pmName: seed.pmName,
-      });
-      count++;
-    } else {
-      // Update pillar/PM if changed
-      await db
-        .update(squads)
-        .set({
+      })
+      .onConflictDoUpdate({
+        target: squads.name,
+        set: {
           pillar: seed.pillar,
           channelId: seed.channelId,
           pmName: seed.pmName,
           updatedAt: new Date(),
-        })
-        .where(eq(squads.name, seed.name));
-    }
+        },
+      })
+      .returning();
+
+    if (result.length > 0) count++;
   }
 
   return count;
