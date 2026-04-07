@@ -36,6 +36,30 @@ export const modeReportData = pgTable(
   (table) => [unique().on(table.reportId, table.queryToken)]
 );
 
+export const okrUpdates = pgTable(
+  "okr_updates",
+  {
+    id: serial("id").primaryKey(),
+    slackTs: text("slack_ts").notNull(),
+    channelId: text("channel_id").notNull(),
+    channelName: text("channel_name"),
+    userId: text("user_id"),
+    userName: text("user_name"),
+    squadName: text("squad_name").notNull(),
+    pillar: text("pillar"), // derived from channel name
+    objectiveName: text("objective_name").notNull(),
+    krName: text("kr_name").notNull(),
+    status: text("status").notNull(), // on_track, at_risk, behind, not_started, completed
+    actual: text("actual"),
+    target: text("target"),
+    tldr: text("tldr"),
+    rawText: text("raw_text"),
+    postedAt: timestamp("posted_at").notNull(),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [unique().on(table.slackTs, table.channelId, table.krName)]
+);
+
 export const syncLog = pgTable("sync_log", {
   id: serial("id").primaryKey(),
   source: text("source").notNull().default("mode"),
