@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { okrUpdates, syncLog } from "@/lib/db/schema";
 import { getChannelHistory, getChannelName, getUserName } from "@/lib/integrations/slack";
-import { parseOkrUpdate, isOkrUpdate } from "@/lib/integrations/slack-okr-parser";
+import { llmParseOkrUpdate } from "@/lib/integrations/llm-okr-parser";
 import { eq, and, desc } from "drizzle-orm";
 
 /** Map channel name to pillar for grouping */
@@ -12,14 +12,23 @@ function derivePillar(channelName: string): string {
   if (channelName.includes("new-bets")) return "New Bets";
   if (channelName.includes("chat")) return "Chat";
   if (channelName.includes("access") || channelName.includes("trust") || channelName.includes("risk"))
-    return "Access, Trust & Money";
+    return "Access, Trust & Money, Risk & Payments";
   if (channelName.includes("card")) return "Card";
   return "Other";
 }
 
+/** Quick filter to skip messages that are clearly not OKR updates. */
+function isLikelyUpdate(text: string, subtype?: string): boolean {
+  if (!text || subtype) return false; // Skip system messages (joins, etc.)
+  if (text.length < 200) return false; // Too short for an OKR update
+  if (/^Reminder:/i.test(text)) return false; // Bot reminders
+  if (/has joined the channel/.test(text)) return false;
+  if (/^Happy Monday/i.test(text)) return false; // Weekly reminder bot
+  return true;
+}
+
 /**
- * Sync OKR updates from a single Slack channel.
- * Fetches messages since the last sync, parses OKR updates, upserts to DB.
+ * Sync OKR updates from a single Slack channel using LLM parsing.
  */
 async function syncChannel(
   channelId: string,
@@ -27,6 +36,7 @@ async function syncChannel(
 ): Promise<number> {
   const channelName = await getChannelName(channelId);
   const pillar = derivePillar(channelName);
+  const channelContext = `#${channelName} (${pillar} pillar)`;
 
   // Fetch messages since last sync (or last 30 days)
   const oldest =
@@ -38,48 +48,58 @@ async function syncChannel(
   let count = 0;
 
   for (const msg of messages) {
-    if (!msg.text || msg.subtype || !isOkrUpdate(msg.text)) continue;
+    if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
-    const parsed = parseOkrUpdate(msg.text);
-    if (!parsed) continue;
+    // LLM parse
+    const parsed = await llmParseOkrUpdate(msg.text, channelContext);
+    if (!parsed || parsed.krs.length === 0) continue;
 
     const userName = msg.user ? await getUserName(msg.user) : null;
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
 
-    for (const objective of parsed.objectives) {
-      for (const kr of objective.keyResults) {
-        await db
-          .insert(okrUpdates)
-          .values({
-            slackTs: msg.ts,
-            channelId,
-            channelName,
-            userId: msg.user ?? null,
-            userName,
-            squadName: parsed.squadName,
-            pillar,
-            objectiveName: objective.name,
-            krName: kr.name,
-            status: kr.status,
-            actual: kr.actual ?? null,
-            target: kr.target ?? null,
+    for (const kr of parsed.krs) {
+      await db
+        .insert(okrUpdates)
+        .values({
+          slackTs: msg.ts,
+          channelId,
+          channelName,
+          userId: msg.user ?? null,
+          userName,
+          squadName: parsed.squadName,
+          pillar,
+          objectiveName: kr.objective,
+          krName: kr.name,
+          status: kr.rag === "green"
+            ? "on_track"
+            : kr.rag === "amber"
+              ? "at_risk"
+              : kr.rag === "red"
+                ? "behind"
+                : "not_started",
+          actual: kr.metric ?? null,
+          target: null,
+          tldr: parsed.tldr ?? null,
+          rawText: msg.text.slice(0, 10000),
+          postedAt,
+        })
+        .onConflictDoUpdate({
+          target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
+          set: {
+            status: kr.rag === "green"
+              ? "on_track"
+              : kr.rag === "amber"
+                ? "at_risk"
+                : kr.rag === "red"
+                  ? "behind"
+                  : "not_started",
+            actual: kr.metric ?? null,
             tldr: parsed.tldr ?? null,
-            rawText: parsed.rawText.slice(0, 10000),
-            postedAt,
-          })
-          .onConflictDoUpdate({
-            target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
-            set: {
-              status: kr.status,
-              actual: kr.actual ?? null,
-              target: kr.target ?? null,
-              tldr: parsed.tldr ?? null,
-              syncedAt: new Date(),
-            },
-          });
+            syncedAt: new Date(),
+          },
+        });
 
-        count++;
-      }
+      count++;
     }
   }
 
@@ -103,14 +123,12 @@ export async function syncAllSlackOkrs(): Promise<{
     return { status: "success", recordsSynced: 0, errors: [] };
   }
 
-  // Create sync log
   const [log] = await db
     .insert(syncLog)
     .values({ source: "slack" })
     .returning();
 
   try {
-    // Get last successful slack sync time
     const lastSync = await db
       .select({ completedAt: syncLog.completedAt })
       .from(syncLog)
