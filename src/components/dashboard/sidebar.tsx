@@ -11,6 +11,7 @@ import {
   BarChart3,
   Target,
   Users,
+  Settings,
 } from "lucide-react";
 
 interface NavItem {
@@ -79,6 +80,17 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people",
         requiredRole: "leadership",
         icon: Users,
+      },
+    ],
+  },
+  {
+    label: "Admin",
+    items: [
+      {
+        label: "Squads",
+        href: "/dashboard/admin/squads",
+        requiredRole: "ceo",
+        icon: Settings,
       },
     ],
   },
