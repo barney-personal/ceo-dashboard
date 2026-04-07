@@ -1,30 +1,91 @@
-# [Project Name]
+# CEO Dashboard
 
-[One-line project description.]
+Internal company dashboard aggregating data from Mode Analytics, Excel uploads, Slack, Notion, HiBob, and Culture Amp.
 
 ## Quick Start
 
 ```bash
-./scripts/setup.sh          # One-time: configure git hooks + optionally set up Doppler/.env
-# ... add project-specific setup steps here ...
+./scripts/setup.sh          # One-time: configure git hooks
+doppler setup               # One-time: connect to Doppler project
+make dev                    # Start dev server on port 3100
 ```
 
 ## Architecture
 
-[Describe your project structure here.]
+- **Stack:** Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui
+- **Auth:** Clerk (Google SSO) with 3-tier roles: `ceo` > `leadership` > `everyone`
+- **Database:** PostgreSQL + Drizzle ORM (planned)
+- **Secrets:** Doppler (never use .env files directly)
+- **Hosting:** Render (web service + Postgres + cron)
+- **Design:** "Paper Folio" — warm editorial light theme, Instrument Serif + DM Sans
+- **Testing:** Vitest + React Testing Library
+
+### Dashboard Sections
+
+```
+Dashboard
+├── Overview                    ← role-aware summary of all sections
+├── Unit Economics              ← Leadership+ (Mode API)
+│   ├── LTV (ARPU, retention, lifetime)
+│   └── CAC (spend by channel, conversion, payback)
+├── Financial                   ← CEO only (Excel uploads + Mode)
+│   ├── Management Accounts
+│   └── FP&A
+├── Product                     ← Leadership+ (Mode dashboards)
+│   └── DAU, activation, retention, feature adoption
+├── OKRs                        ← Everyone (Notion + Slack + Mode)
+│   ├── Company level
+│   ├── Pillar level
+│   └── Squad level
+│   (Key results link to source metrics in other sections)
+└── People                      ← Leadership+ (HiBob + Culture Amp)
+    ├── Performance
+    └── Engagement
+```
+
+OKRs are a cross-cutting goal layer — they reference metrics in other sections rather than duplicating them.
+
+### Key Directories
+
+```
+src/app/                        # Next.js App Router pages
+src/app/dashboard/              # Auth-protected dashboard routes
+src/lib/auth/roles.ts           # Role model (pure functions, client-safe)
+src/lib/auth/roles.server.ts    # getCurrentUserRole() (server-only)
+src/lib/auth/routes.ts          # Public/protected route classification
+src/lib/db/                     # Drizzle schema and client (planned)
+src/lib/integrations/           # API clients (planned)
+src/lib/sync/                   # Data sync logic (planned)
+src/components/dashboard/       # Dashboard UI components
+src/components/ui/              # shadcn/ui primitives
+```
+
+### Permission Model
+
+| Route | Minimum Role | Data Sources |
+|-------|-------------|--------------|
+| `/dashboard` | everyone | Summary of visible sections |
+| `/dashboard/unit-economics` | leadership | Mode API |
+| `/dashboard/financial` | ceo | Excel uploads + Mode |
+| `/dashboard/product` | leadership | Mode API |
+| `/dashboard/okrs` | everyone | Notion + Slack + Mode |
+| `/dashboard/people` | leadership | HiBob + Culture Amp |
+
+Role is stored in Clerk `publicMetadata.role`, read via `currentUser()` in server components. Default is `everyone`.
+
+**Important:** `roles.ts` contains pure functions safe for client components. `roles.server.ts` contains `getCurrentUserRole()` which uses Clerk's `currentUser()` and must only be imported from server components.
+
+### Sidebar Navigation
+
+Grouped by domain: Overview, Performance (Unit Economics + Financial + Product), Goals (OKRs), Team (People). Groups with no visible items for the user's role are hidden.
 
 ## Environment Variables
 
-Managed via **Doppler** (recommended) or `.env` file. See `.env.example` for the full list.
+Managed via **Doppler**. See `.env.example` for the full list (reference only).
 
 ```bash
-# Option A: Doppler
 doppler setup                              # One-time config
-doppler run -- <your-command>              # Run with secrets injected
-
-# Option B: .env file
-cp .env.example .env                       # One-time
-# Edit .env with your values
+make dev                                   # Run with secrets injected
 ```
 
 **Never hardcode secrets. Never commit `.env`.**
@@ -35,7 +96,7 @@ cp .env.example .env                       # One-time
 make test
 ```
 
-Edit the `Makefile` to configure your project's test runner.
+Tests cover: role hierarchy, role extraction, route classification, and PermissionGate component rendering.
 
 ## Git Workflow (MUST follow -- enforced by hooks)
 
@@ -68,6 +129,7 @@ Creates a sibling directory with its own branch (`agent/<name>/<task>`). Never r
 
 ## Key Conventions
 
-- **Secrets**: Never hardcode. Use Doppler or `.env`. Never commit `.env`.
+- **Secrets**: Never hardcode. Use Doppler. Never commit `.env`.
 - **Staging**: Always `git add <specific files>`. Never `git add -A` or `git add .`.
 - **Branches**: Always work on a feature branch. Main is protected at 3 levels.
+- **Server vs Client**: Clerk's `currentUser()` is server-only. Keep it in `.server.ts` files. Pure role logic goes in `roles.ts` for shared use.
