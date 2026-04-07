@@ -1,5 +1,5 @@
 import { UserButton } from "@clerk/nextjs";
-import { getCurrentUserRole } from "@/lib/auth/roles";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Bell } from "lucide-react";
 

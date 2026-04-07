@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { getCurrentUserRole, hasAccess } from "@/lib/auth/roles";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";

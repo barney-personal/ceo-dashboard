@@ -1,4 +1,4 @@
-import { getCurrentUserRole } from "@/lib/auth/roles";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
