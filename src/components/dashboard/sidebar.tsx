@@ -6,9 +6,11 @@ import { type Role, hasAccess } from "@/lib/auth/roles";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
-  TrendingUp,
-  Users,
+  Calculator,
+  PoundSterling,
+  BarChart3,
   Target,
+  Users,
 } from "lucide-react";
 
 interface NavItem {
@@ -26,22 +28,34 @@ const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard,
   },
   {
-    label: "Financials",
-    href: "/dashboard/financials",
+    label: "Unit Economics",
+    href: "/dashboard/unit-economics",
     requiredRole: "ceo",
-    icon: TrendingUp,
+    icon: Calculator,
   },
   {
-    label: "People",
-    href: "/dashboard/people",
+    label: "Financial",
+    href: "/dashboard/financial",
+    requiredRole: "ceo",
+    icon: PoundSterling,
+  },
+  {
+    label: "Product",
+    href: "/dashboard/product",
     requiredRole: "leadership",
-    icon: Users,
+    icon: BarChart3,
   },
   {
     label: "OKRs",
     href: "/dashboard/okrs",
     requiredRole: "everyone",
     icon: Target,
+  },
+  {
+    label: "People",
+    href: "/dashboard/people",
+    requiredRole: "leadership",
+    icon: Users,
   },
 ];
 

@@ -18,9 +18,11 @@ describe("isPublicPath", () => {
   describe("protected routes", () => {
     it.each([
       ["/dashboard"],
-      ["/dashboard/financials"],
-      ["/dashboard/people"],
+      ["/dashboard/unit-economics"],
+      ["/dashboard/financial"],
+      ["/dashboard/product"],
       ["/dashboard/okrs"],
+      ["/dashboard/people"],
       ["/api/upload"],
       ["/api/sync/mode"],
       ["/api/cron"],
