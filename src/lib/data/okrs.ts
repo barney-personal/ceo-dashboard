@@ -28,14 +28,22 @@ export async function getLatestOkrUpdates(): Promise<
     .from(okrUpdates)
     .orderBy(desc(okrUpdates.postedAt));
 
-  // Dedupe: keep only the latest update per (squadName + krName)
-  const seen = new Set<string>();
+  // Dedupe: for each squad, only keep KRs from their most recent update
+  // This avoids naming drift across weeks (same KR gets different names)
+  const latestUpdatePerSquad = new Map<string, Date>();
   const deduped: OkrSummary[] = [];
 
   for (const row of rows) {
-    const key = `${row.squadName}::${row.krName}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const squad = row.squadName;
+    const existing = latestUpdatePerSquad.get(squad);
+
+    if (!existing) {
+      // First time seeing this squad — this is their latest update
+      latestUpdatePerSquad.set(squad, row.postedAt);
+    } else if (row.postedAt.getTime() < existing.getTime() - 24 * 60 * 60 * 1000) {
+      // This row is from an older update (>1 day gap) — skip
+      continue;
+    }
 
     deduped.push({
       pillar: row.pillar ?? "Other",

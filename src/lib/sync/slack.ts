@@ -20,10 +20,19 @@ function derivePillar(channelName: string): string {
 /** Quick filter to skip messages that are clearly not OKR updates. */
 function isLikelyUpdate(text: string, subtype?: string): boolean {
   if (!text || subtype) return false; // Skip system messages (joins, etc.)
-  if (text.length < 200) return false; // Too short for an OKR update
+  if (text.length < 150) return false; // Too short for an OKR update
   if (/^Reminder:/i.test(text)) return false; // Bot reminders
   if (/has joined the channel/.test(text)) return false;
   if (/^Happy Monday/i.test(text)) return false; // Weekly reminder bot
+  if (/^<!subteam\^/.test(text)) return false; // @team mentions (reminders)
+  if (/^<@\w+> has joined/.test(text)) return false;
+  if (/^Hey <!here>/.test(text)) return false; // General announcements
+  if (/^Following from/.test(text)) return false; // Meeting follow-ups
+  if (/^\*Agenda/.test(text)) return false; // Meeting agendas
+  if (/^\*Product Crit/.test(text)) return false;
+  if (/^Action items/i.test(text)) return false;
+  if (/^Separately/i.test(text)) return false;
+  if (text.startsWith("/")) return false; // Slash commands
   return true;
 }
 
@@ -50,11 +59,15 @@ async function syncChannel(
   for (const msg of messages) {
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
-    // LLM parse
-    const parsed = await llmParseOkrUpdate(msg.text, channelContext);
-    if (!parsed || parsed.krs.length === 0) continue;
+    // Resolve author name for LLM context
+    const authorName = msg.user ? await getUserName(msg.user) : "unknown";
 
-    const userName = msg.user ? await getUserName(msg.user) : null;
+    // LLM parse with author context
+    const parsed = await llmParseOkrUpdate(
+      msg.text,
+      `${channelContext}\nAuthor: ${authorName}`
+    );
+    if (!parsed || parsed.krs.length === 0) continue;
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
 
     for (const kr of parsed.krs) {
@@ -65,7 +78,7 @@ async function syncChannel(
           channelId,
           channelName,
           userId: msg.user ?? null,
-          userName,
+          userName: authorName !== "unknown" ? authorName : null,
           squadName: parsed.squadName,
           pillar,
           objectiveName: kr.objective,
