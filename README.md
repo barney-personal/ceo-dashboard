@@ -1,83 +1,80 @@
-# [Project Name]
+# CEO Dashboard
 
-[Description]
+Internal company dashboard aggregating data from multiple sources into a single, role-based view for executive decision-making.
+
+## Data Sources
+
+| Source | Type | Status |
+|--------|------|--------|
+| Mode Analytics | API | Planned |
+| Excel uploads | Manual | Planned |
+| Slack | API | Planned |
+| Notion | API | Planned |
+| HiBob | API | Planned |
+| Culture Amp | API | Planned |
+
+## Dashboard Sections
+
+- **Unit Economics** — LTV, CAC, ARPU, retention, payback (Leadership+)
+- **Financial** — Management accounts, FP&A (CEO only)
+- **Product** — DAU, activation, retention, feature adoption (Leadership+)
+- **OKRs** — Company → Pillar → Squad objectives, linked to source metrics (Everyone)
+- **People** — Performance and engagement (Leadership+)
 
 ## Getting Started
 
 ### Prerequisites
 
-- Git
-- [Your language runtime]
-- (Optional) [Doppler CLI](https://docs.doppler.com/docs/install-cli) for secrets management
+- Node.js 20+
+- [Doppler CLI](https://docs.doppler.com/docs/install-cli) for secrets management
+- A [Clerk](https://clerk.com) account with Google SSO configured
 
 ### Setup
 
 ```bash
-git clone <repo-url>
-cd <repo-name>
+git clone git@github.com:barney-personal/ceo-dashboard.git
+cd ceo-dashboard
 ./scripts/setup.sh
+doppler setup
+npm install
+make dev
 ```
 
-This configures git hooks (branch protection) and optionally sets up environment variables via Doppler or `.env`.
+The app runs on `http://localhost:3100`.
 
-### Development
+### Setting User Roles
 
-Always create a branch before making changes:
+Roles are managed in Clerk. Set a user's role via the Clerk dashboard or API:
 
 ```bash
-git checkout -b my-feature
-# ... make changes ...
-make test
-git add <specific-files>
-git commit -m "Description of changes"
-git push -u origin my-feature
-gh pr create
+# Via Clerk API
+curl -X PATCH "https://api.clerk.com/v1/users/{user_id}" \
+  -H "Authorization: Bearer $CLERK_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"public_metadata": {"role": "ceo"}}'
 ```
 
-## Agent / Claude Code Workflow
+Available roles: `ceo`, `leadership`, `everyone` (default).
 
-This repo uses three layers of main-branch protection:
-
-| Layer | Mechanism | What it blocks |
-|-------|-----------|---------------|
-| 1 | `.claude/settings.json` PreToolUse hook | Claude Code Edit/Write on main |
-| 2 | `.githooks/pre-commit` | `git commit` on main |
-| 3 | `.githooks/pre-push` | `git push` on main |
-
-**Important:** Run `./scripts/setup.sh` after cloning to activate git hooks. Without this, Layers 2 and 3 are inactive.
-
-### Parallel agents
-
-Multiple Claude Code agents must use separate worktrees to avoid file conflicts:
+## Development
 
 ```bash
-scripts/create-agent-worktree.sh <agent-name> <task-name>
+make dev          # Start dev server (port 3100, via Doppler)
+make build        # Production build
+make lint         # ESLint
+make type-check   # TypeScript check
+make test         # Run test suite
 ```
 
-This creates a sibling directory (e.g., `../repo-name-agent-1-task/`) with its own isolated branch (`agent/<name>/<task>`). Hooks are automatically configured in the new worktree.
+## Tech Stack
 
-## Testing
+- **Framework:** Next.js 16, TypeScript, Tailwind CSS 4
+- **UI:** shadcn/ui, Instrument Serif + DM Sans typography
+- **Auth:** Clerk (Google SSO, role-based access)
+- **Secrets:** Doppler
+- **Testing:** Vitest, React Testing Library
+- **Hosting:** Render (planned)
 
-```bash
-make test
-```
+## Git Workflow
 
-Edit the `Makefile` to configure your test runner.
-
-## Environment Variables
-
-See `.env.example` for the full list. Use either:
-
-- **Doppler** (recommended): `doppler setup` then `doppler run -- <command>`
-- **.env file**: `cp .env.example .env` and fill in values
-
-## Created from template
-
-This repo was created from [repo-template](https://github.com/barneyhussey-yeo/repo-template). After creating from the template:
-
-1. Run `./scripts/setup.sh`
-2. Update `CLAUDE.md` with project-specific instructions
-3. Update this `README.md` with project-specific docs
-4. Edit `Makefile` to set your test command
-5. Edit `.env.example` with your project's required variables
-6. Update `.github/workflows/ci.yml` if you need language-specific setup steps
+Always work on feature branches. Main is protected by git hooks and Claude Code hooks. See `CLAUDE.md` for full details.

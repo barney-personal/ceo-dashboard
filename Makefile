@@ -1,12 +1,22 @@
-.PHONY: test setup
+.PHONY: dev build start lint type-check test setup
 
 setup:
 	./scripts/setup.sh
 
+dev:
+	doppler run -- npm run dev
+
+build:
+	npm run build
+
+start:
+	npm start
+
+lint:
+	npm run lint
+
+type-check:
+	npx tsc --noEmit
+
 test:
-	@echo "No test command configured. Edit Makefile to add your test runner."
-	@echo "Examples:"
-	@echo "  python -m pytest tests/ -v"
-	@echo "  npm test"
-	@echo "  go test ./..."
-	@exit 1
+	npx vitest run
