@@ -1,30 +1,54 @@
-# [Project Name]
+# CEO Dashboard
 
-[One-line project description.]
+Internal company dashboard aggregating data from Mode Analytics, Excel uploads, Slack, Notion, HiBob, and Culture Amp.
 
 ## Quick Start
 
 ```bash
-./scripts/setup.sh          # One-time: configure git hooks + optionally set up Doppler/.env
-# ... add project-specific setup steps here ...
+./scripts/setup.sh          # One-time: configure git hooks
+doppler setup               # One-time: connect to Doppler project
+doppler run -- npm run dev  # Start dev server with secrets
 ```
 
 ## Architecture
 
-[Describe your project structure here.]
+- **Stack:** Next.js 15 + TypeScript + Tailwind CSS + shadcn/ui
+- **Auth:** Clerk (Google SSO) with 3-tier roles: `ceo` > `leadership` > `everyone`
+- **Database:** PostgreSQL + Drizzle ORM
+- **Secrets:** Doppler (never use .env files directly)
+- **Hosting:** Render (web service + Postgres + cron)
+
+### Key Directories
+
+```
+src/app/                    # Next.js App Router pages
+src/app/dashboard/          # Auth-protected dashboard routes
+src/lib/auth/roles.ts       # Role model and permission checks
+src/lib/db/                 # Drizzle schema and client
+src/lib/integrations/       # API clients (Mode, HiBob, Slack, Notion, CultureAmp)
+src/lib/sync/               # Data sync logic (parse + upsert)
+src/components/dashboard/   # Dashboard UI components
+src/components/ui/          # shadcn/ui primitives
+```
+
+### Permission Model
+
+| Route | Minimum Role |
+|-------|-------------|
+| `/dashboard` | everyone |
+| `/dashboard/financials/*` | ceo |
+| `/dashboard/people/*` | leadership |
+| `/dashboard/okrs/*` | everyone |
+
+Role is stored in Clerk `publicMetadata.role`. Default is `everyone`.
 
 ## Environment Variables
 
-Managed via **Doppler** (recommended) or `.env` file. See `.env.example` for the full list.
+Managed via **Doppler**. See `.env.example` for the full list (reference only).
 
 ```bash
-# Option A: Doppler
 doppler setup                              # One-time config
-doppler run -- <your-command>              # Run with secrets injected
-
-# Option B: .env file
-cp .env.example .env                       # One-time
-# Edit .env with your values
+doppler run -- npm run dev                 # Run with secrets injected
 ```
 
 **Never hardcode secrets. Never commit `.env`.**
@@ -34,8 +58,6 @@ cp .env.example .env                       # One-time
 ```bash
 make test
 ```
-
-Edit the `Makefile` to configure your project's test runner.
 
 ## Git Workflow (MUST follow -- enforced by hooks)
 
@@ -68,6 +90,6 @@ Creates a sibling directory with its own branch (`agent/<name>/<task>`). Never r
 
 ## Key Conventions
 
-- **Secrets**: Never hardcode. Use Doppler or `.env`. Never commit `.env`.
+- **Secrets**: Never hardcode. Use Doppler. Never commit `.env`.
 - **Staging**: Always `git add <specific files>`. Never `git add -A` or `git add .`.
 - **Branches**: Always work on a feature branch. Main is protected at 3 levels.
