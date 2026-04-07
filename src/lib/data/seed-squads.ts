@@ -72,7 +72,6 @@ export async function seedSquads(): Promise<number> {
           channelId: seed.channelId,
           pmName: seed.pmName,
           pmSlackId: seed.pmSlackId ?? null,
-          isActive: seed.isActive ?? true,
           updatedAt: new Date(),
         },
       })
