@@ -11,6 +11,7 @@ interface Squad {
   channelId: string | null;
   pmName: string | null;
   pmSlackId: string | null;
+  dashboardUrl: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

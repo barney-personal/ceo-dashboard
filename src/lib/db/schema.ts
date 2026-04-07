@@ -16,6 +16,7 @@ export const squads = pgTable("squads", {
   channelId: text("channel_id"),
   pmName: text("pm_name"),
   pmSlackId: text("pm_slack_id"),
+  dashboardUrl: text("dashboard_url"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

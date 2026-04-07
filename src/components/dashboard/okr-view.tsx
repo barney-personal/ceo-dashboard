@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { RagBar } from "@/components/dashboard/rag-bar";
-import { ExternalLink, ArrowLeft } from "lucide-react";
+import { ExternalLink, ArrowLeft, BarChart3 } from "lucide-react";
 
 interface OkrKr {
   pillar: string;
@@ -15,6 +15,7 @@ interface OkrKr {
   target: string | null;
   userName: string | null;
   slackUrl: string;
+  dashboardUrl: string | null;
 }
 
 interface PillarData {
@@ -214,15 +215,28 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
                     </span>
                   )}
                 </div>
-                <a
-                  href={krs[0].slackUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
-                >
-                  Slack
-                  <ExternalLink className="h-2.5 w-2.5" />
-                </a>
+                <div className="flex items-center gap-1.5">
+                  {krs[0].dashboardUrl && (
+                    <a
+                      href={krs[0].dashboardUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
+                    >
+                      Dashboard
+                      <BarChart3 className="h-2.5 w-2.5" />
+                    </a>
+                  )}
+                  <a
+                    href={krs[0].slackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
+                  >
+                    Slack
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                </div>
               </div>
               <div className="p-5 space-y-2">
                 {krs.map((kr) => (

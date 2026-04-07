@@ -55,6 +55,18 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     section: "unit-economics",
     category: "cogs",
   },
+  {
+    reportToken: "483bad97ecb4",
+    name: "Commercial Dashboard",
+    section: "unit-economics",
+    category: "cohorts",
+  },
+  {
+    reportToken: "ad44c2e76bd4",
+    name: "Subs & Retention",
+    section: "unit-economics",
+    category: "subs",
+  },
 
   // --- Financial ---
   {
@@ -128,6 +140,20 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
     title: "Retention Dashboard",
     section: "unit-economics",
     category: "retention",
+  },
+  {
+    url: "https://app.mode.com/cleoai/reports/483bad97ecb4",
+    title: "Commercial Dashboard — Cohorts & Line Items",
+    section: "unit-economics",
+    category: "cohorts",
+    height: 700,
+  },
+  {
+    url: "https://app.mode.com/cleoai/reports/ad44c2e76bd4",
+    title: "Subs & Retention",
+    section: "unit-economics",
+    category: "subs",
+    height: 700,
   },
 
   // --- Financial ---

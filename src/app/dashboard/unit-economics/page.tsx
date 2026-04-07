@@ -28,6 +28,8 @@ export default async function UnitEconomicsPage() {
   const cacCharts = getChartEmbeds("unit-economics", "cac");
   const retentionCharts = getChartEmbeds("unit-economics", "retention");
   const cogsCharts = getChartEmbeds("unit-economics", "cogs");
+  const cohortCharts = getChartEmbeds("unit-economics", "cohorts");
+  const subsCharts = getChartEmbeds("unit-economics", "subs");
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -67,7 +69,7 @@ export default async function UnitEconomicsPage() {
           series={arpuSeries}
           title="Revenue & Profit per User"
           subtitle="Monthly trend"
-          yLabel="£ per user"
+          yLabel="$ per user"
           yFormatType="currency"
           modeUrl="https://app.mode.com/cleoai/reports/b301cc0c9572"
         />
@@ -107,6 +109,8 @@ export default async function UnitEconomicsPage() {
           { label: "Customer Acquisition Cost", charts: cacCharts },
           { label: "Retention", charts: retentionCharts },
           { label: "COGs / Arrears", charts: cogsCharts },
+          { label: "Cohorts & Line Items", charts: cohortCharts },
+          { label: "Subscribers & Retention", charts: subsCharts },
         ]
           .filter((g) => g.charts.length > 0)
           .map((group) => (

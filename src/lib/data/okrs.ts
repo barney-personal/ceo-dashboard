@@ -144,3 +144,21 @@ export function getSlackMessageUrl(
   const cleanTs = ts.replace(".", "");
   return `https://cleo-team.slack.com/archives/${channelId}/p${cleanTs}`;
 }
+
+/**
+ * Get squad dashboard URLs as a lookup map (squadName -> url).
+ */
+export async function getSquadDashboardUrls(): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ name: squads.name, dashboardUrl: squads.dashboardUrl })
+    .from(squads)
+    .where(eq(squads.isActive, true));
+
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    if (row.dashboardUrl) {
+      map.set(row.name, row.dashboardUrl);
+    }
+  }
+  return map;
+}

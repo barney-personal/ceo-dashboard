@@ -46,7 +46,7 @@ export async function PUT(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await request.json();
-  const { id, name, pillar, pmName, channelId, isActive } = body;
+  const { id, name, pillar, pmName, channelId, dashboardUrl, isActive } = body;
 
   if (!id) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
@@ -59,6 +59,7 @@ export async function PUT(request: NextRequest) {
       ...(pillar !== undefined && { pillar }),
       ...(pmName !== undefined && { pmName }),
       ...(channelId !== undefined && { channelId }),
+      ...(dashboardUrl !== undefined && { dashboardUrl }),
       ...(isActive !== undefined && { isActive }),
       updatedAt: new Date(),
     })

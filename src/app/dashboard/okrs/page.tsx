@@ -5,12 +5,13 @@ import {
   getLatestOkrUpdates,
   getOkrStatusCounts,
   getSlackMessageUrl,
+  getSquadDashboardUrls,
   type OkrSummary,
 } from "@/lib/data/okrs";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function OKRsPage() {
-  const [okrsByPillar, counts] = await Promise.all([
+  const [okrsByPillar, counts, dashboardUrls] = await Promise.all([
     getLatestOkrUpdates().catch(() => new Map<string, OkrSummary[]>()),
     getOkrStatusCounts().catch(() => ({
       onTrack: 0,
@@ -18,6 +19,7 @@ export default async function OKRsPage() {
       behind: 0,
       total: 0,
     })),
+    getSquadDashboardUrls().catch(() => new Map<string, string>()),
   ]);
 
   const okrCharts = getChartEmbeds("okrs", "company");
@@ -38,6 +40,7 @@ export default async function OKRsPage() {
         target: okr.target,
         userName: okr.userName,
         slackUrl: getSlackMessageUrl(okr.channelId, okr.slackTs),
+        dashboardUrl: dashboardUrls.get(okr.squadName) ?? null,
       })),
     }));
 
