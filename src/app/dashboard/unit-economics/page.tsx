@@ -8,7 +8,7 @@ import { SectionCard } from "@/components/dashboard/section-card";
 export default async function UnitEconomicsPage() {
   const role = await getCurrentUserRole();
 
-  if (!hasAccess(role, "ceo")) {
+  if (!hasAccess(role, "leadership")) {
     redirect("/dashboard");
   }
 

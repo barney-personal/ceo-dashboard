@@ -20,51 +20,77 @@ interface NavItem {
   icon: React.ElementType;
 }
 
-const NAV_ITEMS: NavItem[] = [
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
   {
     label: "Overview",
-    href: "/dashboard",
-    requiredRole: "everyone",
-    icon: LayoutDashboard,
+    items: [
+      {
+        label: "Dashboard",
+        href: "/dashboard",
+        requiredRole: "everyone",
+        icon: LayoutDashboard,
+      },
+    ],
   },
   {
-    label: "Unit Economics",
-    href: "/dashboard/unit-economics",
-    requiredRole: "ceo",
-    icon: Calculator,
+    label: "Performance",
+    items: [
+      {
+        label: "Unit Economics",
+        href: "/dashboard/unit-economics",
+        requiredRole: "leadership",
+        icon: Calculator,
+      },
+      {
+        label: "Financial",
+        href: "/dashboard/financial",
+        requiredRole: "ceo",
+        icon: PoundSterling,
+      },
+      {
+        label: "Product",
+        href: "/dashboard/product",
+        requiredRole: "leadership",
+        icon: BarChart3,
+      },
+    ],
   },
   {
-    label: "Financial",
-    href: "/dashboard/financial",
-    requiredRole: "ceo",
-    icon: PoundSterling,
+    label: "Goals",
+    items: [
+      {
+        label: "OKRs",
+        href: "/dashboard/okrs",
+        requiredRole: "everyone",
+        icon: Target,
+      },
+    ],
   },
   {
-    label: "Product",
-    href: "/dashboard/product",
-    requiredRole: "leadership",
-    icon: BarChart3,
-  },
-  {
-    label: "OKRs",
-    href: "/dashboard/okrs",
-    requiredRole: "everyone",
-    icon: Target,
-  },
-  {
-    label: "People",
-    href: "/dashboard/people",
-    requiredRole: "leadership",
-    icon: Users,
+    label: "Team",
+    items: [
+      {
+        label: "People",
+        href: "/dashboard/people",
+        requiredRole: "leadership",
+        icon: Users,
+      },
+    ],
   },
 ];
 
 export function Sidebar({ role }: { role: Role }) {
   const pathname = usePathname();
 
-  const visibleItems = NAV_ITEMS.filter((item) =>
-    hasAccess(role, item.requiredRole)
-  );
+  const visibleGroups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => hasAccess(role, item.requiredRole)),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <aside className="flex w-56 flex-col border-r border-sidebar-border bg-sidebar">
@@ -81,40 +107,44 @@ export function Sidebar({ role }: { role: Role }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex flex-1 flex-col gap-0.5 px-3 py-3">
-        <span className="mb-1 px-2 text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/70">
-          Navigation
-        </span>
-        {visibleItems.map((item) => {
-          const Icon = item.icon;
-          const isActive =
-            item.href === "/dashboard"
-              ? pathname === "/dashboard"
-              : pathname.startsWith(item.href);
+      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto px-3 py-3">
+        {visibleGroups.map((group) => (
+          <div key={group.label} className="flex flex-col gap-0.5">
+            <span className="mb-0.5 px-2 text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/70">
+              {group.label}
+            </span>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const isActive =
+                item.href === "/dashboard"
+                  ? pathname === "/dashboard"
+                  : pathname.startsWith(item.href);
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-all duration-150",
-                isActive
-                  ? "bg-primary/8 text-primary shadow-sm"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
-              )}
-            >
-              <Icon
-                className={cn(
-                  "h-4 w-4 shrink-0 transition-colors",
-                  isActive
-                    ? "text-primary"
-                    : "text-muted-foreground/70 group-hover:text-foreground"
-                )}
-              />
-              {item.label}
-            </Link>
-          );
-        })}
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-all duration-150",
+                    isActive
+                      ? "bg-primary/8 text-primary shadow-sm"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
+                  )}
+                >
+                  <Icon
+                    className={cn(
+                      "h-4 w-4 shrink-0 transition-colors",
+                      isActive
+                        ? "text-primary"
+                        : "text-muted-foreground/70 group-hover:text-foreground"
+                    )}
+                  />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Bottom section */}
