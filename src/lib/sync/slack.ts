@@ -1,9 +1,35 @@
 import { db } from "@/lib/db";
-import { okrUpdates, syncLog } from "@/lib/db/schema";
-import { getChannelHistory, getChannelName, getUserName } from "@/lib/integrations/slack";
+import { okrUpdates, squads, syncLog } from "@/lib/db/schema";
+import { getChannelHistory, getChannelName, getThreadReplies, getUserName } from "@/lib/integrations/slack";
 import { llmParseOkrUpdate, buildSquadContext, buildSystemPromptFromContext } from "@/lib/integrations/llm-okr-parser";
 import { seedSquads } from "@/lib/data/seed-squads";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, isNotNull } from "drizzle-orm";
+
+/** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
+async function buildUserNameFallback(): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ pmSlackId: squads.pmSlackId, pmName: squads.pmName })
+    .from(squads)
+    .where(and(eq(squads.isActive, true), isNotNull(squads.pmSlackId)));
+  const map = new Map<string, string>();
+  for (const r of rows) {
+    if (r.pmSlackId && r.pmName) map.set(r.pmSlackId, r.pmName);
+  }
+  return map;
+}
+
+/** Resolve a Slack user ID to a display name, falling back to seed data. */
+async function resolveAuthorName(
+  userId: string,
+  fallback: Map<string, string>
+): Promise<string> {
+  const name = await getUserName(userId);
+  // getUserName returns the raw ID when the API call fails (missing users:read scope)
+  if (name === userId && fallback.has(userId)) {
+    return fallback.get(userId)!;
+  }
+  return name;
+}
 
 /** Map channel name to pillar for grouping */
 function derivePillar(channelName: string): string {
@@ -43,7 +69,8 @@ function isLikelyUpdate(text: string, subtype?: string): boolean {
 async function syncChannel(
   channelId: string,
   lastSyncTs: string | undefined,
-  systemPrompt: string
+  systemPrompt: string,
+  userNameFallback: Map<string, string>
 ): Promise<number> {
   const channelName = await getChannelName(channelId);
   const pillar = derivePillar(channelName);
@@ -54,15 +81,25 @@ async function syncChannel(
     lastSyncTs ??
     String(Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000));
 
-  const messages = await getChannelHistory(channelId, oldest);
+  const topLevelMessages = await getChannelHistory(channelId, oldest);
+
+  // Expand thread replies — PMs sometimes post OKR updates as replies
+  const messages = [];
+  for (const msg of topLevelMessages) {
+    messages.push(msg);
+    if (msg.reply_count && msg.reply_count > 0) {
+      const replies = await getThreadReplies(channelId, msg.ts);
+      messages.push(...replies);
+    }
+  }
 
   let count = 0;
 
   for (const msg of messages) {
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
-    // Resolve author name for LLM context
-    const authorName = msg.user ? await getUserName(msg.user) : "unknown";
+    // Resolve author name for LLM context (falls back to seed data if API lacks users:read)
+    const authorName = msg.user ? await resolveAuthorName(msg.user, userNameFallback) : "unknown";
 
     // LLM parse with author context
     const parsed = await llmParseOkrUpdate(
@@ -149,6 +186,7 @@ export async function syncAllSlackOkrs(): Promise<{
     await seedSquads();
     const squadContext = await buildSquadContext();
     const systemPrompt = buildSystemPromptFromContext(squadContext);
+    const userNameFallback = await buildUserNameFallback();
 
     const lastSync = await db
       .select({ completedAt: syncLog.completedAt })
@@ -168,7 +206,7 @@ export async function syncAllSlackOkrs(): Promise<{
 
     for (const channelId of channelIds) {
       try {
-        const count = await syncChannel(channelId, lastSyncTs, systemPrompt);
+        const count = await syncChannel(channelId, lastSyncTs, systemPrompt, userNameFallback);
         totalRecords += count;
       } catch (err) {
         const message = `Failed to sync channel ${channelId}: ${err instanceof Error ? err.message : String(err)}`;

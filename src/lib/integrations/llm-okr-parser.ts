@@ -54,20 +54,27 @@ export async function buildSquadContext(): Promise<string> {
 export function buildSystemPromptFromContext(squadContext: string): string {
   return `You extract structured OKR data from weekly squad update messages posted by product managers in Slack.
 
-IMPORTANT: Only extract ACTUAL OKR Key Results — these are formal objectives with measurable targets and RAG status indicators. Do NOT extract:
+IMPORTANT: Only extract ACTUAL OKR Key Results — these are formal objectives with measurable targets and/or RAG status indicators. Do NOT extract:
 - Experiments (live, upcoming, or shipped)
 - "Last week" / "This week" / "Working on" items
-- Shipped features or initiatives
+- Shipped features or initiatives without RAG status
 - Discovery work or general status updates
-- Delivery milestones (unless they ARE a formal KR)
+- General delivery/shipping updates (e.g. "Shipped loan offer happy path")
 
-A real KR looks like: "KR1: Increase M1 retention rate by 2% :large_green_circle:" or "KR1.1: Reduce arrears by 3% to unlock $5.10 ARPU"
+A real KR looks like:
+- "KR1: Increase M1 retention rate by 2% :large_green_circle:" or "KR1.1: Reduce arrears by 3% to unlock $5.10 ARPU"
+- Funnel metrics with targets: "Rolloff → Insights Start: 29.3% vs 35% target :large_orange_circle:"
+- Delivery milestones with RAG status: "Delivery Milestone: Launch savings product in UK — :large_green_circle:"
 NOT like: "Shipped loan offer happy path" or "Building fixes for app init time issues"
+
+IMPORTANT: Some PMs post OKR updates without a squad name header. If the message contains formal KRs but no explicit squad name, use the Author → squad mapping below to determine the squad. The author's name is provided in the channel context.
 
 ${squadContext}
 
+IMPORTANT: Some PMs belong to multiple squads across different pillars (e.g. "Instalment Loans" in EWA & Credit Products AND "Instalment Loans (New Bets)" in New Bets). When this happens, use the channel's pillar (provided in the channel context) to pick the correct squad.
+
 Extract:
-- squadName: map to the closest known squad name above
+- squadName: map to the closest known squad name above, using the channel pillar to disambiguate
 - tldr: 1-2 sentence summary
 - krs: array of ONLY formal key results, each with:
   - objective: the parent objective
@@ -81,6 +88,8 @@ RAG emoji mapping:
 - :red_circle: → red
 - :white_circle: / :black_circle: → not_started
 - :apple: → amber
+- :green_apple: → green
+- Any other custom emoji (e.g. :hold-braveheart:, :nervous-kermit:) → treat as amber unless context clearly indicates green or red
 
 If the message is NOT a weekly squad OKR update (e.g. meeting agenda, action items, planning discussion, question, or general chat), return: null
 
@@ -102,7 +111,7 @@ export async function llmParseOkrUpdate(
     buildSystemPromptFromContext(await buildSquadContext());
 
   const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-4-6",
     max_tokens: 2000,
     system: prompt,
     messages: [

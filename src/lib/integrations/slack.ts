@@ -39,6 +39,8 @@ export interface SlackMessage {
   text: string;
   type: string;
   subtype?: string;
+  thread_ts?: string;
+  reply_count?: number;
 }
 
 interface ConversationsHistoryResponse {
@@ -90,6 +92,39 @@ export async function getChannelHistory(
 
   // Slack returns newest first, reverse to chronological
   return allMessages.reverse();
+}
+
+/**
+ * Fetch all replies in a thread, excluding the parent message.
+ */
+export async function getThreadReplies(
+  channelId: string,
+  threadTs: string
+): Promise<SlackMessage[]> {
+  const allMessages: SlackMessage[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const params: Record<string, string> = {
+      channel: channelId,
+      ts: threadTs,
+      limit: "100",
+    };
+    if (cursor) params.cursor = cursor;
+
+    const data = await slackRequest<ConversationsHistoryResponse>(
+      "conversations.replies",
+      params
+    );
+
+    allMessages.push(...data.messages);
+    cursor = data.has_more
+      ? data.response_metadata?.next_cursor
+      : undefined;
+  } while (cursor);
+
+  // conversations.replies includes the parent as the first message — skip it
+  return allMessages.slice(1);
 }
 
 /**
