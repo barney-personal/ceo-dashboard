@@ -1,4 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { db } from "@/lib/db";
+import { squads } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 const client = new Anthropic();
 
@@ -16,46 +19,40 @@ export interface ParsedOkrUpdate {
 }
 
 /**
- * Known pillar → squad mappings to help the LLM normalize squad names.
+ * Build squad context for the LLM prompt from the database.
+ * This way adding a squad is just a DB insert — no code changes.
  */
-const PILLAR_SQUADS: Record<string, string[]> = {
-  Growth: [
-    "Growth Marketing (EWA)",
-    "Growth Marketing (Diversification)",
-    "Growth Onboarding",
-    "Personalisation",
-    "Referrals",
-    "Retention",
-    "PPC (Price, Packaging & Conversion)",
-  ],
-  "EWA & Credit Products": [
-    "EWA-Core",
-    "Geo-expansion",
-    "Instalment Loans",
-    "Card (Flex)",
-    "BNPL (Pay Later)",
-  ],
-  "New Bets": [
-    "Discovery Liquidity (Flex Card)",
-    "Discovery Grow/Wealth",
-    "Discovery Spend",
-    "Mobile",
-  ],
-  Chat: [
-    "Autopilot Adoption",
-    "Daily Plans",
-    "Autopilot Retention",
-    "Broccoli (Chat Platform)",
-  ],
-  "Access, Trust & Money, Risk & Payments": [
-    "Payments Infrastructure & Expansion",
-    "Payment Intelligence",
-    "Risk Decisioning",
-    "Fraud Infrastructure",
-  ],
-};
+export async function buildSquadContext(): Promise<string> {
+  const allSquads = await db
+    .select()
+    .from(squads)
+    .where(eq(squads.isActive, true));
 
-const SYSTEM_PROMPT = `You extract structured OKR data from weekly squad update messages posted by product managers in Slack.
+  // Group by pillar
+  const byPillar = new Map<string, typeof allSquads>();
+  for (const s of allSquads) {
+    const existing = byPillar.get(s.pillar) ?? [];
+    existing.push(s);
+    byPillar.set(s.pillar, existing);
+  }
+
+  const pillarLines = [...byPillar.entries()]
+    .map(
+      ([pillar, sqs]) =>
+        `${pillar}: ${sqs.map((s) => s.name).join(", ")}`
+    )
+    .join("\n");
+
+  const authorLines = allSquads
+    .filter((s) => s.pmName)
+    .map((s) => `- ${s.pmName} → ${s.name} (${s.pillar})`)
+    .join("\n");
+
+  return `Known squads per pillar:\n${pillarLines}\n\nKnown author → squad mapping:\n${authorLines}`;
+}
+
+export function buildSystemPromptFromContext(squadContext: string): string {
+  return `You extract structured OKR data from weekly squad update messages posted by product managers in Slack.
 
 IMPORTANT: Only extract ACTUAL OKR Key Results — these are formal objectives with measurable targets and RAG status indicators. Do NOT extract:
 - Experiments (live, upcoming, or shipped)
@@ -67,30 +64,7 @@ IMPORTANT: Only extract ACTUAL OKR Key Results — these are formal objectives w
 A real KR looks like: "KR1: Increase M1 retention rate by 2% :large_green_circle:" or "KR1.1: Reduce arrears by 3% to unlock $5.10 ARPU"
 NOT like: "Shipped loan offer happy path" or "Building fixes for app init time issues"
 
-Known squads per pillar:
-${Object.entries(PILLAR_SQUADS)
-  .map(([pillar, squads]) => `${pillar}: ${squads.join(", ")}`)
-  .join("\n")}
-
-Known author → squad mapping (use these to identify the squad when the message doesn't have a clear header):
-- Santiago Vaquero / Sarah Varki → Autopilot Adoption (Chat)
-- Fede Behrens → Daily Plans (Chat)
-- Matej Sip → Autopilot Retention (Chat)
-- Cassie Johnstone → Broccoli (Chat Platform) (Chat)
-- Amanda → Growth Marketing (EWA) (Growth)
-- Areej Al Medinah → Growth Onboarding (Growth)
-- Bruno Haag → Personalisation (Growth)
-- Sevda Kiratli → Referrals (Growth)
-- Mathew Taskin → Retention (Growth)
-- Chris Jan Dudley / Ewa Pazdur → EWA-Core (EWA & Credit Products)
-- Lovneet Singh → Geo-expansion (EWA & Credit Products)
-- Jani Kiilunen → Instalment Loans (EWA & Credit Products or New Bets)
-- Dogan Ates → BNPL (Pay Later) (EWA & Credit Products)
-- Oladipo Oladitan (Ladi) → Card (Flex) (EWA & Credit Products)
-- Glenn Drawbridge → Mobile (New Bets)
-- Samuel Rueesch → Discovery Liquidity (Flex Card) (New Bets)
-- Kelly Bueno Martinez → Discovery Grow/Wealth (New Bets)
-- Surabhi Nimkar → Discovery Spend (New Bets)
+${squadContext}
 
 Extract:
 - squadName: map to the closest known squad name above
@@ -111,6 +85,7 @@ RAG emoji mapping:
 If the message is NOT a weekly squad OKR update (e.g. meeting agenda, action items, planning discussion, question, or general chat), return: null
 
 Return ONLY valid JSON (object or null). No markdown code blocks.`;
+}
 
 /**
  * Use Claude to parse a raw Slack message into structured OKR data.
@@ -118,12 +93,18 @@ Return ONLY valid JSON (object or null). No markdown code blocks.`;
  */
 export async function llmParseOkrUpdate(
   messageText: string,
-  channelContext: string
+  channelContext: string,
+  systemPrompt?: string
 ): Promise<ParsedOkrUpdate | null> {
+  // Build prompt from DB if not provided
+  const prompt =
+    systemPrompt ??
+    buildSystemPromptFromContext(await buildSquadContext());
+
   const response = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 2000,
-    system: SYSTEM_PROMPT,
+    system: prompt,
     messages: [
       {
         role: "user",
@@ -138,7 +119,10 @@ export async function llmParseOkrUpdate(
   // Parse the JSON response — strip markdown code blocks if present
   let trimmed = text.trim();
   if (trimmed.startsWith("```")) {
-    trimmed = trimmed.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+    trimmed = trimmed
+      .replace(/^```(?:json)?\n?/, "")
+      .replace(/\n?```$/, "")
+      .trim();
   }
   if (trimmed === "null" || trimmed === "") return null;
 
@@ -147,7 +131,6 @@ export async function llmParseOkrUpdate(
     if (!parsed || !parsed.squadName || !Array.isArray(parsed.krs))
       return null;
 
-    // Validate and normalize
     return {
       squadName: parsed.squadName,
       tldr: parsed.tldr || "",
