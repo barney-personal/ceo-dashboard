@@ -59,27 +59,37 @@ interface UsersInfoResponse {
 }
 
 /**
- * Fetch message history from a channel.
+ * Fetch full message history from a channel, paginating through all pages.
  * Returns messages in chronological order (oldest first).
  */
 export async function getChannelHistory(
   channelId: string,
-  oldest?: string,
-  limit = 100
+  oldest?: string
 ): Promise<SlackMessage[]> {
-  const params: Record<string, string> = {
-    channel: channelId,
-    limit: String(limit),
-  };
-  if (oldest) params.oldest = oldest;
+  const allMessages: SlackMessage[] = [];
+  let cursor: string | undefined;
 
-  const data = await slackRequest<ConversationsHistoryResponse>(
-    "conversations.history",
-    params
-  );
+  do {
+    const params: Record<string, string> = {
+      channel: channelId,
+      limit: "100",
+    };
+    if (oldest) params.oldest = oldest;
+    if (cursor) params.cursor = cursor;
+
+    const data = await slackRequest<ConversationsHistoryResponse>(
+      "conversations.history",
+      params
+    );
+
+    allMessages.push(...data.messages);
+    cursor = data.has_more
+      ? data.response_metadata?.next_cursor
+      : undefined;
+  } while (cursor);
 
   // Slack returns newest first, reverse to chronological
-  return data.messages.reverse();
+  return allMessages.reverse();
 }
 
 /**

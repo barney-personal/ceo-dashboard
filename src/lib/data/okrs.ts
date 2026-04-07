@@ -26,8 +26,7 @@ export async function getLatestOkrUpdates(): Promise<
   const rows = await db
     .select()
     .from(okrUpdates)
-    .orderBy(desc(okrUpdates.postedAt))
-    .limit(500);
+    .orderBy(desc(okrUpdates.postedAt));
 
   // Dedupe: keep only the latest update per (squadName + krName)
   const seen = new Set<string>();
