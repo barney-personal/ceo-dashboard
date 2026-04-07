@@ -3,7 +3,11 @@ import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
-import { SectionCard } from "@/components/dashboard/section-card";
+import { ModeEmbed } from "@/components/dashboard/mode-embed";
+import { BarChart } from "@/components/charts/bar-chart";
+import { getReportData } from "@/lib/data/mode";
+import { getHeadcountByDepartment } from "@/lib/data/chart-data";
+import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function PeoplePage() {
   const role = await getCurrentUserRole();
@@ -12,43 +16,64 @@ export default async function PeoplePage() {
     redirect("/dashboard");
   }
 
+  const [headcountData, deptData] = await Promise.all([
+    getReportData("people", "headcount").catch(() => []),
+    getHeadcountByDepartment().catch(() => []),
+  ]);
+
+  const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
+  const employees = headcountQuery?.rows ?? [];
+  const active = employees.filter(
+    (r) => r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
+  );
+
+  const headcountCharts = getChartEmbeds("people", "headcount");
+
   return (
     <div className="mx-auto max-w-6xl space-y-8">
       <PageHeader
         title="People"
-        description="Headcount, engagement, and team metrics"
+        description="Headcount, team structure, and workforce metrics"
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="Headcount" value="—" subtitle="awaiting data" delay={0} />
-        <MetricCard label="New Hires" value="—" subtitle="this quarter" delay={50} />
-        <MetricCard label="Attrition" value="—" subtitle="annualised" delay={100} />
-        <MetricCard label="Engagement" value="—" subtitle="awaiting data" delay={150} />
+        <MetricCard
+          label="Headcount"
+          value={active.length > 0 ? active.length.toString() : "—"}
+          subtitle={active.length > 0 ? "active employees" : "awaiting data"}
+          modeUrl="https://app.mode.com/cleoai/reports/c458b52ceb68"
+          delay={0}
+        />
+        <MetricCard
+          label="Departments"
+          value={deptData.length > 0 ? deptData.length.toString() : "—"}
+          subtitle={deptData.length > 0 ? "functions" : "awaiting data"}
+          modeUrl="https://app.mode.com/cleoai/reports/c458b52ceb68"
+          delay={50}
+        />
+        <MetricCard label="Engagement" value="—" subtitle="Culture Amp pending" delay={100} />
+        <MetricCard label="Performance" value="—" subtitle="Culture Amp pending" delay={150} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard
-          title="Team Breakdown"
-          description="Headcount by department from HiBob"
-        >
-          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
-            <p className="text-sm text-muted-foreground">
-              Connect HiBob to view department breakdown
-            </p>
-          </div>
-        </SectionCard>
+      {/* D3 bar chart */}
+      {deptData.length > 0 && (
+        <BarChart
+          data={deptData}
+          title="Headcount by Department"
+          subtitle={`${active.length} total`}
+          modeUrl="https://app.mode.com/cleoai/reports/c458b52ceb68"
+        />
+      )}
 
-        <SectionCard
-          title="Engagement Scores"
-          description="Latest survey results from Culture Amp"
-        >
-          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
-            <p className="text-sm text-muted-foreground">
-              Connect Culture Amp to view engagement trends
-            </p>
-          </div>
-        </SectionCard>
-      </div>
+      {/* Mode report links */}
+      {headcountCharts.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Mode Reports</h3>
+          {headcountCharts.map((chart) => (
+            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View in Mode" />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

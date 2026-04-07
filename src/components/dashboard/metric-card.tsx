@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, ExternalLink } from "lucide-react";
 
 type Trend = "up" | "down" | "flat";
 
@@ -9,6 +9,8 @@ interface MetricCardProps {
   change?: string;
   trend?: Trend;
   subtitle?: string;
+  /** URL to the Mode report this metric comes from */
+  modeUrl?: string;
   className?: string;
   delay?: number;
 }
@@ -19,6 +21,7 @@ export function MetricCard({
   change,
   trend,
   subtitle,
+  modeUrl,
   className,
   delay = 0,
 }: MetricCardProps) {
@@ -61,6 +64,18 @@ export function MetricCard({
             <span className="text-xs text-muted-foreground">{subtitle}</span>
           )}
         </div>
+
+        {modeUrl && (
+          <a
+            href={modeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-[10px] text-muted-foreground/50 transition-colors hover:text-primary"
+          >
+            View in Mode
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        )}
       </div>
     </div>
   );
