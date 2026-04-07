@@ -4,9 +4,11 @@ import { syncLog } from "@/lib/db/schema";
 import { desc, eq } from "drizzle-orm";
 import { syncAllModeReports } from "@/lib/sync/mode";
 import { syncAllSlackOkrs } from "@/lib/sync/slack";
+import { syncManagementAccounts } from "@/lib/sync/management-accounts";
 
 const MODE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const SLACK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const MGMT_ACCOUNTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // Daily
 
 async function getLastSyncTime(source: string): Promise<Date | null> {
   const result = await db
@@ -51,6 +53,18 @@ export async function GET(request: NextRequest) {
     }
   } else {
     results.slack = { skipped: true, lastSync: lastSlackSync };
+  }
+
+  // Management accounts sync (daily)
+  const lastMgmtSync = await getLastSyncTime("management-accounts");
+  if (!lastMgmtSync || Date.now() - lastMgmtSync.getTime() > MGMT_ACCOUNTS_INTERVAL_MS) {
+    try {
+      results.managementAccounts = await syncManagementAccounts();
+    } catch (err) {
+      results.managementAccounts = { error: err instanceof Error ? err.message : String(err) };
+    }
+  } else {
+    results.managementAccounts = { skipped: true, lastSync: lastMgmtSync };
   }
 
   return NextResponse.json({ synced: results });
