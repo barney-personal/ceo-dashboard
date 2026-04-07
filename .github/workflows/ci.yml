@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Project setup
+        run: |
+          git config core.hooksPath .githooks
+          chmod +x scripts/*.sh
+
+      - name: Run tests
+        run: make test

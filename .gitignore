@@ -1,0 +1,40 @@
+# === Environment & Secrets ===
+.env
+.prod.env
+.envrc
+credentials.json
+token.json
+token.pickle
+*.pem
+*.key
+
+# === Python ===
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# === Node ===
+node_modules/
+.next/
+.nuxt/
+
+# === Runtime data ===
+data/
+
+# === Claude Code worktrees ===
+.claude/worktrees/
+
+# === OS junk ===
+.DS_Store
+Thumbs.db
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
