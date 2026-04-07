@@ -28,23 +28,17 @@ export default async function FinancialPage() {
         </button>
       </PageHeader>
 
-      {/* Seasonality from Mode */}
       {seasonalityCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Seasonality
-          </h3>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Seasonality</h3>
           {seasonalityCharts.map((chart) => (
-            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
           ))}
         </div>
       )}
 
-      {/* Management Accounts */}
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Management Accounts
-        </h3>
+        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Management Accounts</h3>
         <SectionCard title="Latest Period" description="Uploaded Excel/CSV financial statements">
           <div className="flex h-40 flex-col items-center justify-center rounded-lg border border-dashed border-border/50 text-center">
             <Upload className="mb-2 h-5 w-5 text-muted-foreground" />
@@ -54,11 +48,8 @@ export default async function FinancialPage() {
         </SectionCard>
       </div>
 
-      {/* FP&A */}
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          FP&A
-        </h3>
+        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">FP&A</h3>
         <SectionCard title="Forecast vs Actuals" description="Budget variance from uploaded forecasts">
           <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">Upload FP&A forecast to view variance analysis</p>

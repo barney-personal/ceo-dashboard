@@ -55,14 +55,12 @@ export default async function PeoplePage() {
         <MetricCard label="Performance" value="—" subtitle="Culture Amp pending" delay={150} />
       </div>
 
-      {/* Mode headcount dashboard embed */}
+      {/* Mode headcount charts */}
       {headcountCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Headcount Dashboard
-          </h3>
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Headcount Dashboard</h3>
           {headcountCharts.map((chart) => (
-            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View full headcount dashboard in Mode" />
           ))}
         </div>
       )}

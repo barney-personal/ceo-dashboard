@@ -3,7 +3,6 @@ import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
-import { SectionCard } from "@/components/dashboard/section-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { getUnitEconomicsMetrics } from "@/lib/data/metrics";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
@@ -38,84 +37,74 @@ export default async function UnitEconomicsPage() {
         <MetricCard label="Contribution Margin" value={metrics?.contributionMargin ?? "—"} subtitle={metrics?.contributionMargin ? "after COGs" : "awaiting data"} delay={150} />
       </div>
 
-      {/* KPIs */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Strategic Finance KPIs
-        </h3>
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: "ARPU", value: metrics?.arpu },
-              { label: "Gross Margin", value: metrics?.grossMargin },
-              { label: "M11+ CVR", value: metrics?.cvr },
-              { label: "MAU", value: metrics?.mau },
-              { label: "Revenue", value: metrics?.revenue },
-              { label: "LTV:CAC", value: metrics?.ltvCac },
-            ].map((item) => (
-              <div key={item.label} className="rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm">
-                <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
-                <p className="font-display text-lg text-foreground">{item.value ?? "—"}</p>
-              </div>
-            ))}
+      {/* KPI ratios grid */}
+      <div className="grid grid-cols-3 gap-3 lg:grid-cols-6">
+        {[
+          { label: "ARPU", value: metrics?.arpu },
+          { label: "Gross Margin", value: metrics?.grossMargin },
+          { label: "M11+ CVR", value: metrics?.cvr },
+          { label: "MAU", value: metrics?.mau },
+          { label: "Revenue", value: metrics?.revenue },
+          { label: "LTV:CAC", value: metrics?.ltvCac },
+        ].map((item) => (
+          <div key={item.label} className="rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm">
+            <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
+            <p className="font-display text-lg text-foreground">{item.value ?? "—"}</p>
           </div>
-          {kpiCharts.map((chart) => (
-            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
-          ))}
-        </div>
+        ))}
       </div>
 
-      {/* Conversion */}
+      {/* Chart links by category */}
+      {kpiCharts.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Strategic Finance KPIs</h3>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {kpiCharts.map((chart) => (
+              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
+            ))}
+          </div>
+        </div>
+      )}
+
       {conversionCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Conversion
-          </h3>
-          <div className="grid gap-4 lg:grid-cols-1">
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Conversion</h3>
+          <div className="grid gap-3 lg:grid-cols-2">
             {conversionCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
             ))}
           </div>
         </div>
       )}
 
-      {/* CAC / Growth Marketing */}
       {cacCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Customer Acquisition Cost
-          </h3>
-          <div className="grid gap-4 lg:grid-cols-1">
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Customer Acquisition Cost</h3>
+          <div className="grid gap-3 lg:grid-cols-2">
             {cacCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
             ))}
           </div>
         </div>
       )}
 
-      {/* Retention */}
       {retentionCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Retention
-          </h3>
-          <div className="grid gap-4 lg:grid-cols-1">
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Retention</h3>
+          <div className="grid gap-3 lg:grid-cols-2">
             {retentionCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
             ))}
           </div>
         </div>
       )}
 
-      {/* COGs / Arrears */}
       {cogsCharts.length > 0 && (
-        <div className="space-y-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            COGs / Arrears
-          </h3>
-          <div className="grid gap-4 lg:grid-cols-1">
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">COGs / Arrears</h3>
+          <div className="grid gap-3 lg:grid-cols-2">
             {cogsCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} />
+              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
             ))}
           </div>
         </div>

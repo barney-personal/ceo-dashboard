@@ -13,13 +13,11 @@ export default function OKRsPage() {
       />
 
       {okrCharts.length > 0 ? (
-        okrCharts.map((chart) => (
-          <ModeEmbed
-            key={chart.url}
-            url={chart.url}
-            title={chart.title}
-          />
-        ))
+        <div className="grid gap-3">
+          {okrCharts.map((chart) => (
+            <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View full OKR dashboard in Mode" />
+          ))}
+        </div>
       ) : (
         <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
           <p className="text-sm text-muted-foreground">
