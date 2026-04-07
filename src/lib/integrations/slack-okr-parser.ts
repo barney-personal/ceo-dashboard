@@ -52,6 +52,7 @@ const STATUS_EMOJI_MAP: Record<string, OkrStatus> = {
   ":red_circle:": "behind",
   ":white_circle:": "not_started",
   ":black_circle:": "not_started",
+  ":apple:": "at_risk", // Used by some Chat squads
 };
 
 /**
@@ -59,26 +60,96 @@ const STATUS_EMOJI_MAP: Record<string, OkrStatus> = {
  */
 export function isOkrUpdate(text: string): boolean {
   if (!text) return false;
-  // Must contain at least one RAG emoji and mention of objective/KR/OKR
+  if (text.length < 100) return false; // Too short to be an update
+
   const hasRag = Object.keys(STATUS_EMOJI_MAP).some((emoji) =>
     text.includes(emoji)
   );
+
   const hasOkrContent =
-    /\b(objective|OKR|KR\d|key result)/i.test(text) ||
-    /\b(TL;DR|TLDR|tl;dr)\b/.test(text);
-  return hasRag && hasOkrContent;
+    /\b(objective|OKR|KR\d|key result|RAG|shipped|shipping)/i.test(text) ||
+    /\b(TL;DR|TLDR|tl;dr)\b/.test(text) ||
+    /\b(last week|this week|working on|live experiment)/i.test(text);
+
+  // Skip messages that are clearly not squad updates
+  const isNotUpdate =
+    /^\*?agenda/im.test(text) ||
+    /^\*?action items/im.test(text) ||
+    /^\*?separately/im.test(text) ||
+    /^\*?bills in t2/im.test(text) ||
+    /^\*?prioritization/im.test(text) ||
+    /^hey <!here>/im.test(text) ||
+    /^hey team/im.test(text) ||
+    /^following from/im.test(text);
+
+  if (isNotUpdate) return false;
+
+  // Some updates (like Broccoli) don't have RAG emojis but are clearly updates
+  const isStructuredUpdate =
+    hasOkrContent &&
+    (hasRag || /\b(shipped|shipping|working on|in progress|live)\b/i.test(text));
+
+  return isStructuredUpdate;
 }
 
 /**
  * Extract the squad/team name from the message header.
  * Typically the first bold text: *Growth Marketing | EWA*
+ * Filters out non-squad headers like "TL;DR", "TLDR", "Agenda", etc.
  */
 function extractSquadName(text: string): string {
-  const match = text.match(/^\*([^*]+)\*/m);
-  if (match) {
-    // Clean up emoji and whitespace
-    return match[1].replace(/:[a-z_-]+:/g, "").trim();
+  // Find all bold text at the start of lines
+  const boldMatches = text.match(/^\*([^*]+)\*/gm);
+  if (!boldMatches) return "Unknown Squad";
+
+  const skipPatterns = [
+    /^tl;?dr/i,
+    /^agenda/i,
+    /^okr\s/i,
+    /^live\s/i,
+    /^shipped/i,
+    /^shipping/i,
+    /^last week/i,
+    /^this week/i,
+    /^next up/i,
+    /^working on/i,
+    /^dependencies/i,
+    /^overall/i,
+    /^discovery/i,
+    /^initiatives/i,
+    /^general/i,
+    /^focus/i,
+    /^flag/i,
+    /^question/i,
+    /^product crit/i,
+    /^action/i,
+    /^bills/i,
+    /^separately/i,
+  ];
+
+  // First try: look at the very first line for a bold squad name
+  const firstLine = text.split("\n")[0].trim();
+  const firstLineBold = firstLine.match(/\*([^*]+)\*/);
+  if (firstLineBold) {
+    const cleaned = firstLineBold[1].replace(/:[a-z_-]+:/g, "").trim();
+    if (cleaned.length >= 3 && cleaned.length <= 80 && !skipPatterns.some((p) => p.test(cleaned))) {
+      return cleaned;
+    }
   }
+
+  // Fallback: scan all bold text
+  for (const match of boldMatches) {
+    const cleaned = match
+      .replace(/^\*|\*$/g, "")
+      .replace(/:[a-z_-]+:/g, "")
+      .trim();
+
+    if (cleaned.length < 3 || cleaned.length > 80) continue;
+    if (skipPatterns.some((p) => p.test(cleaned))) continue;
+
+    return cleaned;
+  }
+
   return "Unknown Squad";
 }
 
@@ -198,28 +269,45 @@ export function parseOkrUpdate(text: string): ParsedOkrUpdate | null {
     }
   }
 
-  // If no objectives found but message has RAG emojis, create a generic one
+  // If no objectives found, try to extract from less structured updates
   if (objectives.length === 0) {
     const genericObj: ParsedObjective = { name: squadName, keyResults: [] };
     for (const line of lines) {
+      const trimmed = line.trim();
       const hasRag = Object.keys(STATUS_EMOJI_MAP).some((e) =>
-        line.includes(e)
+        trimmed.includes(e)
       );
-      if (hasRag) {
-        const status = extractStatus(line);
-        const { actual, target } = extractActualTarget(line);
-        genericObj.keyResults.push({
-          name: line
-            .replace(/\*+/g, "")
-            .replace(/:[a-z_-]+:/g, "")
-            .replace(/<[^>]+>/g, "")
-            .trim()
-            .slice(0, 120),
-          status,
-          actual,
-          target,
-          rawLine: line,
-        });
+
+      // Also match metric lines like "Activation: Rolloff → Insights Start: 29.1%"
+      const hasMetric = /\d+\.?\d*%/.test(trimmed) && trimmed.includes(":");
+      // Match status descriptions like "Implementation in progress"
+      const hasStatusText = /\b(in progress|implementation|live|shipped|delayed|discovery|kicking off)\b/i.test(trimmed);
+
+      if (hasRag || hasMetric || (hasStatusText && trimmed.length > 20 && trimmed.length < 200)) {
+        const status = hasRag
+          ? extractStatus(trimmed)
+          : hasMetric
+            ? "at_risk"
+            : "on_track";
+        const { actual, target } = extractActualTarget(trimmed);
+
+        const name = trimmed
+          .replace(/\*+/g, "")
+          .replace(/:[a-z_-]+:/g, "")
+          .replace(/<[^>]+>/g, "")
+          .replace(/^[•\-◦▪\s]+/, "")
+          .trim()
+          .slice(0, 150);
+
+        if (name && name.length > 5) {
+          genericObj.keyResults.push({
+            name,
+            status,
+            actual,
+            target,
+            rawLine: trimmed,
+          });
+        }
       }
     }
     if (genericObj.keyResults.length > 0) {
