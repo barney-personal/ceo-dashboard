@@ -69,18 +69,18 @@ export async function getUnitEconomicsMetrics() {
   const revenue = arpu?.monthly_revenue as number | undefined;
 
   const ltvCac =
-    ltvValue && cpaValue ? (ltvValue / cpaValue).toFixed(1) : null;
+    ltvValue != null && cpaValue != null ? (ltvValue / cpaValue).toFixed(1) : null;
 
   return {
-    ltv: ltvValue ? formatCurrency(ltvValue) : null,
-    arpu: arpuValue ? formatCurrency(arpuValue) : null,
-    grossMargin: grossMargin ? formatPercent(grossMargin) : null,
-    contributionMargin: contributionMargin ? formatPercent(contributionMargin) : null,
-    cpa: cpaValue ? formatCurrency(cpaValue) : null,
-    cvr: cvrValue ? formatPercent(cvrValue) : null,
-    mau: mau ? formatCompact(mau) : null,
-    revenue: revenue ? formatCurrency(revenue, 0) : null,
-    ltvCac: ltvCac ? `${ltvCac}x` : null,
+    ltv: ltvValue != null ? formatCurrency(ltvValue) : null,
+    arpu: arpuValue != null ? formatCurrency(arpuValue) : null,
+    grossMargin: grossMargin != null ? formatPercent(grossMargin) : null,
+    contributionMargin: contributionMargin != null ? formatPercent(contributionMargin) : null,
+    cpa: cpaValue != null ? formatCurrency(cpaValue) : null,
+    cvr: cvrValue != null ? formatPercent(cvrValue) : null,
+    mau: mau != null ? formatCompact(mau) : null,
+    revenue: revenue != null ? formatCurrency(revenue, 0) : null,
+    ltvCac: ltvCac != null ? `${ltvCac}x` : null,
     subscribers: subscribers,
   };
 }
