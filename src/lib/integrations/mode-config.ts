@@ -56,6 +56,20 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     category: "cogs",
   },
 
+  // --- Product ---
+  {
+    reportToken: "56f94e35c537",
+    name: "App Active Users",
+    section: "product",
+    category: "active-users",
+  },
+  {
+    reportToken: "5a033d810ddc",
+    name: "App Retention",
+    section: "product",
+    category: "retention",
+  },
+
   // --- Financial ---
   {
     reportToken: "10b1f099768d",
