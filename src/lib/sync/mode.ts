@@ -2,9 +2,11 @@ import { db } from "@/lib/db";
 import { modeReports, modeReportData, syncLog } from "@/lib/db/schema";
 import { MODE_REPORT_MAP } from "@/lib/integrations/mode-config";
 import {
-  runReportAndWait,
-  getRunQueries,
-  getQueryResult,
+  getLatestRun,
+  getQueryRuns,
+  getReportQueries,
+  getQueryResultContent,
+  extractQueryToken,
 } from "@/lib/integrations/mode";
 import { eq } from "drizzle-orm";
 
@@ -31,44 +33,77 @@ async function seedReports() {
 }
 
 /**
- * Sync a single Mode report: run it, fetch results, upsert to DB.
+ * Sync a single Mode report: fetch latest run results, upsert to DB.
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect
 ): Promise<number> {
-  // Run the report and wait for completion
-  const run = await runReportAndWait(report.reportToken);
+  // Get the latest successful run
+  const run = await getLatestRun(report.reportToken);
+  if (!run) {
+    throw new Error(`No successful runs found for report ${report.reportToken}`);
+  }
 
-  // Get all queries from this run
-  const queries = await getRunQueries(report.reportToken, run.token);
+  // Get query definitions (for names) and query runs (for results)
+  const [queries, queryRuns] = await Promise.all([
+    getReportQueries(report.reportToken),
+    getQueryRuns(report.reportToken, run.token),
+  ]);
+
+  // Build a map of query token → query name
+  const queryNameMap = new Map(queries.map((q) => [q.token, q.name]));
 
   let recordCount = 0;
 
-  for (const query of queries) {
-    const { columns, rows } = await getQueryResult(
-      report.reportToken,
-      run.token,
-      query.token
-    );
+  for (const queryRun of queryRuns) {
+    if (queryRun.state !== "succeeded") continue;
+
+    const queryToken = extractQueryToken(queryRun);
+    const queryName = queryNameMap.get(queryToken) ?? queryToken;
+
+    // Fetch the actual result data (skip queries with excessively large results)
+    let rows: Record<string, unknown>[];
+    try {
+      rows = await getQueryResultContent(
+        report.reportToken,
+        run.token,
+        queryRun.token
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("string longer than")) {
+        console.warn(`Skipping oversized query "${queryName}" in report "${report.name}"`);
+        continue;
+      }
+      throw err;
+    }
+
+    // Derive columns from the first row
+    const columns = rows.length > 0
+      ? Object.keys(rows[0]).map((name) => ({
+          name,
+          type: typeof rows[0][name],
+        }))
+      : [];
 
     // Upsert query results
     await db
       .insert(modeReportData)
       .values({
         reportId: report.id,
-        queryToken: query.token,
-        queryName: query.name,
+        queryToken,
+        queryName,
         data: rows,
-        columns: columns,
+        columns,
         rowCount: rows.length,
         syncedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: [modeReportData.reportId, modeReportData.queryToken],
         set: {
-          queryName: query.name,
+          queryName,
           data: rows,
-          columns: columns,
+          columns,
           rowCount: rows.length,
           syncedAt: new Date(),
         },
@@ -133,14 +168,12 @@ export async function syncAllModeReports(): Promise<{
 
     return { status, recordsSynced: totalRecords, errors };
   } catch (err) {
-    // Fatal error — update sync log
     await db
       .update(syncLog)
       .set({
         completedAt: new Date(),
         status: "error",
-        errorMessage:
-          err instanceof Error ? err.message : String(err),
+        errorMessage: err instanceof Error ? err.message : String(err),
       })
       .where(eq(syncLog.id, log.id));
 

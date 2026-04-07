@@ -1,3 +1,5 @@
+import { gunzipSync } from "zlib";
+
 const MODE_BASE_URL = "https://app.mode.com/api";
 
 interface ModeConfig {
@@ -26,7 +28,6 @@ function authHeaders(config: ModeConfig): HeadersInit {
   );
   return {
     Authorization: `Basic ${encoded}`,
-    "Content-Type": "application/json",
     Accept: "application/hal+json",
   };
 }
@@ -53,39 +54,63 @@ async function modeRequest<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Fetch a JSON endpoint that may be gzipped (used for query result content).
+ */
+async function modeRequestJson<T>(path: string): Promise<T> {
+  const config = getConfig();
+  const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
+  const res = await fetch(url, {
+    headers: {
+      ...authHeaders(config),
+      Accept: "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Mode API error ${res.status}: ${body}`);
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+
+  // Mode may or may not gzip the response — try decompressing, fall back to plain
+  let text: string;
+  try {
+    text = gunzipSync(buffer).toString("utf-8");
+  } catch {
+    text = buffer.toString("utf-8");
+  }
+
+  return JSON.parse(text) as T;
+}
+
 // --- Types ---
 
 export interface ModeReport {
   token: string;
   name: string;
   description: string;
-  _links: {
-    runs: { href: string };
-    queries: { href: string };
-  };
 }
 
 export interface ModeRun {
   token: string;
-  state: string; // 'enqueued' | 'running' | 'succeeded' | 'failed'
+  state: string;
+  created_at: string;
+}
+
+export interface ModeQueryRun {
+  token: string;
+  state: string;
   _links: {
+    query: { href: string };
     result: { href: string };
-    queries: { href: string };
   };
 }
 
 export interface ModeQuery {
   token: string;
   name: string;
-  _links: {
-    result: { href: string };
-  };
-}
-
-export interface ModeQueryResult {
-  token: string;
-  columns: Array<{ name: string; type: string }>;
-  content: unknown[][]; // Row data as arrays
 }
 
 // --- API Methods ---
@@ -94,83 +119,66 @@ export async function getReport(reportToken: string): Promise<ModeReport> {
   return modeRequest<ModeReport>(`/reports/${reportToken}`);
 }
 
-export async function runReport(reportToken: string): Promise<ModeRun> {
-  return modeRequest<ModeRun>(`/reports/${reportToken}/runs`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
+/**
+ * Get the latest successful run for a report.
+ */
+export async function getLatestRun(
+  reportToken: string
+): Promise<ModeRun | null> {
+  const result = await modeRequest<{
+    _embedded: { report_runs: ModeRun[] };
+  }>(`/reports/${reportToken}/runs`);
 
-export async function getReportRun(
-  reportToken: string,
-  runToken: string
-): Promise<ModeRun> {
-  return modeRequest<ModeRun>(
-    `/reports/${reportToken}/runs/${runToken}`
-  );
-}
-
-export async function getRunQueries(
-  reportToken: string,
-  runToken: string
-): Promise<ModeQuery[]> {
-  const result = await modeRequest<{ _embedded: { queries: ModeQuery[] } }>(
-    `/reports/${reportToken}/runs/${runToken}/query_runs`
-  );
-  return result._embedded.queries;
-}
-
-export async function getQueryResult(
-  reportToken: string,
-  runToken: string,
-  queryToken: string
-): Promise<{ columns: Array<{ name: string; type: string }>; rows: Record<string, unknown>[] }> {
-  const result = await modeRequest<ModeQueryResult>(
-    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryToken}/result/content`
-  );
-
-  // Convert array-of-arrays into array-of-objects using column names
-  const columns = result.columns;
-  const rows = result.content.map((row) => {
-    const obj: Record<string, unknown> = {};
-    columns.forEach((col, i) => {
-      obj[col.name] = row[i];
-    });
-    return obj;
-  });
-
-  return { columns, rows };
+  const runs = result._embedded.report_runs;
+  const succeeded = runs.find((r) => r.state === "succeeded");
+  return succeeded ?? null;
 }
 
 /**
- * Run a report and wait for it to complete.
- * Polls every 2 seconds, times out after 2 minutes.
+ * Get all query runs from a report run.
  */
-export async function runReportAndWait(
+export async function getQueryRuns(
   reportToken: string,
-  timeoutMs = 120_000
-): Promise<ModeRun> {
-  const run = await runReport(reportToken);
-  const start = Date.now();
+  runToken: string
+): Promise<ModeQueryRun[]> {
+  const result = await modeRequest<{
+    _embedded: { query_runs: ModeQueryRun[] };
+  }>(`/reports/${reportToken}/runs/${runToken}/query_runs`);
+  return result._embedded.query_runs;
+}
 
-  while (Date.now() - start < timeoutMs) {
-    const status = await getReportRun(reportToken, run.token);
+/**
+ * Get the report-level query definitions (to get query names).
+ */
+export async function getReportQueries(
+  reportToken: string
+): Promise<ModeQuery[]> {
+  const result = await modeRequest<{
+    _embedded: { queries: ModeQuery[] };
+  }>(`/reports/${reportToken}/queries`);
+  return result._embedded.queries;
+}
 
-    if (status.state === "succeeded") {
-      return status;
-    }
-
-    if (status.state === "failed") {
-      throw new Error(
-        `Mode report run failed: ${reportToken}/${run.token}`
-      );
-    }
-
-    // Wait 2 seconds before polling again
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-
-  throw new Error(
-    `Mode report run timed out after ${timeoutMs}ms: ${reportToken}/${run.token}`
+/**
+ * Fetch query result content as JSON rows.
+ * Mode returns gzipped JSON arrays of objects with named columns.
+ */
+export async function getQueryResultContent(
+  reportToken: string,
+  runToken: string,
+  queryRunToken: string
+): Promise<Record<string, unknown>[]> {
+  return modeRequestJson<Record<string, unknown>[]>(
+    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json`
   );
+}
+
+/**
+ * Extract the query token from a query run's query link.
+ * Link format: /api/{workspace}/reports/{report}/queries/{queryToken}
+ */
+export function extractQueryToken(queryRun: ModeQueryRun): string {
+  const href = queryRun._links.query.href;
+  const parts = href.split("/");
+  return parts[parts.length - 1];
 }
