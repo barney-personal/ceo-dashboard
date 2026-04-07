@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
-import { okrUpdates } from "@/lib/db/schema";
-import { desc } from "drizzle-orm";
+import { okrUpdates, squads } from "@/lib/db/schema";
+import { desc, eq, gte } from "drizzle-orm";
 
 export interface OkrSummary {
   pillar: string;
@@ -89,6 +89,49 @@ export async function getOkrStatusCounts(): Promise<{
     behind: all.filter((o) => o.status === "behind").length,
     total: all.length,
   };
+}
+
+export interface SquadInfo {
+  name: string;
+  pillar: string;
+  pmName: string | null;
+  hasRecentUpdate: boolean;
+}
+
+/**
+ * Get all active squads with whether they have a recent update (last 7 days).
+ */
+export async function getSquadsWithCoverage(): Promise<
+  Map<string, SquadInfo[]>
+> {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const allSquads = await db
+    .select()
+    .from(squads)
+    .where(eq(squads.isActive, true));
+
+  // Get squads that have recent updates
+  const recentUpdates = await db
+    .select({ squadName: okrUpdates.squadName })
+    .from(okrUpdates)
+    .where(gte(okrUpdates.postedAt, sevenDaysAgo));
+
+  const recentSquadNames = new Set(recentUpdates.map((r) => r.squadName));
+
+  const grouped = new Map<string, SquadInfo[]>();
+  for (const squad of allSquads) {
+    const existing = grouped.get(squad.pillar) ?? [];
+    existing.push({
+      name: squad.name,
+      pillar: squad.pillar,
+      pmName: squad.pmName,
+      hasRecentUpdate: recentSquadNames.has(squad.name),
+    });
+    grouped.set(squad.pillar, existing);
+  }
+
+  return grouped;
 }
 
 /**

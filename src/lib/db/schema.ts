@@ -9,6 +9,18 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
+export const squads = pgTable("squads", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  pillar: text("pillar").notNull(),
+  channelId: text("channel_id"),
+  pmName: text("pm_name"),
+  pmSlackId: text("pm_slack_id"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const modeReports = pgTable("mode_reports", {
   id: serial("id").primaryKey(),
   reportToken: text("report_token").notNull().unique(),
