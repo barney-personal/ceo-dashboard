@@ -41,7 +41,7 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
         email: (r.email as string) || "",
         jobTitle: (r.job_title as string) || "",
         level: (r.hb_level as string) || "",
-        squad: (r.hb_squad as string) || "Unassigned",
+        squad: (r.hb_squad as string) || (r.hb_function as string) || "Unassigned",
         function: (r.hb_function as string) || "Unassigned",
         manager: (r.manager as string) || "",
         startDate,
@@ -100,32 +100,148 @@ export function getPeopleMetrics(
 }
 
 /**
- * Group employees by function, with squads nested inside.
+ * Map hb_squad values to product pillars.
+ * Squads not matching a product pillar go under their business ops group.
  */
-export function groupByFunctionAndSquad(
-  employees: Person[]
-): { name: string; squads: { name: string; people: Person[] }[] }[] {
-  const byFunction = new Map<string, Map<string, Person[]>>();
+const SQUAD_PILLAR_MAP: Record<string, string> = {
+  // Growth
+  "Growth Pillar": "Growth",
+  "Growth Conversion": "Growth",
+  "Growth Marketing": "Growth",
+  "Growth Personalisation": "Growth",
+  "Growth Engagement (Sea Otters)": "Growth",
+  "Growth Activation (Shire)": "Growth",
+  "Virality": "Growth",
+  "Notifications & Prompts": "Growth",
+  "Prompts & Upsells": "Growth",
+  // EWA & Credit Products
+  "EWA Pillar": "EWA & Credit Products",
+  "EWA & Credit Products Pillar": "EWA & Credit Products",
+  "EWA Core Squad": "EWA & Credit Products",
+  "EWA Modelling": "EWA & Credit Products",
+  "Geo Expansion": "EWA & Credit Products",
+  "BNPL": "EWA & Credit Products",
+  "Instalment Loan": "EWA & Credit Products",
+  "Debt": "EWA & Credit Products",
+  "Pricing & Lending": "EWA & Credit Products",
+  "Credit": "EWA & Credit Products",
+  // Chat
+  "Chat Pillar": "Chat",
+  "Chat 1: Chat Evaluations": "Chat",
+  "Chat 2: AI Money Pro": "Chat",
+  "Chat 3: Recommender": "Chat",
+  "Chat 4: Experience": "Chat",
+  "Chat 5: AI Core": "Chat",
+  "Chat 5: AI Core Squad": "Chat",
+  "Chat System": "Chat",
+  "Chat tools": "Chat",
+  "Chat Insights": "Chat",
+  "Chat: Daily Plans": "Chat",
+  // New Bets
+  "New Bets Pillar": "New Bets",
+  "New Bets Pillar Leads & Shared Resources": "New Bets",
+  "New Bets - Gamification": "New Bets",
+  "Discovery": "New Bets",
+  "Mobile": "New Bets",
+  "Bundles": "New Bets",
+  // Card
+  "Card Pillar": "Card",
+  "Card 1": "Card",
+  "Card 2": "Card",
+  "Builder Pillar": "Card",
+  // Access, Trust & Money, Risk & Payments
+  "Payments Infrastructure": "Access, Trust & Money, Risk & Payments",
+  "Fraud & Security": "Access, Trust & Money, Risk & Payments",
+  "Fraud Infrastructure": "Access, Trust & Money, Risk & Payments",
+  "Identity & Access": "Access, Trust & Money, Risk & Payments",
+  "Access Trust and Money": "Access, Trust & Money, Risk & Payments",
+  "Risk Analystics": "Access, Trust & Money, Risk & Payments",
+  "Pricing & Packaging": "Access, Trust & Money, Risk & Payments",
+  // Platform
+  "Front End Platform": "Platform",
+  "Site Reliability & Data Platform": "Platform",
+  "Platform (Backend & MLOps)": "Platform",
+  "Platform": "Platform",
+  "Data Enablement": "Platform",
+  // Business Operations
+  "Talent": "Talent & People",
+  "People": "Talent & People",
+  "People Team": "Talent & People",
+  "Marketing": "Marketing",
+  "Champs": "Customer Operations",
+  "Operations": "Customer Operations",
+  "Customer Operations": "Customer Operations",
+  "Finance": "Finance",
+  "Commercial": "Commercial",
+  "Legal & Compliance": "Legal & Compliance",
+  "Compliance": "Legal & Compliance",
+  "Exec": "Exec",
+  "CEO": "Exec",
+  "Management": "Exec",
+  "IT": "Business Operations",
+  "Experience": "Experience",
+  "Voice": "Experience",
+  "User Research": "Experience",
+};
+
+/** Pillars that are product/engineering — shown in the main grid. */
+const PRODUCT_PILLARS = new Set([
+  "Growth",
+  "EWA & Credit Products",
+  "Chat",
+  "New Bets",
+  "Card",
+  "Access, Trust & Money, Risk & Payments",
+  "Platform",
+]);
+
+function getPillarForSquad(squad: string): string {
+  if (SQUAD_PILLAR_MAP[squad]) return SQUAD_PILLAR_MAP[squad];
+  for (const part of squad.split(",")) {
+    const pillar = SQUAD_PILLAR_MAP[part.trim()];
+    if (pillar) return pillar;
+  }
+  return "Business Operations";
+}
+
+export interface PillarGroup {
+  name: string;
+  count: number;
+  isProduct: boolean;
+  squads: { name: string; people: Person[] }[];
+}
+
+/**
+ * Group employees by pillar → squad for drill-down navigation.
+ */
+export function groupByPillarAndSquad(employees: Person[]): PillarGroup[] {
+  const byPillar = new Map<string, Map<string, Person[]>>();
 
   for (const person of employees) {
-    if (!byFunction.has(person.function)) {
-      byFunction.set(person.function, new Map());
+    const pillar = getPillarForSquad(person.squad);
+    if (!byPillar.has(pillar)) {
+      byPillar.set(pillar, new Map());
     }
-    const squads = byFunction.get(person.function)!;
+    const squads = byPillar.get(pillar)!;
     if (!squads.has(person.squad)) {
       squads.set(person.squad, []);
     }
     squads.get(person.squad)!.push(person);
   }
 
-  return [...byFunction.entries()]
+  return [...byPillar.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([funcName, squads]) => ({
-      name: funcName,
-      squads: [...squads.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([squadName, people]) => ({ name: squadName, people })),
-    }));
+    .map(([pillarName, squads]) => {
+      const squadList = [...squads.entries()]
+        .sort(([, a], [, b]) => b.length - a.length)
+        .map(([squadName, people]) => ({ name: squadName, people }));
+      return {
+        name: pillarName,
+        count: squadList.reduce((s, sq) => s + sq.people.length, 0),
+        isProduct: PRODUCT_PILLARS.has(pillarName),
+        squads: squadList,
+      };
+    });
 }
 
 /**
