@@ -4,7 +4,9 @@ import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
+import { LineChart } from "@/components/charts/line-chart";
 import { getUnitEconomicsMetrics } from "@/lib/data/metrics";
+import { getArpuMarginSeries, getMarginSeries, getPaybackSeries } from "@/lib/data/chart-data";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function UnitEconomicsPage() {
@@ -14,7 +16,12 @@ export default async function UnitEconomicsPage() {
     redirect("/dashboard");
   }
 
-  const metrics = await getUnitEconomicsMetrics().catch(() => null);
+  const [metrics, arpuSeries, marginSeries, paybackSeries] = await Promise.all([
+    getUnitEconomicsMetrics().catch(() => null),
+    getArpuMarginSeries().catch(() => []),
+    getMarginSeries().catch(() => []),
+    getPaybackSeries().catch(() => []),
+  ]);
 
   const kpiCharts = getChartEmbeds("unit-economics", "kpis");
   const conversionCharts = getChartEmbeds("unit-economics", "conversion");
@@ -31,84 +38,88 @@ export default async function UnitEconomicsPage() {
 
       {/* Headline metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="36M LTV" value={metrics?.ltv ?? "—"} subtitle={metrics?.ltv ? "per user" : "awaiting data"} delay={0} />
-        <MetricCard label="Blended CPA" value={metrics?.cpa ?? "—"} subtitle={metrics?.cpa ? "all channels" : "awaiting data"} delay={50} />
-        <MetricCard label="LTV:CAC" value={metrics?.ltvCac ?? "—"} subtitle={metrics?.ltvCac ? "ratio" : "awaiting data"} delay={100} />
-        <MetricCard label="Contribution Margin" value={metrics?.contributionMargin ?? "—"} subtitle={metrics?.contributionMargin ? "after COGs" : "awaiting data"} delay={150} />
+        <MetricCard label="36M LTV" value={metrics?.ltv ?? "—"} subtitle={metrics?.ltv ? "per user" : "awaiting data"} modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac" delay={0} />
+        <MetricCard label="Blended CPA" value={metrics?.cpa ?? "—"} subtitle={metrics?.cpa ? "all channels" : "awaiting data"} modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac" delay={50} />
+        <MetricCard label="LTV:CAC" value={metrics?.ltvCac ?? "—"} subtitle={metrics?.ltvCac ? "ratio" : "awaiting data"} modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac" delay={100} />
+        <MetricCard label="Contribution Margin" value={metrics?.contributionMargin ?? "—"} subtitle={metrics?.contributionMargin ? "after COGs" : "awaiting data"} modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac" delay={150} />
       </div>
 
       {/* KPI ratios grid */}
       <div className="grid grid-cols-3 gap-3 lg:grid-cols-6">
         {[
-          { label: "ARPU", value: metrics?.arpu },
-          { label: "Gross Margin", value: metrics?.grossMargin },
-          { label: "M11+ CVR", value: metrics?.cvr },
-          { label: "MAU", value: metrics?.mau },
-          { label: "Revenue", value: metrics?.revenue },
-          { label: "LTV:CAC", value: metrics?.ltvCac },
+          { label: "ARPU", value: metrics?.arpu, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
+          { label: "Gross Margin", value: metrics?.grossMargin, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
+          { label: "M11+ CVR", value: metrics?.cvr, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
+          { label: "MAU", value: metrics?.mau, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
+          { label: "Revenue", value: metrics?.revenue, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
+          { label: "LTV:CAC", value: metrics?.ltvCac, url: "https://app.mode.com/cleoai/reports/11c3172037ac" },
         ].map((item) => (
-          <div key={item.label} className="rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm">
+          <a key={item.label} href={item.url} target="_blank" rel="noopener noreferrer" className="group rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm transition-all hover:border-primary/30 hover:shadow-warm-lg">
             <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
             <p className="font-display text-lg text-foreground">{item.value ?? "—"}</p>
-          </div>
+          </a>
         ))}
       </div>
 
-      {/* Chart links by category */}
-      {kpiCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Strategic Finance KPIs</h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {kpiCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
-            ))}
-          </div>
-        </div>
+      {/* Charts */}
+      {arpuSeries.length > 0 && (
+        <LineChart
+          series={arpuSeries}
+          title="Revenue & Profit per User"
+          subtitle="Monthly trend"
+          yLabel="£ per user"
+          yFormatType="currency"
+          modeUrl="https://app.mode.com/cleoai/reports/b301cc0c9572"
+        />
       )}
 
-      {conversionCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Conversion</h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {conversionCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
-            ))}
-          </div>
-        </div>
+      {marginSeries.length > 0 && (
+        <LineChart
+          series={marginSeries}
+          title="Margin Trend"
+          subtitle="vs baseline"
+          yLabel="%"
+          yFormatType="percent"
+          modeUrl="https://app.mode.com/cleoai/reports/b301cc0c9572"
+        />
       )}
 
-      {cacCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Customer Acquisition Cost</h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {cacCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
-            ))}
-          </div>
-        </div>
+      {paybackSeries.length > 0 && (
+        <LineChart
+          series={paybackSeries}
+          title="Payback Period"
+          subtitle="By cohort"
+          yLabel="Months"
+          yFormatType="months"
+          modeUrl="https://app.mode.com/cleoai/reports/774f14224dd9"
+        />
       )}
 
-      {retentionCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">Retention</h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {retentionCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Mode report links grouped by category */}
+      <div className="space-y-6">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+          Mode Reports
+        </h3>
 
-      {cogsCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">COGs / Arrears</h3>
-          <div className="grid gap-3 lg:grid-cols-2">
-            {cogsCharts.map((chart) => (
-              <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View interactive chart in Mode" />
-            ))}
-          </div>
-        </div>
-      )}
+        {[
+          { label: "Strategic Finance KPIs", charts: kpiCharts },
+          { label: "Conversion", charts: conversionCharts },
+          { label: "Customer Acquisition Cost", charts: cacCharts },
+          { label: "Retention", charts: retentionCharts },
+          { label: "COGs / Arrears", charts: cogsCharts },
+        ]
+          .filter((g) => g.charts.length > 0)
+          .map((group) => (
+            <div key={group.label} className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
+              <div className="grid gap-2 lg:grid-cols-2">
+                {group.charts.map((chart) => (
+                  <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View in Mode" />
+                ))}
+              </div>
+            </div>
+          ))}
+      </div>
     </div>
   );
 }

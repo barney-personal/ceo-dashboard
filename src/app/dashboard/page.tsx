@@ -58,6 +58,7 @@ export default async function DashboardOverview() {
             label="LTV:CAC"
             value={metrics?.ltvCac ?? "—"}
             subtitle={metrics?.ltvCac ? "36M LTV / blended CPA" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
             delay={0}
           />
         </PermissionGate>
@@ -66,6 +67,7 @@ export default async function DashboardOverview() {
             label="Revenue"
             value={metrics?.revenue ?? "—"}
             subtitle={metrics?.revenue ? "monthly" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
             delay={50}
           />
         </PermissionGate>
@@ -74,6 +76,7 @@ export default async function DashboardOverview() {
             label="MAU"
             value={metrics?.mau ?? "—"}
             subtitle={metrics?.mau ? "monthly active users" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
             delay={100}
           />
         </PermissionGate>
@@ -82,6 +85,7 @@ export default async function DashboardOverview() {
             label="Headcount"
             value={headcount?.total?.toString() ?? "—"}
             subtitle={headcount?.total ? "active employees" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/c458b52ceb68"
             delay={150}
           />
         </PermissionGate>
@@ -137,7 +141,21 @@ export default async function DashboardOverview() {
       {/* Bottom detail cards */}
       <div className="grid gap-4 lg:grid-cols-2">
         <PermissionGate role={role} requiredRole="leadership">
-          <SectionCard title="Key Ratios" description="From Strategic Finance KPIs">
+          <SectionCard
+            title="Key Ratios"
+            description="From Strategic Finance KPIs"
+            action={
+              <a
+                href="https://app.mode.com/cleoai/reports/11c3172037ac"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Mode
+                <ArrowUpRight className="h-3 w-3" />
+              </a>
+            }
+          >
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: "Gross Margin", value: metrics?.grossMargin },
