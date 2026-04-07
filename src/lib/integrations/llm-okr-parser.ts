@@ -55,32 +55,62 @@ const PILLAR_SQUADS: Record<string, string[]> = {
   ],
 };
 
-const SYSTEM_PROMPT = `You extract structured OKR update data from Slack messages posted by product managers.
+const SYSTEM_PROMPT = `You extract structured OKR data from weekly squad update messages posted by product managers in Slack.
 
-Each message is from one of these pillar OKR channels. The known squads per pillar are:
+IMPORTANT: Only extract ACTUAL OKR Key Results — these are formal objectives with measurable targets and RAG status indicators. Do NOT extract:
+- Experiments (live, upcoming, or shipped)
+- "Last week" / "This week" / "Working on" items
+- Shipped features or initiatives
+- Discovery work or general status updates
+- Delivery milestones (unless they ARE a formal KR)
+
+A real KR looks like: "KR1: Increase M1 retention rate by 2% :large_green_circle:" or "KR1.1: Reduce arrears by 3% to unlock $5.10 ARPU"
+NOT like: "Shipped loan offer happy path" or "Building fixes for app init time issues"
+
+Known squads per pillar:
 ${Object.entries(PILLAR_SQUADS)
   .map(([pillar, squads]) => `${pillar}: ${squads.join(", ")}`)
   .join("\n")}
 
-Given a raw Slack message, extract:
-- squadName: map to the closest known squad name above. If the message mentions a squad not in the list, use the name from the message.
-- tldr: a 1-2 sentence summary of what happened / what's the status
-- krs: array of key results, each with:
-  - objective: the parent objective description
-  - name: short KR name (e.g. "KR1: Total Paid LTV:CPA", "Reduce arrears by 3%", "Launch EWA MVP in UK")
-  - rag: "green" (on track), "amber" (at risk), "red" (behind), or "not_started"
-  - metric: the actual vs target string if present (e.g. "2.86x vs 3x target", "+5.0% vs +7.6% target"), or null
+Known author → squad mapping (use these to identify the squad when the message doesn't have a clear header):
+- Santiago Vaquero / Sarah Varki → Autopilot Adoption (Chat)
+- Fede Behrens → Daily Plans (Chat)
+- Matej Sip → Autopilot Retention (Chat)
+- Cassie Johnstone → Broccoli (Chat Platform) (Chat)
+- Amanda → Growth Marketing (EWA) (Growth)
+- Areej Al Medinah → Growth Onboarding (Growth)
+- Bruno Haag → Personalisation (Growth)
+- Sevda Kiratli → Referrals (Growth)
+- Mathew Taskin → Retention (Growth)
+- Chris Jan Dudley / Ewa Pazdur → EWA-Core (EWA & Credit Products)
+- Lovneet Singh → Geo-expansion (EWA & Credit Products)
+- Jani Kiilunen → Instalment Loans (EWA & Credit Products or New Bets)
+- Dogan Ates → BNPL (Pay Later) (EWA & Credit Products)
+- Oladipo Oladitan (Ladi) → Card (Flex) (EWA & Credit Products)
+- Glenn Drawbridge → Mobile (New Bets)
+- Samuel Rueesch → Discovery Liquidity (Flex Card) (New Bets)
+- Kelly Bueno Martinez → Discovery Grow/Wealth (New Bets)
+- Surabhi Nimkar → Discovery Spend (New Bets)
 
-RAG mapping from Slack emoji:
-- :large_green_circle: or :green_circle: → green
-- :large_orange_circle: or :large_yellow_circle: → amber
+Extract:
+- squadName: map to the closest known squad name above
+- tldr: 1-2 sentence summary
+- krs: array of ONLY formal key results, each with:
+  - objective: the parent objective
+  - name: the KR name (e.g. "KR1: Total Paid LTV:CPA", "Launch EWA MVP in UK")
+  - rag: "green" | "amber" | "red" | "not_started"
+  - metric: actual vs target string if present (e.g. "2.86x vs 3x target"), or null
+
+RAG emoji mapping:
+- :large_green_circle: / :green_circle: → green
+- :large_orange_circle: / :large_yellow_circle: → amber
 - :red_circle: → red
-- :white_circle: or :black_circle: → not_started
-- :apple: → amber (used by some Chat squads as "needs attention")
+- :white_circle: / :black_circle: → not_started
+- :apple: → amber
 
-If the message is NOT an OKR/squad update (e.g. it's a meeting agenda, action items, planning discussion, or general chat), return exactly: null
+If the message is NOT a weekly squad OKR update (e.g. meeting agenda, action items, planning discussion, question, or general chat), return: null
 
-Return ONLY valid JSON — either a single object or null. No markdown, no explanation.`;
+Return ONLY valid JSON (object or null). No markdown code blocks.`;
 
 /**
  * Use Claude to parse a raw Slack message into structured OKR data.
