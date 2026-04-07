@@ -24,7 +24,7 @@ node_modules/
 .nuxt/
 
 # === Runtime data ===
-data/
+/data/
 
 # === Claude Code worktrees ===
 .claude/worktrees/

@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup
+.PHONY: dev build start lint type-check test setup db-push db-migrate db-studio
 
 setup:
 	./scripts/setup.sh
@@ -20,3 +20,12 @@ type-check:
 
 test:
 	npx vitest run
+
+db-push:
+	doppler run -- npx drizzle-kit push
+
+db-migrate:
+	doppler run -- npx drizzle-kit generate
+
+db-studio:
+	doppler run -- npx drizzle-kit studio
