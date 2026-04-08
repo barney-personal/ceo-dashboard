@@ -9,94 +9,40 @@ import type { BarChartData } from "@/components/charts/bar-chart";
 import type { ColumnChartData } from "@/components/charts/column-chart";
 
 /**
- * 36-month LTV by cohort month — long time horizon bar chart.
- * Pulls from the Strategic Finance KPIs report "36M LTV" query.
+ * 36-month LTV estimate over time — monthly bar chart.
+ * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
+ * with columns: month, user_ltv_36m_actual.
  */
 export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
   const data = await getReportData("unit-economics", "kpis");
-  const query = data.find((d) => d.queryName === "36M LTV");
+  const query = data.find((d) => d.queryName === "Query 4");
   if (!query || query.rows.length === 0) return [];
 
-  // Detect date column
-  const dateCol = ["month", "cohort_month", "date", "period"].find(
-    (col) => col in query.rows[0]
-  );
-  if (!dateCol) return [];
-
   return query.rows
-    .filter((r) => r[dateCol] && r.user_pnl_36m != null)
+    .filter((r) => r.month && r.user_ltv_36m_actual != null)
     .map((r) => ({
-      date: r[dateCol] as string,
-      value: r.user_pnl_36m as number,
+      date: r.month as string,
+      value: r.user_ltv_36m_actual as number,
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
 /**
- * Weekly paid CPA over ~2 years from Growth Marketing Performance.
- * Falls back to the KPIs "CPA" query if the cac report has no weekly data.
+ * Marketing CPA over time from Growth Marketing Performance "Query 1".
+ * 281 rows with columns: date, mcpa (marketing CPA).
  */
-export async function getWeeklyCpaSeries(): Promise<ChartSeries[]> {
+export async function getCpaSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("unit-economics", "cac");
+  const query = data.find((d) => d.queryName === "Query 1");
+  if (!query || query.rows.length === 0) return [];
 
-  // Try to find a weekly CPA query
-  const weeklyQuery = data.find(
-    (d) =>
-      d.queryName.toLowerCase().includes("cpa") ||
-      d.queryName.toLowerCase().includes("weekly")
-  );
-
-  if (weeklyQuery && weeklyQuery.rows.length > 0) {
-    const dateCol = ["week", "week_start", "date", "month"].find(
-      (col) => col in weeklyQuery.rows[0]
-    );
-    const valueCol = ["paid_cpa", "cpa", "avg_cpa", "blended_cpa"].find(
-      (col) => col in weeklyQuery.rows[0]
-    );
-
-    if (dateCol && valueCol) {
-      const rows = weeklyQuery.rows
-        .filter((r) => r[dateCol] && r[valueCol] != null)
-        .map((r) => ({
-          date: r[dateCol] as string,
-          value: r[valueCol] as number,
-        }))
-        .sort(
-          (a, b) =>
-            new Date(a.date).getTime() - new Date(b.date).getTime()
-        );
-
-      if (rows.length > 0) {
-        return [
-          {
-            label: "Paid CPA",
-            color: "#3b3bba",
-            data: rows,
-          },
-        ];
-      }
-    }
-  }
-
-  // Fallback: KPIs "CPA" query (aggregated periods)
-  const kpis = await getReportData("unit-economics", "kpis");
-  const cpaQuery = kpis.find((d) => d.queryName === "CPA");
-  if (!cpaQuery) return [];
-
-  const dateCol = ["month", "date", "period", "week"].find(
-    (col) => col in (cpaQuery.rows[0] ?? {})
-  );
-  if (!dateCol) return [];
-
-  const rows = cpaQuery.rows
-    .filter((r) => r[dateCol] && r.avg_cpa != null)
+  const rows = query.rows
+    .filter((r) => r.date && r.mcpa != null && isFinite(r.mcpa as number))
     .map((r) => ({
-      date: r[dateCol] as string,
-      value: r.avg_cpa as number,
+      date: r.date as string,
+      value: r.mcpa as number,
     }))
-    .sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   return rows.length > 0
     ? [{ label: "Paid CPA", color: "#3b3bba", data: rows }]
