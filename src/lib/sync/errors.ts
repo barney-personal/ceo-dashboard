@@ -10,6 +10,7 @@ export type SyncStopReason = "cancelled" | "deadline_exceeded";
 export interface SyncControl {
   shouldStop?: () => boolean;
   stopReason?: () => SyncStopReason | undefined;
+  signal?: AbortSignal;
 }
 
 export class SyncDeadlineExceededError extends Error {

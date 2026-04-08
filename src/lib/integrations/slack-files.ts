@@ -21,11 +21,13 @@ const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 /**
  * List management accounts xlsx files, sorted newest first.
  */
-export async function getManagementAccountFiles(): Promise<SlackFile[]> {
+export async function getManagementAccountFiles(
+  opts: { signal?: AbortSignal } = {}
+): Promise<SlackFile[]> {
   const files = await listChannelFiles(MGMT_ACCOUNTS_CHANNEL, {
     types: "all",
     count: 20,
-  });
+  }, opts);
   return files
     .filter(
       (f) =>
@@ -47,7 +49,8 @@ interface FilesListResponse {
  */
 export async function listChannelFiles(
   channelId: string,
-  options?: { types?: string; oldest?: number; count?: number }
+  options?: { types?: string; oldest?: number; count?: number },
+  opts: { signal?: AbortSignal } = {}
 ): Promise<SlackFile[]> {
   const params = new URLSearchParams({
     channel: channelId,
@@ -56,19 +59,26 @@ export async function listChannelFiles(
   if (options?.types) params.set("types", options.types);
   if (options?.oldest) params.set("ts_from", String(options.oldest));
 
-  const data = await slackApiRequest<FilesListResponse>("files.list", Object.fromEntries(params));
+  const data = await slackApiRequest<FilesListResponse>(
+    "files.list",
+    Object.fromEntries(params),
+    { signal: opts.signal }
+  );
   return data.files;
 }
 
 /**
  * Get file info including download URL.
  */
-export async function getFileInfo(fileId: string): Promise<SlackFile> {
+export async function getFileInfo(
+  fileId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<SlackFile> {
   const data = await slackApiRequest<{
     ok: boolean;
     error?: string;
     file: SlackFile;
-  }>("files.info", { file: fileId });
+  }>("files.info", { file: fileId }, { signal: opts.signal });
   return data.file;
 }
 
@@ -77,9 +87,12 @@ export async function getFileInfo(fileId: string): Promise<SlackFile> {
  * Returns the raw file buffer.
  */
 export async function downloadSlackFile(
-  urlPrivateDownload: string
+  urlPrivateDownload: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<Buffer> {
-  const res = await slackDownloadRequest(urlPrivateDownload);
+  const res = await slackDownloadRequest(urlPrivateDownload, {
+    signal: opts.signal,
+  });
 
   if (!res.ok) {
     throw new Error(`Failed to download file: ${res.status}`);

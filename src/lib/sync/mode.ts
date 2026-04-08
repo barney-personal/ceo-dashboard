@@ -99,14 +99,14 @@ async function syncReport(
     return { recordsSynced: 0, errors: [] };
   }
 
-  const run = await getLatestRun(report.reportToken);
+  const run = await getLatestRun(report.reportToken, { signal: opts.signal });
   if (!run) {
     throw new Error(`No successful runs found for report ${report.reportToken}`);
   }
 
   const [queries, queryRuns] = await Promise.all([
-    getReportQueries(report.reportToken),
-    getQueryRuns(report.reportToken, run.token),
+    getReportQueries(report.reportToken, { signal: opts.signal }),
+    getQueryRuns(report.reportToken, run.token, { signal: opts.signal }),
   ]);
 
   const queryNameMap = new Map(queries.map((query) => [query.token, query.name]));
@@ -138,7 +138,9 @@ async function syncReport(
       const { rows: sourceRows, responseBytes } = await getQueryResultContent(
         report.reportToken,
         run.token,
-        queryRun.token
+        queryRun.token,
+        1000,
+        { signal: opts.signal }
       );
       const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
 

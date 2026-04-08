@@ -91,6 +91,31 @@ describe("sync runtime resilience", () => {
     });
   });
 
+  it("aborts a long-running sync step via the execution-budget signal", async () => {
+    mocks.runSlackSync.mockImplementation(
+      async (_run, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true }
+          );
+        })
+    );
+
+    const promise = expect(
+      runClaimedSync({ id: 23, source: "slack" } as never)
+    ).rejects.toThrow(/execution budget/);
+    await vi.advanceTimersByTimeAsync(60);
+
+    await promise;
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledWith(23, {
+      status: "error",
+      recordsSynced: 0,
+      errorMessage: expect.stringMatching(/execution budget/),
+    });
+  });
+
   it("marks queued runs as failed when a background drain crashes", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     mocks.claimQueuedSyncRun.mockRejectedValue(new Error("claim exploded"));

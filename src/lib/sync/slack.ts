@@ -37,9 +37,10 @@ async function buildUserNameFallback(): Promise<Map<string, string>> {
 /** Resolve a Slack user ID to a display name, falling back to seed data. */
 async function resolveAuthorName(
   userId: string,
-  fallback: Map<string, string>
+  fallback: Map<string, string>,
+  opts: SyncControl = {}
 ): Promise<string> {
-  const name = await getUserName(userId);
+  const name = await getUserName(userId, { signal: opts.signal });
   if (name === userId && fallback.has(userId)) {
     return fallback.get(userId)!;
   }
@@ -100,7 +101,7 @@ async function syncChannel(
       "Slack sync exceeded its execution budget before channel fetch started",
   });
 
-  const channelName = await getChannelName(channelId);
+  const channelName = await getChannelName(channelId, { signal: opts.signal });
   const pillar = derivePillar(channelName);
   const channelContext = `#${channelName} (${pillar} pillar)`;
 
@@ -108,7 +109,9 @@ async function syncChannel(
     lastSyncTs ??
     String(Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000));
 
-  const topLevelMessages = await getChannelHistory(channelId, oldest);
+  const topLevelMessages = await getChannelHistory(channelId, oldest, undefined, {
+    signal: opts.signal,
+  });
   const messages = [];
 
   for (const msg of topLevelMessages) {
@@ -120,7 +123,9 @@ async function syncChannel(
 
     messages.push(msg);
     if (msg.reply_count && msg.reply_count > 0) {
-      const replies = await getThreadReplies(channelId, msg.ts);
+      const replies = await getThreadReplies(channelId, msg.ts, {
+        signal: opts.signal,
+      });
       messages.push(...replies);
     }
   }
@@ -137,13 +142,14 @@ async function syncChannel(
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
     const authorName = msg.user
-      ? await resolveAuthorName(msg.user, userNameFallback)
+      ? await resolveAuthorName(msg.user, userNameFallback, opts)
       : "unknown";
 
     const parsed = await llmParseOkrUpdate(
       msg.text,
       `${channelContext}\nAuthor: ${authorName}`,
-      systemPrompt
+      systemPrompt,
+      { signal: opts.signal }
     );
     if (!parsed || parsed.krs.length === 0) continue;
     const postedAt = new Date(parseFloat(msg.ts) * 1000);

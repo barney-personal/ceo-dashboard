@@ -34,28 +34,65 @@ function authHeaders(config: ModeConfig): HeadersInit {
   };
 }
 
+function composeSignal(
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+  timeoutMessage?: string
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
+  const controller = new AbortController();
+  let didTimeout = false;
+  const onAbort = () => controller.abort(parentSignal?.reason);
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort(new Error(timeoutMessage ?? "Mode request timed out"));
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (parentSignal) {
+        parentSignal.removeEventListener("abort", onAbort);
+      }
+    },
+    timedOut: () => didTimeout,
+  };
+}
+
 async function modeRequest<T>(
   path: string,
-  options?: RequestInit
+  options: RequestInit & { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<T> {
   const config = getConfig();
   const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
+  const { signal: parentSignal, timeoutMs, ...requestInit } = options;
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MODE_MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(new Error("Mode request timed out")),
-      MODE_METADATA_TIMEOUT_MS
+    const { signal, cleanup, timedOut } = composeSignal(
+      timeoutMs ?? MODE_METADATA_TIMEOUT_MS,
+      parentSignal,
+      "Mode request timed out"
     );
 
     try {
       const res = await fetch(url, {
-        ...options,
-        signal: controller.signal,
+        ...requestInit,
+        signal,
         headers: {
           ...authHeaders(config),
-          ...(options?.headers ?? {}),
+          ...(requestInit.headers ?? {}),
         },
       });
 
@@ -75,6 +112,18 @@ async function modeRequest<T>(
 
       return res.json() as Promise<T>;
     } catch (error) {
+      if (signal.aborted) {
+        if (timedOut()) {
+          throw new Error("Mode request timed out");
+        }
+
+        if (signal.reason instanceof Error) {
+          throw signal.reason;
+        }
+
+        throw new Error("Mode request was aborted");
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       const retryable = isRetryableModeError(message);
       if (attempt < MODE_MAX_RETRIES && retryable) {
@@ -84,7 +133,7 @@ async function modeRequest<T>(
       }
       throw error;
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 
@@ -155,6 +204,7 @@ async function modeRequestJson<T>(
   opts: {
     timeoutMs?: number;
     maxBytes?: number;
+    signal?: AbortSignal;
   } = {}
 ): Promise<{ data: T; bytesRead: number }> {
   const config = getConfig();
@@ -164,15 +214,15 @@ async function modeRequestJson<T>(
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MODE_MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(new Error("Mode query result request timed out")),
-      timeoutMs
+    const { signal, cleanup, timedOut } = composeSignal(
+      timeoutMs,
+      opts.signal,
+      "Mode query result request timed out"
     );
 
     try {
       const res = await fetch(url, {
-        signal: controller.signal,
+        signal,
         headers: {
           ...authHeaders(config),
           Accept: "application/json",
@@ -195,6 +245,18 @@ async function modeRequestJson<T>(
 
       return await readJsonBodyWithLimit<T>(res, maxBytes);
     } catch (error) {
+      if (signal.aborted) {
+        if (timedOut()) {
+          throw new Error("Mode query result request timed out");
+        }
+
+        if (signal.reason instanceof Error) {
+          throw signal.reason;
+        }
+
+        throw new Error("Mode query result request was aborted");
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       const retryable = isRetryableModeError(message);
       if (attempt < MODE_MAX_RETRIES && retryable) {
@@ -204,7 +266,7 @@ async function modeRequestJson<T>(
       }
       throw error;
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 
@@ -241,19 +303,23 @@ export interface ModeQuery {
 
 // --- API Methods ---
 
-export async function getReport(reportToken: string): Promise<ModeReport> {
-  return modeRequest<ModeReport>(`/reports/${reportToken}`);
+export async function getReport(
+  reportToken: string,
+  opts?: { signal?: AbortSignal }
+): Promise<ModeReport> {
+  return modeRequest<ModeReport>(`/reports/${reportToken}`, opts);
 }
 
 /**
  * Get the latest successful run for a report.
  */
 export async function getLatestRun(
-  reportToken: string
+  reportToken: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<ModeRun | null> {
   const result = await modeRequest<{
     _embedded: { report_runs: ModeRun[] };
-  }>(`/reports/${reportToken}/runs`);
+  }>(`/reports/${reportToken}/runs`, opts);
 
   const runs = result._embedded.report_runs;
   const succeeded = runs.find((r) => r.state === "succeeded");
@@ -265,11 +331,12 @@ export async function getLatestRun(
  */
 export async function getQueryRuns(
   reportToken: string,
-  runToken: string
+  runToken: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<ModeQueryRun[]> {
   const result = await modeRequest<{
     _embedded: { query_runs: ModeQueryRun[] };
-  }>(`/reports/${reportToken}/runs/${runToken}/query_runs`);
+  }>(`/reports/${reportToken}/runs/${runToken}/query_runs`, opts);
   return result._embedded.query_runs;
 }
 
@@ -277,11 +344,12 @@ export async function getQueryRuns(
  * Get the report-level query definitions (to get query names).
  */
 export async function getReportQueries(
-  reportToken: string
+  reportToken: string,
+  opts?: { signal?: AbortSignal }
 ): Promise<ModeQuery[]> {
   const result = await modeRequest<{
     _embedded: { queries: ModeQuery[] };
-  }>(`/reports/${reportToken}/queries`);
+  }>(`/reports/${reportToken}/queries`, opts);
   return result._embedded.queries;
 }
 
@@ -293,10 +361,12 @@ export async function getQueryResultContent(
   reportToken: string,
   runToken: string,
   queryRunToken: string,
-  maxRows: number = 1000
+  maxRows: number = 1000,
+  opts?: { signal?: AbortSignal }
 ): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
   const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
-    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`
+    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`,
+    opts
   );
 
   return {
@@ -307,7 +377,7 @@ export async function getQueryResultContent(
 
 export async function getModeJsonWithLimit<T>(
   path: string,
-  opts?: { timeoutMs?: number; maxBytes?: number }
+  opts?: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal }
 ): Promise<{ data: T; bytesRead: number }> {
   return modeRequestJson<T>(path, opts);
 }
