@@ -126,6 +126,41 @@ async function syncReport(
   const errors: string[] = [];
   let storedRecords = 0;
 
+  const isGrowthMarketing = report.name
+    .toLowerCase()
+    .includes("growth marketing");
+
+  logModeEvent("report_query_resolution", {
+    reportToken: report.reportToken,
+    reportName: report.name,
+    runToken: run.token,
+    queryDefinitionCount: queries.length,
+    queryDefinitionTokens: queries.map((q) => q.token),
+    queryDefinitionNames: queries.map((q) => q.name),
+    queryRunCount: queryRuns.length,
+    queryRunTokens: queryRuns.map((qr) => qr.token),
+    queryRunQueryLinks: queryRuns.map((qr) => qr._links.query.href),
+    extractedQueryTokens: queryRuns.map((qr) => extractQueryToken(qr)),
+    isGrowthMarketing,
+  });
+
+  if (isGrowthMarketing) {
+    // Extra diagnostic: check if extracted query tokens from runs match any definition tokens
+    const definitionTokenSet = new Set(queries.map((q) => q.token));
+    for (const qr of queryRuns) {
+      const extractedToken = extractQueryToken(qr);
+      const matchesDefinition = definitionTokenSet.has(extractedToken);
+      logModeEvent("growth_marketing_token_match", {
+        queryRunToken: qr.token,
+        extractedQueryToken: extractedToken,
+        queryLink: qr._links.query.href,
+        matchesDefinition,
+        resolvedName: queryNameMap.get(extractedToken) ?? null,
+        queryRunState: qr.state,
+      });
+    }
+  }
+
   for (const queryRun of queryRuns) {
     throwIfSyncShouldStop(opts, {
       cancelled: "Mode sync cancelled between query runs",
@@ -133,13 +168,38 @@ async function syncReport(
         "Mode sync exceeded its execution budget between query runs",
     });
 
-    if (queryRun.state !== "succeeded") continue;
+    if (queryRun.state !== "succeeded") {
+      logModeEvent("query_run_skipped_state", {
+        reportName: report.name,
+        queryRunToken: queryRun.token,
+        state: queryRun.state,
+      });
+      continue;
+    }
 
     const queryToken = extractQueryToken(queryRun);
     const queryName = queryNameMap.get(queryToken) ?? queryToken;
     const queryProfile = getModeQuerySyncProfile(report.reportToken, queryName);
 
+    logModeEvent("query_run_check", {
+      reportName: report.name,
+      queryName,
+      queryToken,
+      queryRunToken: queryRun.token,
+      hasProfile: !!queryProfile,
+      state: queryRun.state,
+      nameFromDefinition: queryNameMap.has(queryToken),
+      configuredQueryNames: profile?.queries.map((q) => q.name) ?? [],
+    });
+
     if (!queryProfile) {
+      logModeEvent("query_run_skipped_no_profile", {
+        reportName: report.name,
+        queryName,
+        queryToken,
+        queryRunToken: queryRun.token,
+        availableProfiles: profile?.queries.map((q) => q.name) ?? [],
+      });
       continue;
     }
 
