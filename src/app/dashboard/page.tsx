@@ -58,6 +58,21 @@ export default async function DashboardOverview() {
         .catch(() => []),
     ]);
 
+  const syncEntries = recentSyncs.map((sync) => {
+    const sourceLabels: Record<string, string> = {
+      mode: "Mode Analytics",
+      slack: "Slack OKRs",
+      "management-accounts": "Management Accounts",
+    };
+    return {
+      id: sync.id,
+      source: sourceLabels[sync.source] ?? sync.source,
+      status: sync.status,
+      recordsSynced: sync.recordsSynced,
+      startedAt: sync.startedAt.toISOString(),
+    };
+  });
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
       <PageHeader
@@ -169,46 +184,34 @@ export default async function DashboardOverview() {
           }
         >
           <div className="space-y-2.5">
-            {recentSyncs.length > 0 ? (
-              recentSyncs.map((sync) => {
-                const sourceLabels: Record<string, string> = {
-                  mode: "Mode Analytics",
-                  slack: "Slack OKRs",
-                  "management-accounts": "Management Accounts",
-                };
-                const ago = Math.floor(
-                  (Date.now() - sync.startedAt.getTime()) / 60000
-                );
-                const timeLabel =
-                  ago < 60
-                    ? `${ago}m ago`
-                    : ago < 1440
-                      ? `${Math.floor(ago / 60)}h ago`
-                      : `${Math.floor(ago / 1440)}d ago`;
-
-                return (
-                  <div key={sync.id} className="flex items-center gap-3">
-                    {sync.status === "success" ? (
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
-                    ) : sync.status === "error" ? (
-                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground">
-                        {sourceLabels[sync.source] ?? sync.source}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {sync.recordsSynced > 0 && (
-                        <span>{sync.recordsSynced.toLocaleString()} records</span>
-                      )}
-                      <span>{timeLabel}</span>
-                    </div>
+            {syncEntries.length > 0 ? (
+              syncEntries.map((entry) => (
+                <div key={entry.id} className="flex items-center gap-3">
+                  {entry.status === "success" ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
+                  ) : entry.status === "error" ? (
+                    <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground">{entry.source}</p>
                   </div>
-                );
-              })
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {entry.recordsSynced > 0 && (
+                      <span>{entry.recordsSynced.toLocaleString()} records</span>
+                    )}
+                    <time dateTime={entry.startedAt}>
+                      {new Date(entry.startedAt).toLocaleDateString("en-GB", {
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  </div>
+                </div>
+              ))
             ) : (
               <p className="text-sm text-muted-foreground">No sync activity yet</p>
             )}
