@@ -1,5 +1,5 @@
-import { currentUser } from "@clerk/nextjs/server";
 import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { getUserRole, hasAccess, type Role } from "@/lib/auth/roles";
 
 export type AuthCheckResult =
@@ -17,12 +17,14 @@ export type SyncRequestAccess =
  * Returns 401 for unauthenticated requests, 403 for insufficient role.
  */
 export async function requireRole(minRole: Role): Promise<AuthCheckResult> {
-  const user = await currentUser();
-  if (!user) {
+  const result = await getCurrentUserWithTimeout();
+
+  if (result.status !== "authenticated") {
     return { ok: false, status: 401, error: "Unauthorized" };
   }
+
   const role = getUserRole(
-    (user.publicMetadata as Record<string, unknown>) ?? {}
+    (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
   if (!hasAccess(role, minRole)) {
     return { ok: false, status: 403, error: "Forbidden" };
@@ -53,13 +55,14 @@ export async function authorizeSyncRequest(
     return "cron";
   }
 
-  const user = await currentUser();
-  if (!user) {
+  const result = await getCurrentUserWithTimeout();
+
+  if (result.status !== "authenticated") {
     return "unauthenticated";
   }
 
   const role = getUserRole(
-    (user.publicMetadata as Record<string, unknown>) ?? {}
+    (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
 
   return hasAccess(role, "ceo") ? "manual" : "forbidden";
