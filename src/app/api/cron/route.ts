@@ -14,7 +14,7 @@ async function getLastSyncTime(source: string): Promise<Date | null> {
   const result = await db
     .select({ startedAt: syncLog.startedAt })
     .from(syncLog)
-    .where(eq(syncLog.source, source))
+    .where(and(eq(syncLog.source, source), eq(syncLog.status, "success")))
     .orderBy(desc(syncLog.startedAt))
     .limit(1);
   return result[0]?.startedAt ?? null;

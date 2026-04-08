@@ -140,6 +140,39 @@ If a value cannot be found, use null.
 Return ONLY valid JSON. No markdown code blocks.`;
 
 /**
+ * Extract JSON from LLM response text, handling various wrapping formats.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractJSON(text: string): Record<string, any> {
+  const trimmed = text.trim();
+
+  // Try direct parse
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  // Strip markdown code fences
+  const stripped = trimmed
+    .replace(/^```(?:json)?\n?/, "")
+    .replace(/\n?```$/, "")
+    .trim();
+  try {
+    return JSON.parse(stripped);
+  } catch {}
+
+  // Find JSON object in the text (first { to last })
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    } catch {}
+  }
+
+  throw new Error(`Could not extract JSON from LLM response: ${trimmed.slice(0, 100)}...`);
+}
+
+/**
  * Parse management accounts Excel file into structured financial data.
  * Uses xlsx to read the file, then Claude to extract the numbers.
  */
@@ -165,15 +198,7 @@ export async function parseManagementAccounts(
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
-  let trimmed = text.trim();
-  if (trimmed.startsWith("```")) {
-    trimmed = trimmed
-      .replace(/^```(?:json)?\n?/, "")
-      .replace(/\n?```$/, "")
-      .trim();
-  }
-
-  const parsed = JSON.parse(trimmed);
+  const parsed = extractJSON(text);
 
   return {
     period: parsed.period ?? "",
