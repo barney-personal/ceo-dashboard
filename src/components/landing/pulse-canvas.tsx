@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect } from "react";
 
 interface Curve {
   color: string;
@@ -28,92 +28,97 @@ export function PulseCanvas() {
   const startTimeRef = useRef<number>(0);
   const visibleRef = useRef(true);
 
-  const draw = useCallback((timestamp: number) => {
-    if (!visibleRef.current) {
-      frameRef.current = requestAnimationFrame(draw);
-      return;
-    }
+  useEffect(() => {
+    function draw(timestamp: number) {
+      if (!visibleRef.current) return; // fully stop loop when hidden
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
 
-    if (!startTimeRef.current) startTimeRef.current = timestamp;
-    const elapsed = timestamp - startTimeRef.current;
+      if (!startTimeRef.current) startTimeRef.current = timestamp;
+      const elapsed = timestamp - startTimeRef.current;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const targetW = Math.round(rect.width * dpr);
+      const targetH = Math.round(rect.height * dpr);
+      const w = rect.width;
+      const h = rect.height;
 
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      ctx.scale(dpr, dpr);
-    }
-
-    ctx.clearRect(0, 0, w, h);
-
-    for (const curve of CURVES) {
-      ctx.beginPath();
-      ctx.strokeStyle = curve.color;
-      ctx.lineWidth = curve.lineWidth;
-      ctx.globalAlpha = curve.opacity;
-
-      const baseY = h * curve.yOffset;
-      const timeShift = elapsed * curve.speed;
-
-      for (let x = -20; x <= w + 20; x += 2) {
-        const y =
-          baseY +
-          Math.sin(x * curve.frequency + timeShift) * curve.amplitude +
-          Math.sin(x * curve.frequency * 2.3 + timeShift * 1.4) * (curve.amplitude * 0.3) +
-          Math.sin(x * curve.frequency * 0.7 + timeShift * 0.6) * (curve.amplitude * 0.5);
-
-        if (x === -20) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        ctx.scale(dpr, dpr);
       }
 
-      ctx.stroke();
+      ctx.clearRect(0, 0, w, h);
+
+      for (const curve of CURVES) {
+        ctx.beginPath();
+        ctx.strokeStyle = curve.color;
+        ctx.lineWidth = curve.lineWidth;
+        ctx.globalAlpha = curve.opacity;
+
+        const baseY = h * curve.yOffset;
+        const timeShift = elapsed * curve.speed;
+
+        for (let x = -20; x <= w + 20; x += 2) {
+          const y =
+            baseY +
+            Math.sin(x * curve.frequency + timeShift) * curve.amplitude +
+            Math.sin(x * curve.frequency * 2.3 + timeShift * 1.4) * (curve.amplitude * 0.3) +
+            Math.sin(x * curve.frequency * 0.7 + timeShift * 0.6) * (curve.amplitude * 0.5);
+
+          if (x === -20) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+
+        ctx.stroke();
+      }
+
+      // Floating data dots
+      ctx.globalAlpha = 1;
+      const dotCount = 12;
+      for (let i = 0; i < dotCount; i++) {
+        const phase = (elapsed * 0.0003 + i * 1.7) % (Math.PI * 2);
+        const x = (Math.sin(phase * 0.7 + i * 2.1) * 0.5 + 0.5) * w;
+        const baseYDot = (Math.cos(phase * 0.5 + i * 1.3) * 0.5 + 0.5) * h;
+        const drift = Math.sin(elapsed * 0.001 + i) * 20;
+
+        const dotOpacity = (Math.sin(phase) * 0.5 + 0.5) * 0.12;
+        const radius = 1.5 + Math.sin(phase + i) * 0.8;
+
+        ctx.beginPath();
+        ctx.arc(x, baseYDot + drift, radius, 0, Math.PI * 2);
+        ctx.fillStyle = i % 3 === 0 ? "#3b3bba" : i % 3 === 1 ? "#2d8a6e" : "#888";
+        ctx.globalAlpha = dotOpacity;
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+      frameRef.current = requestAnimationFrame(draw);
     }
 
-    // Floating data dots
-    ctx.globalAlpha = 1;
-    const dotCount = 12;
-    for (let i = 0; i < dotCount; i++) {
-      const phase = (elapsed * 0.0003 + i * 1.7) % (Math.PI * 2);
-      const x = (Math.sin(phase * 0.7 + i * 2.1) * 0.5 + 0.5) * w;
-      const baseYDot = (Math.cos(phase * 0.5 + i * 1.3) * 0.5 + 0.5) * h;
-      const drift = Math.sin(elapsed * 0.001 + i) * 20;
-
-      const dotOpacity = (Math.sin(phase) * 0.5 + 0.5) * 0.12;
-      const radius = 1.5 + Math.sin(phase + i) * 0.8;
-
-      ctx.beginPath();
-      ctx.arc(x, baseYDot + drift, radius, 0, Math.PI * 2);
-      ctx.fillStyle = i % 3 === 0 ? "#3b3bba" : i % 3 === 1 ? "#2d8a6e" : "#888";
-      ctx.globalAlpha = dotOpacity;
-      ctx.fill();
-    }
-
-    ctx.globalAlpha = 1;
-    frameRef.current = requestAnimationFrame(draw);
-  }, []);
-
-  useEffect(() => {
     frameRef.current = requestAnimationFrame(draw);
 
-    // Pause when scrolled out of view
+    // Pause/resume when visibility changes
     const el = containerRef.current;
     if (!el) return () => cancelAnimationFrame(frameRef.current);
 
     const observer = new IntersectionObserver(
-      ([entry]) => { visibleRef.current = entry.isIntersecting; },
+      ([entry]) => {
+        visibleRef.current = entry.isIntersecting;
+        if (entry.isIntersecting) {
+          // Restart loop when becoming visible again
+          frameRef.current = requestAnimationFrame(draw);
+        }
+      },
       { threshold: 0 }
     );
     observer.observe(el);
@@ -122,7 +127,7 @@ export function PulseCanvas() {
       cancelAnimationFrame(frameRef.current);
       observer.disconnect();
     };
-  }, [draw]);
+  }, []);
 
   return (
     <div ref={containerRef} className="absolute inset-0">
