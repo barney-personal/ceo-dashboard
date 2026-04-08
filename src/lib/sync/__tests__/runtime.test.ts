@@ -197,7 +197,7 @@ describe("sync runtime resilience", () => {
       .mockRejectedValueOnce(new Error("db offline"))
       .mockRejectedValueOnce(new Error("db offline"))
       .mockRejectedValueOnce(new Error("db offline"))
-      .mockResolvedValue(undefined);
+      .mockResolvedValue({ finalized: true });
 
     await expect(
       runClaimedSync({ id: 31, source: "slack" } as never)
