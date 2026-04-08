@@ -79,6 +79,14 @@ async function syncReport(
       throw err;
     }
 
+    // Skip queries whose result data is too large for a single DB insert
+    const dataSize = JSON.stringify(rows).length;
+    if (dataSize > 50_000_000) {
+      console.warn(`Skipping query "${queryName}" in report "${report.name}": data too large (${Math.round(dataSize / 1024 / 1024)}MB)`);
+      rows = [];
+      continue;
+    }
+
     // Derive columns from the first row
     const columns = rows.length > 0
       ? Object.keys(rows[0]).map((name) => ({
