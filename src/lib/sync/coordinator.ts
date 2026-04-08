@@ -7,7 +7,6 @@ import {
   eq,
   inArray,
   lt,
-  or,
   sql,
 } from "drizzle-orm";
 import {
@@ -49,6 +48,17 @@ function isUniqueViolation(error: unknown): boolean {
 
 export function formatSyncError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function determineSyncStatus(
+  errors: readonly unknown[],
+  succeededCount: number
+): Extract<SyncStatus, "success" | "partial" | "error"> {
+  if (errors.length === 0) {
+    return "success";
+  }
+
+  return succeededCount > 0 ? "partial" : "error";
 }
 
 export async function findActiveSyncRun(
@@ -312,13 +322,52 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
   };
 }
 
+export async function cancelSyncRun(
+  runId: number
+): Promise<{ cancelled: boolean; reason?: string }> {
+  const completedAt = new Date();
+
+  const [updated] = await db
+    .update(syncLog)
+    .set({
+      completedAt,
+      status: "cancelled",
+      errorMessage: "Cancelled by user",
+      heartbeatAt: completedAt,
+      leaseExpiresAt: null,
+    })
+    .where(
+      and(
+        eq(syncLog.id, runId),
+        inArray(syncLog.status, [...ACTIVE_STATUSES])
+      )
+    )
+    .returning();
+
+  if (updated) {
+    await closeOpenPhases(runId, "cancelled", "Cancelled by user");
+    return { cancelled: true };
+  }
+
+  const [existing] = await db
+    .select({ id: syncLog.id })
+    .from(syncLog)
+    .where(eq(syncLog.id, runId))
+    .limit(1);
+
+  return {
+    cancelled: false,
+    reason: existing ? "not_cancellable" : "not_found",
+  };
+}
+
 export async function finalizeSyncRun(
   runId: number,
   input: FinalizeSyncRunInput
-): Promise<void> {
+): Promise<{ finalized: boolean }> {
   const completedAt = new Date();
 
-  await db
+  const [updated] = await db
     .update(syncLog)
     .set({
       completedAt,
@@ -329,7 +378,17 @@ export async function finalizeSyncRun(
       heartbeatAt: completedAt,
       leaseExpiresAt: null,
     })
-    .where(eq(syncLog.id, runId));
+    .where(
+      and(
+        eq(syncLog.id, runId),
+        inArray(syncLog.status, [...ACTIVE_STATUSES])
+      )
+    )
+    .returning();
+
+  if (!updated) {
+    return { finalized: false };
+  }
 
   if (input.status === "error" || input.status === "cancelled") {
     await closeOpenPhases(
@@ -338,6 +397,8 @@ export async function finalizeSyncRun(
       input.errorMessage ?? undefined
     );
   }
+
+  return { finalized: true };
 }
 
 export async function markSyncRunsFailed(
@@ -376,4 +437,13 @@ export async function markSyncRunsFailed(
   }
 
   return updated.map((row) => row.id);
+}
+
+export async function isSyncRunCancelled(runId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ status: syncLog.status })
+    .from(syncLog)
+    .where(eq(syncLog.id, runId))
+    .limit(1);
+  return row?.status === "cancelled";
 }

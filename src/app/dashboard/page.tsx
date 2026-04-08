@@ -3,14 +3,25 @@ import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
-import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users, Database, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import {
+  ArrowUpRight,
+  Calculator,
+  PoundSterling,
+  BarChart3,
+  Target,
+  Users,
+  Database,
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+} from "lucide-react";
 import Link from "next/link";
-import { getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
+import { getHeadcountMetrics } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
 import { getLatestARR } from "@/lib/data/management-accounts";
-import { db } from "@/lib/db";
-import { syncLog } from "@/lib/db/schema";
-import { desc } from "drizzle-orm";
+import { getRecentSyncRuns } from "@/lib/data/sync";
+import { formatCompact } from "@/lib/format/number";
+import { getModeReportLink } from "@/lib/integrations/mode-config";
 import { getEffectiveSyncState } from "@/lib/sync/config";
 
 function SectionLink({
@@ -51,12 +62,7 @@ export default async function DashboardOverview() {
       getLatestLtvCacRatio().catch(() => null),
       getLatestARR().catch(() => null),
       getLatestMAU().catch(() => null),
-      db
-        .select()
-        .from(syncLog)
-        .orderBy(desc(syncLog.startedAt))
-        .limit(10)
-        .catch(() => []),
+      getRecentSyncRuns(10).catch(() => []),
     ]);
 
   const syncEntries = recentSyncs.map((sync) => {
@@ -87,8 +93,10 @@ export default async function DashboardOverview() {
           <MetricCard
             label="LTV:Paid CAC"
             value={ltvCacRatio != null ? `${ltvCacRatio.toFixed(2)}x` : "—"}
-            subtitle={ltvCacRatio != null ? "weekly, LTV ÷ Paid CPA" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/774f14224dd9"
+            subtitle={
+              ltvCacRatio != null ? "weekly, LTV ÷ Paid CPA" : "awaiting data"
+            }
+            modeUrl={getModeReportLink("unit-economics", "cac")}
             delay={0}
           />
         </PermissionGate>
@@ -104,8 +112,10 @@ export default async function DashboardOverview() {
           <MetricCard
             label="MAU"
             value={latestMAU != null ? formatCompact(latestMAU) : "—"}
-            subtitle={latestMAU != null ? "daily, App Active Users" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/56f94e35c537"
+            subtitle={
+              latestMAU != null ? "daily, App Active Users" : "awaiting data"
+            }
+            modeUrl={getModeReportLink("product", "active-users")}
             delay={100}
           />
         </PermissionGate>
@@ -114,7 +124,7 @@ export default async function DashboardOverview() {
             label="Headcount"
             value={headcount?.total?.toString() ?? "—"}
             subtitle={headcount?.total ? "active employees" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/c458b52ceb68"
+            modeUrl={getModeReportLink("people", "headcount")}
             delay={150}
           />
         </PermissionGate>
@@ -206,7 +216,9 @@ export default async function DashboardOverview() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     {entry.recordsSynced > 0 && (
-                      <span>{entry.recordsSynced.toLocaleString()} records</span>
+                      <span>
+                        {entry.recordsSynced.toLocaleString()} records
+                      </span>
                     )}
                     <time dateTime={entry.startedAt}>
                       {new Date(entry.startedAt).toLocaleDateString("en-GB", {
@@ -220,7 +232,9 @@ export default async function DashboardOverview() {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No sync activity yet</p>
+              <p className="text-sm text-muted-foreground">
+                No sync activity yet
+              </p>
             )}
           </div>
         </SectionCard>
@@ -235,29 +249,37 @@ export default async function DashboardOverview() {
                 {
                   icon: Database,
                   label: "Mode Analytics",
-                  detail: "Unit economics, product metrics, retention cohorts — synced every 4 hours",
+                  detail:
+                    "Unit economics, product metrics, retention cohorts — synced every 4 hours",
                 },
                 {
                   icon: PoundSterling,
                   label: "Slack → Management Accounts",
-                  detail: "Monthly xlsx files from #fyi-management_accounts, parsed server-side",
+                  detail:
+                    "Monthly xlsx files from #fyi-management_accounts, parsed server-side",
                 },
                 {
                   icon: Target,
                   label: "Slack → OKRs",
-                  detail: "Key results parsed from pillar channels via Claude — synced every 2 hours",
+                  detail:
+                    "Key results parsed from pillar channels via Claude — synced every 2 hours",
                 },
                 {
                   icon: Users,
                   label: "HiBob",
-                  detail: "Team directory, tenure, org structure from HR system",
+                  detail:
+                    "Team directory, tenure, org structure from HR system",
                 },
               ].map((source) => (
                 <div key={source.label} className="flex items-start gap-2.5">
                   <source.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
                   <div>
-                    <p className="text-sm font-medium text-foreground">{source.label}</p>
-                    <p className="text-xs text-muted-foreground">{source.detail}</p>
+                    <p className="text-sm font-medium text-foreground">
+                      {source.label}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {source.detail}
+                    </p>
                   </div>
                 </div>
               ))}
