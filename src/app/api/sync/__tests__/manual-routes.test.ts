@@ -12,7 +12,7 @@ vi.mock("@/lib/sync/coordinator", () => ({
 
 vi.mock("@/lib/sync/runtime", () => ({
   createWorkerId: vi.fn(),
-  drainSyncQueue: vi.fn(),
+  startBackgroundSyncDrain: vi.fn(),
 }));
 
 import {
@@ -20,7 +20,7 @@ import {
   syncRequestAccessErrorResponse,
 } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
+import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 import { POST as postManagementAccounts } from "@/app/api/sync/management-accounts/route";
 import { POST as postMode } from "@/app/api/sync/mode/route";
 import { POST as postSlack } from "@/app/api/sync/slack/route";
@@ -31,7 +31,7 @@ const mockSyncRequestAccessErrorResponse = vi.mocked(
 );
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
-const mockDrainSyncQueue = vi.mocked(drainSyncQueue);
+const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
 
 const routes = [
   {
@@ -121,7 +121,11 @@ describe("manual sync routes", () => {
         force: false,
       });
       expect(mockCreateWorkerId).toHaveBeenCalledWith(workerId);
-      expect(mockDrainSyncQueue).toHaveBeenCalledWith(workerId, { source });
+      expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith(workerId, {
+        source,
+        runIds: [17],
+        triggerLabel: "manual " + source + " sync request",
+      });
       expect(await response.json()).toEqual({
         outcome: "queued",
         runId: 17,
@@ -148,7 +152,7 @@ describe("manual sync routes", () => {
         trigger: "manual",
         force: false,
       });
-      expect(mockDrainSyncQueue).not.toHaveBeenCalled();
+      expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
       expect(await response.json()).toEqual({
         outcome: "skipped",
         runId: 9,
@@ -176,7 +180,11 @@ describe("manual sync routes", () => {
         force: true,
       });
       expect(mockCreateWorkerId).toHaveBeenCalledWith(workerId);
-      expect(mockDrainSyncQueue).toHaveBeenCalledWith(workerId, { source });
+      expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith(workerId, {
+        source,
+        runIds: [23],
+        triggerLabel: "manual " + source + " sync request",
+      });
       expect(await response.json()).toEqual({
         outcome: "forced",
         runId: 23,

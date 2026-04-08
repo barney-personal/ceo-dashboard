@@ -10,18 +10,18 @@ vi.mock("@/lib/sync/coordinator", () => ({
 
 vi.mock("@/lib/sync/runtime", () => ({
   createWorkerId: vi.fn(),
-  drainSyncQueue: vi.fn(),
+  startBackgroundSyncDrain: vi.fn(),
 }));
 
 import { isCronRequest } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
+import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 import { GET } from "../route";
 
 const mockIsCronRequest = vi.mocked(isCronRequest);
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
-const mockDrainSyncQueue = vi.mocked(drainSyncQueue);
+const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
 
 function makeRequest(authHeader?: string) {
   return new Request("http://localhost/api/cron", {
@@ -83,7 +83,10 @@ describe("GET /api/cron", () => {
       }
     );
     expect(mockCreateWorkerId).toHaveBeenCalledWith("web-cron");
-    expect(mockDrainSyncQueue).toHaveBeenCalledWith("web-cron");
+    expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith("web-cron", {
+      runIds: [1, 2, 3],
+      triggerLabel: "cron trigger",
+    });
     expect(await response.json()).toEqual({
       status: "syncs enqueued",
       results: {
@@ -121,6 +124,6 @@ describe("GET /api/cron", () => {
     const response = await GET(makeRequest("Bearer test-secret"));
 
     expect(response.status).toBe(200);
-    expect(mockDrainSyncQueue).not.toHaveBeenCalled();
+    expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
   });
 });

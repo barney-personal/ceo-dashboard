@@ -14,7 +14,12 @@ import {
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { prepareModeRowsForStorage, getModeQuerySyncProfile } from "./mode-storage";
-import { SyncCancelledError } from "./errors";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  type SyncControl,
+  throwIfSyncShouldStop,
+} from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
@@ -81,22 +86,28 @@ async function cleanupReportData(
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect,
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{ recordsSynced: number; errors: string[] }> {
+  throwIfSyncShouldStop(opts, {
+    cancelled: "Mode sync cancelled before report fetch started",
+    deadlineExceeded:
+      "Mode sync exceeded its execution budget before report fetch started",
+  });
+
   const profile = getModeSyncProfile(report.reportToken);
   if (!profile?.syncEnabled) {
     await cleanupReportData(report.id, []);
     return { recordsSynced: 0, errors: [] };
   }
 
-  const run = await getLatestRun(report.reportToken);
+  const run = await getLatestRun(report.reportToken, { signal: opts.signal });
   if (!run) {
     throw new Error(`No successful runs found for report ${report.reportToken}`);
   }
 
   const [queries, queryRuns] = await Promise.all([
-    getReportQueries(report.reportToken),
-    getQueryRuns(report.reportToken, run.token),
+    getReportQueries(report.reportToken, { signal: opts.signal }),
+    getQueryRuns(report.reportToken, run.token, { signal: opts.signal }),
   ]);
 
   const queryNameMap = new Map(queries.map((query) => [query.token, query.name]));
@@ -105,9 +116,11 @@ async function syncReport(
   let storedRecords = 0;
 
   for (const queryRun of queryRuns) {
-    if (opts.shouldStop?.()) {
-      throw new SyncCancelledError("Mode sync cancelled between query runs");
-    }
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Mode sync cancelled between query runs",
+      deadlineExceeded:
+        "Mode sync exceeded its execution budget between query runs",
+    });
 
     if (queryRun.state !== "succeeded") continue;
 
@@ -126,7 +139,9 @@ async function syncReport(
       const { rows: sourceRows, responseBytes } = await getQueryResultContent(
         report.reportToken,
         run.token,
-        queryRun.token
+        queryRun.token,
+        1000,
+        { signal: opts.signal }
       );
       const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
 
@@ -181,8 +196,11 @@ async function syncReport(
         heapMb: getHeapMb(),
       });
     } catch (error) {
-      const message = `Failed to sync query "${queryName}" in report "${report.name}": ${formatSyncError(error)}`;
+      const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
+        error instanceof Error ? error.message : String(error)
+      }`;
       errors.push(message);
+      console.error(message);
       logModeEvent("query_failed", {
         reportToken: report.reportToken,
         reportName: report.name,
@@ -205,7 +223,7 @@ async function syncReport(
 
 export async function runModeSync(
   run: { id: number },
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -252,9 +270,11 @@ export async function runModeSync(
     let succeededReports = 0;
 
     for (const report of reports) {
-      if (opts.shouldStop?.()) {
-        throw new SyncCancelledError("Mode sync cancelled between reports");
-      }
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Mode sync cancelled between reports",
+        deadlineExceeded:
+          "Mode sync exceeded its execution budget between reports",
+      });
 
       const reportPhaseId = await tracker.startPhase(
         `sync_report:${report.name}`,
@@ -292,7 +312,9 @@ export async function runModeSync(
           heapMb: getHeapMb(),
         });
       } catch (error) {
-        const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${formatSyncError(error)}`;
+        const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${
+          error instanceof Error ? error.message : String(error)
+        }`;
         if (error instanceof SyncCancelledError) {
           await tracker.endPhase(reportPhaseId, {
             status: "skipped",
@@ -302,7 +324,17 @@ export async function runModeSync(
           throw error;
         }
 
+        if (error instanceof SyncDeadlineExceededError) {
+          await tracker.endPhase(reportPhaseId, {
+            status: "error",
+            detail: "Execution budget exceeded before report completed",
+            errorMessage: error.message,
+          });
+          throw error;
+        }
+
         errors.push(message);
+        console.error(message);
         await tracker.endPhase(reportPhaseId, {
           status: "error",
           errorMessage: message,
@@ -320,7 +352,12 @@ export async function runModeSync(
       await yieldToEventLoop();
     }
 
-    const status = determineSyncStatus(errors, succeededReports);
+    const status =
+      errors.length === 0
+        ? "success"
+        : succeededReports > 0
+          ? "partial"
+          : "error";
 
     logModeEvent("run_finished", {
       runId: run.id,
@@ -336,6 +373,14 @@ export async function runModeSync(
       errors,
     };
   } catch (error) {
+    if (error instanceof SyncDeadlineExceededError) {
+      return {
+        status: totalRecords > 0 ? "partial" : "error",
+        recordsSynced: totalRecords,
+        errors: [...errors, error.message],
+      };
+    }
+
     if (error instanceof SyncCancelledError) {
       return {
         status: "cancelled",

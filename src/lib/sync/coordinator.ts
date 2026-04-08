@@ -7,6 +7,7 @@ import {
   eq,
   inArray,
   lt,
+  sql,
 } from "drizzle-orm";
 import {
   evaluateQueueDecision,
@@ -15,6 +16,7 @@ import {
   type SyncStatus,
   type SyncTrigger,
 } from "./config";
+import { isLocalSyncRunProtected } from "./worker-state";
 
 const ACTIVE_STATUSES = ["queued", "running"] as const;
 const TERMINAL_STATUSES = ["success", "partial", "error", "cancelled"] as const;
@@ -135,6 +137,15 @@ export async function expireAbandonedSyncRuns(
   const expiredIds: number[] = [];
 
   for (const row of rows) {
+    if (
+      isLocalSyncRunProtected({
+        runId: row.id,
+        workerId: row.workerId,
+      })
+    ) {
+      continue;
+    }
+
     const [updated] = await db
       .update(syncLog)
       .set({
@@ -296,7 +307,12 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
   };
 
   const intervalId = setInterval(() => {
-    void tick();
+    void tick().catch((error) => {
+      console.error(
+        `[sync-worker] heartbeat update failed for run ${run.id}:`,
+        error
+      );
+    });
   }, 15_000);
   intervalId.unref?.();
 
@@ -311,9 +327,6 @@ export async function cancelSyncRun(
 ): Promise<{ cancelled: boolean; reason?: string }> {
   const completedAt = new Date();
 
-  // Single atomic UPDATE — only transitions queued/running rows to cancelled.
-  // This eliminates the read-then-write TOCTOU window where a concurrent
-  // finalizeSyncRun call could overwrite a just-completed run.
   const [updated] = await db
     .update(syncLog)
     .set({
@@ -336,7 +349,6 @@ export async function cancelSyncRun(
     return { cancelled: true };
   }
 
-  // Nothing was updated — distinguish not_found from not_cancellable.
   const [existing] = await db
     .select({ id: syncLog.id })
     .from(syncLog)
@@ -355,9 +367,6 @@ export async function finalizeSyncRun(
 ): Promise<{ finalized: boolean }> {
   const completedAt = new Date();
 
-  // CAS update: only transition rows that are still active. This prevents a
-  // late worker completion from overwriting a cancelled (or otherwise terminal)
-  // row, and prevents a late cancel from overwriting a just-completed run.
   const [updated] = await db
     .update(syncLog)
     .set({
@@ -390,6 +399,44 @@ export async function finalizeSyncRun(
   }
 
   return { finalized: true };
+}
+
+export async function markSyncRunsFailed(
+  runIds: number[],
+  errorMessage: string,
+  skipReason: string | null = "background_drain_failed"
+): Promise<number[]> {
+  if (runIds.length === 0) {
+    return [];
+  }
+
+  const completedAt = new Date();
+  const updated = await db
+    .update(syncLog)
+    .set({
+      completedAt,
+      status: "error",
+      skipReason,
+      errorMessage: sql`case
+        when ${syncLog.errorMessage} is null or ${syncLog.errorMessage} = '' then ${errorMessage}
+        else ${syncLog.errorMessage} || E'\n' || ${errorMessage}
+      end`,
+      heartbeatAt: completedAt,
+      leaseExpiresAt: null,
+    })
+    .where(
+      and(
+        inArray(syncLog.id, runIds),
+        inArray(syncLog.status, [...ACTIVE_STATUSES])
+      )
+    )
+    .returning({ id: syncLog.id });
+
+  for (const row of updated) {
+    await closeOpenPhases(row.id, "error", errorMessage);
+  }
+
+  return updated.map((row) => row.id);
 }
 
 export async function isSyncRunCancelled(runId: number): Promise<boolean> {

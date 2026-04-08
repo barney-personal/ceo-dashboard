@@ -1,9 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { db } from "@/lib/db";
+import { normalizeDatabaseError } from "@/lib/db/errors";
 import { squads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 const client = new Anthropic();
+
+/**
+ * Max wall-clock time for a single LLM API call (including any SDK retries).
+ * Prevents a stuck Anthropic request from keeping a sync worker alive past its budget.
+ */
+const LLM_CALL_TIMEOUT_MS = 90_000;
 
 export interface ParsedKr {
   objective: string;
@@ -18,15 +25,57 @@ export interface ParsedOkrUpdate {
   krs: ParsedKr[];
 }
 
+interface ParseOkrOptions {
+  signal?: AbortSignal;
+}
+
+function composeAbortSignal(
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+  timeoutMessage?: string
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
+  const controller = new AbortController();
+  let didTimeout = false;
+  const onAbort = () => controller.abort(parentSignal?.reason);
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort(new Error(timeoutMessage ?? "LLM OKR parse timed out"));
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (parentSignal) {
+        parentSignal.removeEventListener("abort", onAbort);
+      }
+    },
+    timedOut: () => didTimeout,
+  };
+}
+
 /**
  * Build squad context for the LLM prompt from the database.
  * This way adding a squad is just a DB insert — no code changes.
  */
 export async function buildSquadContext(): Promise<string> {
-  const allSquads = await db
-    .select()
-    .from(squads)
-    .where(eq(squads.isActive, true));
+  let allSquads: Array<typeof squads.$inferSelect>;
+  try {
+    allSquads = await db.select().from(squads).where(eq(squads.isActive, true));
+  } catch (error) {
+    throw normalizeDatabaseError("Build LLM squad context", error);
+  }
 
   // Group by pillar
   const byPillar = new Map<string, typeof allSquads>();
@@ -103,24 +152,54 @@ Return ONLY valid JSON (object or null). No markdown code blocks.`;
 export async function llmParseOkrUpdate(
   messageText: string,
   channelContext: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  opts: ParseOkrOptions = {}
 ): Promise<ParsedOkrUpdate | null> {
   // Build prompt from DB if not provided
   const prompt =
     systemPrompt ??
     buildSystemPromptFromContext(await buildSquadContext());
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 2000,
-    system: prompt,
-    messages: [
+  const { signal, cleanup, timedOut } = composeAbortSignal(
+    LLM_CALL_TIMEOUT_MS,
+    opts.signal,
+    `LLM OKR parse timed out after ${LLM_CALL_TIMEOUT_MS / 1000}s`
+  );
+
+  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    response = await client.messages.create(
       {
-        role: "user",
-        content: `Channel: ${channelContext}\n\nSlack message:\n${messageText}`,
+        model: "claude-sonnet-4-6",
+        max_tokens: 2000,
+        system: prompt,
+        messages: [
+          {
+            role: "user",
+            content: `Channel: ${channelContext}\n\nSlack message:\n${messageText}`,
+          },
+        ],
       },
-    ],
-  });
+      { signal }
+    );
+  } catch (error) {
+    if (signal.aborted) {
+      if (timedOut()) {
+        throw new Error(
+          `LLM OKR parse timed out after ${LLM_CALL_TIMEOUT_MS / 1000}s`
+        );
+      }
+
+      if (signal.reason instanceof Error) {
+        throw signal.reason;
+      }
+
+      throw new Error("LLM OKR parse was aborted");
+    }
+    throw error;
+  } finally {
+    cleanup();
+  }
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";

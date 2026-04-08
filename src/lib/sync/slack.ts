@@ -14,7 +14,12 @@ import {
 import { seedSquads } from "@/lib/data/seed-squads";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
-import { SyncCancelledError } from "./errors";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  type SyncControl,
+  throwIfSyncShouldStop,
+} from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
@@ -33,9 +38,10 @@ async function buildUserNameFallback(): Promise<Map<string, string>> {
 /** Resolve a Slack user ID to a display name, falling back to seed data. */
 async function resolveAuthorName(
   userId: string,
-  fallback: Map<string, string>
+  fallback: Map<string, string>,
+  opts: SyncControl = {}
 ): Promise<string> {
-  const name = await getUserName(userId);
+  const name = await getUserName(userId, { signal: opts.signal });
   if (name === userId && fallback.has(userId)) {
     return fallback.get(userId)!;
   }
@@ -80,15 +86,6 @@ function isLikelyUpdate(text: string, subtype?: string): boolean {
   return true;
 }
 
-type OkrStatus = "on_track" | "at_risk" | "behind" | "not_started";
-
-function ragToStatus(rag: "green" | "amber" | "red" | "not_started"): OkrStatus {
-  if (rag === "green") return "on_track";
-  if (rag === "amber") return "at_risk";
-  if (rag === "red") return "behind";
-  return "not_started";
-}
-
 /**
  * Sync OKR updates from a single Slack channel using LLM parsing.
  */
@@ -97,9 +94,15 @@ async function syncChannel(
   lastSyncTs: string | undefined,
   systemPrompt: string,
   userNameFallback: Map<string, string>,
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<number> {
-  const channelName = await getChannelName(channelId);
+  throwIfSyncShouldStop(opts, {
+    cancelled: "Slack sync cancelled before channel fetch started",
+    deadlineExceeded:
+      "Slack sync exceeded its execution budget before channel fetch started",
+  });
+
+  const channelName = await getChannelName(channelId, { signal: opts.signal });
   const pillar = derivePillar(channelName);
   const channelContext = `#${channelName} (${pillar} pillar)`;
 
@@ -107,17 +110,23 @@ async function syncChannel(
     lastSyncTs ??
     String(Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000));
 
-  const topLevelMessages = await getChannelHistory(channelId, oldest);
+  const topLevelMessages = await getChannelHistory(channelId, oldest, undefined, {
+    signal: opts.signal,
+  });
   const messages = [];
 
   for (const msg of topLevelMessages) {
-    if (opts.shouldStop?.()) {
-      throw new SyncCancelledError("Slack sync cancelled while expanding threads");
-    }
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled while expanding threads",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget while expanding threads",
+    });
 
     messages.push(msg);
     if (msg.reply_count && msg.reply_count > 0) {
-      const replies = await getThreadReplies(channelId, msg.ts);
+      const replies = await getThreadReplies(channelId, msg.ts, {
+        signal: opts.signal,
+      });
       messages.push(...replies);
     }
   }
@@ -125,20 +134,23 @@ async function syncChannel(
   let count = 0;
 
   for (const msg of messages) {
-    if (opts.shouldStop?.()) {
-      throw new SyncCancelledError("Slack sync cancelled while parsing messages");
-    }
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled while parsing messages",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget while parsing messages",
+    });
 
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
     const authorName = msg.user
-      ? await resolveAuthorName(msg.user, userNameFallback)
+      ? await resolveAuthorName(msg.user, userNameFallback, opts)
       : "unknown";
 
     const parsed = await llmParseOkrUpdate(
       msg.text,
       `${channelContext}\nAuthor: ${authorName}`,
-      systemPrompt
+      systemPrompt,
+      { signal: opts.signal }
     );
     if (!parsed || parsed.krs.length === 0) continue;
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
@@ -156,7 +168,14 @@ async function syncChannel(
           pillar,
           objectiveName: kr.objective,
           krName: kr.name,
-          status: ragToStatus(kr.rag),
+          status:
+            kr.rag === "green"
+              ? "on_track"
+              : kr.rag === "amber"
+                ? "at_risk"
+                : kr.rag === "red"
+                  ? "behind"
+                  : "not_started",
           actual: kr.metric ?? null,
           target: null,
           tldr: parsed.tldr ?? null,
@@ -166,7 +185,14 @@ async function syncChannel(
         .onConflictDoUpdate({
           target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
           set: {
-            status: ragToStatus(kr.rag),
+            status:
+              kr.rag === "green"
+                ? "on_track"
+                : kr.rag === "amber"
+                  ? "at_risk"
+                  : kr.rag === "red"
+                    ? "behind"
+                    : "not_started",
             actual: kr.metric ?? null,
             tldr: parsed.tldr ?? null,
             syncedAt: new Date(),
@@ -198,7 +224,7 @@ async function fetchLastSlackSuccessTimestamp(): Promise<string | undefined> {
  */
 export async function runSlackSync(
   run: { id: number },
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -253,9 +279,11 @@ export async function runSlackSync(
     });
 
     for (const channelId of channelIds) {
-      if (opts.shouldStop?.()) {
-        throw new SyncCancelledError("Slack sync cancelled between channels");
-      }
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Slack sync cancelled between channels",
+        deadlineExceeded:
+          "Slack sync exceeded its execution budget between channels",
+      });
 
       const channelPhaseId = await tracker.startPhase(
         `sync_channel:${channelId}`,
@@ -286,6 +314,15 @@ export async function runSlackSync(
           throw error;
         }
 
+        if (error instanceof SyncDeadlineExceededError) {
+          await tracker.endPhase(channelPhaseId, {
+            status: "error",
+            detail: "Execution budget exceeded before channel completed",
+            errorMessage: error.message,
+          });
+          throw error;
+        }
+
         const message = `Failed to sync channel ${channelId}: ${formatSyncError(error)}`;
         errors.push(message);
         await tracker.endPhase(channelPhaseId, {
@@ -301,6 +338,14 @@ export async function runSlackSync(
       errors,
     };
   } catch (error) {
+    if (error instanceof SyncDeadlineExceededError) {
+      return {
+        status: totalRecords > 0 ? "partial" : "error",
+        recordsSynced: totalRecords,
+        errors: [...errors, error.message],
+      };
+    }
+
     if (error instanceof SyncCancelledError) {
       return {
         status: "cancelled",

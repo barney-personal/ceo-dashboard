@@ -41,6 +41,10 @@ vi.mock("drizzle-orm", () => ({
   desc: (col: unknown) => ({ desc: col }),
   lt: (col: unknown, val: unknown) => ({ lt: [col, val] }),
   or: (...args: unknown[]) => ({ or: args }),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+    strings,
+    values,
+  })),
 }));
 
 vi.mock("@/lib/sync/config", () => ({
