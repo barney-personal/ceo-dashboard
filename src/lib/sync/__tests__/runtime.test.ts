@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { throwIfSyncShouldStop } from "../errors";
+import {
+  isLocalSyncRunProtected,
+  resetLocalSyncRunProtectionForTest,
+} from "../worker-state";
 
 const mocks = vi.hoisted(() => ({
   claimQueuedSyncRun: vi.fn(),
@@ -51,6 +55,7 @@ import { runClaimedSync, startBackgroundSyncDrain } from "../runtime";
 describe("sync runtime resilience", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetLocalSyncRunProtectionForTest();
     mocks.expireAbandonedSyncRuns.mockReset();
     mocks.finalizeSyncRun.mockReset();
     mocks.claimQueuedSyncRun.mockReset();
@@ -65,6 +70,7 @@ describe("sync runtime resilience", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetLocalSyncRunProtectionForTest();
     vi.restoreAllMocks();
   });
 
@@ -164,9 +170,11 @@ describe("sync runtime resilience", () => {
     });
 
     expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(1);
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(true);
 
     await vi.advanceTimersByTimeAsync(50_000);
     expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(4);
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(true);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(5);
@@ -175,5 +183,6 @@ describe("sync runtime resilience", () => {
       recordsSynced: 12,
       errorMessage: null,
     });
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(false);
   });
 });
