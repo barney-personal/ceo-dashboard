@@ -27,7 +27,7 @@ export function formatCompact(value: number): string {
  * Get a row from a named query.
  * Pass `match` to pick a specific row (e.g. a time period); otherwise returns the first row.
  */
-function getQueryRow(
+export function getQueryRow(
   data: Awaited<ReturnType<typeof getReportData>>,
   queryName: string,
   match?: Record<string, unknown>
