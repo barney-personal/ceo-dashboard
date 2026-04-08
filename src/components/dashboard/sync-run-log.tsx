@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   XCircle,
@@ -12,6 +13,8 @@ import {
   FileSpreadsheet,
   Clock,
   AlertTriangle,
+  Play,
+  Square,
 } from "lucide-react";
 
 interface Phase {
@@ -169,9 +172,10 @@ function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; tota
   );
 }
 
-function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
+function RunRow({ run, avgDuration, onAction }: { run: SyncRun; avgDuration: number; onAction: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [cancelling, setCancelling] = useState(false);
   const Icon = SOURCE_ICONS[run.source] ?? Database;
   const label = SOURCE_LABELS[run.source] ?? run.source;
   const isRunning = run.status === "running";
@@ -252,6 +256,27 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
       {/* Expanded phase detail */}
       {expanded && (
         <div className="border-t border-border/20 bg-accent/10 px-4">
+          {isRunning && (
+            <div className="mt-3 flex justify-end">
+              <button
+                disabled={cancelling}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setCancelling(true);
+                  await fetch("/api/sync/cancel", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ syncLogId: run.id }),
+                  });
+                  onAction();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-1.5 text-[11px] font-medium text-destructive/70 transition-colors hover:bg-destructive/10 disabled:opacity-50"
+              >
+                <Square className="h-3 w-3" />
+                {cancelling ? "Cancelling..." : "Cancel sync"}
+              </button>
+            </div>
+          )}
           {run.errorMessage && (
             <div className="mt-3 rounded-md bg-destructive/5 px-3 py-2">
               <p className="text-[11px] font-medium text-destructive/60">Run error</p>
@@ -265,35 +290,84 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
   );
 }
 
+const SYNC_ENDPOINTS: Record<string, string> = {
+  mode: "/api/sync/mode",
+  slack: "/api/sync/slack",
+  "management-accounts": "/api/sync/management-accounts",
+};
+
+function TriggerButton({ source, onTriggered }: { source: string; onTriggered: () => void }) {
+  const [triggering, setTriggering] = useState(false);
+  const label = SOURCE_LABELS[source] ?? source;
+
+  return (
+    <button
+      disabled={triggering}
+      onClick={async () => {
+        setTriggering(true);
+        await fetch(SYNC_ENDPOINTS[source], { method: "POST" });
+        setTimeout(() => {
+          setTriggering(false);
+          onTriggered();
+        }, 1000);
+      }}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border/40 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-primary disabled:opacity-50"
+    >
+      {triggering ? (
+        <RefreshCw className="h-3 w-3 animate-spin" />
+      ) : (
+        <Play className="h-3 w-3" />
+      )}
+      {label}
+    </button>
+  );
+}
+
 export function SyncRunLog({ runs, avgDurations }: SyncRunLogProps) {
   const [filter, setFilter] = useState<string>("all");
+  const router = useRouter();
 
   const filtered = filter === "all" ? runs : runs.filter((r) => r.source === filter);
+  const refresh = () => router.refresh();
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-warm">
-      {/* Header + filters */}
-      <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
+      {/* Header + filters + trigger buttons */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 px-5 py-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">Sync Runs</h3>
           <p className="text-[11px] text-muted-foreground/50">
             Last {runs.length} runs with phase detail
           </p>
         </div>
-        <div className="flex gap-1">
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                filter === f
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground/40 hover:text-muted-foreground"
-              }`}
-            >
-              {FILTER_LABELS[f]}
-            </button>
-          ))}
+        <div className="flex items-center gap-4">
+          {/* Trigger buttons */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/30">
+              Trigger
+            </span>
+            {Object.keys(SYNC_ENDPOINTS).map((source) => (
+              <TriggerButton key={source} source={source} onTriggered={refresh} />
+            ))}
+          </div>
+          {/* Divider */}
+          <div className="h-5 w-px bg-border/30" />
+          {/* Filter tabs */}
+          <div className="flex gap-1">
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  filter === f
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground/40 hover:text-muted-foreground"
+                }`}
+              >
+                {FILTER_LABELS[f]}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -309,6 +383,7 @@ export function SyncRunLog({ runs, avgDurations }: SyncRunLogProps) {
               key={run.id}
               run={run}
               avgDuration={avgDurations[run.source] ?? 0}
+              onAction={refresh}
             />
           ))
         )}
