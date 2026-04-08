@@ -102,6 +102,12 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Admin",
     items: [
       {
+        label: "Users",
+        href: "/dashboard/admin/users",
+        requiredRole: "ceo",
+        icon: Users,
+      },
+      {
         label: "Squads",
         href: "/dashboard/admin/squads",
         requiredRole: "ceo",
