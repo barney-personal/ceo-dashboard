@@ -1,53 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
-import { currentUser } from "@clerk/nextjs/server";
-import { getUserRole, hasAccess } from "@/lib/auth/roles";
-import { db } from "@/lib/db";
-import { syncLog, syncPhases } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
+import { cancelSyncRun } from "@/lib/sync/coordinator";
+
+function parseSyncLogId(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  return null;
+}
 
 export async function POST(request: NextRequest) {
-  const user = await currentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const role = getUserRole(
-    (user.publicMetadata as Record<string, unknown>) ?? {}
-  );
-  if (!hasAccess(role, "ceo")) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireRole("ceo");
+  const authError = authErrorResponse(auth);
+  if (authError) {
+    return authError;
   }
 
-  const { syncLogId } = await request.json();
+  const body = (await request.json().catch(() => null)) as
+    | { syncLogId?: unknown }
+    | null;
+  const syncLogId = parseSyncLogId(body?.syncLogId);
+
   if (!syncLogId) {
-    return NextResponse.json({ error: "syncLogId required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "syncLogId must be a positive integer" },
+      { status: 400 }
+    );
   }
 
-  // Mark any running phases as interrupted
-  await db
-    .update(syncPhases)
-    .set({
-      status: "error",
-      completedAt: new Date(),
-      errorMessage: "Cancelled by user",
-    })
-    .where(
-      and(
-        eq(syncPhases.syncLogId, syncLogId),
-        eq(syncPhases.status, "running")
-      )
+  const result = await cancelSyncRun(syncLogId);
+  if (!result.cancelled) {
+    return NextResponse.json(
+      { error: result.reason ?? "Cannot cancel" },
+      { status: 404 }
     );
+  }
 
-  // Mark the sync log as cancelled
-  await db
-    .update(syncLog)
-    .set({
-      status: "error",
-      completedAt: new Date(),
-      errorMessage: "Cancelled by user",
-    })
-    .where(
-      and(eq(syncLog.id, syncLogId), eq(syncLog.status, "running"))
-    );
-
-  return NextResponse.json({ cancelled: true });
+  return NextResponse.json({ cancelled: true, status: "cancelled" });
 }

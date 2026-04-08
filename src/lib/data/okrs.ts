@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { okrUpdates, squads } from "@/lib/db/schema";
+import { buildSlackMessageUrl } from "@/lib/config/slack";
 import { desc, eq, gte } from "drizzle-orm";
 
 export interface OkrSummary {
@@ -16,20 +17,23 @@ export interface OkrSummary {
   slackTs: string;
 }
 
-/**
- * Get the latest OKR updates grouped by pillar.
- * Returns only the most recent update per KR (deduped by squad + KR name).
- */
-export async function getLatestOkrUpdates(): Promise<
-  Map<string, OkrSummary[]>
-> {
-  const rows = await db
-    .select()
-    .from(okrUpdates)
-    .orderBy(desc(okrUpdates.postedAt));
+export interface OkrUpdateRow {
+  pillar: string | null;
+  squadName: string;
+  objectiveName: string;
+  krName: string;
+  status: string;
+  actual: string | null;
+  target: string | null;
+  userName: string | null;
+  postedAt: Date;
+  channelId: string;
+  slackTs: string;
+}
 
-  // Dedupe: for each squad, only keep KRs from their most recent Slack message.
-  // Uses slackTs as the identity of an update — all KRs in the same message share one ts.
+export function groupLatestOkrRows(
+  rows: OkrUpdateRow[],
+): Map<string, OkrSummary[]> {
   const latestTsPerSquad = new Map<string, string>();
   const deduped: OkrSummary[] = [];
 
@@ -38,10 +42,8 @@ export async function getLatestOkrUpdates(): Promise<
     const existing = latestTsPerSquad.get(squad);
 
     if (!existing) {
-      // First time seeing this squad (rows ordered desc) — this is the latest
       latestTsPerSquad.set(squad, row.slackTs);
     } else if (row.slackTs !== existing) {
-      // Different message — skip older updates
       continue;
     }
 
@@ -60,7 +62,6 @@ export async function getLatestOkrUpdates(): Promise<
     });
   }
 
-  // Group by pillar
   const grouped = new Map<string, OkrSummary[]>();
   for (const okr of deduped) {
     const existing = grouped.get(okr.pillar) ?? [];
@@ -69,6 +70,21 @@ export async function getLatestOkrUpdates(): Promise<
   }
 
   return grouped;
+}
+
+/**
+ * Get the latest OKR updates grouped by pillar.
+ * Returns only the most recent update per KR (deduped by squad + KR name).
+ */
+export async function getLatestOkrUpdates(): Promise<
+  Map<string, OkrSummary[]>
+> {
+  const rows = await db
+    .select()
+    .from(okrUpdates)
+    .orderBy(desc(okrUpdates.postedAt));
+
+  return groupLatestOkrRows(rows);
 }
 
 /**
@@ -137,10 +153,6 @@ export async function getSquadsWithCoverage(): Promise<
 /**
  * Build a Slack deep link to the original message.
  */
-export function getSlackMessageUrl(
-  channelId: string,
-  ts: string
-): string {
-  const cleanTs = ts.replace(".", "");
-  return `https://cleo-team.slack.com/archives/${channelId}/p${cleanTs}`;
+export function getSlackMessageUrl(channelId: string, ts: string): string {
+  return buildSlackMessageUrl(channelId, ts);
 }

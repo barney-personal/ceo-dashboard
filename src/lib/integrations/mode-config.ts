@@ -1,3 +1,5 @@
+import { CHART_HISTORY_START_DATE } from "@/lib/config/charts";
+
 export type DashboardSection =
   | "unit-economics"
   | "financial"
@@ -39,6 +41,19 @@ export interface ModeChartEmbed {
   height?: number;
 }
 
+export const MODE_WORKSPACE_SLUG = "cleoai";
+
+export function buildModeReportUrl(reportToken: string): string {
+  return `https://app.mode.com/${MODE_WORKSPACE_SLUG}/reports/${reportToken}`;
+}
+
+export function buildModeExploreUrl(
+  reportToken: string,
+  vizToken: string,
+): string {
+  return `${buildModeReportUrl(reportToken)}/viz/${vizToken}/explore`;
+}
+
 /**
  * Map of Mode reports to dashboard sections (for data sync).
  */
@@ -64,7 +79,7 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
         storageWindow: {
           kind: "since-date",
           field: "day",
-          since: "2023-01-01",
+          since: CHART_HISTORY_START_DATE,
         },
       },
       {
@@ -97,7 +112,7 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
         storageWindow: {
           kind: "since-date",
           field: "period",
-          since: "2023-01-01",
+          since: CHART_HISTORY_START_DATE,
         },
       },
     ],
@@ -215,10 +230,37 @@ function toModeReportConfig(profile: ModeSyncProfile): ModeReportConfig {
 export const MODE_REPORT_MAP: ModeReportConfig[] =
   MODE_SYNC_PROFILES.map(toModeReportConfig);
 
+const MODE_REPORT_BY_SECTION_CATEGORY = new Map<
+  string,
+  ModeReportConfig & { category: string }
+>(
+  MODE_REPORT_MAP.filter(
+    (report): report is ModeReportConfig & { category: string } =>
+      Boolean(report.category),
+  ).map((report) => [`${report.section}:${report.category}`, report]),
+);
+
 export function getModeSyncProfile(
-  reportToken: string
+  reportToken: string,
 ): ModeSyncProfile | undefined {
-  return MODE_SYNC_PROFILES.find((profile) => profile.reportToken === reportToken);
+  return MODE_SYNC_PROFILES.find(
+    (profile) => profile.reportToken === reportToken,
+  );
+}
+
+export function getModeReportLink(
+  section: DashboardSection,
+  category: string,
+): string {
+  const report = MODE_REPORT_BY_SECTION_CATEGORY.get(`${section}:${category}`);
+
+  if (!report) {
+    throw new Error(
+      `Missing Mode report configuration for ${section}:${category}`,
+    );
+  }
+
+  return buildModeReportUrl(report.reportToken);
 }
 
 /**
@@ -228,43 +270,43 @@ export function getModeSyncProfile(
 export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
   // --- Unit Economics ---
   {
-    url: "https://app.mode.com/cleoai/reports/11c3172037ac/viz/b834503b4991/explore",
+    url: buildModeExploreUrl("11c3172037ac", "b834503b4991"),
     title: "Strategic Finance KPIs — Overview",
     section: "unit-economics",
     category: "kpis",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/11c3172037ac/viz/e1fcec6d6c6f/explore",
+    url: buildModeExploreUrl("11c3172037ac", "e1fcec6d6c6f"),
     title: "Strategic Finance KPIs — Detail",
     section: "unit-economics",
     category: "kpis",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/76bc42f598a7/viz/7b72a2bce97a/explore",
+    url: buildModeExploreUrl("76bc42f598a7", "7b72a2bce97a"),
     title: "Premium Conversion Dashboard",
     section: "unit-economics",
     category: "conversion",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/774f14224dd9/viz/8da4a53042b9/explore",
+    url: buildModeExploreUrl("774f14224dd9", "8da4a53042b9"),
     title: "Growth Marketing Performance",
     section: "unit-economics",
     category: "cac",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/9da7db154e14/viz/85ba5ebd160f/explore",
+    url: buildModeExploreUrl("9da7db154e14", "85ba5ebd160f"),
     title: "Arrears Monitoring — Overview",
     section: "unit-economics",
     category: "cogs",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/9da7db154e14/viz/f90a8736ccd9/explore",
+    url: buildModeExploreUrl("9da7db154e14", "f90a8736ccd9"),
     title: "Arrears Monitoring — Detail",
     section: "unit-economics",
     category: "cogs",
   },
   {
-    url: "https://app.mode.com/cleoai/reports/9c02ab407985/viz/a78655bb88d9/explore",
+    url: buildModeExploreUrl("9c02ab407985", "a78655bb88d9"),
     title: "Retention Dashboard",
     section: "unit-economics",
     category: "retention",
@@ -272,7 +314,7 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
 
   // --- Financial ---
   {
-    url: "https://app.mode.com/cleoai/reports/10b1f099768d/viz/1dd17f9b8f0b/explore",
+    url: buildModeExploreUrl("10b1f099768d", "1dd17f9b8f0b"),
     title: "Seasonality Overview",
     section: "financial",
     category: "seasonality",
@@ -280,7 +322,7 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
 
   // --- OKRs ---
   {
-    url: "https://app.mode.com/cleoai/reports/b301cc0c9572",
+    url: buildModeReportUrl("b301cc0c9572"),
     title: "Company OKR Dashboard",
     section: "okrs",
     category: "company",
@@ -289,14 +331,14 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
 
   // --- People ---
   {
-    url: "https://app.mode.com/cleoai/reports/c458b52ceb68",
+    url: buildModeReportUrl("c458b52ceb68"),
     title: "Headcount SSoT Dashboard",
     section: "people",
     category: "headcount",
     height: 700,
   },
   {
-    url: "https://app.mode.com/cleoai/reports/79ea96d310a9",
+    url: buildModeReportUrl("79ea96d310a9"),
     title: "Performance Dashboard",
     section: "people",
     category: "performance",
@@ -309,9 +351,9 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
  */
 export function getChartEmbeds(
   section: DashboardSection,
-  category?: string
+  category?: string,
 ): ModeChartEmbed[] {
   return MODE_CHART_EMBEDS.filter(
-    (e) => e.section === section && (!category || e.category === category)
+    (e) => e.section === section && (!category || e.category === category),
   );
 }
