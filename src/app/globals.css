@@ -131,3 +131,43 @@
     0 2px 4px oklch(0.16 0.01 260 / 0.03),
     0 8px 24px oklch(0.16 0.01 260 / 0.06);
 }
+
+/* Landing page mini-visualization animations */
+@keyframes landing-bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes landing-line-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes landing-dot-appear {
+  to {
+    opacity: 0.35;
+  }
+}
+
+@keyframes landing-ring-fill {
+  to {
+    stroke-dashoffset: 18.85;
+  }
+}
+
+@keyframes landing-ring-fill-lg {
+  to {
+    stroke-dashoffset: 39.27;
+  }
+}
+
+@keyframes landing-ring-fill-xl {
+  to {
+    stroke-dashoffset: 47.12;
+  }
+}
