@@ -3,7 +3,7 @@ import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
-import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users, Database, Clock, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users, Database, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
