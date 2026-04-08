@@ -2,36 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
 import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 import { isCronRequest } from "@/lib/sync/request-auth";
-import { serializeEnqueueSyncResult } from "@/lib/sync/response";
+import {
+  serializeEnqueueSyncResult,
+  unexpectedSyncRouteErrorResponse,
+} from "@/lib/sync/response";
 
 export async function GET(request: NextRequest) {
-  if (!(await isCronRequest(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    if (!(await isCronRequest(request))) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  const [mode, slack, managementAccounts] = await Promise.all([
-    enqueueSyncRun("mode", { trigger: "cron" }),
-    enqueueSyncRun("slack", { trigger: "cron" }),
-    enqueueSyncRun("management-accounts", { trigger: "cron" }),
-  ]);
+    const [mode, slack, managementAccounts] = await Promise.all([
+      enqueueSyncRun("mode", { trigger: "cron" }),
+      enqueueSyncRun("slack", { trigger: "cron" }),
+      enqueueSyncRun("management-accounts", { trigger: "cron" }),
+    ]);
 
-  if ([mode, slack, managementAccounts].some((result) => result.outcome !== "skipped")) {
-    const workerId = createWorkerId("web-cron");
-    const runIds = [mode.runId, slack.runId, managementAccounts.runId].filter(
-      (runId): runId is number => runId != null
-    );
-    startBackgroundSyncDrain(workerId, {
-      runIds,
-      triggerLabel: "cron trigger",
+    if ([mode, slack, managementAccounts].some((result) => result.outcome !== "skipped")) {
+      const workerId = createWorkerId("web-cron");
+      const runIds = [mode.runId, slack.runId, managementAccounts.runId].filter(
+        (runId): runId is number => runId != null
+      );
+      startBackgroundSyncDrain(workerId, {
+        runIds,
+        triggerLabel: "cron trigger",
+      });
+    }
+
+    return NextResponse.json({
+      status: "syncs enqueued",
+      results: {
+        mode: serializeEnqueueSyncResult(mode),
+        slack: serializeEnqueueSyncResult(slack),
+        managementAccounts: serializeEnqueueSyncResult(managementAccounts),
+      },
     });
+  } catch (error) {
+    return unexpectedSyncRouteErrorResponse("cron", error);
   }
-
-  return NextResponse.json({
-    status: "syncs enqueued",
-    results: {
-      mode: serializeEnqueueSyncResult(mode),
-      slack: serializeEnqueueSyncResult(slack),
-      managementAccounts: serializeEnqueueSyncResult(managementAccounts),
-    },
-  });
 }

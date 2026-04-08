@@ -32,6 +32,7 @@ const mockSyncRequestAccessErrorResponse = vi.mocked(
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
+const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 const routes = [
   {
@@ -70,6 +71,7 @@ describe("manual sync routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    consoleErrorSpy.mockImplementation(() => {});
     mockSyncRequestAccessErrorResponse.mockImplementation((access) => {
       if (access === "unauthenticated") {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -191,6 +193,71 @@ describe("manual sync routes", () => {
         reason: null,
         nextEligibleAt: "2026-04-08T10:30:00.000Z",
       });
+    }
+  );
+
+  it.each(routes)(
+    "returns 500 for unexpected auth errors on $name",
+    async ({ handler, name, url }) => {
+      const error = new Error(`${name} auth exploded`);
+      mockAuthorizeSyncRequest.mockRejectedValue(error);
+
+      const response = await handler(makeRequest(url));
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Internal server error" });
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        `[sync-api] unexpected ${name} route error`,
+        error
+      );
+    }
+  );
+
+  it.each(routes)(
+    "returns 500 for unexpected enqueue errors on $name",
+    async ({ handler, name, url }) => {
+      const error = new Error(`${name} enqueue exploded`);
+      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockEnqueueSyncRun.mockRejectedValue(error);
+
+      const response = await handler(makeRequest(url));
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Internal server error" });
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        `[sync-api] unexpected ${name} route error`,
+        error
+      );
+    }
+  );
+
+  it.each(routes)(
+    "returns 500 for unexpected worker startup errors on $name",
+    async ({ handler, name, source, url }) => {
+      const error = new Error(`${name} worker exploded`);
+      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockEnqueueSyncRun.mockResolvedValue({
+        outcome: "queued",
+        runId: 17,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T09:00:00.000Z"),
+      });
+      mockStartBackgroundSyncDrain.mockImplementation(() => {
+        throw error;
+      });
+
+      const response = await handler(makeRequest(url));
+
+      expect(mockEnqueueSyncRun).toHaveBeenCalledWith(source, {
+        trigger: "manual",
+        force: false,
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Internal server error" });
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        `[sync-api] unexpected ${name} route error`,
+        error
+      );
     }
   );
 });

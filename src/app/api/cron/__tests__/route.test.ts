@@ -22,6 +22,7 @@ const mockIsCronRequest = vi.mocked(isCronRequest);
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
+const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 function makeRequest(authHeader?: string) {
   return new Request("http://localhost/api/cron", {
@@ -33,6 +34,7 @@ describe("GET /api/cron", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    consoleErrorSpy.mockImplementation(() => {});
   });
 
   it("returns 401 when the request is not signed with the cron secret", async () => {
@@ -125,5 +127,70 @@ describe("GET /api/cron", () => {
 
     expect(response.status).toBe(200);
     expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when cron auth lookup throws unexpectedly", async () => {
+    const error = new Error("clerk offline");
+    mockIsCronRequest.mockRejectedValue(error);
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[sync-api] unexpected cron route error",
+      error
+    );
+  });
+
+  it("returns 500 when enqueueing syncs throws unexpectedly", async () => {
+    const error = new Error("db unavailable");
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockRejectedValue(error);
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[sync-api] unexpected cron route error",
+      error
+    );
+  });
+
+  it("returns 500 when background worker startup throws unexpectedly", async () => {
+    const error = new Error("worker startup failed");
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun
+      .mockResolvedValueOnce({
+        outcome: "queued",
+        runId: 1,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T08:00:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        outcome: "skipped",
+        runId: null,
+        reason: "within_interval",
+        nextEligibleAt: new Date("2026-04-08T10:00:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        outcome: "forced",
+        runId: 3,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T09:30:00.000Z"),
+      });
+    mockStartBackgroundSyncDrain.mockImplementation(() => {
+      throw error;
+    });
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[sync-api] unexpected cron route error",
+      error
+    );
   });
 });
