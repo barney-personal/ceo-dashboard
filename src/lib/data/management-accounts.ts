@@ -90,8 +90,8 @@ export async function getLatestARR(): Promise<{
   if (!arrRow) return null;
 
   // After reversal: [label, code, YTD, latest_month, prev_month, ...]
-  // Find the first large numeric value (ARR is in the hundreds of millions)
-  for (let i = 2; i < arrRow.length; i++) {
+  // Start at index 3 to skip YTD and get the latest monthly value
+  for (let i = 3; i < arrRow.length; i++) {
     const val = arrRow[i];
     if (typeof val === "number" && val > 1_000_000) {
       const period = extractPeriodFromFilename(latest.name);

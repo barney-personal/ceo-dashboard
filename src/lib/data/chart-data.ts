@@ -318,9 +318,12 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   const avg = (arr: number[]) =>
     arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 
-  // Exclude current partial month (< 20 days of data skews the average)
-  const allMonths = [...byMonth.keys()].sort();
-  const months = allMonths.filter((m) => byMonth.get(m)!.maus.length >= 20);
+  // Exclude current calendar month entirely (always incomplete)
+  const now = new Date();
+  const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+  const months = [...byMonth.keys()]
+    .filter((m) => m < currentMonth)
+    .sort();
 
   return [
     {
