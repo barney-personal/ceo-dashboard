@@ -10,7 +10,7 @@ services:
     runtime: node
     plan: pro
     buildCommand: NODE_ENV=development npm ci && npm run build
-    preDeployCommand: npx drizzle-kit migrate
+    preDeployCommand: npx drizzle-kit push --force
     startCommand: npm start
     healthCheckPath: /
     maxShutdownDelaySeconds: 300
@@ -45,6 +45,16 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: SENTRY_DSN
+        value: "https://b20d7c73b665f715d5c629addad2ec9b@o4511137405206528.ingest.us.sentry.io/4511184683270144"
+      - key: NEXT_PUBLIC_SENTRY_DSN
+        value: "https://b20d7c73b665f715d5c629addad2ec9b@o4511137405206528.ingest.us.sentry.io/4511184683270144"
+      - key: SENTRY_AUTH_TOKEN
+        sync: false
+      - key: SENTRY_ORG
+        value: "cleo-bf"
+      - key: SENTRY_PROJECT
+        value: "ceo-dashboard"
       - key: CRON_SECRET
         generateValue: true
 
