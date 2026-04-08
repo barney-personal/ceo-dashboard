@@ -10,6 +10,61 @@ import type { ColumnChartData } from "@/components/charts/column-chart";
 
 const CHARTS_START = new Date("2023-01-01").getTime();
 
+export function getWeekStart(date: string | Date): string {
+  const value = date instanceof Date ? new Date(date.getTime()) : new Date(date);
+  const day = value.getDay();
+  const monday = new Date(
+    value.getTime() - ((day === 0 ? 6 : day - 1) * 86400000)
+  );
+  return monday.toISOString().slice(0, 10);
+}
+
+export function groupByWeek<T extends Record<string, unknown>>(
+  rows: T[],
+  dateField: keyof T
+): Map<string, T[]> {
+  const weekMap = new Map<string, T[]>();
+
+  for (const row of rows) {
+    const date = row[dateField];
+    if (!date) continue;
+
+    const key = getWeekStart(date as string | Date);
+    const bucket = weekMap.get(key) ?? [];
+    bucket.push(row);
+    weekMap.set(key, bucket);
+  }
+
+  return weekMap;
+}
+
+export function aggregateCohortRows(
+  rows: Record<string, unknown>[]
+): Map<string, Map<number, number>> {
+  const byCohort = new Map<string, Map<number, number>>();
+
+  for (const row of rows) {
+    if (row.cohort_month == null || row.activity_month == null) continue;
+
+    const cohortDate = new Date(row.cohort_month as string);
+    const cohort = `${cohortDate.getFullYear()}-${String(
+      cohortDate.getMonth() + 1
+    ).padStart(2, "0")}`;
+    const period = row.activity_month as number;
+    const maus = (row.maus as number) ?? 0;
+
+    let periods = byCohort.get(cohort);
+    if (!periods) {
+      periods = new Map();
+      byCohort.set(cohort, periods);
+    }
+
+    periods.set(period, (periods.get(period) ?? 0) + maus);
+  }
+
+  return byCohort;
+}
+
 /**
  * 36-month LTV estimate over time — monthly bar chart.
  * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
@@ -48,32 +103,32 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  // Aggregate to weekly
-  const weekMap = new Map<string, { ltv: number; paidSpend: number; paidUsers: number; days: number }>();
-  for (const r of rows) {
-    const d = new Date(r.date);
-    const day = d.getDay();
-    const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
-    const key = monday.toISOString().slice(0, 10);
-    const b = weekMap.get(key) ?? { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 };
-    b.ltv += r.ltv;
-    b.paidSpend += r.paidSpend;
-    b.paidUsers += r.paidUsers;
-    b.days += 1;
-    weekMap.set(key, b);
-  }
-
-  const weeks = [...weekMap.entries()]
+  const weeks = [...groupByWeek(rows, "date").entries()]
     .filter(([date]) => date >= "2023-01-02")
     .sort((a, b) => a[0].localeCompare(b[0]));
 
   const ratioData = weeks
-    .filter(([, v]) => v.paidUsers > 0)
-    .map(([date, v]) => {
-      const avgLtv = v.ltv / v.days;
-      const paidCpa = v.paidSpend / v.paidUsers;
+    .map(([date, weekRows]) => {
+      const totals = weekRows.reduce(
+        (acc, row) => {
+          acc.ltv += row.ltv;
+          acc.paidSpend += row.paidSpend;
+          acc.paidUsers += row.paidUsers;
+          acc.days += 1;
+          return acc;
+        },
+        { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 }
+      );
+
+      if (totals.paidUsers <= 0) {
+        return null;
+      }
+
+      const avgLtv = totals.ltv / totals.days;
+      const paidCpa = totals.paidSpend / totals.paidUsers;
       return { date, value: paidCpa > 0 ? avgLtv / paidCpa : 0 };
-    });
+    })
+    .filter((point): point is { date: string; value: number } => point !== null);
 
   return [
     {
@@ -162,22 +217,12 @@ export async function getQuery3Series(): Promise<{
   }
 
   // Aggregate all types to weekly buckets (week starting Monday)
-  const weeklyByType = new Map<string, Map<string, { spend: number; users: number; cpa: number; days: number }>>();
+  const weeklyByType = new Map<
+    string,
+    Map<string, { date: string; spend: number; users: number; cpa: number }[]>
+  >();
   for (const [type, rows] of byType) {
-    const weekMap = new Map<string, { spend: number; users: number; cpa: number; days: number }>();
-    for (const r of rows) {
-      const d = new Date(r.date);
-      const day = d.getDay();
-      const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
-      const key = monday.toISOString().slice(0, 10);
-      const bucket = weekMap.get(key) ?? { spend: 0, users: 0, cpa: 0, days: 0 };
-      bucket.spend += r.spend;
-      bucket.users += r.users;
-      bucket.cpa += r.cpa;
-      bucket.days += 1;
-      weekMap.set(key, bucket);
-    }
-    weeklyByType.set(type, weekMap);
+    weeklyByType.set(type, groupByWeek(rows, "date"));
   }
 
   const startKey = "2023-01-02"; // First Monday of 2023
@@ -190,9 +235,12 @@ export async function getQuery3Series(): Promise<{
       data: [...weekMap.entries()]
         .filter(([date]) => date >= startKey)
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([date, v]) => ({
+        .map(([date, weekRows]) => ({
           date,
-          value: field === "cpa" ? v.cpa / v.days : v[field],
+          value:
+            field === "cpa"
+              ? weekRows.reduce((sum, row) => sum + row.cpa, 0) / weekRows.length
+              : weekRows.reduce((sum, row) => sum + row[field], 0),
         })),
     }));
 
@@ -349,22 +397,7 @@ export async function getMauRetentionCohorts(): Promise<
   const query = data.find((d) => d.queryName === "Query 1");
   if (!query) return [];
 
-  // Aggregate: sum maus per (cohort_month, activity_month) across all segments
-  const byCohort = new Map<string, Map<number, number>>();
-  for (const row of query.rows) {
-    if (row.cohort_month == null || row.activity_month == null) continue;
-    const cohortDate = new Date(row.cohort_month as string);
-    const cohort = `${cohortDate.getFullYear()}-${String(cohortDate.getMonth() + 1).padStart(2, "0")}`;
-    const period = row.activity_month as number;
-    const maus = (row.maus as number) ?? 0;
-
-    let periods = byCohort.get(cohort);
-    if (!periods) {
-      periods = new Map();
-      byCohort.set(cohort, periods);
-    }
-    periods.set(period, (periods.get(period) ?? 0) + maus);
-  }
+  const byCohort = aggregateCohortRows(query.rows);
 
   const cohorts = [...byCohort.keys()].sort();
 
