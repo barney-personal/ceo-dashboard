@@ -92,7 +92,7 @@ make test         # Run test suite
 
 Data flows through a sync-first pipeline:
 
-1. **Cron job** (every 2 hours) triggers `POST /api/cron`
+1. **Cron job** (every 2 hours) triggers `GET /api/cron`
 2. **Sync modules** pull from Mode, Slack, and Excel files
 3. **Data stored** in PostgreSQL via Drizzle ORM
 4. **Server components** read from DB and pass data to chart components

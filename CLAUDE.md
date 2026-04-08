@@ -84,7 +84,7 @@ scripts/                        # Setup, guard, worktree, and utility scripts
 | Notion | API | — | Planned |
 | Culture Amp | API | — | Planned |
 
-Sync is triggered by a Render cron job (`0 */2 * * *`) hitting `POST /api/cron` with a bearer token. Each source checks its last sync time and skips if the interval hasn't elapsed. Manual sync triggers available at `POST /api/sync/mode` and `POST /api/sync/slack` (CEO or cron-authorized).
+Sync is triggered by a Render cron job (`0 */2 * * *`) hitting `GET /api/cron` with a bearer token. Each source checks its last sync time and skips if the interval hasn't elapsed. Manual sync triggers available at `POST /api/sync/mode` and `POST /api/sync/slack` (CEO or cron-authorized).
 
 ### Database Schema
 
