@@ -1,16 +1,25 @@
 import {
   claimQueuedSyncRun,
+  expireAbandonedSyncRuns,
   finalizeSyncRun,
   formatSyncError,
   isSyncRunCancelled,
+  markSyncRunsFailed,
   startSyncHeartbeat,
   type SyncLogRow,
 } from "./coordinator";
 import { runModeSync } from "./mode";
 import { runSlackSync } from "./slack";
 import { runManagementAccountsSync } from "./management-accounts";
-import { type SyncSource } from "./config";
+import { getSyncSourceConfig, type SyncSource } from "./config";
 import { isSchemaCompatibilityError } from "@/lib/db/errors";
+import {
+  SyncDeadlineExceededError,
+  isSyncDeadlineExceededError,
+  type SyncControl,
+  type SyncStopReason,
+} from "./errors";
+import { protectLocalSyncRun, releaseLocalSyncRun } from "./worker-state";
 
 type SyncRunResult = {
   status: "success" | "partial" | "error" | "cancelled";
@@ -20,7 +29,7 @@ type SyncRunResult = {
 
 type SyncRunner = (
   run: { id: number },
-  opts?: { shouldStop?: () => boolean }
+  opts?: SyncControl
 ) => Promise<SyncRunResult>;
 
 const RUNNERS: Record<SyncSource, SyncRunner> = {
@@ -29,69 +38,331 @@ const RUNNERS: Record<SyncSource, SyncRunner> = {
   "management-accounts": runManagementAccountsSync,
 };
 
+const FINALIZE_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000];
+const PENDING_FINALIZE_RECOVERY_INTERVAL_MS = 30_000;
+const ABANDONED_SYNC_SWEEP_INTERVAL_MS = 30_000;
+const DB_CANCEL_POLL_MS = 5_000;
+
+type FinalizeInput = Parameters<typeof finalizeSyncRun>[1];
+
+const pendingFinalizeRecoveries = new Map<number, FinalizeInput>();
+let pendingFinalizeRecoveryInterval:
+  | ReturnType<typeof setInterval>
+  | null = null;
+let abandonedSyncSweepInterval: ReturnType<typeof setInterval> | null = null;
+let abandonedSyncSweepInFlight: Promise<void> | null = null;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatDuration(ms: number): string {
+  if (ms % (60 * 1000) === 0) {
+    const minutes = ms / (60 * 1000);
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  const seconds = Math.round(ms / 1000);
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
+}
+
+function getExecutionBudgetMessage(source: string, budgetMs: number): string {
+  return `${source} sync exceeded the ${formatDuration(
+    budgetMs
+  )} execution budget`;
+}
+
+function createExecutionControl(
+  run: SyncLogRow,
+  opts: SyncControl
+): {
+  control: SyncControl;
+  budgetMs: number;
+  clear: () => void;
+  stopReason: () => SyncStopReason | undefined;
+  exceededBudget: () => boolean;
+} {
+  const { executionBudgetMs } = getSyncSourceConfig(run.source as SyncSource);
+  let deadlineExceeded = false;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    deadlineExceeded = true;
+    controller.abort(
+      new SyncDeadlineExceededError(
+        getExecutionBudgetMessage(run.source, executionBudgetMs)
+      )
+    );
+  }, executionBudgetMs);
+  timeoutId.unref?.();
+
+  const stopReason = (): SyncStopReason | undefined => {
+    if (deadlineExceeded) {
+      return "deadline_exceeded";
+    }
+
+    return opts.stopReason?.() ?? (opts.shouldStop?.() ? "cancelled" : undefined);
+  };
+
+  return {
+    control: {
+      shouldStop: () => stopReason() != null,
+      stopReason,
+      signal: controller.signal,
+    },
+    budgetMs: executionBudgetMs,
+    clear: () => clearTimeout(timeoutId),
+    stopReason,
+    exceededBudget: () => deadlineExceeded,
+  };
 }
 
 export function createWorkerId(prefix: string): string {
   return `${prefix}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// How often to poll the DB for an externally-triggered cancellation while a
-// sync is in-flight. Kept short enough to stop work promptly, but long enough
-// not to hammer the DB on every tick.
-const DB_CANCEL_POLL_MS = 5_000;
+/**
+ * Stop the heartbeat timer, logging and suppressing any Postgres error so that
+ * a DB outage during cleanup does not mask the original sync error or leave an
+ * unhandled rejection.
+ */
+async function safeStopHeartbeat(
+  stopHeartbeat: () => Promise<void>,
+  runId: number
+): Promise<void> {
+  try {
+    await stopHeartbeat();
+  } catch (error) {
+    console.error(
+      `[sync-worker] failed to stop heartbeat for run ${runId}:`,
+      error
+    );
+  }
+}
+
+function stopPendingFinalizeRecoverySweepIfIdle(): void {
+  if (pendingFinalizeRecoveryInterval && pendingFinalizeRecoveries.size === 0) {
+    clearInterval(pendingFinalizeRecoveryInterval);
+    pendingFinalizeRecoveryInterval = null;
+  }
+}
+
+async function flushPendingFinalizeRecoveries(): Promise<void> {
+  if (pendingFinalizeRecoveries.size === 0) {
+    stopPendingFinalizeRecoverySweepIfIdle();
+    return;
+  }
+
+  for (const [runId, input] of pendingFinalizeRecoveries.entries()) {
+    try {
+      const { finalized } = await finalizeSyncRun(runId, input);
+      pendingFinalizeRecoveries.delete(runId);
+      releaseLocalSyncRun(runId);
+      if (finalized) {
+        console.warn(
+          `[sync-worker] recovered finalize for run ${runId} via background sweep`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[sync-worker] background finalize sweep failed for run ${runId}:`,
+        error
+      );
+    }
+  }
+
+  stopPendingFinalizeRecoverySweepIfIdle();
+}
+
+function ensurePendingFinalizeRecoverySweep(): void {
+  if (pendingFinalizeRecoveryInterval) {
+    return;
+  }
+
+  pendingFinalizeRecoveryInterval = setInterval(() => {
+    void flushPendingFinalizeRecoveries();
+  }, PENDING_FINALIZE_RECOVERY_INTERVAL_MS);
+  pendingFinalizeRecoveryInterval.unref?.();
+}
+
+function queuePendingFinalizeRecovery(
+  runId: number,
+  input: FinalizeInput
+): void {
+  pendingFinalizeRecoveries.set(runId, input);
+  ensurePendingFinalizeRecoverySweep();
+}
+
+async function runAbandonedSyncSweep(): Promise<void> {
+  if (abandonedSyncSweepInFlight) {
+    return abandonedSyncSweepInFlight;
+  }
+
+  abandonedSyncSweepInFlight = (async () => {
+    try {
+      const expiredIds = await expireAbandonedSyncRuns();
+      if (expiredIds.length > 0) {
+        console.warn(
+          `[sync-worker] expired abandoned sync runs: ${expiredIds.join(", ")}`
+        );
+      }
+    } catch (error) {
+      console.error("[sync-worker] abandoned sync sweep failed:", error);
+    } finally {
+      abandonedSyncSweepInFlight = null;
+    }
+  })();
+
+  await abandonedSyncSweepInFlight;
+}
+
+export function ensureSyncRecoverySweep(): void {
+  if (abandonedSyncSweepInterval) {
+    return;
+  }
+
+  abandonedSyncSweepInterval = setInterval(() => {
+    void runAbandonedSyncSweep();
+  }, ABANDONED_SYNC_SWEEP_INTERVAL_MS);
+  abandonedSyncSweepInterval.unref?.();
+  void runAbandonedSyncSweep();
+}
+
+function scheduleFinalizeRecovery(
+  runId: number,
+  input: FinalizeInput,
+  attempt: number
+): void {
+  const delayMs = FINALIZE_RECOVERY_DELAYS_MS[attempt - 1];
+  if (!delayMs) {
+    console.error(
+      `[sync-worker] exhausted finalize recovery for run ${runId} (status=${input.status}); handing off to the background sweep`
+    );
+    queuePendingFinalizeRecovery(runId, input);
+    return;
+  }
+
+  const timeoutId = setTimeout(() => {
+    void retryFinalizeSyncRun(runId, input, attempt);
+  }, delayMs);
+  timeoutId.unref?.();
+}
+
+async function retryFinalizeSyncRun(
+  runId: number,
+  input: FinalizeInput,
+  attempt: number
+): Promise<void> {
+  try {
+    const { finalized } = await finalizeSyncRun(runId, input);
+    pendingFinalizeRecoveries.delete(runId);
+    releaseLocalSyncRun(runId);
+    stopPendingFinalizeRecoverySweepIfIdle();
+    console.warn(
+      `[sync-worker] recovered finalize for run ${runId} on attempt ${attempt}`
+    );
+  } catch (error) {
+    console.error(
+      `[sync-worker] finalize recovery attempt ${attempt} failed for run ${runId}:`,
+      error
+    );
+    scheduleFinalizeRecovery(runId, input, attempt + 1);
+  }
+}
+
+/**
+ * Write the final sync status to Postgres, logging and suppressing any DB
+ * error. Short retry timers handle brief outages, the background finalize
+ * sweep handles longer outages in the same process, and the abandoned-run
+ * sweep backstops worker restarts once the lease expires.
+ */
+async function safeFinalizeSyncRun(
+  runId: number,
+  input: FinalizeInput
+): Promise<boolean> {
+  try {
+    const { finalized } = await finalizeSyncRun(runId, input);
+    releaseLocalSyncRun(runId);
+    return finalized;
+  } catch (error) {
+    console.error(
+      `[sync-worker] failed to finalize run ${runId} (status=${input.status}):`,
+      error
+    );
+    scheduleFinalizeRecovery(runId, input, 1);
+    return true;
+  }
+}
 
 export async function runClaimedSync(
   run: SyncLogRow,
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<SyncRunResult> {
-  // DB-backed cancellation: poll the syncLog row so that a /api/sync/cancel
-  // request stops in-flight work promptly instead of only changing the row
-  // after the runner completes.
+  const execution = createExecutionControl(run, opts);
+  protectLocalSyncRun({
+    runId: run.id,
+    source: run.source as SyncSource,
+    workerId: run.workerId,
+  });
   let cancelledByDb = false;
   const cancelPollInterval = setInterval(() => {
     void isSyncRunCancelled(run.id).then((cancelled) => {
-      if (cancelled) cancelledByDb = true;
+      if (cancelled) {
+        cancelledByDb = true;
+      }
     });
   }, DB_CANCEL_POLL_MS);
   cancelPollInterval.unref?.();
 
   const combinedShouldStop = () =>
-    cancelledByDb || (opts.shouldStop?.() ?? false);
+    cancelledByDb || execution.control.shouldStop?.() === true;
+  const combinedStopReason = (): SyncStopReason | undefined =>
+    cancelledByDb ? "cancelled" : execution.control.stopReason?.();
 
   const stopHeartbeat = startSyncHeartbeat(run);
 
   try {
     const runner = RUNNERS[run.source as SyncSource];
-    const result = await runner(run, { shouldStop: combinedShouldStop });
+    let result = await runner(run, {
+      ...execution.control,
+      shouldStop: combinedShouldStop,
+      stopReason: combinedStopReason,
+    });
+    if (execution.exceededBudget() && result.status !== "cancelled") {
+      const timeoutMessage = getExecutionBudgetMessage(
+        run.source,
+        execution.budgetMs
+      );
+      result = {
+        status: result.recordsSynced > 0 ? "partial" : "error",
+        recordsSynced: result.recordsSynced,
+        errors: [...result.errors, timeoutMessage],
+      };
+    }
     clearInterval(cancelPollInterval);
-    await stopHeartbeat();
-
-    const { finalized } = await finalizeSyncRun(run.id, {
+    await safeStopHeartbeat(stopHeartbeat, run.id);
+    const finalized = await safeFinalizeSyncRun(run.id, {
       status: result.status,
       recordsSynced: result.recordsSynced,
       errorMessage: result.errors.length > 0 ? result.errors.join("\n") : null,
     });
-
     if (!finalized) {
-      // The row was already transitioned to a terminal state (e.g. cancelled)
-      // while the runner was executing. Return cancelled so callers see the
-      // correct outcome rather than the stale runner result.
       return { status: "cancelled", recordsSynced: 0, errors: [] };
     }
-
     return result;
   } catch (error) {
     clearInterval(cancelPollInterval);
-    const message = formatSyncError(error);
-    await stopHeartbeat();
-    await finalizeSyncRun(run.id, {
+    const message = isSyncDeadlineExceededError(error)
+      ? error.message
+      : formatSyncError(error);
+    await safeStopHeartbeat(stopHeartbeat, run.id);
+    await safeFinalizeSyncRun(run.id, {
       status: "error",
       recordsSynced: 0,
       errorMessage: message,
     });
     throw error;
+  } finally {
+    execution.clear();
   }
 }
 
@@ -99,7 +370,8 @@ export async function drainSyncQueue(
   workerId: string,
   opts: {
     source?: SyncSource;
-    shouldStop?: () => boolean;
+    shouldStop?: SyncControl["shouldStop"];
+    stopReason?: SyncControl["stopReason"];
   } = {}
 ): Promise<number> {
   let processed = 0;
@@ -115,6 +387,45 @@ export async function drainSyncQueue(
   }
 
   return processed;
+}
+
+export function startBackgroundSyncDrain(
+  workerId: string,
+  opts: {
+    source?: SyncSource;
+    shouldStop?: SyncControl["shouldStop"];
+    stopReason?: SyncControl["stopReason"];
+    runIds?: number[];
+    triggerLabel: string;
+  }
+): void {
+  void drainSyncQueue(workerId, opts).catch(async (error) => {
+    const message = `Background sync drain failed for ${opts.triggerLabel} (${workerId}): ${formatSyncError(
+      error
+    )}`;
+
+    console.error("[sync-worker] background drain failed", {
+      workerId,
+      source: opts.source ?? "all",
+      triggerLabel: opts.triggerLabel,
+      runIds: opts.runIds ?? [],
+      error,
+    });
+
+    if (!opts.runIds?.length) {
+      return;
+    }
+
+    try {
+      await markSyncRunsFailed(opts.runIds, message);
+    } catch (markError) {
+      console.error("[sync-worker] failed to mark background drain runs as error", {
+        workerId,
+        runIds: opts.runIds,
+        error: markError,
+      });
+    }
+  });
 }
 
 export async function runSyncWorker(

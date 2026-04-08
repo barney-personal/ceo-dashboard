@@ -11,7 +11,12 @@ import {
 import { getChannelHistory } from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
-import { SyncCancelledError } from "./errors";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  type SyncControl,
+  throwIfSyncShouldStop,
+} from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
@@ -22,11 +27,14 @@ const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
  */
 async function findFileMessage(
   channelId: string,
-  fileTimestamp: number
+  fileTimestamp: number,
+  opts: SyncControl = {}
 ): Promise<string | null> {
   const oldest = String(fileTimestamp - 3600);
   const latest = String(fileTimestamp + 7200);
-  const messages = await getChannelHistory(channelId, oldest, latest);
+  const messages = await getChannelHistory(channelId, oldest, latest, {
+    signal: opts.signal,
+  });
 
   for (const msg of messages) {
     const msgTs = parseFloat(msg.ts);
@@ -47,7 +55,7 @@ async function findFileMessage(
  */
 export async function runManagementAccountsSync(
   run: { id: number },
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -65,7 +73,7 @@ export async function runManagementAccountsSync(
     const files = await listChannelFiles(MGMT_ACCOUNTS_CHANNEL, {
       types: "all",
       count: 20,
-    });
+    }, { signal: opts.signal });
     await tracker.endPhase(phaseId, {
       itemsProcessed: files.length,
       detail: `Found ${files.length} files in channel`,
@@ -86,11 +94,11 @@ export async function runManagementAccountsSync(
     });
 
     for (const file of mgmtFiles) {
-      if (opts.shouldStop?.()) {
-        throw new SyncCancelledError(
-          "Management accounts sync cancelled between files"
-        );
-      }
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Management accounts sync cancelled between files",
+        deadlineExceeded:
+          "Management accounts sync exceeded its execution budget between files",
+      });
 
       const filePhaseId = await tracker.startPhase(
         `sync_file:${file.name}`,
@@ -113,8 +121,12 @@ export async function runManagementAccountsSync(
         }
 
         const periodFromName = extractPeriodFromFilename(file.name);
-        const buffer = await downloadSlackFile(file.url_private_download);
-        const data = await parseManagementAccounts(buffer, file.name);
+        const buffer = await downloadSlackFile(file.url_private_download, {
+          signal: opts.signal,
+        });
+        const data = await parseManagementAccounts(buffer, file.name, {
+          signal: opts.signal,
+        });
 
         const period = data.period || periodFromName;
         if (!period) {
@@ -136,7 +148,8 @@ export async function runManagementAccountsSync(
 
         const slackSummary = await findFileMessage(
           MGMT_ACCOUNTS_CHANNEL,
-          file.timestamp
+          file.timestamp,
+          opts
         );
 
         await db
@@ -199,6 +212,15 @@ export async function runManagementAccountsSync(
           throw error;
         }
 
+        if (error instanceof SyncDeadlineExceededError) {
+          await tracker.endPhase(filePhaseId, {
+            status: "error",
+            detail: "Execution budget exceeded before file completed",
+            errorMessage: error.message,
+          });
+          throw error;
+        }
+
         const message = `Failed to sync ${file.name}: ${formatSyncError(error)}`;
         errors.push(message);
         await tracker.endPhase(filePhaseId, {
@@ -214,6 +236,14 @@ export async function runManagementAccountsSync(
       errors,
     };
   } catch (error) {
+    if (error instanceof SyncDeadlineExceededError) {
+      return {
+        status: count > 0 ? "partial" : "error",
+        recordsSynced: count,
+        errors: [...errors, error.message],
+      };
+    }
+
     if (error instanceof SyncCancelledError) {
       return {
         status: "cancelled",

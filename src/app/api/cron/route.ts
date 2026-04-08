@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
+import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 import { isCronRequest } from "@/lib/sync/request-auth";
 import { serializeEnqueueSyncResult } from "@/lib/sync/response";
 
@@ -16,7 +16,14 @@ export async function GET(request: NextRequest) {
   ]);
 
   if ([mode, slack, managementAccounts].some((result) => result.outcome !== "skipped")) {
-    void drainSyncQueue(createWorkerId("web-cron"));
+    const workerId = createWorkerId("web-cron");
+    const runIds = [mode.runId, slack.runId, managementAccounts.runId].filter(
+      (runId): runId is number => runId != null
+    );
+    startBackgroundSyncDrain(workerId, {
+      runIds,
+      triggerLabel: "cron trigger",
+    });
   }
 
   return NextResponse.json({

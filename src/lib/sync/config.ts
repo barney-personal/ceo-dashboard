@@ -29,6 +29,7 @@ export interface SyncSourceConfig {
   normalIntervalMs: number;
   retryAfterMs: number;
   leaseMs: number;
+  executionBudgetMs: number;
   maxAttempts: number;
 }
 
@@ -58,6 +59,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 4 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    executionBudgetMs: 15 * 60 * 1000,
     maxAttempts: 1,
   },
   slack: {
@@ -65,6 +67,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 2 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    executionBudgetMs: 10 * 60 * 1000,
     maxAttempts: 1,
   },
   "management-accounts": {
@@ -72,6 +75,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 24 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    executionBudgetMs: 10 * 60 * 1000,
     maxAttempts: 1,
   },
 };

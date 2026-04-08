@@ -5,7 +5,7 @@ import {
   syncRequestAccessErrorResponse,
 } from "@/lib/sync/request-auth";
 import { serializeEnqueueSyncResult } from "@/lib/sync/response";
-import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
+import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 
 export async function POST(request: NextRequest) {
   const access = await authorizeSyncRequest(request);
@@ -22,8 +22,11 @@ export async function POST(request: NextRequest) {
   });
 
   if (result.outcome === "queued" || result.outcome === "forced") {
-    void drainSyncQueue(createWorkerId("web-accounts"), {
+    const workerId = createWorkerId("web-accounts");
+    startBackgroundSyncDrain(workerId, {
       source: "management-accounts",
+      runIds: result.runId != null ? [result.runId] : [],
+      triggerLabel: `${access} management-accounts sync request`,
     });
   }
 

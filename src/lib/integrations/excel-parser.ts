@@ -1,7 +1,15 @@
 import * as XLSX from "xlsx";
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({ maxRetries: 4 });
+// maxRetries: 1 — batch extraction rarely benefits from more retries, and extra
+// retries inflate wall-clock time before the AbortController timeout kicks in.
+const client = new Anthropic({ maxRetries: 1 });
+
+/**
+ * Max wall-clock time for the management accounts LLM extraction call.
+ * Prevents a stuck Anthropic request from blocking a sync worker indefinitely.
+ */
+const LLM_CALL_TIMEOUT_MS = 90_000;
 
 export interface FinancialData {
   period: string; // "2026-02"
@@ -20,6 +28,48 @@ export interface FinancialData {
   headcountCost: number | null;
   marketingCost: number | null;
   rawSheets: Record<string, unknown[][]>;
+}
+
+interface ParseManagementAccountsOptions {
+  signal?: AbortSignal;
+}
+
+function composeAbortSignal(
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+  timeoutMessage?: string
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
+  const controller = new AbortController();
+  let didTimeout = false;
+  const onAbort = () => controller.abort(parentSignal?.reason);
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort(
+      new Error(timeoutMessage ?? "Management accounts extraction timed out")
+    );
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (parentSignal) {
+        parentSignal.removeEventListener("abort", onAbort);
+      }
+    },
+    timedOut: () => didTimeout,
+  };
 }
 
 /**
@@ -174,22 +224,56 @@ function asNumberOrNull(value: unknown): number | null {
  */
 export async function parseManagementAccounts(
   buffer: Buffer,
-  filenameHint?: string
+  filenameHint?: string,
+  opts: ParseManagementAccountsOptions = {}
 ): Promise<FinancialData> {
   const { sheetNames, sheets } = readExcelSheets(buffer);
   const sheetText = formatSheetsForLLM(sheets);
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 2000,
-    system: SYSTEM_PROMPT,
-    messages: [
+  const { signal, cleanup, timedOut } = composeAbortSignal(
+    LLM_CALL_TIMEOUT_MS,
+    opts.signal,
+    `Management accounts LLM extraction timed out after ${
+      LLM_CALL_TIMEOUT_MS / 1000
+    }s`
+  );
+
+  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    response = await client.messages.create(
       {
-        role: "user",
-        content: `Filename: ${filenameHint ?? "management_accounts.xlsx"}\nSheets: ${sheetNames.join(", ")}\n\nData:\n${sheetText}`,
+        model: "claude-sonnet-4-6",
+        max_tokens: 2000,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `Filename: ${filenameHint ?? "management_accounts.xlsx"}\nSheets: ${sheetNames.join(", ")}\n\nData:\n${sheetText}`,
+          },
+        ],
       },
-    ],
-  });
+      { signal }
+    );
+  } catch (error) {
+    if (signal.aborted) {
+      if (timedOut()) {
+        throw new Error(
+          `Management accounts LLM extraction timed out after ${
+            LLM_CALL_TIMEOUT_MS / 1000
+          }s`
+        );
+      }
+
+      if (signal.reason instanceof Error) {
+        throw signal.reason;
+      }
+
+      throw new Error("Management accounts LLM extraction was aborted");
+    }
+    throw error;
+  } finally {
+    cleanup();
+  }
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";

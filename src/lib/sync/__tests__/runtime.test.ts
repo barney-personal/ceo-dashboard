@@ -1,193 +1,226 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { throwIfSyncShouldStop } from "../errors";
+import {
+  isLocalSyncRunProtected,
+  resetLocalSyncRunProtectionForTest,
+} from "../worker-state";
 
-// ---------------------------------------------------------------------------
-// Mock coordinator — lets tests control finalizeSyncRun / isSyncRunCancelled
-// ---------------------------------------------------------------------------
-
-vi.mock("@/lib/sync/coordinator", () => ({
+const mocks = vi.hoisted(() => ({
   claimQueuedSyncRun: vi.fn(),
+  expireAbandonedSyncRuns: vi.fn(),
   finalizeSyncRun: vi.fn(),
-  formatSyncError: vi.fn((e: unknown) =>
-    e instanceof Error ? e.message : String(e)
-  ),
   isSyncRunCancelled: vi.fn(),
+  markSyncRunsFailed: vi.fn(),
   startSyncHeartbeat: vi.fn(),
-}));
-
-// ---------------------------------------------------------------------------
-// Mock the individual sync runners
-// ---------------------------------------------------------------------------
-
-vi.mock("@/lib/sync/mode", () => ({ runModeSync: vi.fn() }));
-vi.mock("@/lib/sync/slack", () => ({ runSlackSync: vi.fn() }));
-vi.mock("@/lib/sync/management-accounts", () => ({
+  runSlackSync: vi.fn(),
+  runModeSync: vi.fn(),
   runManagementAccountsSync: vi.fn(),
 }));
 
-// ---------------------------------------------------------------------------
-// Import under test AFTER mocks
-// ---------------------------------------------------------------------------
+vi.mock("../coordinator", () => ({
+  claimQueuedSyncRun: mocks.claimQueuedSyncRun,
+  expireAbandonedSyncRuns: mocks.expireAbandonedSyncRuns,
+  finalizeSyncRun: mocks.finalizeSyncRun,
+  formatSyncError: (error: unknown) =>
+    error instanceof Error ? error.message : String(error),
+  isSyncRunCancelled: mocks.isSyncRunCancelled,
+  markSyncRunsFailed: mocks.markSyncRunsFailed,
+  startSyncHeartbeat: mocks.startSyncHeartbeat,
+}));
 
-import {
-  claimQueuedSyncRun,
-  finalizeSyncRun,
-  isSyncRunCancelled,
-  startSyncHeartbeat,
-} from "@/lib/sync/coordinator";
-import { runModeSync } from "@/lib/sync/mode";
-import { runClaimedSync } from "@/lib/sync/runtime";
+vi.mock("../slack", () => ({
+  runSlackSync: mocks.runSlackSync,
+}));
 
-const mockClaimQueuedSyncRun = vi.mocked(claimQueuedSyncRun);
-const mockFinalizeSyncRun = vi.mocked(finalizeSyncRun);
-const mockIsSyncRunCancelled = vi.mocked(isSyncRunCancelled);
-const mockStartSyncHeartbeat = vi.mocked(startSyncHeartbeat);
-const mockRunModeSync = vi.mocked(runModeSync);
+vi.mock("../mode", () => ({
+  runModeSync: mocks.runModeSync,
+}));
 
-function makeRun(overrides: Record<string, unknown> = {}) {
+vi.mock("../management-accounts", () => ({
+  runManagementAccountsSync: mocks.runManagementAccountsSync,
+}));
+
+vi.mock("../config", async () => {
+  const actual = await vi.importActual<typeof import("../config")>("../config");
+
   return {
-    id: 1,
-    source: "mode",
-    status: "running",
-    workerId: "test-worker",
-    attempt: 1,
-    maxAttempts: 3,
-    trigger: "manual",
-    startedAt: new Date(),
-    completedAt: null,
-    heartbeatAt: null,
-    leaseExpiresAt: null,
-    recordsSynced: 0,
-    errorMessage: null,
-    skipReason: null,
-    ...overrides,
-  } as import("@/lib/sync/coordinator").SyncLogRow;
-}
-
-beforeEach(() => {
-  vi.resetAllMocks();
-  mockStartSyncHeartbeat.mockReturnValue(vi.fn().mockResolvedValue(undefined));
-  mockIsSyncRunCancelled.mockResolvedValue(false);
-  mockFinalizeSyncRun.mockResolvedValue({ finalized: true });
+    ...actual,
+    getSyncSourceConfig: vi.fn((source: keyof typeof actual.SYNC_SOURCE_CONFIGS) => ({
+      ...actual.SYNC_SOURCE_CONFIGS[source],
+      executionBudgetMs: 50,
+    })),
+  };
 });
 
-// ---------------------------------------------------------------------------
-// Normal success path
-// ---------------------------------------------------------------------------
+import { runClaimedSync, startBackgroundSyncDrain } from "../runtime";
 
-describe("runClaimedSync — normal completion", () => {
-  it("finalizes with runner result when finalized:true", async () => {
-    mockRunModeSync.mockResolvedValue({
-      status: "success",
-      recordsSynced: 10,
-      errors: [],
-    });
-
-    const result = await runClaimedSync(makeRun());
-
-    expect(result).toEqual({ status: "success", recordsSynced: 10, errors: [] });
-    expect(mockFinalizeSyncRun).toHaveBeenCalledWith(1, {
-      status: "success",
-      recordsSynced: 10,
-      errorMessage: null,
-    });
+describe("sync runtime resilience", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetLocalSyncRunProtectionForTest();
+    mocks.expireAbandonedSyncRuns.mockReset();
+    mocks.finalizeSyncRun.mockReset();
+    mocks.isSyncRunCancelled.mockReset();
+    mocks.claimQueuedSyncRun.mockReset();
+    mocks.markSyncRunsFailed.mockReset();
+    mocks.runSlackSync.mockReset();
+    mocks.runModeSync.mockReset();
+    mocks.runManagementAccountsSync.mockReset();
+    mocks.startSyncHeartbeat.mockReset();
+    mocks.expireAbandonedSyncRuns.mockResolvedValue([]);
+    mocks.finalizeSyncRun.mockResolvedValue({ finalized: true });
+    mocks.isSyncRunCancelled.mockResolvedValue(false);
+    mocks.startSyncHeartbeat.mockReturnValue(async () => {});
   });
 
-  it("passes errors array as joined errorMessage to finalizeSyncRun", async () => {
-    mockRunModeSync.mockResolvedValue({
-      status: "partial",
-      recordsSynced: 5,
-      errors: ["err1", "err2"],
-    });
-
-    await runClaimedSync(makeRun());
-
-    expect(mockFinalizeSyncRun).toHaveBeenCalledWith(1, {
-      status: "partial",
-      recordsSynced: 5,
-      errorMessage: "err1\nerr2",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Cancel-before-finish race
-// ---------------------------------------------------------------------------
-
-describe("runClaimedSync — cancel wins the race", () => {
-  it("returns cancelled result when finalizeSyncRun returns finalized:false", async () => {
-    // Runner completes normally, but the row was already cancelled externally
-    mockRunModeSync.mockResolvedValue({
-      status: "success",
-      recordsSynced: 20,
-      errors: [],
-    });
-    mockFinalizeSyncRun.mockResolvedValue({ finalized: false });
-
-    const result = await runClaimedSync(makeRun());
-
-    expect(result).toEqual({ status: "cancelled", recordsSynced: 0, errors: [] });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetLocalSyncRunProtectionForTest();
+    vi.restoreAllMocks();
   });
 
-  it("does NOT re-throw when finalized:false (worker was cancelled, not errored)", async () => {
-    mockRunModeSync.mockResolvedValue({
-      status: "success",
-      recordsSynced: 5,
-      errors: [],
-    });
-    mockFinalizeSyncRun.mockResolvedValue({ finalized: false });
-
-    await expect(runClaimedSync(makeRun())).resolves.not.toThrow();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// DB-backed shouldStop propagation
-// ---------------------------------------------------------------------------
-
-describe("runClaimedSync — DB-backed shouldStop", () => {
-  it("passes a shouldStop function to the runner", async () => {
-    mockRunModeSync.mockImplementation(
-      async (_run: unknown, opts?: { shouldStop?: () => boolean }) => {
-        // shouldStop must be provided and callable
-        expect(typeof opts?.shouldStop).toBe("function");
-        // At the start it returns false (not yet cancelled)
-        expect(opts!.shouldStop!()).toBe(false);
-        return { status: "success", recordsSynced: 0, errors: [] };
+  it("marks a claimed sync as errored when its execution budget expires", async () => {
+    mocks.runSlackSync.mockImplementation(async (_run, opts) => {
+      while (!opts?.shouldStop?.()) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
       }
-    );
 
-    await runClaimedSync(makeRun());
-  });
+      throwIfSyncShouldStop(opts, {
+        cancelled: "cancelled",
+        deadlineExceeded: "slack budget exceeded",
+      });
 
-  it("shouldStop returns true when external shouldStop fires", async () => {
-    const externalStop = vi.fn(() => true);
+      return { status: "success", recordsSynced: 0, errors: [] };
+    });
 
-    mockRunModeSync.mockImplementation(
-      async (_run: unknown, opts?: { shouldStop?: () => boolean }) => {
-        expect(opts!.shouldStop!()).toBe(true);
-        return { status: "cancelled", recordsSynced: 0, errors: [] };
-      }
-    );
+    const promise = expect(
+      runClaimedSync({ id: 17, source: "slack" } as never)
+    ).rejects.toThrow("slack budget exceeded");
+    await vi.advanceTimersByTimeAsync(60);
 
-    await runClaimedSync(makeRun(), { shouldStop: externalStop });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Error path
-// ---------------------------------------------------------------------------
-
-describe("runClaimedSync — runner throws", () => {
-  it("finalizes with error status and re-throws", async () => {
-    const boom = new Error("network failure");
-    mockRunModeSync.mockRejectedValue(boom);
-
-    await expect(runClaimedSync(makeRun())).rejects.toThrow("network failure");
-
-    expect(mockFinalizeSyncRun).toHaveBeenCalledWith(1, {
+    await promise;
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledWith(17, {
       status: "error",
       recordsSynced: 0,
-      errorMessage: "network failure",
+      errorMessage: "slack budget exceeded",
     });
+  });
+
+  it("returns cancelled when finalizeSyncRun reports the run was already terminal", async () => {
+    mocks.runSlackSync.mockResolvedValue({
+      status: "success",
+      recordsSynced: 4,
+      errors: [],
+    });
+    mocks.finalizeSyncRun.mockResolvedValue({ finalized: false });
+
+    await expect(
+      runClaimedSync({ id: 18, source: "slack" } as never)
+    ).resolves.toEqual({
+      status: "cancelled",
+      recordsSynced: 0,
+      errors: [],
+    });
+  });
+
+  it("passes a callable shouldStop function through to the runner", async () => {
+    mocks.runModeSync.mockImplementation(async (_run, opts) => {
+      expect(typeof opts?.shouldStop).toBe("function");
+      expect(opts?.shouldStop?.()).toBe(false);
+      return { status: "success", recordsSynced: 0, errors: [] };
+    });
+
+    await expect(
+      runClaimedSync({ id: 19, source: "mode" } as never)
+    ).resolves.toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+  });
+
+  it("aborts a long-running sync step via the execution-budget signal", async () => {
+    mocks.runSlackSync.mockImplementation(
+      async (_run, opts) =>
+        new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true }
+          );
+        })
+    );
+
+    const promise = expect(
+      runClaimedSync({ id: 23, source: "slack" } as never)
+    ).rejects.toThrow(/execution budget/);
+    await vi.advanceTimersByTimeAsync(60);
+
+    await promise;
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledWith(23, {
+      status: "error",
+      recordsSynced: 0,
+      errorMessage: expect.stringMatching(/execution budget/),
+    });
+  });
+
+  it("marks queued runs as failed when a background drain crashes", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.claimQueuedSyncRun.mockRejectedValue(new Error("claim exploded"));
+    mocks.markSyncRunsFailed.mockResolvedValue([91]);
+
+    startBackgroundSyncDrain("worker-1", {
+      source: "slack",
+      runIds: [91],
+      triggerLabel: "manual slack sync request",
+    });
+
+    await vi.runAllTicks();
+    await Promise.resolve();
+
+    expect(mocks.markSyncRunsFailed).toHaveBeenCalledWith(
+      [91],
+      expect.stringContaining("manual slack sync request")
+    );
+  });
+
+  it("keeps retrying finalization after the short recovery window is exhausted", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.runSlackSync.mockResolvedValue({
+      status: "success",
+      recordsSynced: 12,
+      errors: [],
+    });
+    mocks.finalizeSyncRun
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockResolvedValue({ finalized: true });
+
+    await expect(
+      runClaimedSync({ id: 31, source: "slack" } as never)
+    ).resolves.toEqual({
+      status: "success",
+      recordsSynced: 12,
+      errors: [],
+    });
+
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(1);
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(4);
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(5);
+    expect(mocks.finalizeSyncRun).toHaveBeenLastCalledWith(31, {
+      status: "success",
+      recordsSynced: 12,
+      errorMessage: null,
+    });
+    expect(isLocalSyncRunProtected({ runId: 31 })).toBe(false);
   });
 });
