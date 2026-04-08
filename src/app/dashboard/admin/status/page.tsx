@@ -15,7 +15,7 @@ import {
   financialPeriods,
   squads,
 } from "@/lib/db/schema";
-import { desc, eq, and, count, avg, inArray } from "drizzle-orm";
+import { desc, count, inArray } from "drizzle-orm";
 import {
   Database,
   CheckCircle2,
@@ -37,15 +37,20 @@ export default async function DataStatusPage() {
     .orderBy(desc(syncLog.startedAt))
     .limit(20);
 
-  // Fetch phases for those runs
+  // Fetch phases for those runs (gracefully handles missing table before schema push)
   const runIds = recentRuns.map((r) => r.id);
-  const phases = runIds.length > 0
-    ? await db
+  let phases: (typeof syncPhases.$inferSelect)[] = [];
+  try {
+    if (runIds.length > 0) {
+      phases = await db
         .select()
         .from(syncPhases)
         .where(inArray(syncPhases.syncLogId, runIds))
-        .orderBy(syncPhases.startedAt)
-    : [];
+        .orderBy(syncPhases.startedAt);
+    }
+  } catch {
+    // sync_phases table may not exist yet — page works without it
+  }
 
   // Group phases by run
   const phasesByRun = new Map<number, typeof phases>();
