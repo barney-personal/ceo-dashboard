@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
 import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
 import { isCronRequest } from "@/lib/sync/request-auth";
+import { serializeEnqueueSyncResult } from "@/lib/sync/response";
 
 export async function GET(request: NextRequest) {
   if (!(await isCronRequest(request))) {
@@ -21,24 +22,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     status: "syncs enqueued",
     results: {
-      mode: {
-        outcome: mode.outcome,
-        runId: mode.runId,
-        reason: mode.reason,
-        nextEligibleAt: mode.nextEligibleAt?.toISOString() ?? null,
-      },
-      slack: {
-        outcome: slack.outcome,
-        runId: slack.runId,
-        reason: slack.reason,
-        nextEligibleAt: slack.nextEligibleAt?.toISOString() ?? null,
-      },
-      managementAccounts: {
-        outcome: managementAccounts.outcome,
-        runId: managementAccounts.runId,
-        reason: managementAccounts.reason,
-        nextEligibleAt: managementAccounts.nextEligibleAt?.toISOString() ?? null,
-      },
+      mode: serializeEnqueueSyncResult(mode),
+      slack: serializeEnqueueSyncResult(slack),
+      managementAccounts: serializeEnqueueSyncResult(managementAccounts),
     },
   });
 }

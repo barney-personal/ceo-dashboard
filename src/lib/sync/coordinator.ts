@@ -296,6 +296,30 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
   };
 }
 
+export async function cancelSyncRun(
+  runId: number
+): Promise<{ cancelled: boolean; reason?: string }> {
+  const [existing] = await db
+    .select({ id: syncLog.id, status: syncLog.status })
+    .from(syncLog)
+    .where(eq(syncLog.id, runId))
+    .limit(1);
+
+  if (!existing) {
+    return { cancelled: false, reason: "not_found" };
+  }
+
+  if (existing.status !== "running" && existing.status !== "queued") {
+    return { cancelled: false, reason: "not_cancellable" };
+  }
+
+  await finalizeSyncRun(runId, {
+    status: "cancelled",
+    errorMessage: "Cancelled by user",
+  });
+  return { cancelled: true };
+}
+
 export async function finalizeSyncRun(
   runId: number,
   input: FinalizeSyncRunInput
