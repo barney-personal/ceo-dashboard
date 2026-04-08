@@ -13,7 +13,10 @@ import {
 } from "@/lib/integrations/mode";
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
-import { prepareModeRowsForStorage, getModeQuerySyncProfile } from "./mode-storage";
+import {
+  prepareModeRowsForStorage,
+  getModeQuerySyncProfile,
+} from "./mode-storage";
 import {
   SyncCancelledError,
   SyncDeadlineExceededError,
@@ -28,7 +31,7 @@ function logModeEvent(event: string, payload: Record<string, unknown>) {
       source: "mode",
       event,
       ...payload,
-    })
+    }),
   );
 }
 
@@ -45,29 +48,33 @@ function yieldToEventLoop(): Promise<void> {
  */
 async function seedReports() {
   for (const config of MODE_SYNC_PROFILES) {
-    const existing = await db
-      .select()
-      .from(modeReports)
-      .where(eq(modeReports.reportToken, config.reportToken))
-      .limit(1);
-
-    if (existing.length === 0) {
-      await db.insert(modeReports).values({
+    await db
+      .insert(modeReports)
+      .values({
         reportToken: config.reportToken,
         name: config.name,
         section: config.section,
         category: config.category ?? null,
+      })
+      .onConflictDoUpdate({
+        target: modeReports.reportToken,
+        set: {
+          name: config.name,
+          section: config.section,
+          category: config.category ?? null,
+        },
       });
-    }
   }
 }
 
 async function cleanupReportData(
   reportId: number,
-  allowedQueryTokens: string[]
+  allowedQueryTokens: string[],
 ): Promise<void> {
   if (allowedQueryTokens.length === 0) {
-    await db.delete(modeReportData).where(eq(modeReportData.reportId, reportId));
+    await db
+      .delete(modeReportData)
+      .where(eq(modeReportData.reportId, reportId));
     return;
   }
 
@@ -76,8 +83,8 @@ async function cleanupReportData(
     .where(
       and(
         eq(modeReportData.reportId, reportId),
-        notInArray(modeReportData.queryToken, allowedQueryTokens)
-      )
+        notInArray(modeReportData.queryToken, allowedQueryTokens),
+      ),
     );
 }
 
@@ -86,7 +93,7 @@ async function cleanupReportData(
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect,
-  opts: SyncControl = {}
+  opts: SyncControl = {},
 ): Promise<{ recordsSynced: number; errors: string[] }> {
   throwIfSyncShouldStop(opts, {
     cancelled: "Mode sync cancelled before report fetch started",
@@ -102,7 +109,9 @@ async function syncReport(
 
   const run = await getLatestRun(report.reportToken, { signal: opts.signal });
   if (!run) {
-    throw new Error(`No successful runs found for report ${report.reportToken}`);
+    throw new Error(
+      `No successful runs found for report ${report.reportToken}`,
+    );
   }
 
   const [queries, queryRuns] = await Promise.all([
@@ -110,7 +119,9 @@ async function syncReport(
     getQueryRuns(report.reportToken, run.token, { signal: opts.signal }),
   ]);
 
-  const queryNameMap = new Map(queries.map((query) => [query.token, query.name]));
+  const queryNameMap = new Map(
+    queries.map((query) => [query.token, query.name]),
+  );
   const allowedQueryTokens: string[] = [];
   const errors: string[] = [];
   let storedRecords = 0;
@@ -141,7 +152,7 @@ async function syncReport(
         run.token,
         queryRun.token,
         1000,
-        { signal: opts.signal }
+        { signal: opts.signal },
       );
       const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
 
@@ -223,7 +234,7 @@ async function syncReport(
 
 export async function runModeSync(
   run: { id: number },
-  opts: SyncControl = {}
+  opts: SyncControl = {},
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -236,20 +247,20 @@ export async function runModeSync(
   try {
     let phaseId = await tracker.startPhase(
       "seed_reports",
-      "Ensuring config reports exist in DB"
+      "Ensuring config reports exist in DB",
     );
     await seedReports();
     await tracker.endPhase(phaseId, {
       detail: `Checked ${MODE_SYNC_PROFILES.length} report definitions`,
     });
 
-    const enabledTokens = MODE_SYNC_PROFILES.filter((profile) => profile.syncEnabled).map(
-      (profile) => profile.reportToken
-    );
+    const enabledTokens = MODE_SYNC_PROFILES.filter(
+      (profile) => profile.syncEnabled,
+    ).map((profile) => profile.reportToken);
 
     phaseId = await tracker.startPhase(
       "fetch_active_reports",
-      "Loading active reports from DB"
+      "Loading active reports from DB",
     );
     const reports = enabledTokens.length
       ? await db
@@ -258,8 +269,8 @@ export async function runModeSync(
           .where(
             and(
               eq(modeReports.isActive, true),
-              inArray(modeReports.reportToken, enabledTokens)
-            )
+              inArray(modeReports.reportToken, enabledTokens),
+            ),
           )
       : [];
     await tracker.endPhase(phaseId, {
@@ -278,7 +289,7 @@ export async function runModeSync(
 
       const reportPhaseId = await tracker.startPhase(
         `sync_report:${report.name}`,
-        "Fetching latest run and syncing allowed queries"
+        "Fetching latest run and syncing allowed queries",
       );
       const reportStartedAt = Date.now();
 
@@ -298,7 +309,8 @@ export async function runModeSync(
         await tracker.endPhase(reportPhaseId, {
           status: result.errors.length > 0 ? "error" : "success",
           itemsProcessed: result.recordsSynced,
-          errorMessage: result.errors.length > 0 ? result.errors.join("\n") : undefined,
+          errorMessage:
+            result.errors.length > 0 ? result.errors.join("\n") : undefined,
           detail: `Stored ${result.recordsSynced} rows`,
         });
 
