@@ -267,6 +267,65 @@ export function getTenureDistribution(employees: Person[]): BarChartData[] {
 }
 
 /**
+ * Monthly joiners and departures for the last N months.
+ */
+export function getMonthlyJoinersAndDepartures(
+  activeEmployees: Person[],
+  allRows: Record<string, unknown>[],
+  months: number = 36
+): { joiners: { date: string; value: number }[]; departures: { date: string; value: number }[] } {
+  const now = new Date();
+  const startMonth = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+
+  // Build month buckets
+  const buckets: { key: string; date: string }[] = [];
+  for (let i = 0; i < months; i++) {
+    const d = new Date(startMonth.getFullYear(), startMonth.getMonth() + i, 1);
+    buckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      date: d.toISOString().slice(0, 10),
+    });
+  }
+
+  // Count joiners from active employees by start_date month
+  const joinerCounts = new Map<string, number>();
+  for (const p of activeEmployees) {
+    if (!p.startDate) continue;
+    const d = new Date(p.startDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    joinerCounts.set(key, (joinerCounts.get(key) ?? 0) + 1);
+  }
+
+  // Also count joiners from terminated employees (they joined then left)
+  for (const r of allRows) {
+    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") continue;
+    if (r.is_cleo_headcount !== 1) continue;
+    const startDate = r.start_date as string | null;
+    if (!startDate) continue;
+    const d = new Date(startDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    joinerCounts.set(key, (joinerCounts.get(key) ?? 0) + 1);
+  }
+
+  // Count departures by termination_date month
+  const departureCounts = new Map<string, number>();
+  for (const r of allRows) {
+    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") continue;
+    if (r.is_cleo_headcount !== 1) continue;
+    const termDate = r.termination_date as string | null;
+    if (!termDate) continue;
+    const d = new Date(termDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    departureCounts.set(key, (departureCounts.get(key) ?? 0) + 1);
+  }
+
+  return {
+    joiners: buckets.map((b) => ({ date: b.date, value: joinerCounts.get(b.key) ?? 0 })),
+    departures: buckets.map((b) => ({ date: b.date, value: departureCounts.get(b.key) ?? 0 })),
+  };
+}
+
+/**
  * Fetch and transform active employees from Mode headcount data.
  */
 export async function getActiveEmployees(): Promise<{

@@ -13,6 +13,8 @@ import {
   Users,
   Settings,
   Activity,
+  TrendingUp,
+  Heart,
 } from "lucide-react";
 
 interface NavItem {
@@ -77,10 +79,22 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Team",
     items: [
       {
-        label: "People",
+        label: "Org",
         href: "/dashboard/people",
         requiredRole: "leadership",
         icon: Users,
+      },
+      {
+        label: "Performance",
+        href: "/dashboard/people/performance",
+        requiredRole: "leadership",
+        icon: TrendingUp,
+      },
+      {
+        label: "Engagement",
+        href: "/dashboard/people/engagement",
+        requiredRole: "leadership",
+        icon: Heart,
       },
     ],
   },
@@ -135,8 +149,9 @@ export function Sidebar({ role }: { role: Role }) {
             {group.items.map((item) => {
               const Icon = item.icon;
               const isActive =
-                item.href === "/dashboard"
-                  ? pathname === "/dashboard"
+                item.href === "/dashboard" ||
+                item.href === "/dashboard/people"
+                  ? pathname === item.href
                   : pathname.startsWith(item.href);
 
               return (

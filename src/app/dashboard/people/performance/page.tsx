@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
@@ -6,10 +7,12 @@ export default function PeoplePerformancePage() {
 
   return (
     <div className="space-y-8">
+      <PageHeader
+        title="Performance"
+        description="Team performance dashboards and reviews"
+      />
+
       <div className="space-y-3">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Performance Dashboards
-        </h3>
         {performanceCharts.length > 0 ? (
           performanceCharts.map((chart) => (
             <ModeEmbed
