@@ -1,12 +1,13 @@
 import { getReportData } from "./mode";
+import type { BarChartData } from "@/components/charts/bar-chart";
+import type { ColumnChartData } from "@/components/charts/column-chart";
+
 type ChartSeries = {
   label: string;
   color: string;
   data: { date: string; value: number }[];
   dashed?: boolean;
 };
-import type { BarChartData } from "@/components/charts/bar-chart";
-import type { ColumnChartData } from "@/components/charts/column-chart";
 
 const CHARTS_START = new Date("2023-01-01").getTime();
 

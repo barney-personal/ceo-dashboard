@@ -15,7 +15,7 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { prepareModeRowsForStorage, getModeQuerySyncProfile } from "./mode-storage";
 import { SyncCancelledError } from "./errors";
-import { determineSyncStatus } from "./coordinator";
+import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -181,11 +181,8 @@ async function syncReport(
         heapMb: getHeapMb(),
       });
     } catch (error) {
-      const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      const message = `Failed to sync query "${queryName}" in report "${report.name}": ${formatSyncError(error)}`;
       errors.push(message);
-      console.error(message);
       logModeEvent("query_failed", {
         reportToken: report.reportToken,
         reportName: report.name,
@@ -295,9 +292,7 @@ export async function runModeSync(
           heapMb: getHeapMb(),
         });
       } catch (error) {
-        const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${formatSyncError(error)}`;
         if (error instanceof SyncCancelledError) {
           await tracker.endPhase(reportPhaseId, {
             status: "skipped",
@@ -308,7 +303,6 @@ export async function runModeSync(
         }
 
         errors.push(message);
-        console.error(message);
         await tracker.endPhase(reportPhaseId, {
           status: "error",
           errorMessage: message,
