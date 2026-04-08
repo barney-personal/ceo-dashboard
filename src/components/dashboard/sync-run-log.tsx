@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   CheckCircle2,
   XCircle,
@@ -92,7 +92,7 @@ function StatusIcon({ status, className = "" }: { status: string; className?: st
   return <Clock className={`text-muted-foreground/40 ${className}`} />;
 }
 
-function PhaseTimeline({ phases, totalDurationMs }: { phases: Phase[]; totalDurationMs: number }) {
+function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; totalDurationMs: number; now: number }) {
   if (phases.length === 0) {
     return (
       <p className="py-4 text-center text-[12px] text-muted-foreground/40">
@@ -106,7 +106,7 @@ function PhaseTimeline({ phases, totalDurationMs }: { phases: Phase[]; totalDura
       {phases.map((phase) => {
         const durationMs = phase.completedAt
           ? new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime()
-          : Date.now() - new Date(phase.startedAt).getTime();
+          : now - new Date(phase.startedAt).getTime();
         const widthPct = totalDurationMs > 0 ? Math.max(2, (durationMs / totalDurationMs) * 100) : 50;
         const isInterrupted = phase.status === "running" && !phase.completedAt;
 
@@ -171,18 +171,24 @@ function PhaseTimeline({ phases, totalDurationMs }: { phases: Phase[]; totalDura
 
 function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const Icon = SOURCE_ICONS[run.source] ?? Database;
   const label = SOURCE_LABELS[run.source] ?? run.source;
   const isRunning = run.status === "running";
-  const isStale = isRunning && Date.now() - new Date(run.startedAt).getTime() > 600_000; // 10 min
+
+  // Tick `now` every 2s for running syncs
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(id);
+  }, [isRunning]);
+
+  const isStale = isRunning && now - new Date(run.startedAt).getTime() > 600_000;
 
   const durationMs = run.completedAt
     ? new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()
-    : Date.now() - new Date(run.startedAt).getTime();
+    : now - new Date(run.startedAt).getTime();
 
-  // Estimate remaining time for running syncs
-  const completedPhases = run.phases.filter((p) => p.status !== "running").length;
-  const totalPhases = run.phases.length || 1;
   const estimatedRemaining = isRunning && avgDuration > 0
     ? Math.max(0, avgDuration - durationMs)
     : null;
@@ -252,7 +258,7 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
               <p className="mt-0.5 text-[11px] text-destructive/50">{run.errorMessage}</p>
             </div>
           )}
-          <PhaseTimeline phases={run.phases} totalDurationMs={durationMs} />
+          <PhaseTimeline phases={run.phases} totalDurationMs={durationMs} now={now} />
         </div>
       )}
     </div>
