@@ -10,7 +10,7 @@ services:
     runtime: node
     plan: pro
     buildCommand: NODE_ENV=development npm ci && npm run build
-    preDeployCommand: npx drizzle-kit push --force
+    preDeployCommand: npx drizzle-kit migrate
     startCommand: npm start
     healthCheckPath: /
     maxShutdownDelaySeconds: 300
