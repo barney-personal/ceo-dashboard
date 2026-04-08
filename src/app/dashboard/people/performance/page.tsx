@@ -13,22 +13,14 @@ export default function PeoplePerformancePage() {
       />
 
       <div className="space-y-3">
-        {performanceCharts.length > 0 ? (
-          performanceCharts.map((chart) => (
-            <ModeEmbed
-              key={chart.url}
-              url={chart.url}
-              title={chart.title}
-              subtitle="View in Mode"
-            />
-          ))
-        ) : (
+        {performanceCharts.map((chart) => (
           <ModeEmbed
-            url="https://app.mode.com/cleoai/reports/79ea96d310a9"
-            title="Performance Dashboard"
+            key={chart.url}
+            url={chart.url}
+            title={chart.title}
             subtitle="View in Mode"
           />
-        )}
+        ))}
       </div>
     </div>
   );
