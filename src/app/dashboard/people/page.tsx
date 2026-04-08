@@ -1,10 +1,8 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { BarChart } from "@/components/charts/bar-chart";
+import { DivergingBarChart } from "@/components/charts/diverging-bar-chart";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
@@ -13,16 +11,11 @@ import {
   getPeopleMetrics,
   groupByPillarAndSquad,
   getTenureDistribution,
+  getMonthlyJoinersAndDepartures,
 } from "@/lib/data/people";
 
-export default async function PeoplePage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
-
-  const [{ employees, allRows, lastSync }, deptData] = await Promise.all([
+export default async function PeopleOrgPage() {
+  const [{ employees, allRows }, deptData] = await Promise.all([
     getActiveEmployees().catch(() => ({
       employees: [],
       allRows: [] as Record<string, unknown>[],
@@ -35,6 +28,7 @@ export default async function PeoplePage() {
   const tenureData = getTenureDistribution(employees);
   const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
+  const monthlyMovement = getMonthlyJoinersAndDepartures(allRows, 36);
 
   // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({
@@ -58,9 +52,9 @@ export default async function PeoplePage() {
   const modeUrl = "https://app.mode.com/cleoai/reports/c458b52ceb68";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="space-y-8">
       <PageHeader
-        title="People"
+        title="Org"
         description="Headcount, team structure, and workforce metrics"
       />
 
@@ -129,27 +123,44 @@ export default async function PeoplePage() {
         />
       )}
 
+      {/* Joiners & departures — diverging from zero */}
+      {monthlyMovement.joiners.some((d) => d.value > 0) && (
+        <DivergingBarChart
+          data={monthlyMovement.joiners.map((j, i) => ({
+            date: j.date,
+            positive: j.value,
+            negative: monthlyMovement.departures[i].value,
+          }))}
+          title="Joiners & Departures"
+          subtitle="last 3 years, monthly"
+          modeUrl={modeUrl}
+        />
+      )}
+
       {/* Team directory */}
       {employees.length > 0 && (
         <PeopleDirectory pillars={serializedPillars} />
       )}
 
-      {/* Mode report links */}
-      {headcountCharts.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Mode Reports
-          </h3>
-          {headcountCharts.map((chart) => (
-            <ModeEmbed
-              key={chart.url}
-              url={chart.url}
-              title={chart.title}
-              subtitle="View in Mode"
-            />
-          ))}
-        </div>
-      )}
+      {/* Source links */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+          Sources
+        </h3>
+        <ModeEmbed
+          url="https://docs.google.com/spreadsheets/d/1NChFRIbocVFvMsqSF00MLnAlPAC5thVai7yR88KU4yA/edit?usp=sharing"
+          title="Org Chart"
+          subtitle="View in Google Sheets"
+        />
+        {headcountCharts.map((chart) => (
+          <ModeEmbed
+            key={chart.url}
+            url={chart.url}
+            title={chart.title}
+            subtitle="View in Mode"
+          />
+        ))}
+      </div>
     </div>
   );
 }
