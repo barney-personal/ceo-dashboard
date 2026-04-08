@@ -5,7 +5,9 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users } from "lucide-react";
 import Link from "next/link";
-import { getUnitEconomicsMetrics, getHeadcountMetrics } from "@/lib/data/metrics";
+import { getUnitEconomicsMetrics, getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
+import { getLatestLtvCacRatio } from "@/lib/data/chart-data";
+import { getLatestRevenue } from "@/lib/data/management-accounts";
 
 function SectionLink({
   href,
@@ -39,9 +41,11 @@ function SectionLink({
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
-  const [metrics, headcount] = await Promise.all([
+  const [metrics, headcount, ltvCacRatio, latestRevenue] = await Promise.all([
     getUnitEconomicsMetrics().catch(() => null),
     getHeadcountMetrics().catch(() => null),
+    getLatestLtvCacRatio().catch(() => null),
+    getLatestRevenue().catch(() => null),
   ]);
 
   return (
@@ -55,19 +59,18 @@ export default async function DashboardOverview() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <PermissionGate role={role} requiredRole="leadership">
           <MetricCard
-            label="LTV:CAC"
-            value={metrics?.ltvCac ?? "—"}
-            subtitle={metrics?.ltvCac ? "36M LTV / blended CPA" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
+            label="LTV:Paid CAC"
+            value={ltvCacRatio != null ? `${ltvCacRatio.toFixed(2)}x` : "—"}
+            subtitle={ltvCacRatio != null ? "weekly, LTV ÷ Paid CPA" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/774f14224dd9"
             delay={0}
           />
         </PermissionGate>
         <PermissionGate role={role} requiredRole="ceo">
           <MetricCard
             label="Revenue"
-            value={metrics?.revenue ?? "—"}
-            subtitle={metrics?.revenue ? "monthly" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
+            value={latestRevenue ? `$${formatCompact(latestRevenue.value)}` : "—"}
+            subtitle={latestRevenue ? "monthly, management accounts" : "awaiting data"}
             delay={50}
           />
         </PermissionGate>

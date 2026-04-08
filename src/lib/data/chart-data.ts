@@ -91,6 +91,16 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
 }
 
 /**
+ * Latest LTV:Paid CAC ratio (the most recent weekly data point).
+ */
+export async function getLatestLtvCacRatio(): Promise<number | null> {
+  const series = await getLtvCacRatioSeries();
+  const ltvCac = series.find((s) => s.label === "LTV:CAC");
+  if (!ltvCac || ltvCac.data.length === 0) return null;
+  return ltvCac.data[ltvCac.data.length - 1].value;
+}
+
+/**
  * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
  * Weekly aggregates, split by actual vs target, from Jan 2023.
  */

@@ -66,3 +66,36 @@ export async function getManagementAccountsData(
 
   return { files, currentFile: targetInfo, sheetData };
 }
+
+/**
+ * Get the latest Total Revenue from the most recent management accounts P&L.
+ */
+export async function getLatestRevenue(): Promise<{
+  value: number;
+  period: string;
+} | null> {
+  const rawFiles = await getManagementAccountFiles();
+  if (rawFiles.length === 0) return null;
+
+  const latest = rawFiles[0];
+  const sheetData = await getSheetData(latest.id, latest.url_private_download);
+  const plRows = sheetData.sheets["P&L Summary"];
+  if (!plRows) return null;
+
+  const revenueRow = plRows.find((row) => {
+    const label = String(row[0] ?? "").trim().toLowerCase();
+    return label === "total revenue" || label === "total income";
+  });
+  if (!revenueRow) return null;
+
+  // After reversal: [label, code, YTD, latest_month, prev_month, ...]
+  for (let i = 2; i < revenueRow.length; i++) {
+    const val = revenueRow[i];
+    if (typeof val === "number" && val > 0) {
+      const period = extractPeriodFromFilename(latest.name);
+      return { value: val, period: period ?? "latest" };
+    }
+  }
+
+  return null;
+}

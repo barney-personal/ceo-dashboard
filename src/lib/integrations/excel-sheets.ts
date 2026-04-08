@@ -26,21 +26,50 @@ const cache = new Map<string, { data: ParsedSheets; fetchedAt: number }>();
 const inflight = new Map<string, Promise<ParsedSheets>>();
 
 /**
- * Trim wide rows: strip trailing nulls, then keep first 2 label columns
- * + last N data columns reversed so newest is first.
+ * Find the widest non-null extent across all rows to determine
+ * the true data column count (ignoring trailing null padding).
  */
-function trimRow(row: unknown[], maxDataCols: number = MAX_DATA_COLS): unknown[] {
-  // Strip trailing null/empty cells
-  let end = row.length;
-  while (end > 0 && (row[end - 1] === null || row[end - 1] === "")) {
-    end--;
+function findMaxDataCol(rows: unknown[][]): number {
+  let maxCol = 0;
+  for (const row of rows) {
+    for (let i = row.length - 1; i >= 0; i--) {
+      if (row[i] !== null && row[i] !== "") {
+        if (i + 1 > maxCol) maxCol = i + 1;
+        break;
+      }
+    }
   }
-  const trimmed = row.slice(0, end);
+  return maxCol;
+}
 
-  if (trimmed.length <= maxDataCols + 2) return trimmed;
-  const labels = trimmed.slice(0, 2);
-  const dataCols = trimmed.slice(2);
-  return [...labels, ...dataCols.slice(-maxDataCols).reverse()];
+/**
+ * Trim all rows in a sheet uniformly: keep first 2 label columns +
+ * last N data columns, reversed so newest is first.
+ * Uses a single column range derived from the widest row.
+ */
+function trimSheet(rows: unknown[][]): unknown[][] {
+  const totalCols = findMaxDataCol(rows);
+  const dataCols = totalCols - 2;
+
+  if (dataCols <= MAX_DATA_COLS) {
+    return rows.map((row) => {
+      const padded = row.slice(0, totalCols);
+      while (padded.length < totalCols) padded.push(null);
+      return padded;
+    });
+  }
+
+  const startCol = totalCols - MAX_DATA_COLS;
+
+  return rows.map((row) => {
+    const labels = [row[0] ?? null, row[1] ?? null];
+    const data: unknown[] = [];
+    for (let i = startCol; i < totalCols; i++) {
+      data.push(row[i] ?? null);
+    }
+    data.reverse();
+    return [...labels, ...data];
+  });
 }
 
 /**
@@ -53,7 +82,6 @@ function parseKeySheets(buffer: Buffer): ParsedSheets {
     (n) => !n.startsWith("lf-shadow")
   );
 
-  // Use key sheets that exist in this workbook, preserving KEY_SHEETS order
   const sheetNames = KEY_SHEETS.filter((name) => available.includes(name));
 
   const sheets: Record<string, unknown[][]> = {};
@@ -64,7 +92,7 @@ function parseKeySheets(buffer: Buffer): ParsedSheets {
       defval: null,
     }) as unknown[][];
 
-    sheets[name] = rows.slice(0, MAX_ROWS).map((row) => trimRow(row));
+    sheets[name] = trimSheet(rows.slice(0, MAX_ROWS));
   }
 
   return { sheetNames, sheets };
