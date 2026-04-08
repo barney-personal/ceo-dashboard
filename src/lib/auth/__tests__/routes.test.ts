@@ -10,6 +10,7 @@ describe("isPublicPath", () => {
       ["/sign-in/sso-callback"],
       ["/sign-up"],
       ["/sign-up/verify"],
+      ["/access-denied"],
     ])("%s is public", (path) => {
       expect(isPublicPath(path)).toBe(true);
     });

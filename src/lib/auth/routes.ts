@@ -3,6 +3,7 @@ export const PUBLIC_ROUTE_PATTERNS = [
   /^\/$/,
   /^\/sign-in(\/.*)?$/,
   /^\/sign-up(\/.*)?$/,
+  /^\/access-denied$/,
 ];
 
 /** API routes handle their own auth (cron secret, Clerk currentUser, etc.) */

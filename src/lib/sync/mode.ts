@@ -9,6 +9,7 @@ import {
   extractQueryToken,
 } from "@/lib/integrations/mode";
 import { eq } from "drizzle-orm";
+import { createPhaseTracker } from "./phase-tracker";
 
 /**
  * Ensure all reports from config exist in the database.
@@ -129,29 +130,38 @@ export async function syncAllModeReports(): Promise<{
     .values({ source: "mode" })
     .returning();
 
+  const tracker = createPhaseTracker(log.id);
+
   try {
     // Seed any new reports from config
+    let phaseId = await tracker.startPhase("seed_reports", "Ensuring config reports exist in DB");
     await seedReports();
+    await tracker.endPhase(phaseId, { detail: `Checked ${MODE_REPORT_MAP.length} report definitions` });
 
     // Get all active reports
+    phaseId = await tracker.startPhase("fetch_active_reports", "Loading active reports from DB");
     const reports = await db
       .select()
       .from(modeReports)
       .where(eq(modeReports.isActive, true));
+    await tracker.endPhase(phaseId, { itemsProcessed: reports.length, detail: `Found ${reports.length} active reports` });
 
     let totalRecords = 0;
     const errors: string[] = [];
 
     for (const report of reports) {
+      const reportPhaseId = await tracker.startPhase(`sync_report:${report.name}`, `Fetching latest run and queries`);
       try {
         console.log(`Mode sync: starting report ${report.name}`);
         const count = await syncReport(report);
         console.log(`Mode sync: completed ${report.name} (${count} records)`);
         totalRecords += count;
+        await tracker.endPhase(reportPhaseId, { itemsProcessed: count, detail: `Synced ${count} rows` });
       } catch (err) {
         const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${err instanceof Error ? err.message : String(err)}`;
         errors.push(message);
         console.error(message);
+        await tracker.endPhase(reportPhaseId, { status: "error", errorMessage: message });
       }
     }
 

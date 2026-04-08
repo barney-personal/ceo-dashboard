@@ -4,6 +4,7 @@ import { getChannelHistory, getChannelName, getThreadReplies, getUserName } from
 import { llmParseOkrUpdate, buildSquadContext, buildSystemPromptFromContext } from "@/lib/integrations/llm-okr-parser";
 import { seedSquads } from "@/lib/data/seed-squads";
 import { eq, and, desc, isNotNull } from "drizzle-orm";
+import { createPhaseTracker } from "./phase-tracker";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
@@ -181,13 +182,24 @@ export async function syncAllSlackOkrs(): Promise<{
     .values({ source: "slack" })
     .returning();
 
+  const tracker = createPhaseTracker(log.id);
+
   try {
     // Seed squads and build LLM context once
+    let phaseId = await tracker.startPhase("seed_squads", "Seeding squad definitions");
     await seedSquads();
+    await tracker.endPhase(phaseId);
+
+    phaseId = await tracker.startPhase("build_context", "Building LLM system prompt from squad context");
     const squadContext = await buildSquadContext();
     const systemPrompt = buildSystemPromptFromContext(squadContext);
-    const userNameFallback = await buildUserNameFallback();
+    await tracker.endPhase(phaseId);
 
+    phaseId = await tracker.startPhase("build_user_fallback", "Loading user name fallback map");
+    const userNameFallback = await buildUserNameFallback();
+    await tracker.endPhase(phaseId, { itemsProcessed: userNameFallback.size, detail: `Loaded ${userNameFallback.size} user mappings` });
+
+    phaseId = await tracker.startPhase("fetch_last_sync", "Checking last successful sync time");
     const lastSync = await db
       .select({ completedAt: syncLog.completedAt })
       .from(syncLog)
@@ -200,18 +212,22 @@ export async function syncAllSlackOkrs(): Promise<{
     const lastSyncTs = lastSync[0]?.completedAt
       ? String(lastSync[0].completedAt.getTime() / 1000)
       : undefined;
+    await tracker.endPhase(phaseId, { detail: lastSyncTs ? `Since ${lastSync[0].completedAt!.toISOString()}` : "Full scan (no prior sync)" });
 
     let totalRecords = 0;
     const errors: string[] = [];
 
     for (const channelId of channelIds) {
+      const channelPhaseId = await tracker.startPhase(`sync_channel:${channelId}`, "Fetching messages and parsing OKRs");
       try {
         const count = await syncChannel(channelId, lastSyncTs, systemPrompt, userNameFallback);
         totalRecords += count;
+        await tracker.endPhase(channelPhaseId, { itemsProcessed: count, detail: `Parsed ${count} key results` });
       } catch (err) {
         const message = `Failed to sync channel ${channelId}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(message);
         console.error(message);
+        await tracker.endPhase(channelPhaseId, { status: "error", errorMessage: message });
       }
     }
 
