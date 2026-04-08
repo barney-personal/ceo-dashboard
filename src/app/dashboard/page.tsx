@@ -89,7 +89,7 @@ export default async function DashboardOverview() {
 
       {/* Hero metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <PermissionGate role={role} requiredRole="leadership">
+        <PermissionGate role={role} requiredRole="everyone">
           <MetricCard
             label="LTV:Paid CAC"
             value={ltvCacRatio != null ? `${ltvCacRatio.toFixed(2)}x` : "—"}
@@ -100,7 +100,7 @@ export default async function DashboardOverview() {
             delay={0}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="ceo">
+        <PermissionGate role={role} requiredRole="leadership">
           <MetricCard
             label="ARR"
             value={latestARR ? `$${formatCompact(latestARR.value)}` : "—"}
@@ -108,7 +108,7 @@ export default async function DashboardOverview() {
             delay={50}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="leadership">
+        <PermissionGate role={role} requiredRole="everyone">
           <MetricCard
             label="MAU"
             value={latestMAU != null ? formatCompact(latestMAU) : "—"}
@@ -119,7 +119,7 @@ export default async function DashboardOverview() {
             delay={100}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="leadership">
+        <PermissionGate role={role} requiredRole="everyone">
           <MetricCard
             label="Headcount"
             value={headcount?.total?.toString() ?? "—"}
@@ -136,15 +136,13 @@ export default async function DashboardOverview() {
           Sections
         </h3>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <SectionLink
+            href="/dashboard/unit-economics"
+            icon={Calculator}
+            title="Unit Economics"
+            description="LTV:Paid CAC ratio, 36-month LTV by cohort, paid CPA trend, marketing spend and new user acquisition — all from Mode"
+          />
           <PermissionGate role={role} requiredRole="leadership">
-            <SectionLink
-              href="/dashboard/unit-economics"
-              icon={Calculator}
-              title="Unit Economics"
-              description="LTV:Paid CAC ratio, 36-month LTV by cohort, paid CPA trend, marketing spend and new user acquisition — all from Mode"
-            />
-          </PermissionGate>
-          <PermissionGate role={role} requiredRole="ceo">
             <SectionLink
               href="/dashboard/financial"
               icon={PoundSterling}
@@ -152,14 +150,12 @@ export default async function DashboardOverview() {
               description="Embedded P&L Summary, Balance Sheet, Cash Flow, Treasury Dashboard, KPIs, and Headcount from Slack xlsx files"
             />
           </PermissionGate>
-          <PermissionGate role={role} requiredRole="leadership">
-            <SectionLink
-              href="/dashboard/product"
-              icon={BarChart3}
-              title="Product"
-              description="MAU, WAU, and DAU bar charts, WAU/MAU engagement trend, and MAU retention cohort heatmap"
-            />
-          </PermissionGate>
+          <SectionLink
+            href="/dashboard/product"
+            icon={BarChart3}
+            title="Product"
+            description="MAU, WAU, and DAU bar charts, WAU/MAU engagement trend, and MAU retention cohort heatmap"
+          />
           <SectionLink
             href="/dashboard/okrs"
             icon={Target}

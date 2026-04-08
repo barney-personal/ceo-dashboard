@@ -1,6 +1,3 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
@@ -16,11 +13,6 @@ import {
 } from "@/lib/integrations/mode-config";
 
 export default async function UnitEconomicsPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
 
   const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
     getLtvTimeSeries().catch(() => []),

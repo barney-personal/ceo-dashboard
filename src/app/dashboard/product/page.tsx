@@ -1,6 +1,3 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
@@ -20,12 +17,6 @@ import {
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
-
   const [
     activeUsers,
     engagement,
