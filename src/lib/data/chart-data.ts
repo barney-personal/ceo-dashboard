@@ -243,7 +243,12 @@ export async function getActiveUsersSeries(): Promise<{
 
   const rows = query.rows
     .filter((r) => r.date)
-    .map((r) => ({ date: new Date(rowStr(r, "date")), daus: rowNum(r, "daus"), waus: rowNum(r, "waus"), maus: rowNum(r, "maus") }))
+    .map((r) => ({
+      date: new Date(rowStr(r, "date")),
+      daus: rowNumOrNull(r, "daus"),
+      waus: rowNumOrNull(r, "waus"),
+      maus: rowNumOrNull(r, "maus"),
+    }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   // MAU: group by month, average
@@ -281,10 +286,14 @@ export async function getActiveUsersSeries(): Promise<{
 
   // DAU: daily, last 90 days
   const dailyRows = rows.slice(-90);
-  const dau = dailyRows.map((r) => ({
-    date: r.date.toISOString().slice(0, 10),
-    value: r.daus,
-  }));
+  const dau = dailyRows
+    .filter(
+      (r): r is typeof r & { daus: number } => r.daus != null
+    )
+    .map((r) => ({
+      date: r.date.toISOString().slice(0, 10),
+      value: r.daus,
+    }));
 
   return { dau, wau, mau };
 }
