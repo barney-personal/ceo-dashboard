@@ -23,6 +23,32 @@ export interface PeopleMetrics {
   attritionLast90Days: number;
 }
 
+function normalizeLifecycleStatus(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isTruthyHeadcountFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function isActiveCleoEmployeeRow(row: Record<string, unknown>): boolean {
+  return (
+    normalizeLifecycleStatus(row.lifecycle_status) === "employed" &&
+    isTruthyHeadcountFlag(row.is_cleo_headcount)
+  );
+}
+
+export function isTerminatedCleoEmployeeRow(
+  row: Record<string, unknown>
+): boolean {
+  return (
+    normalizeLifecycleStatus(row.lifecycle_status) === "terminated" &&
+    isTruthyHeadcountFlag(row.is_cleo_headcount)
+  );
+}
+
 /**
  * Transform raw Mode headcount rows into typed Person objects.
  */
@@ -82,8 +108,7 @@ export function getPeopleMetrics(
   const departments = new Set(active.map((p) => p.function)).size;
 
   const attritionLast90Days = allRows.filter((r) => {
-    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") return false;
-    if (r.is_cleo_headcount !== 1) return false;
+    if (!isTerminatedCleoEmployeeRow(r)) return false;
     const termDate = r.termination_date as string | null;
     if (!termDate) return false;
     return new Date(termDate) >= ninetyDaysAgo;
@@ -289,7 +314,7 @@ export function getMonthlyJoinersAndDepartures(
   // Count all Cleo employee joiners by start_date month
   const joinerCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (r.is_cleo_headcount !== 1) continue;
+    if (!isTruthyHeadcountFlag(r.is_cleo_headcount)) continue;
     const startDate = r.start_date as string | null;
     if (!startDate) continue;
     const d = new Date(startDate);
@@ -300,8 +325,7 @@ export function getMonthlyJoinersAndDepartures(
   // Count departures by termination_date month
   const departureCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") continue;
-    if (r.is_cleo_headcount !== 1) continue;
+    if (!isTerminatedCleoEmployeeRow(r)) continue;
     const termDate = r.termination_date as string | null;
     if (!termDate) continue;
     const d = new Date(termDate);
@@ -328,9 +352,7 @@ export async function getActiveEmployees(): Promise<{
   if (!query) return { employees: [], allRows: [], lastSync: null };
 
   const allRows = query.rows;
-  const activeRows = allRows.filter(
-    (r) => r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
-  );
+  const activeRows = allRows.filter(isActiveCleoEmployeeRow);
 
   return {
     employees: transformToPersons(activeRows),

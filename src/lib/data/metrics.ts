@@ -1,4 +1,5 @@
 import { getReportData } from "./mode";
+import { isActiveCleoEmployeeRow } from "./people";
 
 /**
  * Format a number as currency (USD).
@@ -87,10 +88,7 @@ export async function getHeadcountMetrics() {
 
   if (!headcountData) return { total: null, lastSync: null };
 
-  const activeEmployees = headcountData.rows.filter(
-    (r) =>
-      r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
-  );
+  const activeEmployees = headcountData.rows.filter(isActiveCleoEmployeeRow);
 
   return {
     total: activeEmployees.length,

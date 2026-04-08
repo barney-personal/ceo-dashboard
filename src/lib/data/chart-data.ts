@@ -1,4 +1,5 @@
 import { getReportData } from "./mode";
+import { isActiveCleoEmployeeRow } from "./people";
 type ChartSeries = {
   label: string;
   color: string;
@@ -395,9 +396,7 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
   const query = data.find((d) => d.queryName === "headcount");
   if (!query) return [];
 
-  const active = query.rows.filter(
-    (r) => r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
-  );
+  const active = query.rows.filter(isActiveCleoEmployeeRow);
 
   const byDept = new Map<string, number>();
   for (const emp of active) {
