@@ -17,7 +17,7 @@ export default async function FinancialPage({
   searchParams: Promise<{ period?: string }>;
 }) {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
+  if (!hasAccess(role, "leadership")) {
     redirect("/dashboard");
   }
 

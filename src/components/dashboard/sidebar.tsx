@@ -47,19 +47,19 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Unit Economics",
         href: "/dashboard/unit-economics",
-        requiredRole: "leadership",
+        requiredRole: "everyone",
         icon: Calculator,
       },
       {
         label: "Financial",
         href: "/dashboard/financial",
-        requiredRole: "ceo",
+        requiredRole: "leadership",
         icon: PoundSterling,
       },
       {
         label: "Product",
         href: "/dashboard/product",
-        requiredRole: "leadership",
+        requiredRole: "everyone",
         icon: BarChart3,
       },
     ],
