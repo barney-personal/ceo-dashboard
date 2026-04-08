@@ -11,6 +11,7 @@ import { getLatestARR } from "@/lib/data/management-accounts";
 import { db } from "@/lib/db";
 import { syncLog } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
+import { getEffectiveSyncState } from "@/lib/sync/config";
 
 function SectionLink({
   href,
@@ -67,7 +68,7 @@ export default async function DashboardOverview() {
     return {
       id: sync.id,
       source: sourceLabels[sync.source] ?? sync.source,
-      status: sync.status,
+      status: getEffectiveSyncState(sync, new Date()),
       recordsSynced: sync.recordsSynced,
       startedAt: sync.startedAt.toISOString(),
     };
@@ -189,6 +190,12 @@ export default async function DashboardOverview() {
                 <div key={entry.id} className="flex items-center gap-3">
                   {entry.status === "success" ? (
                     <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
+                  ) : entry.status === "partial" ? (
+                    <XCircle className="h-3.5 w-3.5 shrink-0 text-warning" />
+                  ) : entry.status === "queued" ? (
+                    <RefreshCw className="h-3.5 w-3.5 shrink-0 text-warning" />
+                  ) : entry.status === "abandoned" ? (
+                    <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
                   ) : entry.status === "error" ? (
                     <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
                   ) : (

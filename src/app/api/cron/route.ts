@@ -1,83 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { syncLog } from "@/lib/db/schema";
-import { and, desc, eq, lt } from "drizzle-orm";
-import { syncAllModeReports } from "@/lib/sync/mode";
-import { syncAllSlackOkrs } from "@/lib/sync/slack";
-import { syncManagementAccounts } from "@/lib/sync/management-accounts";
-
-const MODE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
-const SLACK_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const MGMT_ACCOUNTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // Daily
-
-async function getLastSyncTime(source: string): Promise<Date | null> {
-  const result = await db
-    .select({ startedAt: syncLog.startedAt })
-    .from(syncLog)
-    .where(and(eq(syncLog.source, source), eq(syncLog.status, "success")))
-    .orderBy(desc(syncLog.startedAt))
-    .limit(1);
-  return result[0]?.startedAt ?? null;
-}
+import { enqueueSyncRun } from "@/lib/sync/coordinator";
+import { createWorkerId, drainSyncQueue } from "@/lib/sync/runtime";
+import { isCronRequest } from "@/lib/sync/request-auth";
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  if (
-    !process.env.CRON_SECRET ||
-    authHeader !== `Bearer ${process.env.CRON_SECRET}`
-  ) {
+  if (!(await isCronRequest(request))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Clean up stale "running" syncs from crashed processes
-  await db
-    .update(syncLog)
-    .set({
-      completedAt: new Date(),
-      status: "error",
-      errorMessage: "Sync interrupted — process likely crashed",
-    })
-    .where(
-      and(
-        eq(syncLog.status, "running"),
-        lt(syncLog.startedAt, new Date(Date.now() - 10 * 60 * 1000))
-      )
-    );
+  const [mode, slack, managementAccounts] = await Promise.all([
+    enqueueSyncRun("mode", { trigger: "cron" }),
+    enqueueSyncRun("slack", { trigger: "cron" }),
+    enqueueSyncRun("management-accounts", { trigger: "cron" }),
+  ]);
 
-  const results: Record<string, string> = {};
-
-  // Mode sync (every 4 hours)
-  const lastModeSync = await getLastSyncTime("mode");
-  if (!lastModeSync || Date.now() - lastModeSync.getTime() > MODE_INTERVAL_MS) {
-    results.mode = "triggered";
-    syncAllModeReports()
-      .then((r) => console.log("Cron: Mode sync finished", r))
-      .catch((err) => console.error("Cron: Mode sync failed", err));
-  } else {
-    results.mode = "skipped";
+  if ([mode, slack, managementAccounts].some((result) => result.outcome !== "skipped")) {
+    void drainSyncQueue(createWorkerId("web-cron"));
   }
 
-  // Slack OKR sync (every 2 hours)
-  const lastSlackSync = await getLastSyncTime("slack");
-  if (!lastSlackSync || Date.now() - lastSlackSync.getTime() > SLACK_INTERVAL_MS) {
-    results.slack = "triggered";
-    syncAllSlackOkrs()
-      .then((r) => console.log("Cron: Slack sync finished", r))
-      .catch((err) => console.error("Cron: Slack sync failed", err));
-  } else {
-    results.slack = "skipped";
-  }
-
-  // Management accounts sync (daily)
-  const lastMgmtSync = await getLastSyncTime("management-accounts");
-  if (!lastMgmtSync || Date.now() - lastMgmtSync.getTime() > MGMT_ACCOUNTS_INTERVAL_MS) {
-    results.managementAccounts = "triggered";
-    syncManagementAccounts()
-      .then((r) => console.log("Cron: Management accounts sync finished", r))
-      .catch((err) => console.error("Cron: Management accounts sync failed", err));
-  } else {
-    results.managementAccounts = "skipped";
-  }
-
-  return NextResponse.json({ status: "syncs triggered", results });
+  return NextResponse.json({
+    status: "syncs enqueued",
+    results: {
+      mode: {
+        outcome: mode.outcome,
+        runId: mode.runId,
+        reason: mode.reason,
+        nextEligibleAt: mode.nextEligibleAt?.toISOString() ?? null,
+      },
+      slack: {
+        outcome: slack.outcome,
+        runId: slack.runId,
+        reason: slack.reason,
+        nextEligibleAt: slack.nextEligibleAt?.toISOString() ?? null,
+      },
+      managementAccounts: {
+        outcome: managementAccounts.outcome,
+        runId: managementAccounts.runId,
+        reason: managementAccounts.reason,
+        nextEligibleAt: managementAccounts.nextEligibleAt?.toISOString() ?? null,
+      },
+    },
+  });
 }

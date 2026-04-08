@@ -1,6 +1,8 @@
-import { gunzipSync } from "zlib";
-
 const MODE_BASE_URL = "https://app.mode.com/api";
+const MODE_METADATA_TIMEOUT_MS = 30_000;
+const MODE_RESULTS_TIMEOUT_MS = 120_000;
+const MODE_MAX_RESULT_BYTES = 25 * 1024 * 1024;
+const MODE_MAX_RETRIES = 3;
 
 interface ModeConfig {
   token: string;
@@ -38,51 +40,175 @@ async function modeRequest<T>(
 ): Promise<T> {
   const config = getConfig();
   const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...authHeaders(config),
-      ...(options?.headers ?? {}),
-    },
-  });
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Mode API error ${res.status}: ${body}`);
+  for (let attempt = 1; attempt <= MODE_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error("Mode request timed out")),
+      MODE_METADATA_TIMEOUT_MS
+    );
+
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          ...authHeaders(config),
+          ...(options?.headers ?? {}),
+        },
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const error = new Error(`Mode API error ${res.status}: ${body}`);
+        if (
+          attempt < MODE_MAX_RETRIES &&
+          (res.status === 429 || res.status >= 500)
+        ) {
+          lastError = error;
+          await sleep(getRetryDelayMs(attempt));
+          continue;
+        }
+        throw error;
+      }
+
+      return res.json() as Promise<T>;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = isRetryableModeError(message);
+      if (attempt < MODE_MAX_RETRIES && retryable) {
+        lastError = error instanceof Error ? error : new Error(message);
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
-  return res.json() as Promise<T>;
+  throw lastError ?? new Error("Mode request failed");
+}
+
+function isRetryableModeError(message: string): boolean {
+  return (
+    message.includes("timed out") ||
+    message.includes("aborted") ||
+    message.includes("fetch failed") ||
+    message.includes("socket hang up") ||
+    message.includes("ECONNRESET") ||
+    message.includes("EAI_AGAIN")
+  );
+}
+
+function getRetryDelayMs(attempt: number): number {
+  const baseMs = 500 * 2 ** (attempt - 1);
+  return baseMs + Math.floor(Math.random() * 250);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readJsonBodyWithLimit<T>(
+  res: Response,
+  maxBytes: number
+): Promise<{ data: T; bytesRead: number }> {
+  if (!res.body) {
+    throw new Error("Mode response body is empty");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    bytesRead += value.byteLength;
+    if (bytesRead > maxBytes) {
+      throw new Error(
+        `Mode result exceeded ${Math.round(maxBytes / 1024 / 1024)}MB response limit`
+      );
+    }
+
+    text += decoder.decode(value, { stream: true });
+  }
+
+  text += decoder.decode();
+
+  return {
+    data: JSON.parse(text) as T,
+    bytesRead,
+  };
 }
 
 /**
  * Fetch a JSON endpoint that may be gzipped (used for query result content).
  */
-async function modeRequestJson<T>(path: string): Promise<T> {
+async function modeRequestJson<T>(
+  path: string,
+  opts: {
+    timeoutMs?: number;
+    maxBytes?: number;
+  } = {}
+): Promise<{ data: T; bytesRead: number }> {
   const config = getConfig();
   const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
-  const res = await fetch(url, {
-    headers: {
-      ...authHeaders(config),
-      Accept: "application/json",
-    },
-  });
+  const timeoutMs = opts.timeoutMs ?? MODE_RESULTS_TIMEOUT_MS;
+  const maxBytes = opts.maxBytes ?? MODE_MAX_RESULT_BYTES;
+  let lastError: Error | null = null;
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Mode API error ${res.status}: ${body}`);
+  for (let attempt = 1; attempt <= MODE_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error("Mode query result request timed out")),
+      timeoutMs
+    );
+
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          ...authHeaders(config),
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const error = new Error(`Mode API error ${res.status}: ${body}`);
+        if (
+          attempt < MODE_MAX_RETRIES &&
+          (res.status === 429 || res.status >= 500)
+        ) {
+          lastError = error;
+          await sleep(getRetryDelayMs(attempt));
+          continue;
+        }
+        throw error;
+      }
+
+      return await readJsonBodyWithLimit<T>(res, maxBytes);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = isRetryableModeError(message);
+      if (attempt < MODE_MAX_RETRIES && retryable) {
+        lastError = error instanceof Error ? error : new Error(message);
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
-  const buffer = Buffer.from(await res.arrayBuffer());
-
-  // Mode may or may not gzip the response — try decompressing, fall back to plain
-  let text: string;
-  try {
-    text = gunzipSync(buffer).toString("utf-8");
-  } catch {
-    text = buffer.toString("utf-8");
-  }
-
-  return JSON.parse(text) as T;
+  throw lastError ?? new Error("Mode JSON request failed");
 }
 
 // --- Types ---
@@ -167,11 +293,23 @@ export async function getQueryResultContent(
   reportToken: string,
   runToken: string,
   queryRunToken: string,
-  maxRows: number = 5000
-): Promise<Record<string, unknown>[]> {
-  return modeRequestJson<Record<string, unknown>[]>(
+  maxRows: number = 1000
+): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
+  const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
     `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`
   );
+
+  return {
+    rows: data,
+    responseBytes: bytesRead,
+  };
+}
+
+export async function getModeJsonWithLimit<T>(
+  path: string,
+  opts?: { timeoutMs?: number; maxBytes?: number }
+): Promise<{ data: T; bytesRead: number }> {
+  return modeRequestJson<T>(path, opts);
 }
 
 /**
