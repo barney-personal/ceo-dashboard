@@ -2,6 +2,7 @@ import {
   claimQueuedSyncRun,
   finalizeSyncRun,
   formatSyncError,
+  isSyncRunCancelled,
   startSyncHeartbeat,
   type SyncLogRow,
 } from "./coordinator";
@@ -36,23 +37,53 @@ export function createWorkerId(prefix: string): string {
   return `${prefix}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// How often to poll the DB for an externally-triggered cancellation while a
+// sync is in-flight. Kept short enough to stop work promptly, but long enough
+// not to hammer the DB on every tick.
+const DB_CANCEL_POLL_MS = 5_000;
+
 export async function runClaimedSync(
   run: SyncLogRow,
   opts: { shouldStop?: () => boolean } = {}
 ): Promise<SyncRunResult> {
+  // DB-backed cancellation: poll the syncLog row so that a /api/sync/cancel
+  // request stops in-flight work promptly instead of only changing the row
+  // after the runner completes.
+  let cancelledByDb = false;
+  const cancelPollInterval = setInterval(() => {
+    void isSyncRunCancelled(run.id).then((cancelled) => {
+      if (cancelled) cancelledByDb = true;
+    });
+  }, DB_CANCEL_POLL_MS);
+  cancelPollInterval.unref?.();
+
+  const combinedShouldStop = () =>
+    cancelledByDb || (opts.shouldStop?.() ?? false);
+
   const stopHeartbeat = startSyncHeartbeat(run);
 
   try {
     const runner = RUNNERS[run.source as SyncSource];
-    const result = await runner(run, opts);
+    const result = await runner(run, { shouldStop: combinedShouldStop });
+    clearInterval(cancelPollInterval);
     await stopHeartbeat();
-    await finalizeSyncRun(run.id, {
+
+    const { finalized } = await finalizeSyncRun(run.id, {
       status: result.status,
       recordsSynced: result.recordsSynced,
       errorMessage: result.errors.length > 0 ? result.errors.join("\n") : null,
     });
+
+    if (!finalized) {
+      // The row was already transitioned to a terminal state (e.g. cancelled)
+      // while the runner was executing. Return cancelled so callers see the
+      // correct outcome rather than the stale runner result.
+      return { status: "cancelled", recordsSynced: 0, errors: [] };
+    }
+
     return result;
   } catch (error) {
+    clearInterval(cancelPollInterval);
     const message = formatSyncError(error);
     await stopHeartbeat();
     await finalizeSyncRun(run.id, {
