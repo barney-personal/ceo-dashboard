@@ -1,0 +1,59 @@
+databases:
+  - name: ceo-dashboard-db
+    plan: starter
+    databaseName: ceo_dashboard
+    user: ceo_dashboard
+
+services:
+  - type: web
+    name: ceo-dashboard
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ceo-dashboard-db
+          property: connectionString
+      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: NEXT_PUBLIC_CLERK_SIGN_IN_URL
+        value: /sign-in
+      - key: NEXT_PUBLIC_CLERK_SIGN_UP_URL
+        value: /sign-up
+      - key: MODE_API_TOKEN
+        sync: false
+      - key: MODE_API_SECRET
+        sync: false
+      - key: MODE_WORKSPACE
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: HIBOB_API_TOKEN
+        sync: false
+      - key: HIBOB_SERVICE_USER_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        generateValue: true
+
+  - type: cron
+    name: ceo-dashboard-cron
+    runtime: node
+    schedule: "0 */2 * * *"
+    buildCommand: npm ci
+    command: |
+      curl -s -H "Authorization: Bearer $CRON_SECRET" https://ceo-dashboard.onrender.com/api/cron
+    envVars:
+      - key: CRON_SECRET
+        fromService:
+          name: ceo-dashboard
+          type: web
+          envVarKey: CRON_SECRET
