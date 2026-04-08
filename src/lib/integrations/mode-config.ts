@@ -218,9 +218,17 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
   },
 ];
 
-export const MODE_REPORT_MAP: ModeReportConfig[] = MODE_SYNC_PROFILES.map(
-  ({ syncEnabled: _syncEnabled, queries: _queries, ...report }) => report,
-);
+function toModeReportConfig(profile: ModeSyncProfile): ModeReportConfig {
+  return {
+    reportToken: profile.reportToken,
+    name: profile.name,
+    section: profile.section,
+    category: profile.category,
+  };
+}
+
+export const MODE_REPORT_MAP: ModeReportConfig[] =
+  MODE_SYNC_PROFILES.map(toModeReportConfig);
 
 const MODE_REPORT_BY_SECTION_CATEGORY = new Map<
   string,
