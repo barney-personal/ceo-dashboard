@@ -1,4 +1,4 @@
-import { getReportData } from "./mode";
+import { getReportData, rowStr, rowNum } from "./mode";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import {
   DAYS_PER_MONTH,
@@ -35,23 +35,22 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
   const now = Date.now();
   return rows
     .map((r) => {
-      const startDate = (r.start_date as string) || "";
+      const startDate = rowStr(r, "start_date");
       const startMs = startDate ? new Date(startDate).getTime() : now;
       const tenureMonths = Math.max(
         0,
         Math.floor((now - startMs) / (DAYS_PER_MONTH * 24 * 60 * 60 * 1000)),
       );
       return {
-        name: (r.preferred_name as string) || "Unknown",
-        email: (r.email as string) || "",
-        jobTitle: (r.job_title as string) || "",
-        level: (r.hb_level as string) || "",
-        squad:
-          (r.hb_squad as string) || (r.hb_function as string) || "Unassigned",
-        function: (r.hb_function as string) || "Unassigned",
-        manager: (r.manager as string) || "",
+        name: rowStr(r, "preferred_name") || "Unknown",
+        email: rowStr(r, "email"),
+        jobTitle: rowStr(r, "job_title"),
+        level: rowStr(r, "hb_level"),
+        squad: rowStr(r, "hb_squad") || rowStr(r, "hb_function") || "Unassigned",
+        function: rowStr(r, "hb_function") || "Unassigned",
+        manager: rowStr(r, "manager"),
         startDate,
-        location: (r.work_location as string) || "",
+        location: rowStr(r, "work_location"),
         tenureMonths,
       };
     })
@@ -89,13 +88,9 @@ export function getPeopleMetrics(
   const departments = new Set(active.map((p) => p.function)).size;
 
   const attritionLast90Days = allRows.filter((r) => {
-    if (
-      r.lifecycle_status !== "Terminated" &&
-      r.lifecycle_status !== "terminated"
-    )
-      return false;
-    if (r.is_cleo_headcount !== 1) return false;
-    const termDate = r.termination_date as string | null;
+    if (String(r.lifecycle_status).toLowerCase() !== "terminated") return false;
+    if (rowNum(r, "is_cleo_headcount") !== 1) return false;
+    const termDate = rowStr(r, "termination_date");
     if (!termDate) return false;
     return new Date(termDate) >= ninetyDaysAgo;
   }).length;
@@ -202,8 +197,8 @@ export function getMonthlyJoinersAndDepartures(
   // Count all Cleo employee joiners by start_date month
   const joinerCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (r.is_cleo_headcount !== 1) continue;
-    const startDate = r.start_date as string | null;
+    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    const startDate = rowStr(r, "start_date");
     if (!startDate) continue;
     const d = new Date(startDate);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -213,13 +208,9 @@ export function getMonthlyJoinersAndDepartures(
   // Count departures by termination_date month
   const departureCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (
-      r.lifecycle_status !== "Terminated" &&
-      r.lifecycle_status !== "terminated"
-    )
-      continue;
-    if (r.is_cleo_headcount !== 1) continue;
-    const termDate = r.termination_date as string | null;
+    if (String(r.lifecycle_status).toLowerCase() !== "terminated") continue;
+    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    const termDate = rowStr(r, "termination_date");
     if (!termDate) continue;
     const d = new Date(termDate);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -254,7 +245,7 @@ export async function getActiveEmployees(): Promise<{
   const activeRows = allRows.filter(
     (r) =>
       String(r.lifecycle_status).toLowerCase() === "employed" &&
-      r.is_cleo_headcount === 1,
+      rowNum(r, "is_cleo_headcount") === 1,
   );
 
   return {

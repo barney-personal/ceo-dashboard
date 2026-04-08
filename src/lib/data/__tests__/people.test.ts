@@ -6,6 +6,10 @@ const { mockGetReportData } = vi.hoisted(() => ({
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
+  rowStr: (row: Record<string, unknown>, key: string) =>
+    typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
+  rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
+    typeof row[key] === "number" ? row[key] : fallback,
 }));
 
 import {

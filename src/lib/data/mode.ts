@@ -56,19 +56,37 @@ export async function getReportData(
 }
 
 /**
- * Extract a single metric value from synced data.
- * Looks for the first row of the first matching query and returns the column value.
+ * Safely extract a string value from a report row.
+ * Returns "" if the key is absent, null, or not a string.
  */
-export async function getMetricValue(
-  section: DashboardSection,
-  category: string,
-  queryName: string,
-  columnName: string
-): Promise<unknown | null> {
-  const data = await getReportData(section, category);
-  const match = data.find((d) => d.queryName === queryName);
-  if (!match || match.rows.length === 0) return null;
-  return match.rows[0][columnName] ?? null;
+export function rowStr(row: Record<string, unknown>, key: string): string {
+  const v = row[key];
+  return typeof v === "string" ? v : v != null ? String(v) : "";
+}
+
+/**
+ * Safely extract a number value from a report row.
+ * Returns `fallback` (default 0) if the key is absent, null, or not a number.
+ */
+export function rowNum(
+  row: Record<string, unknown>,
+  key: string,
+  fallback = 0
+): number {
+  const v = row[key];
+  return typeof v === "number" ? v : fallback;
+}
+
+/**
+ * Safely extract a nullable number value from a report row.
+ * Returns null if the key is absent, null, or not a number.
+ */
+export function rowNumOrNull(
+  row: Record<string, unknown>,
+  key: string
+): number | null {
+  const v = row[key];
+  return typeof v === "number" ? v : null;
 }
 
 /**

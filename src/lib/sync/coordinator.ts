@@ -7,7 +7,6 @@ import {
   eq,
   inArray,
   lt,
-  or,
 } from "drizzle-orm";
 import {
   evaluateQueueDecision,
@@ -47,6 +46,17 @@ function isUniqueViolation(error: unknown): boolean {
 
 export function formatSyncError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function determineSyncStatus(
+  errors: readonly unknown[],
+  succeededCount: number
+): Extract<SyncStatus, "success" | "partial" | "error"> {
+  if (errors.length === 0) {
+    return "success";
+  }
+
+  return succeededCount > 0 ? "partial" : "error";
 }
 
 export async function findActiveSyncRun(

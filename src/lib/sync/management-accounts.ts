@@ -12,6 +12,7 @@ import { getChannelHistory } from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { SyncCancelledError } from "./errors";
+import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -187,7 +188,6 @@ export async function runManagementAccountsSync(
           });
 
         count++;
-        console.log(`Synced management accounts: ${file.name} → ${period}`);
         await tracker.endPhase(filePhaseId, { detail: `Synced → ${period}` });
       } catch (error) {
         if (error instanceof SyncCancelledError) {
@@ -199,11 +199,8 @@ export async function runManagementAccountsSync(
           throw error;
         }
 
-        const message = `Failed to sync ${file.name}: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        const message = `Failed to sync ${file.name}: ${formatSyncError(error)}`;
         errors.push(message);
-        console.error(message);
         await tracker.endPhase(filePhaseId, {
           status: "error",
           errorMessage: message,
@@ -212,8 +209,7 @@ export async function runManagementAccountsSync(
     }
 
     return {
-      status:
-        errors.length === 0 ? "success" : count > 0 ? "partial" : "error",
+      status: determineSyncStatus(errors, count),
       recordsSynced: count,
       errors,
     };
