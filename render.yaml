@@ -1,6 +1,6 @@
 databases:
   - name: ceo-dashboard-db
-    plan: basic-1gb
+    plan: pro-4gb
     databaseName: ceo_dashboard
     user: ceo_dashboard
 
