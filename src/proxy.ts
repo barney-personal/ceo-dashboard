@@ -20,7 +20,7 @@ export default clerkMiddleware(async (auth, request) => {
       (e) => e.id === user.primaryEmailAddressId
     )?.emailAddress;
 
-    if (!email || !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+    if (!email || !email.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)) {
       return NextResponse.redirect(new URL("/access-denied", request.url));
     }
   }
