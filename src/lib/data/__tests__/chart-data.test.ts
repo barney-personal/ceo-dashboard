@@ -7,7 +7,11 @@ const { mockGetReportData } = vi.hoisted(() => ({
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
   rowStr: (row: Record<string, unknown>, key: string) =>
-    typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
+    typeof row[key] === "string"
+      ? row[key]
+      : row[key] != null
+        ? String(row[key])
+        : "",
   rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
     typeof row[key] === "number" ? row[key] : fallback,
   rowNumOrNull: (row: Record<string, unknown>, key: string) =>
@@ -38,11 +42,11 @@ describe("groupByWeek", () => {
         { date: "2023-01-08" },
         { date: "2023-01-09" },
       ],
-      "date"
+      "date",
     );
 
     expect(
-      [...grouped.entries()].map(([date, rows]) => [date, rows.length])
+      [...grouped.entries()].map(([date, rows]) => [date, rows.length]),
     ).toEqual([
       ["2022-12-26", 1],
       ["2023-01-02", 2],
@@ -52,7 +56,7 @@ describe("groupByWeek", () => {
 });
 
 describe("getQuery3Series", () => {
-  it("sums weekly spend and users while averaging weekly CPA", async () => {
+  it("sums weekly spend and users while deriving weekly CPA from totals", async () => {
     mockGetReportData.mockResolvedValue([
       {
         queryName: "Query 3",
@@ -62,14 +66,14 @@ describe("getQuery3Series", () => {
             actual_or_target: "actual",
             spend: 10,
             new_bank_connected_users: 2,
-            cpa: 5,
+            cpa: 500,
           },
           {
             day: "2023-01-08",
             actual_or_target: "actual",
             spend: 30,
             new_bank_connected_users: 3,
-            cpa: 9,
+            cpa: 900,
           },
           {
             day: "2023-01-03",
@@ -91,7 +95,40 @@ describe("getQuery3Series", () => {
       { date: "2023-01-02", value: 5 },
     ]);
     expect(series.cpa.find((item) => item.label === "actual")?.data).toEqual([
-      { date: "2023-01-02", value: 7 },
+      { date: "2023-01-02", value: 8 },
+    ]);
+  });
+
+  it("drops the current incomplete week from weekly charts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 3",
+        rows: [
+          {
+            day: "2026-03-31",
+            actual_or_target: "actual",
+            spend: 40,
+            new_bank_connected_users: 4,
+            cpa: 999,
+          },
+          {
+            day: "2026-04-07",
+            actual_or_target: "actual",
+            spend: 150,
+            new_bank_connected_users: 2,
+            cpa: 75,
+          },
+        ],
+      },
+    ]);
+
+    const series = await getQuery3Series();
+
+    expect(series.cpa.find((item) => item.label === "actual")?.data).toEqual([
+      { date: "2026-03-30", value: 10 },
     ]);
   });
 });
@@ -135,6 +172,38 @@ describe("getLtvCacRatioSeries", () => {
       ],
     });
     expect(latest).toBe(16);
+  });
+
+  it("excludes the current incomplete week from the ratio series", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "LTV:Paid CAC",
+        rows: [
+          {
+            period: "2026-03-31",
+            ltv_36m: 120,
+            paid_spend_excl_test: 60,
+            paid_users_excl_test: 6,
+          },
+          {
+            period: "2026-04-07",
+            ltv_36m: 200,
+            paid_spend_excl_test: 150,
+            paid_users_excl_test: 2,
+          },
+        ],
+      },
+    ]);
+
+    const series = await getLtvCacRatioSeries();
+
+    expect(series[0]).toMatchObject({
+      label: "LTV:CAC",
+      data: [{ date: "2026-03-30", value: 12 }],
+    });
   });
 });
 
