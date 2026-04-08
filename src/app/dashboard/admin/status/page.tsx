@@ -62,6 +62,10 @@ export default async function DataStatusPage() {
       }
     }
   } catch (error) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+
     warnings.push(getSchemaCompatibilityMessage(error));
   }
 
@@ -159,6 +163,10 @@ export default async function DataStatusPage() {
       { name: "financial_periods", label: "Financial Periods", count: financialCount.count, description: "Monthly management accounts" },
     ];
   } catch (error) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+
     warnings.push(getSchemaCompatibilityMessage(error));
   }
 
