@@ -3,6 +3,7 @@ import { throwIfSyncShouldStop } from "../errors";
 
 const mocks = vi.hoisted(() => ({
   claimQueuedSyncRun: vi.fn(),
+  expireAbandonedSyncRuns: vi.fn(),
   finalizeSyncRun: vi.fn(),
   markSyncRunsFailed: vi.fn(),
   startSyncHeartbeat: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../coordinator", () => ({
   claimQueuedSyncRun: mocks.claimQueuedSyncRun,
+  expireAbandonedSyncRuns: mocks.expireAbandonedSyncRuns,
   finalizeSyncRun: mocks.finalizeSyncRun,
   formatSyncError: (error: unknown) =>
     error instanceof Error ? error.message : String(error),
@@ -49,6 +51,7 @@ import { runClaimedSync, startBackgroundSyncDrain } from "../runtime";
 describe("sync runtime resilience", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    mocks.expireAbandonedSyncRuns.mockReset();
     mocks.finalizeSyncRun.mockReset();
     mocks.claimQueuedSyncRun.mockReset();
     mocks.markSyncRunsFailed.mockReset();
@@ -56,6 +59,7 @@ describe("sync runtime resilience", () => {
     mocks.runModeSync.mockReset();
     mocks.runManagementAccountsSync.mockReset();
     mocks.startSyncHeartbeat.mockReset();
+    mocks.expireAbandonedSyncRuns.mockResolvedValue([]);
     mocks.startSyncHeartbeat.mockReturnValue(async () => {});
   });
 
@@ -134,5 +138,42 @@ describe("sync runtime resilience", () => {
       [91],
       expect.stringContaining("manual slack sync request")
     );
+  });
+
+  it("keeps retrying finalization after the short recovery window is exhausted", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.runSlackSync.mockResolvedValue({
+      status: "success",
+      recordsSynced: 12,
+      errors: [],
+    });
+    mocks.finalizeSyncRun
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockRejectedValueOnce(new Error("db offline"))
+      .mockResolvedValue(undefined);
+
+    await expect(
+      runClaimedSync({ id: 31, source: "slack" } as never)
+    ).resolves.toEqual({
+      status: "success",
+      recordsSynced: 12,
+      errors: [],
+    });
+
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.finalizeSyncRun).toHaveBeenCalledTimes(5);
+    expect(mocks.finalizeSyncRun).toHaveBeenLastCalledWith(31, {
+      status: "success",
+      recordsSynced: 12,
+      errorMessage: null,
+    });
   });
 });

@@ -1,5 +1,6 @@
 import {
   claimQueuedSyncRun,
+  expireAbandonedSyncRuns,
   finalizeSyncRun,
   formatSyncError,
   markSyncRunsFailed,
@@ -36,6 +37,17 @@ const RUNNERS: Record<SyncSource, SyncRunner> = {
 };
 
 const FINALIZE_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000];
+const PENDING_FINALIZE_RECOVERY_INTERVAL_MS = 30_000;
+const ABANDONED_SYNC_SWEEP_INTERVAL_MS = 30_000;
+
+type FinalizeInput = Parameters<typeof finalizeSyncRun>[1];
+
+const pendingFinalizeRecoveries = new Map<number, FinalizeInput>();
+let pendingFinalizeRecoveryInterval:
+  | ReturnType<typeof setInterval>
+  | null = null;
+let abandonedSyncSweepInterval: ReturnType<typeof setInterval> | null = null;
+let abandonedSyncSweepInFlight: Promise<void> | null = null;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -124,16 +136,102 @@ async function safeStopHeartbeat(
   }
 }
 
+function stopPendingFinalizeRecoverySweepIfIdle(): void {
+  if (pendingFinalizeRecoveryInterval && pendingFinalizeRecoveries.size === 0) {
+    clearInterval(pendingFinalizeRecoveryInterval);
+    pendingFinalizeRecoveryInterval = null;
+  }
+}
+
+async function flushPendingFinalizeRecoveries(): Promise<void> {
+  if (pendingFinalizeRecoveries.size === 0) {
+    stopPendingFinalizeRecoverySweepIfIdle();
+    return;
+  }
+
+  for (const [runId, input] of pendingFinalizeRecoveries.entries()) {
+    try {
+      await finalizeSyncRun(runId, input);
+      pendingFinalizeRecoveries.delete(runId);
+      console.warn(
+        `[sync-worker] recovered finalize for run ${runId} via background sweep`
+      );
+    } catch (error) {
+      console.error(
+        `[sync-worker] background finalize sweep failed for run ${runId}:`,
+        error
+      );
+    }
+  }
+
+  stopPendingFinalizeRecoverySweepIfIdle();
+}
+
+function ensurePendingFinalizeRecoverySweep(): void {
+  if (pendingFinalizeRecoveryInterval) {
+    return;
+  }
+
+  pendingFinalizeRecoveryInterval = setInterval(() => {
+    void flushPendingFinalizeRecoveries();
+  }, PENDING_FINALIZE_RECOVERY_INTERVAL_MS);
+  pendingFinalizeRecoveryInterval.unref?.();
+}
+
+function queuePendingFinalizeRecovery(
+  runId: number,
+  input: FinalizeInput
+): void {
+  pendingFinalizeRecoveries.set(runId, input);
+  ensurePendingFinalizeRecoverySweep();
+}
+
+async function runAbandonedSyncSweep(): Promise<void> {
+  if (abandonedSyncSweepInFlight) {
+    return abandonedSyncSweepInFlight;
+  }
+
+  abandonedSyncSweepInFlight = (async () => {
+    try {
+      const expiredIds = await expireAbandonedSyncRuns();
+      if (expiredIds.length > 0) {
+        console.warn(
+          `[sync-worker] expired abandoned sync runs: ${expiredIds.join(", ")}`
+        );
+      }
+    } catch (error) {
+      console.error("[sync-worker] abandoned sync sweep failed:", error);
+    } finally {
+      abandonedSyncSweepInFlight = null;
+    }
+  })();
+
+  await abandonedSyncSweepInFlight;
+}
+
+export function ensureSyncRecoverySweep(): void {
+  if (abandonedSyncSweepInterval) {
+    return;
+  }
+
+  abandonedSyncSweepInterval = setInterval(() => {
+    void runAbandonedSyncSweep();
+  }, ABANDONED_SYNC_SWEEP_INTERVAL_MS);
+  abandonedSyncSweepInterval.unref?.();
+  void runAbandonedSyncSweep();
+}
+
 function scheduleFinalizeRecovery(
   runId: number,
-  input: Parameters<typeof finalizeSyncRun>[1],
+  input: FinalizeInput,
   attempt: number
 ): void {
   const delayMs = FINALIZE_RECOVERY_DELAYS_MS[attempt - 1];
   if (!delayMs) {
     console.error(
-      `[sync-worker] exhausted finalize recovery for run ${runId} (status=${input.status})`
+      `[sync-worker] exhausted finalize recovery for run ${runId} (status=${input.status}); handing off to the background sweep`
     );
+    queuePendingFinalizeRecovery(runId, input);
     return;
   }
 
@@ -145,11 +243,13 @@ function scheduleFinalizeRecovery(
 
 async function retryFinalizeSyncRun(
   runId: number,
-  input: Parameters<typeof finalizeSyncRun>[1],
+  input: FinalizeInput,
   attempt: number
 ): Promise<void> {
   try {
     await finalizeSyncRun(runId, input);
+    pendingFinalizeRecoveries.delete(runId);
+    stopPendingFinalizeRecoverySweepIfIdle();
     console.warn(
       `[sync-worker] recovered finalize for run ${runId} on attempt ${attempt}`
     );
@@ -164,12 +264,13 @@ async function retryFinalizeSyncRun(
 
 /**
  * Write the final sync status to Postgres, logging and suppressing any DB
- * error.  The lease-expiry mechanism in expireAbandonedSyncRuns will
- * eventually clean up orphaned `running` rows if this write fails.
+ * error. Short retry timers handle brief outages, the background finalize
+ * sweep handles longer outages in the same process, and the abandoned-run
+ * sweep backstops worker restarts once the lease expires.
  */
 async function safeFinalizeSyncRun(
   runId: number,
-  input: Parameters<typeof finalizeSyncRun>[1]
+  input: FinalizeInput
 ): Promise<void> {
   try {
     await finalizeSyncRun(runId, input);
