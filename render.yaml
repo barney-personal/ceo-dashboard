@@ -8,10 +8,12 @@ services:
   - type: web
     name: ceo-dashboard
     runtime: node
-    plan: starter
+    plan: standard
     buildCommand: NODE_ENV=development npm ci && npm run build
-    startCommand: npx drizzle-kit push && npm start
+    preDeployCommand: npx drizzle-kit migrate
+    startCommand: npm start
     healthCheckPath: /
+    maxShutdownDelaySeconds: 300
     envVars:
       - key: NODE_ENV
         value: production
@@ -45,6 +47,34 @@ services:
         sync: false
       - key: CRON_SECRET
         generateValue: true
+
+  - type: worker
+    name: ceo-dashboard-sync-worker
+    runtime: node
+    plan: standard
+    buildCommand: NODE_ENV=development npm ci && npm run build
+    preDeployCommand: npx drizzle-kit migrate
+    startCommand: npm run sync-worker
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ceo-dashboard-db
+          property: connectionString
+      - key: MODE_API_TOKEN
+        sync: false
+      - key: MODE_API_SECRET
+        sync: false
+      - key: MODE_WORKSPACE
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_OKR_CHANNEL_IDS
+        value: "C05LACCBKPU,C09E6L6336G,C09E30B8PD0,C09DMP0UBGX,C09EG0TTJQ1"
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   - type: cron
     name: ceo-dashboard-cron

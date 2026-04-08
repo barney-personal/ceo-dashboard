@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { getEffectiveSyncState } from "@/lib/sync/config";
 import {
   CheckCircle2,
   XCircle,
@@ -13,8 +13,6 @@ import {
   FileSpreadsheet,
   Clock,
   AlertTriangle,
-  Play,
-  Square,
 } from "lucide-react";
 
 interface Phase {
@@ -32,9 +30,14 @@ interface SyncRun {
   id: number;
   source: string;
   status: string;
+  trigger: string;
+  attempt: number;
   startedAt: string;
   completedAt: string | null;
+  heartbeatAt: string | null;
+  leaseExpiresAt: string | null;
   recordsSynced: number;
+  skipReason: string | null;
   errorMessage: string | null;
   phases: Phase[];
 }
@@ -89,13 +92,27 @@ function formatPhaseName(phase: string): string {
 
 function StatusIcon({ status, className = "" }: { status: string; className?: string }) {
   if (status === "success") return <CheckCircle2 className={`text-positive ${className}`} />;
+  if (status === "partial") return <AlertTriangle className={`text-warning ${className}`} />;
   if (status === "error") return <XCircle className={`text-destructive ${className}`} />;
+  if (status === "abandoned") return <AlertTriangle className={`text-destructive ${className}`} />;
   if (status === "running") return <RefreshCw className={`text-warning animate-spin ${className}`} />;
+  if (status === "queued") return <Clock className={`text-warning ${className}`} />;
   if (status === "skipped") return <SkipForward className={`text-muted-foreground/40 ${className}`} />;
+  if (status === "cancelled") return <XCircle className={`text-muted-foreground/50 ${className}`} />;
   return <Clock className={`text-muted-foreground/40 ${className}`} />;
 }
 
-function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; totalDurationMs: number; now: number }) {
+function PhaseTimeline({
+  phases,
+  totalDurationMs,
+  now,
+  runEffectiveStatus,
+}: {
+  phases: Phase[];
+  totalDurationMs: number;
+  now: number;
+  runEffectiveStatus: string;
+}) {
   if (phases.length === 0) {
     return (
       <p className="py-4 text-center text-[12px] text-muted-foreground/40">
@@ -111,7 +128,11 @@ function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; tota
           ? new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime()
           : now - new Date(phase.startedAt).getTime();
         const widthPct = totalDurationMs > 0 ? Math.max(2, (durationMs / totalDurationMs) * 100) : 50;
-        const isInterrupted = phase.status === "running" && !phase.completedAt;
+        const isInterrupted =
+          phase.status === "running" &&
+          !phase.completedAt &&
+          runEffectiveStatus !== "running" &&
+          runEffectiveStatus !== "queued";
 
         return (
           <div key={phase.id} className="group">
@@ -172,22 +193,23 @@ function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; tota
   );
 }
 
-function RunRow({ run, avgDuration, onAction }: { run: SyncRun; avgDuration: number; onAction: () => void }) {
+function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [cancelling, setCancelling] = useState(false);
   const Icon = SOURCE_ICONS[run.source] ?? Database;
   const label = SOURCE_LABELS[run.source] ?? run.source;
-  const isRunning = run.status === "running";
+  const effectiveStatus = getEffectiveSyncState(run, new Date(now));
+  const isActive = effectiveStatus === "running" || effectiveStatus === "queued";
+  const isRunning = effectiveStatus === "running";
 
-  // Tick `now` every 2s for running syncs
+  // Tick `now` every 2s for queued/running syncs
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isActive) return;
     const id = setInterval(() => setNow(Date.now()), 2000);
     return () => clearInterval(id);
-  }, [isRunning]);
+  }, [isActive]);
 
-  const isStale = isRunning && now - new Date(run.startedAt).getTime() > 600_000;
+  const isStale = effectiveStatus === "abandoned";
 
   const durationMs = run.completedAt
     ? new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()
@@ -207,7 +229,7 @@ function RunRow({ run, avgDuration, onAction }: { run: SyncRun; avgDuration: num
         <Icon className="h-4 w-4 shrink-0 text-muted-foreground/40" />
 
         {/* Status dot */}
-        <StatusIcon status={run.status} className="h-3.5 w-3.5 shrink-0" />
+        <StatusIcon status={effectiveStatus} className="h-3.5 w-3.5 shrink-0" />
 
         {/* Source label */}
         <span className="w-28 shrink-0 text-[13px] font-medium text-foreground/80">
@@ -256,118 +278,59 @@ function RunRow({ run, avgDuration, onAction }: { run: SyncRun; avgDuration: num
       {/* Expanded phase detail */}
       {expanded && (
         <div className="border-t border-border/20 bg-accent/10 px-4">
-          {isRunning && (
-            <div className="mt-3 flex justify-end">
-              <button
-                disabled={cancelling}
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  setCancelling(true);
-                  await fetch("/api/sync/cancel", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ syncLogId: run.id }),
-                  });
-                  onAction();
-                }}
-                className="inline-flex items-center gap-1.5 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-1.5 text-[11px] font-medium text-destructive/70 transition-colors hover:bg-destructive/10 disabled:opacity-50"
-              >
-                <Square className="h-3 w-3" />
-                {cancelling ? "Cancelling..." : "Cancel sync"}
-              </button>
-            </div>
-          )}
           {run.errorMessage && (
             <div className="mt-3 rounded-md bg-destructive/5 px-3 py-2">
               <p className="text-[11px] font-medium text-destructive/60">Run error</p>
               <p className="mt-0.5 text-[11px] text-destructive/50">{run.errorMessage}</p>
             </div>
           )}
-          <PhaseTimeline phases={run.phases} totalDurationMs={durationMs} now={now} />
+          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted-foreground/50">
+            <span>State: {effectiveStatus}</span>
+            <span>Trigger: {run.trigger}</span>
+            <span>Attempt: {run.attempt}</span>
+            {run.skipReason && <span>Reason: {run.skipReason}</span>}
+          </div>
+          <PhaseTimeline
+            phases={run.phases}
+            totalDurationMs={durationMs}
+            now={now}
+            runEffectiveStatus={effectiveStatus}
+          />
         </div>
       )}
     </div>
   );
 }
 
-const SYNC_ENDPOINTS: Record<string, string> = {
-  mode: "/api/sync/mode",
-  slack: "/api/sync/slack",
-  "management-accounts": "/api/sync/management-accounts",
-};
-
-function TriggerButton({ source, onTriggered }: { source: string; onTriggered: () => void }) {
-  const [triggering, setTriggering] = useState(false);
-  const label = SOURCE_LABELS[source] ?? source;
-
-  return (
-    <button
-      disabled={triggering}
-      onClick={async () => {
-        setTriggering(true);
-        await fetch(SYNC_ENDPOINTS[source], { method: "POST" });
-        setTimeout(() => {
-          setTriggering(false);
-          onTriggered();
-        }, 1000);
-      }}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border/40 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-primary disabled:opacity-50"
-    >
-      {triggering ? (
-        <RefreshCw className="h-3 w-3 animate-spin" />
-      ) : (
-        <Play className="h-3 w-3" />
-      )}
-      {label}
-    </button>
-  );
-}
-
 export function SyncRunLog({ runs, avgDurations }: SyncRunLogProps) {
   const [filter, setFilter] = useState<string>("all");
-  const router = useRouter();
 
   const filtered = filter === "all" ? runs : runs.filter((r) => r.source === filter);
-  const refresh = () => router.refresh();
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-warm">
-      {/* Header + filters + trigger buttons */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 px-5 py-3">
+      {/* Header + filters */}
+      <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">Sync Runs</h3>
           <p className="text-[11px] text-muted-foreground/50">
             Last {runs.length} runs with phase detail
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          {/* Trigger buttons */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/30">
-              Trigger
-            </span>
-            {Object.keys(SYNC_ENDPOINTS).map((source) => (
-              <TriggerButton key={source} source={source} onTriggered={refresh} />
-            ))}
-          </div>
-          {/* Divider */}
-          <div className="h-5 w-px bg-border/30" />
-          {/* Filter tabs */}
-          <div className="flex gap-1">
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  filter === f
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground/40 hover:text-muted-foreground"
-                }`}
-              >
-                {FILTER_LABELS[f]}
-              </button>
-            ))}
-          </div>
+        <div className="flex gap-1">
+          {FILTERS.map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                filter === f
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground/40 hover:text-muted-foreground"
+              }`}
+            >
+              {FILTER_LABELS[f]}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -383,7 +346,6 @@ export function SyncRunLog({ runs, avgDurations }: SyncRunLogProps) {
               key={run.id}
               run={run}
               avgDuration={avgDurations[run.source] ?? 0}
-              onAction={refresh}
             />
           ))
         )}
