@@ -15,6 +15,7 @@ import { seedSquads } from "@/lib/data/seed-squads";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { SyncCancelledError } from "./errors";
+import { determineSyncStatus } from "./coordinator";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
@@ -77,6 +78,15 @@ function isLikelyUpdate(text: string, subtype?: string): boolean {
   if (/^Separately/i.test(text)) return false;
   if (text.startsWith("/")) return false;
   return true;
+}
+
+type OkrStatus = "on_track" | "at_risk" | "behind" | "not_started";
+
+function ragToStatus(rag: "green" | "amber" | "red" | "not_started"): OkrStatus {
+  if (rag === "green") return "on_track";
+  if (rag === "amber") return "at_risk";
+  if (rag === "red") return "behind";
+  return "not_started";
 }
 
 /**
@@ -146,14 +156,7 @@ async function syncChannel(
           pillar,
           objectiveName: kr.objective,
           krName: kr.name,
-          status:
-            kr.rag === "green"
-              ? "on_track"
-              : kr.rag === "amber"
-                ? "at_risk"
-                : kr.rag === "red"
-                  ? "behind"
-                  : "not_started",
+          status: ragToStatus(kr.rag),
           actual: kr.metric ?? null,
           target: null,
           tldr: parsed.tldr ?? null,
@@ -163,14 +166,7 @@ async function syncChannel(
         .onConflictDoUpdate({
           target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
           set: {
-            status:
-              kr.rag === "green"
-                ? "on_track"
-                : kr.rag === "amber"
-                  ? "at_risk"
-                  : kr.rag === "red"
-                    ? "behind"
-                    : "not_started",
+            status: ragToStatus(kr.rag),
             actual: kr.metric ?? null,
             tldr: parsed.tldr ?? null,
             syncedAt: new Date(),
@@ -303,12 +299,7 @@ export async function runSlackSync(
     }
 
     return {
-      status:
-        errors.length === 0
-          ? "success"
-          : succeededChannels > 0
-            ? "partial"
-            : "error",
+      status: determineSyncStatus(errors, succeededChannels),
       recordsSynced: totalRecords,
       errors,
     };

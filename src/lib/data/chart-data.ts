@@ -10,6 +10,13 @@ import type { ColumnChartData } from "@/components/charts/column-chart";
 
 const CHARTS_START = new Date("2023-01-01").getTime();
 
+function toMondayKey(dateStr: string): string {
+  const date = new Date(dateStr);
+  const day = date.getDay();
+  const monday = new Date(date.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
+  return monday.toISOString().slice(0, 10);
+}
+
 /**
  * 36-month LTV estimate over time — monthly bar chart.
  * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
@@ -51,10 +58,7 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   // Aggregate to weekly
   const weekMap = new Map<string, { ltv: number; paidSpend: number; paidUsers: number; days: number }>();
   for (const r of rows) {
-    const d = new Date(r.date);
-    const day = d.getDay();
-    const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
-    const key = monday.toISOString().slice(0, 10);
+    const key = toMondayKey(r.date);
     const b = weekMap.get(key) ?? { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 };
     b.ltv += r.ltv;
     b.paidSpend += r.paidSpend;
@@ -166,10 +170,7 @@ export async function getQuery3Series(): Promise<{
   for (const [type, rows] of byType) {
     const weekMap = new Map<string, { spend: number; users: number; cpa: number; days: number }>();
     for (const r of rows) {
-      const d = new Date(r.date);
-      const day = d.getDay();
-      const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
-      const key = monday.toISOString().slice(0, 10);
+      const key = toMondayKey(r.date);
       const bucket = weekMap.get(key) ?? { spend: 0, users: 0, cpa: 0, days: 0 };
       bucket.spend += r.spend;
       bucket.users += r.users;
