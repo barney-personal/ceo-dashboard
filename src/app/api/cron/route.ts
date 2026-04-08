@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { syncLog } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { syncAllModeReports } from "@/lib/sync/mode";
 import { syncAllSlackOkrs } from "@/lib/sync/slack";
 import { syncManagementAccounts } from "@/lib/sync/management-accounts";
@@ -14,7 +14,7 @@ async function getLastSyncTime(source: string): Promise<Date | null> {
   const result = await db
     .select({ startedAt: syncLog.startedAt })
     .from(syncLog)
-    .where(eq(syncLog.source, source))
+    .where(and(eq(syncLog.source, source), eq(syncLog.status, "success")))
     .orderBy(desc(syncLog.startedAt))
     .limit(1);
   return result[0]?.startedAt ?? null;
