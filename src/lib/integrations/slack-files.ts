@@ -12,9 +12,30 @@ export interface SlackFile {
   filetype: string;
   size: number;
   url_private_download: string;
+  permalink: string;
+  permalink_public?: string;
   timestamp: number;
   user: string;
   channels: string[];
+}
+
+const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
+
+/**
+ * List management accounts xlsx files, sorted newest first.
+ */
+export async function getManagementAccountFiles(): Promise<SlackFile[]> {
+  const files = await listChannelFiles(MGMT_ACCOUNTS_CHANNEL, {
+    types: "all",
+    count: 20,
+  });
+  return files
+    .filter(
+      (f) =>
+        f.name.toLowerCase().includes("management accounts") &&
+        f.filetype === "xlsx"
+    )
+    .sort((a, b) => b.timestamp - a.timestamp);
 }
 
 interface FilesListResponse {
