@@ -293,7 +293,7 @@ export async function getQueryResultContent(
   reportToken: string,
   runToken: string,
   queryRunToken: string,
-  maxRows: number = 50000
+  maxRows: number = 1000
 ): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
   const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
     `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`
