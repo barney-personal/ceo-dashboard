@@ -89,7 +89,7 @@ export async function getHeadcountMetrics() {
 
   const activeEmployees = headcountData.rows.filter(
     (r) =>
-      r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
+      String(r.lifecycle_status).toLowerCase() === "employed" && r.is_cleo_headcount === 1
   );
 
   return {
