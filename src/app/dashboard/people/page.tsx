@@ -1,7 +1,3 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
-import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { BarChart } from "@/components/charts/bar-chart";
@@ -15,14 +11,8 @@ import {
   getTenureDistribution,
 } from "@/lib/data/people";
 
-export default async function PeoplePage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
-
-  const [{ employees, allRows, lastSync }, deptData] = await Promise.all([
+export default async function PeopleOrgPage() {
+  const [{ employees, allRows }, deptData] = await Promise.all([
     getActiveEmployees().catch(() => ({
       employees: [],
       allRows: [] as Record<string, unknown>[],
@@ -58,12 +48,7 @@ export default async function PeoplePage() {
   const modeUrl = "https://app.mode.com/cleoai/reports/c458b52ceb68";
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
-      <PageHeader
-        title="People"
-        description="Headcount, team structure, and workforce metrics"
-      />
-
+    <div className="space-y-8">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           label="Headcount"

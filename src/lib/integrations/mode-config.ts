@@ -93,6 +93,12 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     section: "people",
     category: "headcount",
   },
+  {
+    reportToken: "79ea96d310a9",
+    name: "Performance Dashboard",
+    section: "people",
+    category: "performance",
+  },
 ];
 
 /**
@@ -167,6 +173,13 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
     title: "Headcount SSoT Dashboard",
     section: "people",
     category: "headcount",
+    height: 700,
+  },
+  {
+    url: "https://app.mode.com/cleoai/reports/79ea96d310a9",
+    title: "Performance Dashboard",
+    section: "people",
+    category: "performance",
     height: 700,
   },
 ];
