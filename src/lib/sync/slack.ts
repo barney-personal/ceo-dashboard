@@ -15,7 +15,7 @@ import { seedSquads } from "@/lib/data/seed-squads";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { SyncCancelledError } from "./errors";
-import { determineSyncStatus } from "./coordinator";
+import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
@@ -286,11 +286,8 @@ export async function runSlackSync(
           throw error;
         }
 
-        const message = `Failed to sync channel ${channelId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        const message = `Failed to sync channel ${channelId}: ${formatSyncError(error)}`;
         errors.push(message);
-        console.error(message);
         await tracker.endPhase(channelPhaseId, {
           status: "error",
           errorMessage: message,

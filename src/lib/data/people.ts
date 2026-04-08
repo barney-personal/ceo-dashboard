@@ -82,7 +82,7 @@ export function getPeopleMetrics(
   const departments = new Set(active.map((p) => p.function)).size;
 
   const attritionLast90Days = allRows.filter((r) => {
-    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") return false;
+    if (String(r.lifecycle_status).toLowerCase() !== "terminated") return false;
     if (r.is_cleo_headcount !== 1) return false;
     const termDate = r.termination_date as string | null;
     if (!termDate) return false;
@@ -300,7 +300,7 @@ export function getMonthlyJoinersAndDepartures(
   // Count departures by termination_date month
   const departureCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") continue;
+    if (String(r.lifecycle_status).toLowerCase() !== "terminated") continue;
     if (r.is_cleo_headcount !== 1) continue;
     const termDate = r.termination_date as string | null;
     if (!termDate) continue;
