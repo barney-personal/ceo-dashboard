@@ -1,6 +1,6 @@
 databases:
   - name: ceo-dashboard-db
-    plan: basic-256mb
+    plan: basic-1gb
     databaseName: ceo_dashboard
     user: ceo_dashboard
 
@@ -8,7 +8,7 @@ services:
   - type: web
     name: ceo-dashboard
     runtime: node
-    plan: standard
+    plan: pro
     buildCommand: NODE_ENV=development npm ci && npm run build
     preDeployCommand: npx drizzle-kit migrate
     startCommand: npm start
@@ -51,7 +51,7 @@ services:
   - type: worker
     name: ceo-dashboard-sync-worker
     runtime: node
-    plan: standard
+    plan: pro
     buildCommand: NODE_ENV=development npm ci && npm run build
     preDeployCommand: npx drizzle-kit migrate
     startCommand: npm run sync-worker
