@@ -111,6 +111,7 @@ async function syncReport(
       });
 
     recordCount += rows.length;
+    rows = []; // Free memory immediately
   }
 
   return recordCount;
@@ -156,6 +157,8 @@ export async function syncAllModeReports(): Promise<{
         const count = await syncReport(report);
         console.log(`Mode sync: completed ${report.name} (${count} records)`);
         totalRecords += count;
+        const mem = process.memoryUsage();
+        console.log(`Mode sync: memory after ${report.name}: ${Math.round(mem.heapUsed / 1024 / 1024)}MB heap`);
         await tracker.endPhase(reportPhaseId, { itemsProcessed: count, detail: `Synced ${count} rows` });
       } catch (err) {
         const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${err instanceof Error ? err.message : String(err)}`;

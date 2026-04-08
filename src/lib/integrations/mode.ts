@@ -166,10 +166,11 @@ export async function getReportQueries(
 export async function getQueryResultContent(
   reportToken: string,
   runToken: string,
-  queryRunToken: string
+  queryRunToken: string,
+  maxRows: number = 50000
 ): Promise<Record<string, unknown>[]> {
   return modeRequestJson<Record<string, unknown>[]>(
-    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json`
+    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`
   );
 }
 
