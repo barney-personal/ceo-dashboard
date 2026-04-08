@@ -4,6 +4,7 @@ import {
   text,
   boolean,
   integer,
+  numeric,
   timestamp,
   jsonb,
   unique,
@@ -71,6 +72,31 @@ export const okrUpdates = pgTable(
   },
   (table) => [unique().on(table.slackTs, table.channelId, table.krName)]
 );
+
+export const financialPeriods = pgTable("financial_periods", {
+  id: serial("id").primaryKey(),
+  period: text("period").notNull().unique(), // "2026-02"
+  periodLabel: text("period_label").notNull(), // "February 2026"
+  slackFileId: text("slack_file_id").unique(),
+  filename: text("filename"),
+  revenue: numeric("revenue", { precision: 15, scale: 2 }),
+  grossProfit: numeric("gross_profit", { precision: 15, scale: 2 }),
+  grossMargin: numeric("gross_margin", { precision: 5, scale: 4 }),
+  contributionProfit: numeric("contribution_profit", { precision: 15, scale: 2 }),
+  contributionMargin: numeric("contribution_margin", { precision: 5, scale: 4 }),
+  ebitda: numeric("ebitda", { precision: 15, scale: 2 }),
+  ebitdaMargin: numeric("ebitda_margin", { precision: 5, scale: 4 }),
+  netIncome: numeric("net_income", { precision: 15, scale: 2 }),
+  cashPosition: numeric("cash_position", { precision: 15, scale: 2 }),
+  cashBurn: numeric("cash_burn", { precision: 15, scale: 2 }),
+  opex: numeric("opex", { precision: 15, scale: 2 }),
+  headcountCost: numeric("headcount_cost", { precision: 15, scale: 2 }),
+  marketingCost: numeric("marketing_cost", { precision: 15, scale: 2 }),
+  rawData: jsonb("raw_data"),
+  slackSummary: text("slack_summary"),
+  postedAt: timestamp("posted_at"),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+});
 
 export const syncLog = pgTable("sync_log", {
   id: serial("id").primaryKey(),
