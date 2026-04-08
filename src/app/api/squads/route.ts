@@ -1,30 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { currentUser } from "@clerk/nextjs/server";
-import { getUserRole, hasAccess } from "@/lib/auth/roles";
+import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
 import { db } from "@/lib/db";
 import { squads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
-async function requireCeo() {
-  const user = await currentUser();
-  if (!user) return null;
-  const role = getUserRole(
-    (user.publicMetadata as Record<string, unknown>) ?? {}
-  );
-  return hasAccess(role, "ceo") ? user : null;
-}
-
 export async function GET() {
-  const user = await requireCeo();
-  if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireRole("ceo");
+  const authError = authErrorResponse(auth);
+  if (authError) {
+    return authError;
+  }
 
   const all = await db.select().from(squads).orderBy(squads.pillar, squads.name);
   return NextResponse.json(all);
 }
 
 export async function POST(request: NextRequest) {
-  const user = await requireCeo();
-  if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireRole("ceo");
+  const authError = authErrorResponse(auth);
+  if (authError) {
+    return authError;
+  }
 
   const body = await request.json();
   const { name, pillar, pmName, channelId } = body;
@@ -42,8 +38,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const user = await requireCeo();
-  if (!user) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const auth = await requireRole("ceo");
+  const authError = authErrorResponse(auth);
+  if (authError) {
+    return authError;
+  }
 
   const body = await request.json();
   const { id, name, pillar, pmName, channelId, isActive } = body;
