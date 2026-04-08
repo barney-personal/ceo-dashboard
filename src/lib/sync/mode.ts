@@ -15,6 +15,7 @@ import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { prepareModeRowsForStorage, getModeQuerySyncProfile } from "./mode-storage";
 import { SyncCancelledError } from "./errors";
+import { determineSyncStatus } from "./coordinator";
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -325,12 +326,7 @@ export async function runModeSync(
       await yieldToEventLoop();
     }
 
-    const status =
-      errors.length === 0
-        ? "success"
-        : succeededReports > 0
-          ? "partial"
-          : "error";
+    const status = determineSyncStatus(errors, succeededReports);
 
     logModeEvent("run_finished", {
       runId: run.id,

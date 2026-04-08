@@ -12,6 +12,7 @@ import { getChannelHistory } from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import { SyncCancelledError } from "./errors";
+import { determineSyncStatus } from "./coordinator";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -212,8 +213,7 @@ export async function runManagementAccountsSync(
     }
 
     return {
-      status:
-        errors.length === 0 ? "success" : count > 0 ? "partial" : "error",
+      status: determineSyncStatus(errors, count),
       recordsSynced: count,
       errors,
     };
