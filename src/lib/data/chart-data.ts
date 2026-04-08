@@ -8,6 +8,8 @@ type ChartSeries = {
 import type { BarChartData } from "@/components/charts/bar-chart";
 import type { ColumnChartData } from "@/components/charts/column-chart";
 
+const CHARTS_START = new Date("2023-01-01").getTime();
+
 /**
  * 36-month LTV estimate over time — monthly bar chart.
  * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
@@ -31,15 +33,13 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
  * LTV:Paid CAC ratio over time (weekly).
  * Computed as avg_ltv / (paid_spend_excl_test / paid_users_excl_test).
  */
-const DATA_START = new Date("2023-01-01").getTime();
-
 export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("unit-economics", "cac");
   const query = data.find((d) => d.queryName === "LTV:Paid CAC");
   if (!query || query.rows.length === 0) return [];
 
   const rows = query.rows
-    .filter((r) => r.period && new Date(r.period as string).getTime() >= DATA_START)
+    .filter((r) => r.period && new Date(r.period as string).getTime() >= CHARTS_START)
     .map((r) => ({
       date: r.period as string,
       ltv: (r.ltv_36m as number) ?? 0,
@@ -94,8 +94,6 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
  * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
  * Weekly aggregates, split by actual vs target, from Jan 2023.
  */
-const QUERY3_START = new Date("2023-01-01").getTime();
-
 export async function getQuery3Series(): Promise<{
   spend: ChartSeries[];
   users: ChartSeries[];
@@ -115,7 +113,7 @@ export async function getQuery3Series(): Promise<{
   const byType = new Map<string, { date: string; spend: number; users: number; cpa: number }[]>();
   for (const r of query.rows) {
     if (!r.day) continue;
-    if (new Date(r.day as string).getTime() < QUERY3_START) continue;
+    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
     const type = r.actual_or_target as string;
     let arr = byType.get(type);
     if (!arr) { arr = []; byType.set(type, arr); }
