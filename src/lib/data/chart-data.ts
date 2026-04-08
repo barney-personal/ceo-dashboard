@@ -6,120 +6,101 @@ type ChartSeries = {
   dashed?: boolean;
 };
 import type { BarChartData } from "@/components/charts/bar-chart";
+import type { ColumnChartData } from "@/components/charts/column-chart";
 
 /**
- * ARPU + Margin monthly time series from the OKR Company Dashboard.
+ * 36-month LTV by cohort month — long time horizon bar chart.
+ * Pulls from the Strategic Finance KPIs report "36M LTV" query.
  */
-export async function getArpuMarginSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("okrs", "company");
-  const query = data.find((d) => d.queryName === "ARPU + Margin");
-  if (!query) return [];
+export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
+  const data = await getReportData("unit-economics", "kpis");
+  const query = data.find((d) => d.queryName === "36M LTV");
+  if (!query || query.rows.length === 0) return [];
 
-  const rows = query.rows
-    .filter((r) => r.month)
-    .sort(
-      (a, b) =>
-        new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
-    );
+  // Detect date column
+  const dateCol = ["month", "cohort_month", "date", "period"].find(
+    (col) => col in query.rows[0]
+  );
+  if (!dateCol) return [];
 
-  return [
-    {
-      label: "Revenue / User",
-      color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: r.total_revenue as number,
-      })),
-    },
-    {
-      label: "Profit / User",
-      color: "#2d8a6e",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: r.total_profit as number,
-      })),
-    },
-    {
-      label: "Margin Target",
-      color: "#888",
-      dashed: true,
-      data: rows
-        .filter((r) => r.margin_term_target)
-        .map((r) => ({
-          date: r.month as string,
-          value: (r.margin_term_target as number) * 100,
-        })),
-    },
-  ];
+  return query.rows
+    .filter((r) => r[dateCol] && r.user_pnl_36m != null)
+    .map((r) => ({
+      date: r[dateCol] as string,
+      value: r.user_pnl_36m as number,
+    }))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
 /**
- * Margin trend from ARPU + Margin data.
+ * Weekly paid CPA over ~2 years from Growth Marketing Performance.
+ * Falls back to the KPIs "CPA" query if the cac report has no weekly data.
  */
-export async function getMarginSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("okrs", "company");
-  const query = data.find((d) => d.queryName === "ARPU + Margin");
-  if (!query) return [];
-
-  const rows = query.rows
-    .filter((r) => r.month)
-    .sort(
-      (a, b) =>
-        new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
-    );
-
-  return [
-    {
-      label: "Margin",
-      color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: (r.margin as number) * 100,
-      })),
-    },
-    {
-      label: "Baseline",
-      color: "#888",
-      dashed: true,
-      data: rows
-        .filter((r) => r.margin_baseline)
-        .map((r) => ({
-          date: r.month as string,
-          value: (r.margin_baseline as number) * 100,
-        })),
-    },
-  ];
-}
-
-/**
- * Payback period data from Growth Marketing Performance.
- */
-export async function getPaybackSeries(): Promise<ChartSeries[]> {
+export async function getWeeklyCpaSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("unit-economics", "cac");
-  const query = data.find((d) => d.queryName === "Payback");
-  if (!query) return [];
 
-  const rows = query.rows
-    .filter((r) => r.cohort && r.payback_month != null)
+  // Try to find a weekly CPA query
+  const weeklyQuery = data.find(
+    (d) =>
+      d.queryName.toLowerCase().includes("cpa") ||
+      d.queryName.toLowerCase().includes("weekly")
+  );
+
+  if (weeklyQuery && weeklyQuery.rows.length > 0) {
+    const dateCol = ["week", "week_start", "date", "month"].find(
+      (col) => col in weeklyQuery.rows[0]
+    );
+    const valueCol = ["paid_cpa", "cpa", "avg_cpa", "blended_cpa"].find(
+      (col) => col in weeklyQuery.rows[0]
+    );
+
+    if (dateCol && valueCol) {
+      const rows = weeklyQuery.rows
+        .filter((r) => r[dateCol] && r[valueCol] != null)
+        .map((r) => ({
+          date: r[dateCol] as string,
+          value: r[valueCol] as number,
+        }))
+        .sort(
+          (a, b) =>
+            new Date(a.date).getTime() - new Date(b.date).getTime()
+        );
+
+      if (rows.length > 0) {
+        return [
+          {
+            label: "Paid CPA",
+            color: "#3b3bba",
+            data: rows,
+          },
+        ];
+      }
+    }
+  }
+
+  // Fallback: KPIs "CPA" query (aggregated periods)
+  const kpis = await getReportData("unit-economics", "kpis");
+  const cpaQuery = kpis.find((d) => d.queryName === "CPA");
+  if (!cpaQuery) return [];
+
+  const dateCol = ["month", "date", "period", "week"].find(
+    (col) => col in (cpaQuery.rows[0] ?? {})
+  );
+  if (!dateCol) return [];
+
+  const rows = cpaQuery.rows
+    .filter((r) => r[dateCol] && r.avg_cpa != null)
+    .map((r) => ({
+      date: r[dateCol] as string,
+      value: r.avg_cpa as number,
+    }))
     .sort(
-      (a, b) =>
-        new Date(a.cohort as string).getTime() -
-        new Date(b.cohort as string).getTime()
-    )
-    .slice(-24); // Last 24 cohorts
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
 
-  return [
-    {
-      label: "Payback Month",
-      color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.cohort as string,
-        value: r.payback_month as number,
-      })),
-    },
-  ];
+  return rows.length > 0
+    ? [{ label: "Paid CPA", color: "#3b3bba", data: rows }]
+    : [];
 }
 
 // --- Product ---
