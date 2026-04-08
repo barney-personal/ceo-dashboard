@@ -23,9 +23,9 @@ export default async function UnitEconomicsPage() {
   }
 
   const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
-    getLtvTimeSeries().catch(() => []),
-    getLtvCacRatioSeries().catch(() => []),
-    getQuery3Series().catch(() => ({ spend: [], users: [], cpa: [] })),
+    getLtvTimeSeries(),
+    getLtvCacRatioSeries(),
+    getQuery3Series(),
   ]);
 
   const modeUrl = getModeReportLink("unit-economics", "kpis");

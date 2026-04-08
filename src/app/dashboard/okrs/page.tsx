@@ -5,19 +5,13 @@ import {
   getLatestOkrUpdates,
   getOkrStatusCounts,
   getSlackMessageUrl,
-  type OkrSummary,
 } from "@/lib/data/okrs";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function OKRsPage() {
   const [okrsByPillar, counts] = await Promise.all([
-    getLatestOkrUpdates().catch(() => new Map<string, OkrSummary[]>()),
-    getOkrStatusCounts().catch(() => ({
-      onTrack: 0,
-      atRisk: 0,
-      behind: 0,
-      total: 0,
-    })),
+    getLatestOkrUpdates(),
+    getOkrStatusCounts(),
   ]);
 
   const okrCharts = getChartEmbeds("okrs", "company");
