@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic();
+const client = new Anthropic({ maxRetries: 4 });
 
 export interface FinancialData {
   period: string; // "2026-02"
@@ -23,8 +23,19 @@ export interface FinancialData {
 }
 
 /**
+ * Trim wide rows to keep labels (first 2 cols) + the most recent data columns.
+ * Management accounts sheets often have 50+ monthly columns going back years.
+ */
+function trimRowColumns(row: unknown[], maxDataCols: number = 14): unknown[] {
+  if (row.length <= maxDataCols + 2) return row;
+  const labels = row.slice(0, 2);
+  const dataCols = row.slice(2);
+  return [...labels, ...dataCols.slice(-maxDataCols)];
+}
+
+/**
  * Read an Excel file and extract sheet data as arrays.
- * Returns a summary of each sheet for LLM parsing.
+ * Skips LiveFlow shadow sheets and trims wide rows to recent months.
  */
 function readExcelSheets(
   buffer: Buffer
@@ -32,17 +43,22 @@ function readExcelSheets(
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheets: Record<string, unknown[][]> = {};
 
-  for (const name of workbook.SheetNames) {
+  // Skip lf-shadow-* sheets (LiveFlow internal/encrypted data)
+  const realSheetNames = workbook.SheetNames.filter(
+    (n) => !n.startsWith("lf-shadow")
+  );
+
+  for (const name of realSheetNames) {
     const sheet = workbook.Sheets[name];
     const data = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: null,
     }) as unknown[][];
-    // Keep first 50 rows to avoid sending too much to LLM
-    sheets[name] = data.slice(0, 50);
+    // Keep first 50 rows, trim wide rows to labels + last 14 data columns
+    sheets[name] = data.slice(0, 50).map((row) => trimRowColumns(row));
   }
 
-  return { sheetNames: workbook.SheetNames, sheets };
+  return { sheetNames: realSheetNames, sheets };
 }
 
 /**
@@ -90,7 +106,7 @@ function formatSheetsForLLM(
       )
       .join("\n")}`;
 
-    if (totalChars + text.length > MAX_CHARS) break;
+    if (totalChars + text.length > MAX_CHARS) continue;
     parts.push(text);
     totalChars += text.length;
   }
