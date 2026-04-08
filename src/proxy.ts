@@ -1,6 +1,9 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-const isPublicRoute = createRouteMatcher(["/", "/sign-in(.*)", "/sign-up(.*)"]);
+const ALLOWED_DOMAIN = "meetcleo.com";
+
+const isPublicRoute = createRouteMatcher(["/", "/sign-in(.*)", "/sign-up(.*)", "/access-denied"]);
 const isApiRoute = createRouteMatcher(["/api/(.*)"]);
 
 export default clerkMiddleware(async (auth, request) => {
@@ -8,7 +11,18 @@ export default clerkMiddleware(async (auth, request) => {
   if (isApiRoute(request)) return;
 
   if (!isPublicRoute(request)) {
-    await auth.protect();
+    const { userId } = await auth.protect();
+
+    // Verify email domain
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    const email = user.emailAddresses.find(
+      (e) => e.id === user.primaryEmailAddressId
+    )?.emailAddress;
+
+    if (!email || !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+      return NextResponse.redirect(new URL("/access-denied", request.url));
+    }
   }
 });
 
