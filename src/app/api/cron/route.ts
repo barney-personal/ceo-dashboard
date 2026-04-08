@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { syncLog } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { syncAllModeReports } from "@/lib/sync/mode";
 import { syncAllSlackOkrs } from "@/lib/sync/slack";
 import { syncManagementAccounts } from "@/lib/sync/management-accounts";
@@ -28,6 +28,21 @@ export async function GET(request: NextRequest) {
   ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Clean up stale "running" syncs from crashed processes
+  await db
+    .update(syncLog)
+    .set({
+      completedAt: new Date(),
+      status: "error",
+      errorMessage: "Sync interrupted — process likely crashed",
+    })
+    .where(
+      and(
+        eq(syncLog.status, "running"),
+        lt(syncLog.startedAt, new Date(Date.now() - 10 * 60 * 1000))
+      )
+    );
 
   const results: Record<string, string> = {};
 
