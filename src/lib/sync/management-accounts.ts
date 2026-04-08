@@ -18,9 +18,10 @@ async function findFileMessage(
   channelId: string,
   fileTimestamp: number
 ): Promise<string | null> {
-  // Search around the file upload time
+  // Search a tight window around the file upload time
   const oldest = String(fileTimestamp - 3600); // 1 hour before
-  const messages = await getChannelHistory(channelId, oldest);
+  const latest = String(fileTimestamp + 7200); // 2 hours after
+  const messages = await getChannelHistory(channelId, oldest, latest);
 
   // Find message that mentions "management accounts" near the file time
   for (const msg of messages) {
@@ -87,8 +88,12 @@ export async function syncManagementAccounts(): Promise<{
         // Parse with LLM
         const data = await parseManagementAccounts(buffer, file.name);
 
-        // Use filename period if LLM didn't extract one
-        const period = data.period || periodFromName || "unknown";
+        // Use filename period if LLM didn't extract one — skip if neither has a valid period
+        const period = data.period || periodFromName;
+        if (!period) {
+          errors.push(`Skipped ${file.name}: could not determine period from filename or LLM`);
+          continue;
+        }
         const periodLabel =
           data.periodLabel ||
           new Date(period + "-01").toLocaleDateString("en-GB", {
