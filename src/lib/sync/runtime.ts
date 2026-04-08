@@ -9,6 +9,7 @@ import { runModeSync } from "./mode";
 import { runSlackSync } from "./slack";
 import { runManagementAccountsSync } from "./management-accounts";
 import { type SyncSource } from "./config";
+import { isSchemaCompatibilityError } from "@/lib/db/errors";
 
 type SyncRunResult = {
   status: "success" | "partial" | "error" | "cancelled";
@@ -95,8 +96,20 @@ export async function runSyncWorker(
   const pollMs = opts.pollMs ?? 5_000;
 
   while (!opts.shouldStop?.()) {
-    const processed = await drainSyncQueue(workerId, opts);
-    if (processed === 0) {
+    try {
+      const processed = await drainSyncQueue(workerId, opts);
+      if (processed === 0) {
+        await sleep(pollMs);
+      }
+    } catch (error) {
+      if (!isSchemaCompatibilityError(error)) {
+        throw error;
+      }
+
+      console.warn(
+        `[sync-worker] database schema is not ready yet, retrying in ${pollMs}ms`,
+        error
+      );
       await sleep(pollMs);
     }
   }
