@@ -42,6 +42,10 @@ export function groupByWeek<T extends Record<string, unknown>>(
   return weekMap;
 }
 
+function getCurrentWeekStart(): string {
+  return getWeekStart(new Date());
+}
+
 export function aggregateCohortRows(
   rows: Record<string, unknown>[],
 ): Map<string, Map<number, number>> {
@@ -110,8 +114,12 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
+  const currentWeekStart = getCurrentWeekStart();
   const weeks = [...groupByWeek(rows, "date").entries()]
-    .filter(([date]) => date >= CHART_HISTORY_FIRST_FULL_WEEK)
+    .filter(
+      ([date]) =>
+        date >= CHART_HISTORY_FIRST_FULL_WEEK && date < currentWeekStart,
+    )
     .sort((a, b) => a[0].localeCompare(b[0]));
 
   const ratioData = weeks
@@ -240,22 +248,38 @@ export async function getQuery3Series(): Promise<{
     weeklyByType.set(type, groupByWeek(rows, "date"));
   }
 
+  const currentWeekStart = getCurrentWeekStart();
   const makeSeries = (field: "spend" | "users" | "cpa"): ChartSeries[] =>
     [...weeklyByType.entries()].map(([type, weekMap]) => ({
       label: type,
       color: colors[type] ?? "#999",
       dashed: type !== "actual",
       data: [...weekMap.entries()]
-        .filter(([date]) => date >= CHART_HISTORY_FIRST_FULL_WEEK)
+        .filter(
+          ([date]) =>
+            date >= CHART_HISTORY_FIRST_FULL_WEEK && date < currentWeekStart,
+        )
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([date, weekRows]) => ({
-          date,
-          value:
-            field === "cpa"
-              ? weekRows.reduce((sum, row) => sum + row.cpa, 0) /
-                weekRows.length
-              : weekRows.reduce((sum, row) => sum + row[field], 0),
-        })),
+        .map(([date, weekRows]) => {
+          const totals = weekRows.reduce(
+            (acc, row) => {
+              acc.spend += row.spend;
+              acc.users += row.users;
+              return acc;
+            },
+            { spend: 0, users: 0 },
+          );
+
+          if (field === "cpa") {
+            if (totals.users <= 0) return null;
+            return { date, value: totals.spend / totals.users };
+          }
+
+          return { date, value: totals[field] };
+        })
+        .filter(
+          (point): point is { date: string; value: number } => point !== null,
+        ),
     }));
 
   return {
@@ -278,7 +302,7 @@ export async function getLatestMAU(): Promise<number | null> {
     .sort(
       (a, b) =>
         new Date(rowStr(b, "date")).getTime() -
-        new Date(rowStr(a, "date")).getTime()
+        new Date(rowStr(a, "date")).getTime(),
     );
 
   return sorted[0] ? rowNumOrNull(sorted[0], "maus") : null;
@@ -363,9 +387,7 @@ export async function getActiveUsersSeries(): Promise<{
   // DAU: daily, last 90 days
   const dailyRows = rows.slice(-90);
   const dau = dailyRows
-    .filter(
-      (r): r is typeof r & { daus: number } => r.daus != null
-    )
+    .filter((r): r is typeof r & { daus: number } => r.daus != null)
     .map((r) => ({
       date: r.date.toISOString().slice(0, 10),
       value: r.daus,
@@ -498,7 +520,7 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
     .sort(
       (a, b) =>
         new Date(rowStr(a, "month")).getTime() -
-        new Date(rowStr(b, "month")).getTime()
+        new Date(rowStr(b, "month")).getTime(),
     );
 
   // Check what columns exist
