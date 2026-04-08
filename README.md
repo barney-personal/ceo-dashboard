@@ -4,22 +4,24 @@ Internal company dashboard aggregating data from multiple sources into a single,
 
 ## Data Sources
 
-| Source | Type | Status |
-|--------|------|--------|
-| Mode Analytics | API | Planned |
-| Excel uploads | Manual | Planned |
-| Slack | API | Planned |
-| Notion | API | Planned |
-| HiBob | API | Planned |
-| Culture Amp | API | Planned |
+| Source | Type | Sync Interval | Status |
+|--------|------|---------------|--------|
+| Mode Analytics | REST API | Every 4 hours | Active |
+| Slack (OKRs) | Conversations API + Claude LLM | Every 2 hours | Active |
+| Slack (Management Accounts) | Files API + Claude LLM | Daily | Active |
+| HiBob | API | — | Planned |
+| Notion | API | — | Planned |
+| Culture Amp | API | — | Planned |
 
 ## Dashboard Sections
 
-- **Unit Economics** — LTV, CAC, ARPU, retention, payback (Leadership+)
-- **Financial** — Management accounts, FP&A (CEO only)
-- **Product** — DAU, activation, retention, feature adoption (Leadership+)
-- **OKRs** — Company → Pillar → Squad objectives, linked to source metrics (Everyone)
-- **People** — Performance and engagement (Leadership+)
+- **Overview** — Role-aware summary with hero metrics (Everyone)
+- **Unit Economics** — LTV:CAC ratio, LTV by cohort, CPA, spend, user acquisition with targets (Leadership+)
+- **Financial** — Management accounts P&L by period, seasonality (CEO only)
+- **Product** — DAU/WAU/MAU, engagement ratios, retention cohort heatmap (Leadership+)
+- **OKRs** — Company/pillar/squad objectives parsed from Slack via Claude LLM (Everyone)
+- **People** — Org structure, headcount, tenure, joiners/departures, performance, engagement (Leadership+)
+- **Admin** — Data sync status, squad registry management (CEO only)
 
 ## Getting Started
 
@@ -28,6 +30,7 @@ Internal company dashboard aggregating data from multiple sources into a single,
 - Node.js 20+
 - [Doppler CLI](https://docs.doppler.com/docs/install-cli) for secrets management
 - A [Clerk](https://clerk.com) account with Google SSO configured
+- PostgreSQL database (provisioned via Render or local)
 
 ### Setup
 
@@ -47,7 +50,6 @@ The app runs on `http://localhost:3100`.
 Roles are managed in Clerk. Set a user's role via the Clerk dashboard or API:
 
 ```bash
-# Via Clerk API
 curl -X PATCH "https://api.clerk.com/v1/users/{user_id}" \
   -H "Authorization: Bearer $CLERK_SECRET_KEY" \
   -H "Content-Type: application/json" \
@@ -55,6 +57,14 @@ curl -X PATCH "https://api.clerk.com/v1/users/{user_id}" \
 ```
 
 Available roles: `ceo`, `leadership`, `everyone` (default).
+
+### Database
+
+```bash
+make db-push          # Push schema to database
+make db-migrate       # Generate migration files
+make db-studio        # Open Drizzle Studio
+```
 
 ## Development
 
@@ -70,11 +80,29 @@ make test         # Run test suite
 
 - **Framework:** Next.js 16, TypeScript, Tailwind CSS 4
 - **UI:** shadcn/ui, Instrument Serif + DM Sans typography
-- **Auth:** Clerk (Google SSO, role-based access)
+- **Charts:** D3.js (line, column, bar, diverging bar, cohort heatmap)
+- **Auth:** Clerk (Google SSO, 3-tier role-based access)
+- **Database:** PostgreSQL + Drizzle ORM
+- **LLM:** Anthropic Claude Sonnet 4.6 (OKR parsing, Excel extraction)
 - **Secrets:** Doppler
 - **Testing:** Vitest, React Testing Library
-- **Hosting:** Render (planned)
+- **Hosting:** Render (web service + Postgres + cron job)
+
+## Architecture
+
+Data flows through a sync-first pipeline:
+
+1. **Cron job** (every 2 hours) triggers `GET /api/cron`
+2. **Sync modules** pull from Mode, Slack, and Excel files
+3. **Data stored** in PostgreSQL via Drizzle ORM
+4. **Server components** read from DB and pass data to chart components
+5. **Client components** render D3.js charts with interactive tooltips
 
 ## Git Workflow
 
-Always work on feature branches. Main is protected by git hooks and Claude Code hooks. See `CLAUDE.md` for full details.
+Always work on feature branches. Main is protected by three layers:
+- Claude Code hook (blocks Edit/Write on main)
+- Git pre-commit hook (blocks commits on main)
+- Git pre-push hook (blocks pushes on main)
+
+See `CLAUDE.md` for full workflow details.
