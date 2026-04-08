@@ -116,10 +116,14 @@ function isHeaderRow(row: unknown[], rowIndex: number): boolean {
   return !hasNumbers;
 }
 
-// Convert Excel serial date to month label
+// Convert Excel serial date to month label (UTC to avoid timezone drift)
 function excelDateToLabel(serial: number): string {
   const date = new Date((serial - 25569) * 86400 * 1000);
-  return date.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+  return date.toLocaleDateString("en-GB", {
+    month: "short",
+    year: "2-digit",
+    timeZone: "UTC",
+  });
 }
 
 export function SpreadsheetTable({
