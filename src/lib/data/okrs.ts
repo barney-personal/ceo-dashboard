@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { okrUpdates, squads } from "@/lib/db/schema";
+import { buildSlackMessageUrl } from "@/lib/config/slack";
 import { desc, eq, gte } from "drizzle-orm";
 
 export interface OkrSummary {
@@ -30,7 +31,9 @@ export interface OkrUpdateRow {
   slackTs: string;
 }
 
-export function groupLatestOkrRows(rows: OkrUpdateRow[]): Map<string, OkrSummary[]> {
+export function groupLatestOkrRows(
+  rows: OkrUpdateRow[],
+): Map<string, OkrSummary[]> {
   const latestTsPerSquad = new Map<string, string>();
   const deduped: OkrSummary[] = [];
 
@@ -150,10 +153,6 @@ export async function getSquadsWithCoverage(): Promise<
 /**
  * Build a Slack deep link to the original message.
  */
-export function getSlackMessageUrl(
-  channelId: string,
-  ts: string
-): string {
-  const cleanTs = ts.replace(".", "");
-  return `https://cleo-team.slack.com/archives/${channelId}/p${cleanTs}`;
+export function getSlackMessageUrl(channelId: string, ts: string): string {
+  return buildSlackMessageUrl(channelId, ts);
 }

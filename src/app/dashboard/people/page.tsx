@@ -5,7 +5,10 @@ import { BarChart } from "@/components/charts/bar-chart";
 import { DivergingBarChart } from "@/components/charts/diverging-bar-chart";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
-import { getChartEmbeds } from "@/lib/integrations/mode-config";
+import {
+  getChartEmbeds,
+  getModeReportLink,
+} from "@/lib/integrations/mode-config";
 import {
   getActiveEmployees,
   getPeopleMetrics,
@@ -49,7 +52,7 @@ export default async function PeopleOrgPage() {
     })),
   }));
 
-  const modeUrl = "https://app.mode.com/cleoai/reports/c458b52ceb68";
+  const modeUrl = getModeReportLink("people", "headcount");
 
   return (
     <div className="space-y-8">
@@ -138,9 +141,7 @@ export default async function PeopleOrgPage() {
       )}
 
       {/* Team directory */}
-      {employees.length > 0 && (
-        <PeopleDirectory pillars={serializedPillars} />
-      )}
+      {employees.length > 0 && <PeopleDirectory pillars={serializedPillars} />}
 
       {/* Source links */}
       <div className="space-y-3">

@@ -91,7 +91,7 @@ describe("groupLatestOkrRows", () => {
 describe("getSlackMessageUrl", () => {
   it("builds a Slack permalink from a channel id and message timestamp", () => {
     expect(getSlackMessageUrl("C123456", "1712512345.6789")).toBe(
-      "https://cleo-team.slack.com/archives/C123456/p17125123456789"
+      "https://cleo-team.slack.com/archives/C123456/p17125123456789",
     );
   });
 });

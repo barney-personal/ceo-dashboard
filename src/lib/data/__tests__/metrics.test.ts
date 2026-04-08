@@ -12,8 +12,8 @@ import {
   formatCompact,
   formatCurrency,
   formatPercent,
-  getQueryRow,
-} from "../metrics";
+} from "@/lib/format/number";
+import { getQueryRow } from "../metrics";
 
 afterEach(() => {
   mockGetReportData.mockReset();
@@ -61,7 +61,9 @@ describe("getQueryRow", () => {
   });
 
   it("returns the row matching the provided field constraints", () => {
-    expect(getQueryRow(data, "CPA", { time_period: "Previous 365 days" })).toEqual({
+    expect(
+      getQueryRow(data, "CPA", { time_period: "Previous 365 days" }),
+    ).toEqual({
       time_period: "Previous 365 days",
       avg_cpa: 34,
     });
