@@ -177,6 +177,25 @@ export async function getQuery3Series(): Promise<{
   };
 }
 
+/**
+ * Latest MAU from the App Active Users report (most recent daily data point).
+ */
+export async function getLatestMAU(): Promise<number | null> {
+  const data = await getReportData("product", "active-users");
+  const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
+  if (!query || query.rows.length === 0) return null;
+
+  const sorted = query.rows
+    .filter((r) => r.date && r.maus != null)
+    .sort(
+      (a, b) =>
+        new Date(b.date as string).getTime() -
+        new Date(a.date as string).getTime()
+    );
+
+  return (sorted[0]?.maus as number) ?? null;
+}
+
 // --- Product ---
 
 /**

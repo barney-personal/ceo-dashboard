@@ -8,11 +8,12 @@ import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { CohortHeatmap } from "@/components/charts/cohort-heatmap";
-import { getUnitEconomicsMetrics } from "@/lib/data/metrics";
+import { getUnitEconomicsMetrics, formatCompact } from "@/lib/data/metrics";
 import {
   getActiveUsersSeries,
   getEngagementSeries,
   getMauRetentionCohorts,
+  getLatestMAU,
 } from "@/lib/data/chart-data";
 
 export default async function ProductPage() {
@@ -22,12 +23,13 @@ export default async function ProductPage() {
     redirect("/dashboard");
   }
 
-  const [metrics, activeUsers, engagement, retentionCohorts] =
+  const [metrics, activeUsers, engagement, retentionCohorts, latestMAU] =
     await Promise.all([
       getUnitEconomicsMetrics().catch(() => null),
       getActiveUsersSeries().catch(() => ({ dau: [], wau: [], mau: [] })),
       getEngagementSeries().catch(() => []),
       getMauRetentionCohorts().catch(() => []),
+      getLatestMAU().catch(() => null),
     ]);
 
   const modeUrlKpis = "https://app.mode.com/cleoai/reports/11c3172037ac";
@@ -43,7 +45,7 @@ export default async function ProductPage() {
 
       {/* Hero strip */}
       <div className="grid gap-4 sm:grid-cols-4">
-        <MetricCard label="MAU" value={metrics?.mau ?? "—"} subtitle={metrics?.mau ? "30D avg" : "awaiting data"} modeUrl={modeUrlKpis} delay={0} />
+        <MetricCard label="MAU" value={latestMAU != null ? formatCompact(latestMAU) : "—"} subtitle={latestMAU != null ? "daily, App Active Users" : "awaiting data"} modeUrl={modeUrlActiveUsers} delay={0} />
         <MetricCard label="M11+ CVR" value={metrics?.cvr ?? "—"} subtitle={metrics?.cvr ? "7D avg" : "awaiting data"} modeUrl={modeUrlKpis} delay={50} />
         <MetricCard label="M11 Retention" value="—" subtitle="awaiting data" modeUrl={modeUrlKpis} delay={100} />
         <MetricCard label="DAU/MAU" value="—" subtitle="awaiting data" modeUrl={modeUrlActiveUsers} delay={150} />

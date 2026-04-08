@@ -6,8 +6,8 @@ import { SectionCard } from "@/components/dashboard/section-card";
 import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users } from "lucide-react";
 import Link from "next/link";
 import { getUnitEconomicsMetrics, getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
-import { getLatestLtvCacRatio } from "@/lib/data/chart-data";
-import { getLatestRevenue } from "@/lib/data/management-accounts";
+import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
+import { getLatestARR } from "@/lib/data/management-accounts";
 
 function SectionLink({
   href,
@@ -41,12 +41,14 @@ function SectionLink({
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
-  const [metrics, headcount, ltvCacRatio, latestRevenue] = await Promise.all([
-    getUnitEconomicsMetrics().catch(() => null),
-    getHeadcountMetrics().catch(() => null),
-    getLatestLtvCacRatio().catch(() => null),
-    getLatestRevenue().catch(() => null),
-  ]);
+  const [metrics, headcount, ltvCacRatio, latestARR, latestMAU] =
+    await Promise.all([
+      getUnitEconomicsMetrics().catch(() => null),
+      getHeadcountMetrics().catch(() => null),
+      getLatestLtvCacRatio().catch(() => null),
+      getLatestARR().catch(() => null),
+      getLatestMAU().catch(() => null),
+    ]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-10">
@@ -68,18 +70,18 @@ export default async function DashboardOverview() {
         </PermissionGate>
         <PermissionGate role={role} requiredRole="ceo">
           <MetricCard
-            label="Revenue"
-            value={latestRevenue ? `$${formatCompact(latestRevenue.value)}` : "—"}
-            subtitle={latestRevenue ? "monthly, management accounts" : "awaiting data"}
+            label="ARR"
+            value={latestARR ? `$${formatCompact(latestARR.value)}` : "—"}
+            subtitle={latestARR ? "management accounts" : "awaiting data"}
             delay={50}
           />
         </PermissionGate>
         <PermissionGate role={role} requiredRole="leadership">
           <MetricCard
             label="MAU"
-            value={metrics?.mau ?? "—"}
-            subtitle={metrics?.mau ? "monthly active users" : "awaiting data"}
-            modeUrl="https://app.mode.com/cleoai/reports/11c3172037ac"
+            value={latestMAU != null ? formatCompact(latestMAU) : "—"}
+            subtitle={latestMAU != null ? "daily, App Active Users" : "awaiting data"}
+            modeUrl="https://app.mode.com/cleoai/reports/56f94e35c537"
             delay={100}
           />
         </PermissionGate>

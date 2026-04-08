@@ -68,9 +68,10 @@ export async function getManagementAccountsData(
 }
 
 /**
- * Get the latest Total Revenue from the most recent management accounts P&L.
+ * Get the latest ARR from the most recent management accounts P&L.
+ * Reads the "ARR" row, skipping YTD to get the latest monthly value.
  */
-export async function getLatestRevenue(): Promise<{
+export async function getLatestARR(): Promise<{
   value: number;
   period: string;
 } | null> {
@@ -82,16 +83,17 @@ export async function getLatestRevenue(): Promise<{
   const plRows = sheetData.sheets["P&L Summary"];
   if (!plRows) return null;
 
-  const revenueRow = plRows.find((row) => {
+  const arrRow = plRows.find((row) => {
     const label = String(row[0] ?? "").trim().toLowerCase();
-    return label === "total revenue" || label === "total income";
+    return label.startsWith("arr");
   });
-  if (!revenueRow) return null;
+  if (!arrRow) return null;
 
   // After reversal: [label, code, YTD, latest_month, prev_month, ...]
-  for (let i = 2; i < revenueRow.length; i++) {
-    const val = revenueRow[i];
-    if (typeof val === "number" && val > 0) {
+  // Find the first large numeric value (ARR is in the hundreds of millions)
+  for (let i = 2; i < arrRow.length; i++) {
+    const val = arrRow[i];
+    if (typeof val === "number" && val > 1_000_000) {
       const period = extractPeriodFromFilename(latest.name);
       return { value: val, period: period ?? "latest" };
     }
