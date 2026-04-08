@@ -43,8 +43,13 @@ function composeSignal(
   timeoutMs: number,
   parentSignal?: AbortSignal,
   timeoutMessage?: string
-): { signal: AbortSignal; cleanup: () => void } {
+): {
+  signal: AbortSignal;
+  cleanup: () => void;
+  timedOut: () => boolean;
+} {
   const controller = new AbortController();
+  let didTimeout = false;
   const onAbort = () => controller.abort(parentSignal?.reason);
 
   if (parentSignal?.aborted) {
@@ -54,6 +59,7 @@ function composeSignal(
   }
 
   const timeoutId = setTimeout(() => {
+    didTimeout = true;
     controller.abort(new Error(timeoutMessage ?? "Slack request timed out"));
   }, timeoutMs);
 
@@ -65,6 +71,7 @@ function composeSignal(
         parentSignal.removeEventListener("abort", onAbort);
       }
     },
+    timedOut: () => didTimeout,
   };
 }
 
@@ -84,7 +91,7 @@ async function slackFetch(
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= (opts.maxRetries ?? SLACK_MAX_RETRIES); attempt++) {
-    const { signal, cleanup } = composeSignal(
+    const { signal, cleanup, timedOut } = composeSignal(
       opts.timeoutMs,
       init.signal ?? undefined,
       opts.timeoutMessage
@@ -109,8 +116,16 @@ async function slackFetch(
 
       return res;
     } catch (error) {
+      if (signal.aborted && !timedOut()) {
+        if (signal.reason instanceof Error) {
+          throw signal.reason;
+        }
+
+        throw new Error("Slack request was aborted");
+      }
+
       const retryable =
-        isAbortError(error) ||
+        (timedOut() && isAbortError(error)) ||
         (error instanceof Error &&
           /fetch failed|ECONNRESET|EAI_AGAIN|socket hang up/i.test(error.message));
 
@@ -149,6 +164,14 @@ export async function slackApiRequest<T>(
   const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (opts.signal?.aborted) {
+      if (opts.signal.reason instanceof Error) {
+        throw opts.signal.reason;
+      }
+
+      throw new Error(`Slack ${method} request was aborted`);
+    }
+
     const res = await slackFetch(
       url.toString(),
       {
@@ -243,7 +266,8 @@ interface UsersInfoResponse {
 export async function getChannelHistory(
   channelId: string,
   oldest?: string,
-  latest?: string
+  latest?: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<SlackMessage[]> {
   const allMessages: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -259,7 +283,8 @@ export async function getChannelHistory(
 
     const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.history",
-      params
+      params,
+      { signal: opts.signal }
     );
 
     allMessages.push(...data.messages);
@@ -277,7 +302,8 @@ export async function getChannelHistory(
  */
 export async function getThreadReplies(
   channelId: string,
-  threadTs: string
+  threadTs: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<SlackMessage[]> {
   const allMessages: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -292,7 +318,8 @@ export async function getThreadReplies(
 
     const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.replies",
-      params
+      params,
+      { signal: opts.signal }
     );
 
     allMessages.push(...data.messages);
@@ -308,10 +335,14 @@ export async function getThreadReplies(
 /**
  * Get channel name by ID.
  */
-export async function getChannelName(channelId: string): Promise<string> {
+export async function getChannelName(
+  channelId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<string> {
   const data = await slackApiRequest<ConversationsInfoResponse>(
     "conversations.info",
-    { channel: channelId }
+    { channel: channelId },
+    { signal: opts.signal }
   );
   return data.channel.name;
 }
@@ -321,18 +352,29 @@ export async function getChannelName(channelId: string): Promise<string> {
  */
 const userNameCache = new Map<string, string>();
 
-export async function getUserName(userId: string): Promise<string> {
+export async function getUserName(
+  userId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<string> {
   if (userNameCache.has(userId)) return userNameCache.get(userId)!;
 
   try {
     const data = await slackApiRequest<UsersInfoResponse>("users.info", {
       user: userId,
-    });
+    }, { signal: opts.signal });
     const name =
       data.user.profile.display_name || data.user.real_name || userId;
     userNameCache.set(userId, name);
     return name;
-  } catch {
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      if (opts.signal.reason instanceof Error) {
+        throw opts.signal.reason;
+      }
+
+      throw error;
+    }
+
     return userId;
   }
 }

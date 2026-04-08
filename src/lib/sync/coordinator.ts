@@ -287,7 +287,12 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
   };
 
   const intervalId = setInterval(() => {
-    void tick();
+    void tick().catch((error) => {
+      console.error(
+        `[sync-worker] heartbeat update failed for run ${run.id}:`,
+        error
+      );
+    });
   }, 15_000);
   intervalId.unref?.();
 

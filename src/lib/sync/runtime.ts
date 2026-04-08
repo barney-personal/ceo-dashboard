@@ -12,6 +12,7 @@ import { runManagementAccountsSync } from "./management-accounts";
 import { getSyncSourceConfig, type SyncSource } from "./config";
 import { isSchemaCompatibilityError } from "@/lib/db/errors";
 import {
+  SyncDeadlineExceededError,
   isSyncDeadlineExceededError,
   type SyncControl,
   type SyncStopReason,
@@ -33,6 +34,8 @@ const RUNNERS: Record<SyncSource, SyncRunner> = {
   slack: runSlackSync,
   "management-accounts": runManagementAccountsSync,
 };
+
+const FINALIZE_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,8 +69,14 @@ function createExecutionControl(
 } {
   const { executionBudgetMs } = getSyncSourceConfig(run.source as SyncSource);
   let deadlineExceeded = false;
+  const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     deadlineExceeded = true;
+    controller.abort(
+      new SyncDeadlineExceededError(
+        getExecutionBudgetMessage(run.source, executionBudgetMs)
+      )
+    );
   }, executionBudgetMs);
   timeoutId.unref?.();
 
@@ -83,6 +92,7 @@ function createExecutionControl(
     control: {
       shouldStop: () => stopReason() != null,
       stopReason,
+      signal: controller.signal,
     },
     budgetMs: executionBudgetMs,
     clear: () => clearTimeout(timeoutId),
@@ -93,6 +103,83 @@ function createExecutionControl(
 
 export function createWorkerId(prefix: string): string {
   return `${prefix}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Stop the heartbeat timer, logging and suppressing any Postgres error so that
+ * a DB outage during cleanup does not mask the original sync error or leave an
+ * unhandled rejection.
+ */
+async function safeStopHeartbeat(
+  stopHeartbeat: () => Promise<void>,
+  runId: number
+): Promise<void> {
+  try {
+    await stopHeartbeat();
+  } catch (error) {
+    console.error(
+      `[sync-worker] failed to stop heartbeat for run ${runId}:`,
+      error
+    );
+  }
+}
+
+function scheduleFinalizeRecovery(
+  runId: number,
+  input: Parameters<typeof finalizeSyncRun>[1],
+  attempt: number
+): void {
+  const delayMs = FINALIZE_RECOVERY_DELAYS_MS[attempt - 1];
+  if (!delayMs) {
+    console.error(
+      `[sync-worker] exhausted finalize recovery for run ${runId} (status=${input.status})`
+    );
+    return;
+  }
+
+  const timeoutId = setTimeout(() => {
+    void retryFinalizeSyncRun(runId, input, attempt);
+  }, delayMs);
+  timeoutId.unref?.();
+}
+
+async function retryFinalizeSyncRun(
+  runId: number,
+  input: Parameters<typeof finalizeSyncRun>[1],
+  attempt: number
+): Promise<void> {
+  try {
+    await finalizeSyncRun(runId, input);
+    console.warn(
+      `[sync-worker] recovered finalize for run ${runId} on attempt ${attempt}`
+    );
+  } catch (error) {
+    console.error(
+      `[sync-worker] finalize recovery attempt ${attempt} failed for run ${runId}:`,
+      error
+    );
+    scheduleFinalizeRecovery(runId, input, attempt + 1);
+  }
+}
+
+/**
+ * Write the final sync status to Postgres, logging and suppressing any DB
+ * error.  The lease-expiry mechanism in expireAbandonedSyncRuns will
+ * eventually clean up orphaned `running` rows if this write fails.
+ */
+async function safeFinalizeSyncRun(
+  runId: number,
+  input: Parameters<typeof finalizeSyncRun>[1]
+): Promise<void> {
+  try {
+    await finalizeSyncRun(runId, input);
+  } catch (error) {
+    console.error(
+      `[sync-worker] failed to finalize run ${runId} (status=${input.status}):`,
+      error
+    );
+    scheduleFinalizeRecovery(runId, input, 1);
+  }
 }
 
 export async function runClaimedSync(
@@ -116,8 +203,8 @@ export async function runClaimedSync(
         errors: [...result.errors, timeoutMessage],
       };
     }
-    await stopHeartbeat();
-    await finalizeSyncRun(run.id, {
+    await safeStopHeartbeat(stopHeartbeat, run.id);
+    await safeFinalizeSyncRun(run.id, {
       status: result.status,
       recordsSynced: result.recordsSynced,
       errorMessage: result.errors.length > 0 ? result.errors.join("\n") : null,
@@ -127,8 +214,8 @@ export async function runClaimedSync(
     const message = isSyncDeadlineExceededError(error)
       ? error.message
       : formatSyncError(error);
-    await stopHeartbeat();
-    await finalizeSyncRun(run.id, {
+    await safeStopHeartbeat(stopHeartbeat, run.id);
+    await safeFinalizeSyncRun(run.id, {
       status: "error",
       recordsSynced: 0,
       errorMessage: message,

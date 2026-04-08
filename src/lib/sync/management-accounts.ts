@@ -26,11 +26,14 @@ const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
  */
 async function findFileMessage(
   channelId: string,
-  fileTimestamp: number
+  fileTimestamp: number,
+  opts: SyncControl = {}
 ): Promise<string | null> {
   const oldest = String(fileTimestamp - 3600);
   const latest = String(fileTimestamp + 7200);
-  const messages = await getChannelHistory(channelId, oldest, latest);
+  const messages = await getChannelHistory(channelId, oldest, latest, {
+    signal: opts.signal,
+  });
 
   for (const msg of messages) {
     const msgTs = parseFloat(msg.ts);
@@ -69,7 +72,7 @@ export async function runManagementAccountsSync(
     const files = await listChannelFiles(MGMT_ACCOUNTS_CHANNEL, {
       types: "all",
       count: 20,
-    });
+    }, { signal: opts.signal });
     await tracker.endPhase(phaseId, {
       itemsProcessed: files.length,
       detail: `Found ${files.length} files in channel`,
@@ -117,8 +120,12 @@ export async function runManagementAccountsSync(
         }
 
         const periodFromName = extractPeriodFromFilename(file.name);
-        const buffer = await downloadSlackFile(file.url_private_download);
-        const data = await parseManagementAccounts(buffer, file.name);
+        const buffer = await downloadSlackFile(file.url_private_download, {
+          signal: opts.signal,
+        });
+        const data = await parseManagementAccounts(buffer, file.name, {
+          signal: opts.signal,
+        });
 
         const period = data.period || periodFromName;
         if (!period) {
@@ -140,7 +147,8 @@ export async function runManagementAccountsSync(
 
         const slackSummary = await findFileMessage(
           MGMT_ACCOUNTS_CHANNEL,
-          file.timestamp
+          file.timestamp,
+          opts
         );
 
         await db
