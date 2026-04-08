@@ -144,7 +144,9 @@ export async function syncAllModeReports(): Promise<{
 
     for (const report of reports) {
       try {
+        console.log(`Mode sync: starting report ${report.name}`);
         const count = await syncReport(report);
+        console.log(`Mode sync: completed ${report.name} (${count} records)`);
         totalRecords += count;
       } catch (err) {
         const message = `Failed to sync report "${report.name}" (${report.reportToken}): ${err instanceof Error ? err.message : String(err)}`;
@@ -165,6 +167,8 @@ export async function syncAllModeReports(): Promise<{
         errorMessage: errors.length > 0 ? errors.join("\n") : null,
       })
       .where(eq(syncLog.id, log.id));
+
+    console.log("Mode sync: all reports complete");
 
     return { status, recordsSynced: totalRecords, errors };
   } catch (err) {
