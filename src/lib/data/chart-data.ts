@@ -1,27 +1,31 @@
 import { getReportData } from "./mode";
+import {
+  CHART_HISTORY_FIRST_FULL_WEEK,
+  CHART_HISTORY_START_TS,
+} from "@/lib/config/charts";
+import type { BarChartData } from "@/components/charts/bar-chart";
+import type { ColumnChartData } from "@/components/charts/column-chart";
+
 type ChartSeries = {
   label: string;
   color: string;
   data: { date: string; value: number }[];
   dashed?: boolean;
 };
-import type { BarChartData } from "@/components/charts/bar-chart";
-import type { ColumnChartData } from "@/components/charts/column-chart";
-
-const CHARTS_START = new Date("2023-01-01").getTime();
 
 export function getWeekStart(date: string | Date): string {
-  const value = date instanceof Date ? new Date(date.getTime()) : new Date(date);
+  const value =
+    date instanceof Date ? new Date(date.getTime()) : new Date(date);
   const day = value.getDay();
   const monday = new Date(
-    value.getTime() - ((day === 0 ? 6 : day - 1) * 86400000)
+    value.getTime() - (day === 0 ? 6 : day - 1) * 86400000,
   );
   return monday.toISOString().slice(0, 10);
 }
 
 export function groupByWeek<T extends Record<string, unknown>>(
   rows: T[],
-  dateField: keyof T
+  dateField: keyof T,
 ): Map<string, T[]> {
   const weekMap = new Map<string, T[]>();
 
@@ -39,7 +43,7 @@ export function groupByWeek<T extends Record<string, unknown>>(
 }
 
 export function aggregateCohortRows(
-  rows: Record<string, unknown>[]
+  rows: Record<string, unknown>[],
 ): Map<string, Map<number, number>> {
   const byCohort = new Map<string, Map<number, number>>();
 
@@ -48,7 +52,7 @@ export function aggregateCohortRows(
 
     const cohortDate = new Date(row.cohort_month as string);
     const cohort = `${cohortDate.getFullYear()}-${String(
-      cohortDate.getMonth() + 1
+      cohortDate.getMonth() + 1,
     ).padStart(2, "0")}`;
     const period = row.activity_month as number;
     const maus = (row.maus as number) ?? 0;
@@ -94,7 +98,11 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   if (!query || query.rows.length === 0) return [];
 
   const rows = query.rows
-    .filter((r) => r.period && new Date(r.period as string).getTime() >= CHARTS_START)
+    .filter(
+      (r) =>
+        r.period &&
+        new Date(r.period as string).getTime() >= CHART_HISTORY_START_TS,
+    )
     .map((r) => ({
       date: r.period as string,
       ltv: (r.ltv_36m as number) ?? 0,
@@ -104,7 +112,7 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   const weeks = [...groupByWeek(rows, "date").entries()]
-    .filter(([date]) => date >= "2023-01-02")
+    .filter(([date]) => date >= CHART_HISTORY_FIRST_FULL_WEEK)
     .sort((a, b) => a[0].localeCompare(b[0]));
 
   const ratioData = weeks
@@ -117,7 +125,7 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
           acc.days += 1;
           return acc;
         },
-        { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 }
+        { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 },
       );
 
       if (totals.paidUsers <= 0) {
@@ -128,7 +136,9 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
       const paidCpa = totals.paidSpend / totals.paidUsers;
       return { date, value: paidCpa > 0 ? avgLtv / paidCpa : 0 };
     })
-    .filter((point): point is { date: string; value: number } => point !== null);
+    .filter(
+      (point): point is { date: string; value: number } => point !== null,
+    );
 
   return [
     {
@@ -201,13 +211,19 @@ export async function getQuery3Series(): Promise<{
     target_management: "#2d8a6e",
   };
 
-  const byType = new Map<string, { date: string; spend: number; users: number; cpa: number }[]>();
+  const byType = new Map<
+    string,
+    { date: string; spend: number; users: number; cpa: number }[]
+  >();
   for (const r of query.rows) {
     if (!r.day) continue;
-    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
+    if (new Date(r.day as string).getTime() < CHART_HISTORY_START_TS) continue;
     const type = r.actual_or_target as string;
     let arr = byType.get(type);
-    if (!arr) { arr = []; byType.set(type, arr); }
+    if (!arr) {
+      arr = [];
+      byType.set(type, arr);
+    }
     arr.push({
       date: r.day as string,
       spend: (r.spend as number) ?? 0,
@@ -225,21 +241,20 @@ export async function getQuery3Series(): Promise<{
     weeklyByType.set(type, groupByWeek(rows, "date"));
   }
 
-  const startKey = "2023-01-02"; // First Monday of 2023
-
   const makeSeries = (field: "spend" | "users" | "cpa"): ChartSeries[] =>
     [...weeklyByType.entries()].map(([type, weekMap]) => ({
       label: type,
       color: colors[type] ?? "#999",
       dashed: type !== "actual",
       data: [...weekMap.entries()]
-        .filter(([date]) => date >= startKey)
+        .filter(([date]) => date >= CHART_HISTORY_FIRST_FULL_WEEK)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([date, weekRows]) => ({
           date,
           value:
             field === "cpa"
-              ? weekRows.reduce((sum, row) => sum + row.cpa, 0) / weekRows.length
+              ? weekRows.reduce((sum, row) => sum + row.cpa, 0) /
+                weekRows.length
               : weekRows.reduce((sum, row) => sum + row[field], 0),
         })),
     }));
@@ -264,7 +279,7 @@ export async function getLatestMAU(): Promise<number | null> {
     .sort(
       (a, b) =>
         new Date(b.date as string).getTime() -
-        new Date(a.date as string).getTime()
+        new Date(a.date as string).getTime(),
     );
 
   return (sorted[0]?.maus as number) ?? null;
@@ -289,7 +304,12 @@ export async function getActiveUsersSeries(): Promise<{
 
   const rows = query.rows
     .filter((r) => r.date)
-    .map((r) => ({ date: new Date(r.date as string), daus: r.daus as number, waus: r.waus as number, maus: r.maus as number }))
+    .map((r) => ({
+      date: new Date(r.date as string),
+      daus: r.daus as number,
+      waus: r.waus as number,
+      maus: r.maus as number,
+    }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   // MAU: group by month, average
@@ -297,22 +317,33 @@ export async function getActiveUsersSeries(): Promise<{
   for (const r of rows) {
     const key = `${r.date.getFullYear()}-${String(r.date.getMonth() + 1).padStart(2, "0")}`;
     let arr = byMonth.get(key);
-    if (!arr) { arr = []; byMonth.set(key, arr); }
+    if (!arr) {
+      arr = [];
+      byMonth.set(key, arr);
+    }
     if (r.maus != null) arr.push(r.maus);
   }
   const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
   const months = [...byMonth.keys()].sort().slice(-18);
-  const mau = months.map((m) => ({ date: `${m}-01`, value: avg(byMonth.get(m)!) }));
+  const mau = months.map((m) => ({
+    date: `${m}-01`,
+    value: avg(byMonth.get(m)!),
+  }));
 
   // WAU: group by ISO week, average
   const byWeek = new Map<string, number[]>();
   for (const r of rows) {
     const d = r.date;
     const jan1 = new Date(d.getFullYear(), 0, 1);
-    const weekNum = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7);
+    const weekNum = Math.ceil(
+      ((d.getTime() - jan1.getTime()) / 86400000 + jan1.getDay() + 1) / 7,
+    );
     const key = `${d.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
     let arr = byWeek.get(key);
-    if (!arr) { arr = []; byWeek.set(key, arr); }
+    if (!arr) {
+      arr = [];
+      byWeek.set(key, arr);
+    }
     if (r.waus != null) arr.push(r.waus);
   }
   const weeks = [...byWeek.keys()].sort().slice(-26);
@@ -321,8 +352,13 @@ export async function getActiveUsersSeries(): Promise<{
     const [yr, wk] = w.split("-W").map(Number);
     const jan1 = new Date(yr, 0, 1);
     const dayOffset = (jan1.getDay() + 6) % 7; // days until Monday
-    const monday = new Date(jan1.getTime() + ((wk - 1) * 7 - dayOffset) * 86400000);
-    return { date: monday.toISOString().slice(0, 10), value: avg(byWeek.get(w)!) };
+    const monday = new Date(
+      jan1.getTime() + ((wk - 1) * 7 - dayOffset) * 86400000,
+    );
+    return {
+      date: monday.toISOString().slice(0, 10),
+      value: avg(byWeek.get(w)!),
+    };
   });
 
   // DAU: daily, last 90 days
@@ -369,9 +405,7 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   // Exclude current calendar month entirely (always incomplete)
   const now = new Date();
   const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const months = [...byMonth.keys()]
-    .filter((m) => m < currentMonth)
-    .sort();
+  const months = [...byMonth.keys()].filter((m) => m < currentMonth).sort();
 
   return [
     {
@@ -380,7 +414,10 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
       data: months.map((m) => {
         const b = byMonth.get(m)!;
         const mau = avg(b.maus);
-        return { date: `${m}-01`, value: mau > 0 ? (avg(b.waus) / mau) * 100 : 0 };
+        return {
+          date: `${m}-01`,
+          value: mau > 0 ? (avg(b.waus) / mau) * 100 : 0,
+        };
       }),
     },
   ];
@@ -413,7 +450,7 @@ export async function getMauRetentionCohorts(): Promise<
       return {
         cohort,
         periods: Array.from({ length: maxPeriod + 1 }, (_, i) =>
-          periods.has(i) ? periods.get(i)! / base : null
+          periods.has(i) ? periods.get(i)! / base : null,
         ),
       };
     })
@@ -429,7 +466,9 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
   if (!query) return [];
 
   const active = query.rows.filter(
-    (r) => String(r.lifecycle_status).toLowerCase() === "employed" && r.is_cleo_headcount === 1
+    (r) =>
+      String(r.lifecycle_status).toLowerCase() === "employed" &&
+      r.is_cleo_headcount === 1,
   );
 
   const byDept = new Map<string, number>();
@@ -456,7 +495,7 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
     .sort(
       (a, b) =>
         new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
+        new Date(b.month as string).getTime(),
     );
 
   // Check what columns exist
