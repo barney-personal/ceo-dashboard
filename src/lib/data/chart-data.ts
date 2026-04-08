@@ -396,7 +396,7 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
   if (!query) return [];
 
   const active = query.rows.filter(
-    (r) => r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
+    (r) => String(r.lifecycle_status).toLowerCase() === "employed" && r.is_cleo_headcount === 1
   );
 
   const byDept = new Map<string, number>();

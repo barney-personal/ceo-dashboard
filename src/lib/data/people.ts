@@ -329,7 +329,7 @@ export async function getActiveEmployees(): Promise<{
 
   const allRows = query.rows;
   const activeRows = allRows.filter(
-    (r) => r.lifecycle_status === "Employed" && r.is_cleo_headcount === 1
+    (r) => String(r.lifecycle_status).toLowerCase() === "employed" && r.is_cleo_headcount === 1
   );
 
   return {
