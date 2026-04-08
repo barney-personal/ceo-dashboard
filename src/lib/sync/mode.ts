@@ -20,6 +20,7 @@ import {
   type SyncControl,
   throwIfSyncShouldStop,
 } from "./errors";
+import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(

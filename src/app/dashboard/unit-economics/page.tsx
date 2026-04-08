@@ -5,8 +5,15 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
-import { getLtvTimeSeries, getLtvCacRatioSeries, getQuery3Series } from "@/lib/data/chart-data";
-import { getChartEmbeds } from "@/lib/integrations/mode-config";
+import {
+  getLtvTimeSeries,
+  getLtvCacRatioSeries,
+  getQuery3Series,
+} from "@/lib/data/chart-data";
+import {
+  getChartEmbeds,
+  getModeReportLink,
+} from "@/lib/integrations/mode-config";
 
 export default async function UnitEconomicsPage() {
   const role = await getCurrentUserRole();
@@ -21,15 +28,30 @@ export default async function UnitEconomicsPage() {
     getQuery3Series().catch(() => ({ spend: [], users: [], cpa: [] })),
   ]);
 
-  const modeUrl = "https://app.mode.com/cleoai/reports/11c3172037ac";
-  const cacModeUrl = "https://app.mode.com/cleoai/reports/774f14224dd9";
+  const modeUrl = getModeReportLink("unit-economics", "kpis");
+  const cacModeUrl = getModeReportLink("unit-economics", "cac");
 
   const allEmbeds = [
-    { label: "Strategic Finance KPIs", charts: getChartEmbeds("unit-economics", "kpis") },
-    { label: "Conversion", charts: getChartEmbeds("unit-economics", "conversion") },
-    { label: "Retention", charts: getChartEmbeds("unit-economics", "retention") },
-    { label: "COGs / Arrears", charts: getChartEmbeds("unit-economics", "cogs") },
-    { label: "Growth Marketing", charts: getChartEmbeds("unit-economics", "cac") },
+    {
+      label: "Strategic Finance KPIs",
+      charts: getChartEmbeds("unit-economics", "kpis"),
+    },
+    {
+      label: "Conversion",
+      charts: getChartEmbeds("unit-economics", "conversion"),
+    },
+    {
+      label: "Retention",
+      charts: getChartEmbeds("unit-economics", "retention"),
+    },
+    {
+      label: "COGs / Arrears",
+      charts: getChartEmbeds("unit-economics", "cogs"),
+    },
+    {
+      label: "Growth Marketing",
+      charts: getChartEmbeds("unit-economics", "cac"),
+    },
   ].filter((g) => g.charts.length > 0);
 
   return (
@@ -63,7 +85,9 @@ export default async function UnitEconomicsPage() {
         />
       ) : (
         <div className="rounded-xl border border-border/60 bg-card px-5 py-10 text-center shadow-warm">
-          <p className="text-sm text-muted-foreground">LTV chart awaiting data sync</p>
+          <p className="text-sm text-muted-foreground">
+            LTV chart awaiting data sync
+          </p>
         </div>
       )}
 
@@ -111,10 +135,17 @@ export default async function UnitEconomicsPage() {
           </p>
           {allEmbeds.map((group) => (
             <div key={group.label} className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                {group.label}
+              </p>
               <div className="grid gap-2 lg:grid-cols-2">
                 {group.charts.map((chart) => (
-                  <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View in Mode" />
+                  <ModeEmbed
+                    key={chart.url}
+                    url={chart.url}
+                    title={chart.title}
+                    subtitle="View in Mode"
+                  />
                 ))}
               </div>
             </div>

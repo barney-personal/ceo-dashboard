@@ -4,45 +4,27 @@ import {
   normalizeDatabaseError,
 } from "@/lib/db/errors";
 import { getReportData } from "./mode";
-
-/**
- * Format a number as currency (USD).
- */
-export function formatCurrency(value: number, decimals = 2): string {
-  return `$${value.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
-}
-
-/**
- * Format a number as a percentage.
- */
-export function formatPercent(value: number, decimals = 1): string {
-  return `${(value * 100).toFixed(decimals)}%`;
-}
-
-/**
- * Format a large number with K/M suffix.
- */
-export function formatCompact(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return value.toFixed(0);
-}
+import {
+  formatCompact,
+  formatCurrency,
+  formatPercent,
+} from "@/lib/format/number";
 
 /**
  * Get a row from a named query.
  * Pass `match` to pick a specific row (e.g. a time period); otherwise returns the first row.
  */
-function getQueryRow(
+export function getQueryRow(
   data: Awaited<ReturnType<typeof getReportData>>,
   queryName: string,
-  match?: Record<string, unknown>
+  match?: Record<string, unknown>,
 ): Record<string, unknown> | null {
   const query = data.find((d) => d.queryName === queryName);
   if (!query || query.rows.length === 0) return null;
   if (!match) return query.rows[0];
   return (
     query.rows.find((row) =>
-      Object.entries(match).every(([k, v]) => row[k] === v)
+      Object.entries(match).every(([k, v]) => row[k] === v),
     ) ?? null
   );
 }
@@ -94,7 +76,7 @@ export async function getUnitEconomicsMetrics() {
       const cvr = getQueryRow(kpis, "M11 Plus CVR, past 7 days");
       const subscribers = getQueryRow(
         kpis,
-        "Subscribers at end of period: Growth accounting"
+        "Subscribers at end of period: Growth accounting",
       );
 
       const ltvValue = ltv?.user_pnl_36m as number | undefined;
@@ -124,7 +106,7 @@ export async function getUnitEconomicsMetrics() {
         ltvCac: ltvCac != null ? `${ltvCac}x` : null,
         subscribers,
       };
-    }
+    },
   );
 }
 
@@ -143,14 +125,14 @@ export async function getHeadcountMetrics() {
       const activeEmployees = headcountData.rows.filter(
         (r) =>
           String(r.lifecycle_status).toLowerCase() === "employed" &&
-          r.is_cleo_headcount === 1
+          r.is_cleo_headcount === 1,
       );
 
       return {
         total: activeEmployees.length,
         lastSync: headcountData.syncedAt,
       };
-    }
+    },
   );
 }
 
@@ -170,6 +152,6 @@ export async function getOkrMetrics() {
         rows: okrData.rows,
         lastSync: okrData.syncedAt,
       };
-    }
+    },
   );
 }

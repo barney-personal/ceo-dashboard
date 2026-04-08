@@ -3,6 +3,7 @@ import {
   expireAbandonedSyncRuns,
   finalizeSyncRun,
   formatSyncError,
+  isSyncRunCancelled,
   markSyncRunsFailed,
   startSyncHeartbeat,
   type SyncLogRow,
@@ -40,6 +41,7 @@ const RUNNERS: Record<SyncSource, SyncRunner> = {
 const FINALIZE_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000];
 const PENDING_FINALIZE_RECOVERY_INTERVAL_MS = 30_000;
 const ABANDONED_SYNC_SWEEP_INTERVAL_MS = 30_000;
+const DB_CANCEL_POLL_MS = 5_000;
 
 type FinalizeInput = Parameters<typeof finalizeSyncRun>[1];
 
@@ -152,12 +154,14 @@ async function flushPendingFinalizeRecoveries(): Promise<void> {
 
   for (const [runId, input] of pendingFinalizeRecoveries.entries()) {
     try {
-      await finalizeSyncRun(runId, input);
+      const { finalized } = await finalizeSyncRun(runId, input);
       pendingFinalizeRecoveries.delete(runId);
       releaseLocalSyncRun(runId);
-      console.warn(
-        `[sync-worker] recovered finalize for run ${runId} via background sweep`
-      );
+      if (finalized) {
+        console.warn(
+          `[sync-worker] recovered finalize for run ${runId} via background sweep`
+        );
+      }
     } catch (error) {
       console.error(
         `[sync-worker] background finalize sweep failed for run ${runId}:`,
@@ -249,7 +253,7 @@ async function retryFinalizeSyncRun(
   attempt: number
 ): Promise<void> {
   try {
-    await finalizeSyncRun(runId, input);
+    const { finalized } = await finalizeSyncRun(runId, input);
     pendingFinalizeRecoveries.delete(runId);
     releaseLocalSyncRun(runId);
     stopPendingFinalizeRecoverySweepIfIdle();
@@ -274,16 +278,18 @@ async function retryFinalizeSyncRun(
 async function safeFinalizeSyncRun(
   runId: number,
   input: FinalizeInput
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await finalizeSyncRun(runId, input);
+    const { finalized } = await finalizeSyncRun(runId, input);
     releaseLocalSyncRun(runId);
+    return finalized;
   } catch (error) {
     console.error(
       `[sync-worker] failed to finalize run ${runId} (status=${input.status}):`,
       error
     );
     scheduleFinalizeRecovery(runId, input, 1);
+    return true;
   }
 }
 
@@ -297,11 +303,30 @@ export async function runClaimedSync(
     source: run.source as SyncSource,
     workerId: run.workerId,
   });
+  let cancelledByDb = false;
+  const cancelPollInterval = setInterval(() => {
+    void isSyncRunCancelled(run.id).then((cancelled) => {
+      if (cancelled) {
+        cancelledByDb = true;
+      }
+    });
+  }, DB_CANCEL_POLL_MS);
+  cancelPollInterval.unref?.();
+
+  const combinedShouldStop = () =>
+    cancelledByDb || execution.control.shouldStop?.() === true;
+  const combinedStopReason = (): SyncStopReason | undefined =>
+    cancelledByDb ? "cancelled" : execution.control.stopReason?.();
+
   const stopHeartbeat = startSyncHeartbeat(run);
 
   try {
     const runner = RUNNERS[run.source as SyncSource];
-    let result = await runner(run, execution.control);
+    let result = await runner(run, {
+      ...execution.control,
+      shouldStop: combinedShouldStop,
+      stopReason: combinedStopReason,
+    });
     if (execution.exceededBudget() && result.status !== "cancelled") {
       const timeoutMessage = getExecutionBudgetMessage(
         run.source,
@@ -313,14 +338,19 @@ export async function runClaimedSync(
         errors: [...result.errors, timeoutMessage],
       };
     }
+    clearInterval(cancelPollInterval);
     await safeStopHeartbeat(stopHeartbeat, run.id);
-    await safeFinalizeSyncRun(run.id, {
+    const finalized = await safeFinalizeSyncRun(run.id, {
       status: result.status,
       recordsSynced: result.recordsSynced,
       errorMessage: result.errors.length > 0 ? result.errors.join("\n") : null,
     });
+    if (!finalized) {
+      return { status: "cancelled", recordsSynced: 0, errors: [] };
+    }
     return result;
   } catch (error) {
+    clearInterval(cancelPollInterval);
     const message = isSyncDeadlineExceededError(error)
       ? error.message
       : formatSyncError(error);

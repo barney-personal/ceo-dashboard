@@ -20,6 +20,7 @@ import {
   type SyncControl,
   throwIfSyncShouldStop,
 } from "./errors";
+import { determineSyncStatus, formatSyncError } from "./coordinator";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
@@ -322,11 +323,8 @@ export async function runSlackSync(
           throw error;
         }
 
-        const message = `Failed to sync channel ${channelId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        const message = `Failed to sync channel ${channelId}: ${formatSyncError(error)}`;
         errors.push(message);
-        console.error(message);
         await tracker.endPhase(channelPhaseId, {
           status: "error",
           errorMessage: message,
@@ -335,12 +333,7 @@ export async function runSlackSync(
     }
 
     return {
-      status:
-        errors.length === 0
-          ? "success"
-          : succeededChannels > 0
-            ? "partial"
-            : "error",
+      status: determineSyncStatus(errors, succeededChannels),
       recordsSynced: totalRecords,
       errors,
     };

@@ -8,7 +8,7 @@ import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { CohortHeatmap } from "@/components/charts/cohort-heatmap";
-import { formatCompact, formatPercent } from "@/lib/data/metrics";
+import { formatCompact, formatPercent } from "@/lib/format/number";
 import {
   getActiveUsersSeries,
   getEngagementSeries,
@@ -17,6 +17,7 @@ import {
   getLatestWauMau,
   getLatestM11Retention,
 } from "@/lib/data/chart-data";
+import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
   const role = await getCurrentUserRole();
@@ -25,19 +26,25 @@ export default async function ProductPage() {
     redirect("/dashboard");
   }
 
-  const [activeUsers, engagement, retentionCohorts, latestMAU, latestWauMau, latestM11] =
-    await Promise.all([
-      getActiveUsersSeries().catch(() => ({ dau: [], wau: [], mau: [] })),
-      getEngagementSeries().catch(() => []),
-      getMauRetentionCohorts().catch(() => []),
-      getLatestMAU().catch(() => null),
-      getLatestWauMau().catch(() => null),
-      getLatestM11Retention().catch(() => null),
-    ]);
+  const [
+    activeUsers,
+    engagement,
+    retentionCohorts,
+    latestMAU,
+    latestWauMau,
+    latestM11,
+  ] = await Promise.all([
+    getActiveUsersSeries().catch(() => ({ dau: [], wau: [], mau: [] })),
+    getEngagementSeries().catch(() => []),
+    getMauRetentionCohorts().catch(() => []),
+    getLatestMAU().catch(() => null),
+    getLatestWauMau().catch(() => null),
+    getLatestM11Retention().catch(() => null),
+  ]);
 
-  const modeUrlKpis = "https://app.mode.com/cleoai/reports/11c3172037ac";
-  const modeUrlActiveUsers = "https://app.mode.com/cleoai/reports/56f94e35c537";
-  const modeUrlRetention = "https://app.mode.com/cleoai/reports/5a033d810ddc";
+  const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
+  const modeUrlActiveUsers = getModeReportLink("product", "active-users");
+  const modeUrlRetention = getModeReportLink("product", "retention");
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
@@ -48,9 +55,33 @@ export default async function ProductPage() {
 
       {/* Hero strip */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <MetricCard label="MAU" value={latestMAU != null ? formatCompact(latestMAU) : "—"} subtitle={latestMAU != null ? "daily, App Active Users" : "awaiting data"} modeUrl={modeUrlActiveUsers} delay={0} />
-        <MetricCard label="M11 Retention" value={latestM11 != null ? formatPercent(latestM11) : "—"} subtitle={latestM11 != null ? "latest cohort with M11 data" : "awaiting data"} modeUrl={modeUrlRetention} delay={50} />
-        <MetricCard label="WAU / MAU" value={latestWauMau != null ? `${latestWauMau.toFixed(1)}%` : "—"} subtitle={latestWauMau != null ? "last complete month" : "awaiting data"} modeUrl={modeUrlActiveUsers} delay={100} />
+        <MetricCard
+          label="MAU"
+          value={latestMAU != null ? formatCompact(latestMAU) : "—"}
+          subtitle={
+            latestMAU != null ? "daily, App Active Users" : "awaiting data"
+          }
+          modeUrl={modeUrlActiveUsers}
+          delay={0}
+        />
+        <MetricCard
+          label="M11 Retention"
+          value={latestM11 != null ? formatPercent(latestM11) : "—"}
+          subtitle={
+            latestM11 != null ? "latest cohort with M11 data" : "awaiting data"
+          }
+          modeUrl={modeUrlRetention}
+          delay={50}
+        />
+        <MetricCard
+          label="WAU / MAU"
+          value={latestWauMau != null ? `${latestWauMau.toFixed(1)}%` : "—"}
+          subtitle={
+            latestWauMau != null ? "last complete month" : "awaiting data"
+          }
+          modeUrl={modeUrlActiveUsers}
+          delay={100}
+        />
       </div>
 
       {/* ── Active Users ── */}
@@ -102,8 +133,16 @@ export default async function ProductPage() {
         )}
 
         <div className="grid gap-2 lg:grid-cols-2">
-          <ModeEmbed url={modeUrlActiveUsers} title="App Active Users" subtitle="View in Mode" />
-          <ModeEmbed url={modeUrlKpis} title="Strategic Finance KPIs" subtitle="View in Mode" />
+          <ModeEmbed
+            url={modeUrlActiveUsers}
+            title="App Active Users"
+            subtitle="View in Mode"
+          />
+          <ModeEmbed
+            url={modeUrlKpis}
+            title="Strategic Finance KPIs"
+            subtitle="View in Mode"
+          />
         </div>
       </section>
 
@@ -133,7 +172,11 @@ export default async function ProductPage() {
         )}
 
         <div className="grid gap-2 lg:grid-cols-2">
-          <ModeEmbed url={modeUrlActiveUsers} title="App Active Users" subtitle="View in Mode" />
+          <ModeEmbed
+            url={modeUrlActiveUsers}
+            title="App Active Users"
+            subtitle="View in Mode"
+          />
         </div>
       </section>
 
@@ -150,7 +193,7 @@ export default async function ProductPage() {
             periodLabel="Month"
             title="MAU Retention"
             subtitle="Monthly cohort triangle"
-            modeUrl="https://app.mode.com/cleoai/reports/5a033d810ddc"
+            modeUrl={modeUrlRetention}
           />
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
@@ -161,7 +204,11 @@ export default async function ProductPage() {
         )}
 
         <div className="grid gap-2 lg:grid-cols-2">
-          <ModeEmbed url={modeUrlRetention} title="App Retention" subtitle="View in Mode" />
+          <ModeEmbed
+            url={modeUrlRetention}
+            title="App Retention"
+            subtitle="View in Mode"
+          />
         </div>
       </section>
     </div>
