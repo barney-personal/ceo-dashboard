@@ -12,7 +12,7 @@ import {
   financialPeriods,
   squads,
 } from "@/lib/db/schema";
-import { desc, eq, sql, count } from "drizzle-orm";
+import { desc, count } from "drizzle-orm";
 import {
   RefreshCw,
   Database,

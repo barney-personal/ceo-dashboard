@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
 import { squads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
 
 interface SquadSeed {
   name: string;
