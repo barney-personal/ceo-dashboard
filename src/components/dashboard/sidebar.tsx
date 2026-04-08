@@ -12,6 +12,7 @@ import {
   Target,
   Users,
   Settings,
+  Activity,
 } from "lucide-react";
 
 interface NavItem {
@@ -91,6 +92,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/admin/squads",
         requiredRole: "ceo",
         icon: Settings,
+      },
+      {
+        label: "Data Status",
+        href: "/dashboard/admin/status",
+        requiredRole: "ceo",
+        icon: Activity,
       },
     ],
   },

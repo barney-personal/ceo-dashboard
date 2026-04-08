@@ -66,7 +66,8 @@ interface UsersInfoResponse {
  */
 export async function getChannelHistory(
   channelId: string,
-  oldest?: string
+  oldest?: string,
+  latest?: string
 ): Promise<SlackMessage[]> {
   const allMessages: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -77,6 +78,7 @@ export async function getChannelHistory(
       limit: "100",
     };
     if (oldest) params.oldest = oldest;
+    if (latest) params.latest = latest;
     if (cursor) params.cursor = cursor;
 
     const data = await slackRequest<ConversationsHistoryResponse>(
