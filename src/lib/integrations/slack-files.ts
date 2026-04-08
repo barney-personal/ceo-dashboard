@@ -1,10 +1,7 @@
-const SLACK_API = "https://slack.com/api";
-
-function getToken(): string {
-  const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("Missing SLACK_BOT_TOKEN");
-  return token;
-}
+import {
+  slackApiRequest,
+  slackDownloadRequest,
+} from "./slack";
 
 export interface SlackFile {
   id: string;
@@ -59,15 +56,7 @@ export async function listChannelFiles(
   if (options?.types) params.set("types", options.types);
   if (options?.oldest) params.set("ts_from", String(options.oldest));
 
-  const res = await fetch(`${SLACK_API}/files.list?${params}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  });
-
-  const data = (await res.json()) as FilesListResponse;
-  if (!data.ok) {
-    throw new Error(`Slack files.list error: ${data.error}`);
-  }
-
+  const data = await slackApiRequest<FilesListResponse>("files.list", Object.fromEntries(params));
   return data.files;
 }
 
@@ -75,15 +64,11 @@ export async function listChannelFiles(
  * Get file info including download URL.
  */
 export async function getFileInfo(fileId: string): Promise<SlackFile> {
-  const res = await fetch(`${SLACK_API}/files.info?file=${fileId}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  });
-
-  const data = (await res.json()) as { ok: boolean; error?: string; file: SlackFile };
-  if (!data.ok) {
-    throw new Error(`Slack files.info error: ${data.error}`);
-  }
-
+  const data = await slackApiRequest<{
+    ok: boolean;
+    error?: string;
+    file: SlackFile;
+  }>("files.info", { file: fileId });
   return data.file;
 }
 
@@ -94,9 +79,7 @@ export async function getFileInfo(fileId: string): Promise<SlackFile> {
 export async function downloadSlackFile(
   urlPrivateDownload: string
 ): Promise<Buffer> {
-  const res = await fetch(urlPrivateDownload, {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  });
+  const res = await slackDownloadRequest(urlPrivateDownload);
 
   if (!res.ok) {
     throw new Error(`Failed to download file: ${res.status}`);

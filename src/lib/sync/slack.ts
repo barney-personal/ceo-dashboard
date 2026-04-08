@@ -14,7 +14,12 @@ import {
 import { seedSquads } from "@/lib/data/seed-squads";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
-import { SyncCancelledError } from "./errors";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  type SyncControl,
+  throwIfSyncShouldStop,
+} from "./errors";
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
@@ -87,8 +92,14 @@ async function syncChannel(
   lastSyncTs: string | undefined,
   systemPrompt: string,
   userNameFallback: Map<string, string>,
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<number> {
+  throwIfSyncShouldStop(opts, {
+    cancelled: "Slack sync cancelled before channel fetch started",
+    deadlineExceeded:
+      "Slack sync exceeded its execution budget before channel fetch started",
+  });
+
   const channelName = await getChannelName(channelId);
   const pillar = derivePillar(channelName);
   const channelContext = `#${channelName} (${pillar} pillar)`;
@@ -101,9 +112,11 @@ async function syncChannel(
   const messages = [];
 
   for (const msg of topLevelMessages) {
-    if (opts.shouldStop?.()) {
-      throw new SyncCancelledError("Slack sync cancelled while expanding threads");
-    }
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled while expanding threads",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget while expanding threads",
+    });
 
     messages.push(msg);
     if (msg.reply_count && msg.reply_count > 0) {
@@ -115,9 +128,11 @@ async function syncChannel(
   let count = 0;
 
   for (const msg of messages) {
-    if (opts.shouldStop?.()) {
-      throw new SyncCancelledError("Slack sync cancelled while parsing messages");
-    }
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled while parsing messages",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget while parsing messages",
+    });
 
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
@@ -202,7 +217,7 @@ async function fetchLastSlackSuccessTimestamp(): Promise<string | undefined> {
  */
 export async function runSlackSync(
   run: { id: number },
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -257,9 +272,11 @@ export async function runSlackSync(
     });
 
     for (const channelId of channelIds) {
-      if (opts.shouldStop?.()) {
-        throw new SyncCancelledError("Slack sync cancelled between channels");
-      }
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Slack sync cancelled between channels",
+        deadlineExceeded:
+          "Slack sync exceeded its execution budget between channels",
+      });
 
       const channelPhaseId = await tracker.startPhase(
         `sync_channel:${channelId}`,
@@ -290,6 +307,15 @@ export async function runSlackSync(
           throw error;
         }
 
+        if (error instanceof SyncDeadlineExceededError) {
+          await tracker.endPhase(channelPhaseId, {
+            status: "error",
+            detail: "Execution budget exceeded before channel completed",
+            errorMessage: error.message,
+          });
+          throw error;
+        }
+
         const message = `Failed to sync channel ${channelId}: ${
           error instanceof Error ? error.message : String(error)
         }`;
@@ -313,6 +339,14 @@ export async function runSlackSync(
       errors,
     };
   } catch (error) {
+    if (error instanceof SyncDeadlineExceededError) {
+      return {
+        status: totalRecords > 0 ? "partial" : "error",
+        recordsSynced: totalRecords,
+        errors: [...errors, error.message],
+      };
+    }
+
     if (error instanceof SyncCancelledError) {
       return {
         status: "cancelled",

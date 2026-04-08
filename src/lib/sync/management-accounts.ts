@@ -11,7 +11,12 @@ import {
 import { getChannelHistory } from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
-import { SyncCancelledError } from "./errors";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  type SyncControl,
+  throwIfSyncShouldStop,
+} from "./errors";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -46,7 +51,7 @@ async function findFileMessage(
  */
 export async function runManagementAccountsSync(
   run: { id: number },
-  opts: { shouldStop?: () => boolean } = {}
+  opts: SyncControl = {}
 ): Promise<{
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
@@ -85,11 +90,11 @@ export async function runManagementAccountsSync(
     });
 
     for (const file of mgmtFiles) {
-      if (opts.shouldStop?.()) {
-        throw new SyncCancelledError(
-          "Management accounts sync cancelled between files"
-        );
-      }
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Management accounts sync cancelled between files",
+        deadlineExceeded:
+          "Management accounts sync exceeded its execution budget between files",
+      });
 
       const filePhaseId = await tracker.startPhase(
         `sync_file:${file.name}`,
@@ -199,6 +204,15 @@ export async function runManagementAccountsSync(
           throw error;
         }
 
+        if (error instanceof SyncDeadlineExceededError) {
+          await tracker.endPhase(filePhaseId, {
+            status: "error",
+            detail: "Execution budget exceeded before file completed",
+            errorMessage: error.message,
+          });
+          throw error;
+        }
+
         const message = `Failed to sync ${file.name}: ${
           error instanceof Error ? error.message : String(error)
         }`;
@@ -218,6 +232,14 @@ export async function runManagementAccountsSync(
       errors,
     };
   } catch (error) {
+    if (error instanceof SyncDeadlineExceededError) {
+      return {
+        status: count > 0 ? "partial" : "error",
+        recordsSynced: count,
+        errors: [...errors, error.message],
+      };
+    }
+
     if (error instanceof SyncCancelledError) {
       return {
         status: "cancelled",
