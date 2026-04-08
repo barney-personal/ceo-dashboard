@@ -1,4 +1,4 @@
-import { getReportData } from "./mode";
+import { getReportData, rowStr, rowNum, rowNumOrNull } from "./mode";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import type { ColumnChartData } from "@/components/charts/column-chart";
 
@@ -31,8 +31,8 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
   return query.rows
     .filter((r) => r.month && r.user_ltv_36m_actual != null)
     .map((r) => ({
-      date: r.month as string,
-      value: r.user_ltv_36m_actual as number,
+      date: rowStr(r, "month"),
+      value: rowNum(r, "user_ltv_36m_actual"),
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
@@ -47,12 +47,12 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   if (!query || query.rows.length === 0) return [];
 
   const rows = query.rows
-    .filter((r) => r.period && new Date(r.period as string).getTime() >= CHARTS_START)
+    .filter((r) => r.period && new Date(rowStr(r, "period")).getTime() >= CHARTS_START)
     .map((r) => ({
-      date: r.period as string,
-      ltv: (r.ltv_36m as number) ?? 0,
-      paidSpend: (r.paid_spend_excl_test as number) ?? 0,
-      paidUsers: (r.paid_users_excl_test as number) ?? 0,
+      date: rowStr(r, "period"),
+      ltv: rowNum(r, "ltv_36m"),
+      paidSpend: rowNum(r, "paid_spend_excl_test"),
+      paidUsers: rowNum(r, "paid_users_excl_test"),
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
@@ -154,15 +154,15 @@ export async function getQuery3Series(): Promise<{
   const byType = new Map<string, { date: string; spend: number; users: number; cpa: number }[]>();
   for (const r of query.rows) {
     if (!r.day) continue;
-    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
-    const type = r.actual_or_target as string;
+    if (new Date(rowStr(r, "day")).getTime() < CHARTS_START) continue;
+    const type = rowStr(r, "actual_or_target");
     let arr = byType.get(type);
     if (!arr) { arr = []; byType.set(type, arr); }
     arr.push({
-      date: r.day as string,
-      spend: (r.spend as number) ?? 0,
-      users: (r.new_bank_connected_users as number) ?? 0,
-      cpa: (r.cpa as number) ?? 0,
+      date: rowStr(r, "day"),
+      spend: rowNum(r, "spend"),
+      users: rowNum(r, "new_bank_connected_users"),
+      cpa: rowNum(r, "cpa"),
     });
   }
 
@@ -217,11 +217,11 @@ export async function getLatestMAU(): Promise<number | null> {
     .filter((r) => r.date && r.maus != null)
     .sort(
       (a, b) =>
-        new Date(b.date as string).getTime() -
-        new Date(a.date as string).getTime()
+        new Date(rowStr(b, "date")).getTime() -
+        new Date(rowStr(a, "date")).getTime()
     );
 
-  return (sorted[0]?.maus as number) ?? null;
+  return sorted[0] ? rowNumOrNull(sorted[0], "maus") : null;
 }
 
 // --- Product ---
@@ -243,7 +243,7 @@ export async function getActiveUsersSeries(): Promise<{
 
   const rows = query.rows
     .filter((r) => r.date)
-    .map((r) => ({ date: new Date(r.date as string), daus: r.daus as number, waus: r.waus as number, maus: r.maus as number }))
+    .map((r) => ({ date: new Date(rowStr(r, "date")), daus: rowNum(r, "daus"), waus: rowNum(r, "waus"), maus: rowNum(r, "maus") }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
   // MAU: group by month, average
@@ -305,16 +305,16 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
 
   for (const row of query.rows) {
     if (!row.date) continue;
-    const d = new Date(row.date as string);
+    const d = new Date(rowStr(row, "date"));
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     let bucket = byMonth.get(key);
     if (!bucket) {
       bucket = { daus: [], waus: [], maus: [] };
       byMonth.set(key, bucket);
     }
-    if (row.daus != null) bucket.daus.push(row.daus as number);
-    if (row.waus != null) bucket.waus.push(row.waus as number);
-    if (row.maus != null) bucket.maus.push(row.maus as number);
+    if (row.daus != null) bucket.daus.push(rowNum(row, "daus"));
+    if (row.waus != null) bucket.waus.push(rowNum(row, "waus"));
+    if (row.maus != null) bucket.maus.push(rowNum(row, "maus"));
   }
 
   const avg = (arr: number[]) =>
@@ -355,10 +355,10 @@ export async function getMauRetentionCohorts(): Promise<
   const byCohort = new Map<string, Map<number, number>>();
   for (const row of query.rows) {
     if (row.cohort_month == null || row.activity_month == null) continue;
-    const cohortDate = new Date(row.cohort_month as string);
+    const cohortDate = new Date(rowStr(row, "cohort_month"));
     const cohort = `${cohortDate.getFullYear()}-${String(cohortDate.getMonth() + 1).padStart(2, "0")}`;
-    const period = row.activity_month as number;
-    const maus = (row.maus as number) ?? 0;
+    const period = rowNum(row, "activity_month");
+    const maus = rowNum(row, "maus");
 
     let periods = byCohort.get(cohort);
     if (!periods) {
@@ -398,7 +398,7 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
   if (!query) return [];
 
   const active = query.rows.filter(
-    (r) => String(r.lifecycle_status).toLowerCase() === "employed" && r.is_cleo_headcount === 1
+    (r) => String(r.lifecycle_status).toLowerCase() === "employed" && rowNum(r, "is_cleo_headcount") === 1
   );
 
   const byDept = new Map<string, number>();
@@ -424,8 +424,8 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
     .filter((r) => r.month)
     .sort(
       (a, b) =>
-        new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
+        new Date(rowStr(a, "month")).getTime() -
+        new Date(rowStr(b, "month")).getTime()
     );
 
   // Check what columns exist
@@ -439,8 +439,8 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
       label: "New Users",
       color: "#3b3bba",
       data: rows.map((r) => ({
-        date: r.month as string,
-        value: r.new_bank_connected_users as number,
+        date: rowStr(r, "month"),
+        value: rowNum(r, "new_bank_connected_users"),
       })),
     });
   }

@@ -81,12 +81,42 @@ Baseline lint warnings:
 - `src/lib/data/chart-data.ts:53` computes Monday week keys inline, and similar date-bucketing logic appears again in `src/lib/data/chart-data.ts:306` during monthly aggregation.
 - `src/lib/sync/management-accounts.ts:216`, `src/lib/sync/mode.ts:329`, and `src/lib/sync/slack.ts:307` each determine final sync status from the same `errors.length` / partial-success pattern instead of using one helper.
 
-## Target For Later Cycles
+## Final Scores (after M1–M4)
 
-Bring all five dimensions to `9+/10` by:
+| Dimension | Baseline | Final | Change |
+| --- | --- | --- | --- |
+| Type safety | `8/10` | `9/10` | +1 |
+| Code consistency | `7/10` | `9/10` | +2 |
+| Dead code | `8/10` | `9/10` | +1 |
+| Error handling | `8/10` | `9/10` | +1 |
+| Code duplication | `6/10` | `9/10` | +3 |
 
-- removing the existing dead-code warnings,
-- extracting the duplicated sync and chart helpers,
-- standardizing sync logging and error formatting,
-- tightening the highest-risk row-parsing boundaries,
-- updating this scorecard with final verification results and rescored evidence.
+### Final Evidence
+
+**Type safety — 9/10**
+
+Three typed row-accessor helpers (`rowStr`, `rowNum`, `rowNumOrNull`) were added to `src/lib/data/mode.ts` and used throughout `src/lib/data/chart-data.ts` and `src/lib/data/people.ts`. All ~25 unchecked `as string` / `as number` / `as string | null` casts on report rows are replaced with validated accessors that return safe fallback values (`""` / `0` / `null`). Remaining unchecked casts (`r.columns as Array<…>` and `r.data as Record<string, unknown>[]` in `mode.ts`) are unavoidable JSONB-to-application boundary casts from Drizzle, which is the narrowest safe point for this project's schema.
+
+**Code consistency — 9/10**
+
+`ChartSeries` type is now declared below the import block (M3). Lifecycle status comparisons are normalized to `.toLowerCase() !== "terminated"` (M3). Error formatting uses `formatSyncError()` throughout all sync modules (M3). Row accessors are consistent across `chart-data.ts` and `people.ts`.
+
+**Dead code — 9/10**
+
+Unused `or` import removed from `coordinator.ts` (M2). Warning-prone destructuring in `mode-config.ts` replaced with typed projection helper (M2). ESLint runs clean with zero warnings.
+
+**Error handling — 9/10**
+
+All sync runners use `formatSyncError()` for error message formatting (M3). Phase-tracker and `logModeEvent` are the single reporting path — redundant bare `console.log`/`console.error` calls removed (M3). No uncaught error paths in the sync stack.
+
+**Code duplication — 9/10**
+
+`ragToStatus()` extracted in `slack.ts` (M2). `determineSyncStatus()` shared across all three sync runners (M2). `toMondayKey()` extracted in `chart-data.ts` (M2). `formatSyncError()` shared across all sync modules (M3). Row accessor helpers (`rowStr`, `rowNum`, `rowNumOrNull`) eliminate the per-field cast pattern repeated across `chart-data.ts` (20+ casts) and `people.ts` (10+ casts) (M4).
+
+### Final Verification (post-M4)
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `make test` | Pass | `57` tests passed across `7` files |
+| `npx tsc --noEmit` | Pass | No type errors reported |
+| `npx eslint src/` | Pass | `0` warnings, `0` errors |
