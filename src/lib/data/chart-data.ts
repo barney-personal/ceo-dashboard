@@ -91,6 +91,42 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
 }
 
 /**
+ * Latest LTV:Paid CAC ratio (the most recent weekly data point).
+ */
+export async function getLatestLtvCacRatio(): Promise<number | null> {
+  const series = await getLtvCacRatioSeries();
+  const ltvCac = series.find((s) => s.label === "LTV:CAC");
+  if (!ltvCac || ltvCac.data.length === 0) return null;
+  return ltvCac.data[ltvCac.data.length - 1].value;
+}
+
+/**
+ * Latest WAU/MAU ratio from the engagement series (last complete month).
+ */
+export async function getLatestWauMau(): Promise<number | null> {
+  const series = await getEngagementSeries();
+  const wauMau = series.find((s) => s.label === "WAU / MAU");
+  if (!wauMau || wauMau.data.length === 0) return null;
+  return wauMau.data[wauMau.data.length - 1].value;
+}
+
+/**
+ * Latest M11 retention from the cohort triangle.
+ * Finds the most recent cohort that has an M11 data point.
+ */
+export async function getLatestM11Retention(): Promise<number | null> {
+  const cohorts = await getMauRetentionCohorts();
+  // Walk backwards through cohorts to find one with an M11 value
+  for (let i = cohorts.length - 1; i >= 0; i--) {
+    const periods = cohorts[i].periods;
+    if (periods.length > 11 && periods[11] != null) {
+      return periods[11];
+    }
+  }
+  return null;
+}
+
+/**
  * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
  * Weekly aggregates, split by actual vs target, from Jan 2023.
  */
@@ -165,6 +201,25 @@ export async function getQuery3Series(): Promise<{
     users: makeSeries("users"),
     cpa: makeSeries("cpa"),
   };
+}
+
+/**
+ * Latest MAU from the App Active Users report (most recent daily data point).
+ */
+export async function getLatestMAU(): Promise<number | null> {
+  const data = await getReportData("product", "active-users");
+  const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
+  if (!query || query.rows.length === 0) return null;
+
+  const sorted = query.rows
+    .filter((r) => r.date && r.maus != null)
+    .sort(
+      (a, b) =>
+        new Date(b.date as string).getTime() -
+        new Date(a.date as string).getTime()
+    );
+
+  return (sorted[0]?.maus as number) ?? null;
 }
 
 // --- Product ---
@@ -263,9 +318,12 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   const avg = (arr: number[]) =>
     arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 
+  // Exclude current calendar month entirely (always incomplete)
+  const now = new Date();
+  const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
   const months = [...byMonth.keys()]
-    .sort()
-    .slice(-18);
+    .filter((m) => m < currentMonth)
+    .sort();
 
   return [
     {
@@ -275,15 +333,6 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
         const b = byMonth.get(m)!;
         const mau = avg(b.maus);
         return { date: `${m}-01`, value: mau > 0 ? (avg(b.waus) / mau) * 100 : 0 };
-      }),
-    },
-    {
-      label: "DAU / MAU",
-      color: "#2d8a6e",
-      data: months.map((m) => {
-        const b = byMonth.get(m)!;
-        const mau = avg(b.maus);
-        return { date: `${m}-01`, value: mau > 0 ? (avg(b.daus) / mau) * 100 : 0 };
       }),
     },
   ];
@@ -317,22 +366,25 @@ export async function getMauRetentionCohorts(): Promise<
     periods.set(period, (periods.get(period) ?? 0) + maus);
   }
 
-  const cohorts = [...byCohort.keys()].sort().slice(-18);
+  const cohorts = [...byCohort.keys()].sort();
 
-  // Use M0 MAUs as the base for each cohort
+  // Use M0 MAUs as the base for each cohort.
+  // Drop the last period per cohort — it's always the current incomplete month.
   return cohorts
     .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
     .map((cohort) => {
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
-      const maxPeriod = Math.max(...periods.keys());
+      const maxPeriod = Math.max(...periods.keys()) - 1;
+      if (maxPeriod < 0) return { cohort, periods: [] as (number | null)[] };
       return {
         cohort,
         periods: Array.from({ length: maxPeriod + 1 }, (_, i) =>
           periods.has(i) ? periods.get(i)! / base : null
         ),
       };
-    });
+    })
+    .filter((c) => c.periods.length > 0);
 }
 
 /**

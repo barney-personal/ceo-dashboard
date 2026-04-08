@@ -27,6 +27,8 @@ interface LineChartProps {
   subtitle?: string;
   yLabel?: string;
   yFormatType?: YFormatType;
+  /** When true, Y axis starts near the data minimum instead of 0 */
+  zoomY?: boolean;
   modeUrl?: string;
   className?: string;
 }
@@ -37,6 +39,7 @@ export function LineChart({
   subtitle,
   yLabel,
   yFormatType = "number",
+  zoomY = false,
   modeUrl,
   className,
 }: LineChartProps) {
@@ -86,7 +89,7 @@ export function LineChart({
 
     const y = d3
       .scaleLinear()
-      .domain([Math.max(0, yMin - yPadding), yMax + yPadding])
+      .domain([zoomY ? yMin - yPadding : Math.max(0, yMin - yPadding), yMax + yPadding])
       .nice()
       .range([innerHeight, 0]);
 
@@ -293,7 +296,7 @@ export function LineChart({
       dots.forEach((d) => d.style("opacity", 0));
       tooltip.style("opacity", 0);
     });
-  }, [series, yFormat, yLabel]);
+  }, [series, yFormat, yLabel, zoomY]);
 
   useEffect(() => {
     draw();

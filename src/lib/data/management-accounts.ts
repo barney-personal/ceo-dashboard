@@ -66,3 +66,38 @@ export async function getManagementAccountsData(
 
   return { files, currentFile: targetInfo, sheetData };
 }
+
+/**
+ * Get the latest ARR from the most recent management accounts P&L.
+ * Reads the "ARR" row, skipping YTD to get the latest monthly value.
+ */
+export async function getLatestARR(): Promise<{
+  value: number;
+  period: string;
+} | null> {
+  const rawFiles = await getManagementAccountFiles();
+  if (rawFiles.length === 0) return null;
+
+  const latest = rawFiles[0];
+  const sheetData = await getSheetData(latest.id, latest.url_private_download);
+  const plRows = sheetData.sheets["P&L Summary"];
+  if (!plRows) return null;
+
+  const arrRow = plRows.find((row) => {
+    const label = String(row[0] ?? "").trim().toLowerCase();
+    return label.startsWith("arr");
+  });
+  if (!arrRow) return null;
+
+  // After reversal: [label, code, YTD, latest_month, prev_month, ...]
+  // Start at index 3 to skip YTD and get the latest monthly value
+  for (let i = 3; i < arrRow.length; i++) {
+    const val = arrRow[i];
+    if (typeof val === "number" && val > 1_000_000) {
+      const period = extractPeriodFromFilename(latest.name);
+      return { value: val, period: period ?? "latest" };
+    }
+  }
+
+  return null;
+}

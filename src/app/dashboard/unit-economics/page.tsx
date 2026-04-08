@@ -33,7 +33,7 @@ export default async function UnitEconomicsPage() {
   ].filter((g) => g.charts.length > 0);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-10">
+    <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
       <PageHeader
         title="Unit Economics"
         description="Customer lifetime value and acquisition costs"
