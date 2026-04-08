@@ -18,6 +18,7 @@ import {
   type SyncControl,
   type SyncStopReason,
 } from "./errors";
+import { protectLocalSyncRun, releaseLocalSyncRun } from "./worker-state";
 
 type SyncRunResult = {
   status: "success" | "partial" | "error" | "cancelled";
@@ -153,6 +154,7 @@ async function flushPendingFinalizeRecoveries(): Promise<void> {
     try {
       await finalizeSyncRun(runId, input);
       pendingFinalizeRecoveries.delete(runId);
+      releaseLocalSyncRun(runId);
       console.warn(
         `[sync-worker] recovered finalize for run ${runId} via background sweep`
       );
@@ -249,6 +251,7 @@ async function retryFinalizeSyncRun(
   try {
     await finalizeSyncRun(runId, input);
     pendingFinalizeRecoveries.delete(runId);
+    releaseLocalSyncRun(runId);
     stopPendingFinalizeRecoverySweepIfIdle();
     console.warn(
       `[sync-worker] recovered finalize for run ${runId} on attempt ${attempt}`
@@ -274,6 +277,7 @@ async function safeFinalizeSyncRun(
 ): Promise<void> {
   try {
     await finalizeSyncRun(runId, input);
+    releaseLocalSyncRun(runId);
   } catch (error) {
     console.error(
       `[sync-worker] failed to finalize run ${runId} (status=${input.status}):`,
@@ -288,6 +292,11 @@ export async function runClaimedSync(
   opts: SyncControl = {}
 ): Promise<SyncRunResult> {
   const execution = createExecutionControl(run, opts);
+  protectLocalSyncRun({
+    runId: run.id,
+    source: run.source as SyncSource,
+    workerId: run.workerId,
+  });
   const stopHeartbeat = startSyncHeartbeat(run);
 
   try {

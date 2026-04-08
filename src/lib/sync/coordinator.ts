@@ -17,6 +17,7 @@ import {
   type SyncStatus,
   type SyncTrigger,
 } from "./config";
+import { isLocalSyncRunProtected } from "./worker-state";
 
 const ACTIVE_STATUSES = ["queued", "running"] as const;
 const TERMINAL_STATUSES = ["success", "partial", "error", "cancelled"] as const;
@@ -126,6 +127,15 @@ export async function expireAbandonedSyncRuns(
   const expiredIds: number[] = [];
 
   for (const row of rows) {
+    if (
+      isLocalSyncRunProtected({
+        runId: row.id,
+        workerId: row.workerId,
+      })
+    ) {
+      continue;
+    }
+
     const [updated] = await db
       .update(syncLog)
       .set({
