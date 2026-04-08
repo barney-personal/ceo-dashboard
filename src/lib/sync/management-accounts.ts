@@ -7,6 +7,7 @@ import {
 } from "@/lib/integrations/excel-parser";
 import { getChannelHistory } from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
+import { createPhaseTracker } from "./phase-tracker";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -51,24 +52,31 @@ export async function syncManagementAccounts(): Promise<{
     .values({ source: "management-accounts" })
     .returning();
 
+  const tracker = createPhaseTracker(log.id);
+
   try {
     // List xlsx files in the channel
+    let phaseId = await tracker.startPhase("list_files", "Fetching files from Slack channel");
     const files = await listChannelFiles(MGMT_ACCOUNTS_CHANNEL, {
       types: "all",
       count: 20,
     });
+    await tracker.endPhase(phaseId, { itemsProcessed: files.length, detail: `Found ${files.length} files in channel` });
 
     // Filter to management accounts xlsx files
+    phaseId = await tracker.startPhase("filter_files", "Filtering for management accounts xlsx");
     const mgmtFiles = files.filter(
       (f) =>
         f.name.toLowerCase().includes("management accounts") &&
         f.filetype === "xlsx"
     );
+    await tracker.endPhase(phaseId, { itemsProcessed: mgmtFiles.length, detail: `Filtered to ${mgmtFiles.length} management accounts files` });
 
     let count = 0;
     const errors: string[] = [];
 
     for (const file of mgmtFiles) {
+      const filePhaseId = await tracker.startPhase(`sync_file:${file.name}`, "Downloading and parsing");
       try {
         // Check if already synced
         const existing = await db
@@ -77,7 +85,10 @@ export async function syncManagementAccounts(): Promise<{
           .where(eq(financialPeriods.slackFileId, file.id))
           .limit(1);
 
-        if (existing.length > 0) continue; // Already synced
+        if (existing.length > 0) {
+          await tracker.endPhase(filePhaseId, { status: "skipped", detail: "Already synced" });
+          continue;
+        }
 
         // Extract period from filename
         const periodFromName = extractPeriodFromFilename(file.name);
@@ -91,7 +102,9 @@ export async function syncManagementAccounts(): Promise<{
         // Use filename period if LLM didn't extract one — skip if neither has a valid period
         const period = data.period || periodFromName;
         if (!period) {
-          errors.push(`Skipped ${file.name}: could not determine period from filename or LLM`);
+          const skipMsg = `Could not determine period from filename or LLM`;
+          errors.push(`Skipped ${file.name}: ${skipMsg}`);
+          await tracker.endPhase(filePhaseId, { status: "skipped", detail: skipMsg });
           continue;
         }
         const periodLabel =
@@ -158,10 +171,12 @@ export async function syncManagementAccounts(): Promise<{
 
         count++;
         console.log(`Synced management accounts: ${file.name} → ${period}`);
+        await tracker.endPhase(filePhaseId, { detail: `Synced → ${period}` });
       } catch (err) {
         const message = `Failed to sync ${file.name}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(message);
         console.error(message);
+        await tracker.endPhase(filePhaseId, { status: "error", errorMessage: message });
       }
     }
 

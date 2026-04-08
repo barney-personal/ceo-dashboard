@@ -107,3 +107,17 @@ export const syncLog = pgTable("sync_log", {
   recordsSynced: integer("records_synced").default(0).notNull(),
   errorMessage: text("error_message"),
 });
+
+export const syncPhases = pgTable("sync_phases", {
+  id: serial("id").primaryKey(),
+  syncLogId: integer("sync_log_id")
+    .references(() => syncLog.id, { onDelete: "cascade" })
+    .notNull(),
+  phase: text("phase").notNull(),
+  status: text("status").notNull().default("running"), // 'running' | 'success' | 'error' | 'skipped'
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  detail: text("detail"),
+  itemsProcessed: integer("items_processed").default(0),
+  errorMessage: text("error_message"),
+});
