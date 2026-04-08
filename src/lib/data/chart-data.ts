@@ -28,25 +28,145 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
 }
 
 /**
- * Marketing CPA over time from Growth Marketing Performance "Query 1".
- * 281 rows with columns: date, mcpa (marketing CPA).
+ * LTV:Paid CAC ratio over time (weekly).
+ * Computed as avg_ltv / (paid_spend_excl_test / paid_users_excl_test).
  */
-export async function getCpaSeries(): Promise<ChartSeries[]> {
+const DATA_START = new Date("2023-01-01").getTime();
+
+export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("unit-economics", "cac");
-  const query = data.find((d) => d.queryName === "Query 1");
+  const query = data.find((d) => d.queryName === "LTV:Paid CAC");
   if (!query || query.rows.length === 0) return [];
 
   const rows = query.rows
-    .filter((r) => r.date && r.mcpa != null && isFinite(r.mcpa as number))
+    .filter((r) => r.period && new Date(r.period as string).getTime() >= DATA_START)
     .map((r) => ({
-      date: r.date as string,
-      value: r.mcpa as number,
+      date: r.period as string,
+      ltv: (r.ltv_36m as number) ?? 0,
+      paidSpend: (r.paid_spend_excl_test as number) ?? 0,
+      paidUsers: (r.paid_users_excl_test as number) ?? 0,
     }))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  return rows.length > 0
-    ? [{ label: "Paid CPA", color: "#3b3bba", data: rows }]
-    : [];
+  // Aggregate to weekly
+  const weekMap = new Map<string, { ltv: number; paidSpend: number; paidUsers: number; days: number }>();
+  for (const r of rows) {
+    const d = new Date(r.date);
+    const day = d.getDay();
+    const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
+    const key = monday.toISOString().slice(0, 10);
+    const b = weekMap.get(key) ?? { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 };
+    b.ltv += r.ltv;
+    b.paidSpend += r.paidSpend;
+    b.paidUsers += r.paidUsers;
+    b.days += 1;
+    weekMap.set(key, b);
+  }
+
+  const weeks = [...weekMap.entries()]
+    .filter(([date]) => date >= "2023-01-02")
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const ratioData = weeks
+    .filter(([, v]) => v.paidUsers > 0)
+    .map(([date, v]) => {
+      const avgLtv = v.ltv / v.days;
+      const paidCpa = v.paidSpend / v.paidUsers;
+      return { date, value: paidCpa > 0 ? avgLtv / paidCpa : 0 };
+    });
+
+  return [
+    {
+      label: "LTV:CAC",
+      color: "#3b3bba",
+      data: ratioData,
+    },
+    {
+      label: "3x guardrail",
+      color: "#c44",
+      dashed: true,
+      data: ratioData.map((d) => ({ date: d.date, value: 3 })),
+    },
+  ];
+}
+
+/**
+ * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
+ * Weekly aggregates, split by actual vs target, from Jan 2023.
+ */
+const QUERY3_START = new Date("2023-01-01").getTime();
+
+export async function getQuery3Series(): Promise<{
+  spend: ChartSeries[];
+  users: ChartSeries[];
+  cpa: ChartSeries[];
+}> {
+  const data = await getReportData("unit-economics", "kpis");
+  const query = data.find((d) => d.queryName === "Query 3");
+  if (!query || query.rows.length === 0)
+    return { spend: [], users: [], cpa: [] };
+
+  const colors: Record<string, string> = {
+    actual: "#3b3bba",
+    target_base: "#888",
+    target_management: "#2d8a6e",
+  };
+
+  const byType = new Map<string, { date: string; spend: number; users: number; cpa: number }[]>();
+  for (const r of query.rows) {
+    if (!r.day) continue;
+    if (new Date(r.day as string).getTime() < QUERY3_START) continue;
+    const type = r.actual_or_target as string;
+    let arr = byType.get(type);
+    if (!arr) { arr = []; byType.set(type, arr); }
+    arr.push({
+      date: r.day as string,
+      spend: (r.spend as number) ?? 0,
+      users: (r.new_bank_connected_users as number) ?? 0,
+      cpa: (r.cpa as number) ?? 0,
+    });
+  }
+
+  // Aggregate all types to weekly buckets (week starting Monday)
+  const weeklyByType = new Map<string, Map<string, { spend: number; users: number; cpa: number; days: number }>>();
+  for (const [type, rows] of byType) {
+    const weekMap = new Map<string, { spend: number; users: number; cpa: number; days: number }>();
+    for (const r of rows) {
+      const d = new Date(r.date);
+      const day = d.getDay();
+      const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
+      const key = monday.toISOString().slice(0, 10);
+      const bucket = weekMap.get(key) ?? { spend: 0, users: 0, cpa: 0, days: 0 };
+      bucket.spend += r.spend;
+      bucket.users += r.users;
+      bucket.cpa += r.cpa;
+      bucket.days += 1;
+      weekMap.set(key, bucket);
+    }
+    weeklyByType.set(type, weekMap);
+  }
+
+  const startKey = "2023-01-02"; // First Monday of 2023
+
+  const makeSeries = (field: "spend" | "users" | "cpa"): ChartSeries[] =>
+    [...weeklyByType.entries()].map(([type, weekMap]) => ({
+      label: type,
+      color: colors[type] ?? "#999",
+      dashed: type !== "actual",
+      data: [...weekMap.entries()]
+        .filter(([date]) => date >= startKey)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, v]) => ({
+          date,
+          value: field === "cpa" ? v.cpa / v.days : v[field],
+        })),
+    }));
+
+  return {
+    spend: makeSeries("spend"),
+    users: makeSeries("users"),
+    cpa: makeSeries("cpa"),
+  };
 }
 
 // --- Product ---

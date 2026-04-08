@@ -2,12 +2,10 @@ import { redirect } from "next/navigation";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
-import { getUnitEconomicsMetrics } from "@/lib/data/metrics";
-import { getLtvTimeSeries, getCpaSeries } from "@/lib/data/chart-data";
+import { getLtvTimeSeries, getLtvCacRatioSeries, getQuery3Series } from "@/lib/data/chart-data";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function UnitEconomicsPage() {
@@ -17,13 +15,14 @@ export default async function UnitEconomicsPage() {
     redirect("/dashboard");
   }
 
-  const [metrics, ltvSeries, cpaSeries] = await Promise.all([
-    getUnitEconomicsMetrics().catch(() => null),
+  const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
     getLtvTimeSeries().catch(() => []),
-    getCpaSeries().catch(() => []),
+    getLtvCacRatioSeries().catch(() => []),
+    getQuery3Series().catch(() => ({ spend: [], users: [], cpa: [] })),
   ]);
 
   const modeUrl = "https://app.mode.com/cleoai/reports/11c3172037ac";
+  const cacModeUrl = "https://app.mode.com/cleoai/reports/774f14224dd9";
 
   const allEmbeds = [
     { label: "Strategic Finance KPIs", charts: getChartEmbeds("unit-economics", "kpis") },
@@ -40,12 +39,17 @@ export default async function UnitEconomicsPage() {
         description="Customer lifetime value and acquisition costs"
       />
 
-      {/* Hero strip — executive summary */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <MetricCard label="36M LTV" value={metrics?.ltv ?? "—"} subtitle={metrics?.ltv ? "per user" : "awaiting data"} modeUrl={modeUrl} delay={0} />
-        <MetricCard label="Blended CPA" value={metrics?.cpa ?? "—"} subtitle={metrics?.cpa ? "all channels" : "awaiting data"} modeUrl={modeUrl} delay={50} />
-        <MetricCard label="LTV:CAC" value={metrics?.ltvCac ?? "—"} subtitle={metrics?.ltvCac ? "ratio" : "awaiting data"} modeUrl={modeUrl} delay={100} />
-      </div>
+      {/* LTV:Paid CAC ratio */}
+      {ltvCacRatio.length > 0 && (
+        <LineChart
+          series={ltvCacRatio}
+          title="LTV:Paid CAC"
+          subtitle="Weekly, LTV ÷ Paid CPA"
+          yLabel="x"
+          yFormatType="number"
+          modeUrl={cacModeUrl}
+        />
+      )}
 
       {/* LTV over time */}
       {ltvSeries.length > 0 ? (
@@ -63,20 +67,40 @@ export default async function UnitEconomicsPage() {
         </div>
       )}
 
-      {/* Paid CPA over time */}
-      {cpaSeries.length > 0 ? (
+      {/* CPA — actual vs targets */}
+      {q3.cpa.length > 0 && (
         <LineChart
-          series={cpaSeries}
+          series={q3.cpa}
           title="Paid CPA"
-          subtitle="Over time"
-          yLabel="CPA ($)"
+          subtitle="Weekly avg, actual vs targets"
+          yLabel="$"
           yFormatType="currency"
-          modeUrl="https://app.mode.com/cleoai/reports/774f14224dd9"
+          modeUrl={modeUrl}
         />
-      ) : (
-        <div className="rounded-xl border border-border/60 bg-card px-5 py-10 text-center shadow-warm">
-          <p className="text-sm text-muted-foreground">CPA chart awaiting data sync</p>
-        </div>
+      )}
+
+      {/* Spend — actual vs targets */}
+      {q3.spend.length > 0 && (
+        <LineChart
+          series={q3.spend}
+          title="Marketing Spend"
+          subtitle="Weekly, actual vs targets"
+          yLabel="$"
+          yFormatType="currency"
+          modeUrl={modeUrl}
+        />
+      )}
+
+      {/* New users — actual vs targets */}
+      {q3.users.length > 0 && (
+        <LineChart
+          series={q3.users}
+          title="New Bank Connected Users"
+          subtitle="Weekly, actual vs targets"
+          yLabel="Users"
+          yFormatType="number"
+          modeUrl={modeUrl}
+        />
       )}
 
       {/* Mode dashboard links */}
