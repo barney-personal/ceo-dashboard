@@ -21,7 +21,9 @@ export interface ParsedSheets {
   sheets: Record<string, unknown[][]>;
 }
 
+const MAX_CACHE_ENTRIES = 10;
 const cache = new Map<string, { data: ParsedSheets; fetchedAt: number }>();
+const inflight = new Map<string, Promise<ParsedSheets>>();
 
 /**
  * Trim wide rows: strip trailing nulls, then keep first 2 label columns
@@ -79,9 +81,29 @@ export async function getSheetData(
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
     return cached.data;
   }
+  if (cached) cache.delete(fileId);
 
-  const buffer = await downloadSlackFile(downloadUrl);
-  const data = parseKeySheets(buffer);
-  cache.set(fileId, { data, fetchedAt: Date.now() });
-  return data;
+  // Deduplicate concurrent requests for the same file
+  const existing = inflight.get(fileId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const buffer = await downloadSlackFile(downloadUrl);
+    const data = parseKeySheets(buffer);
+
+    // Evict oldest entry if cache is full
+    if (cache.size >= MAX_CACHE_ENTRIES) {
+      const oldest = [...cache.entries()].sort(
+        (a, b) => a[1].fetchedAt - b[1].fetchedAt
+      )[0];
+      if (oldest) cache.delete(oldest[0]);
+    }
+
+    cache.set(fileId, { data, fetchedAt: Date.now() });
+    inflight.delete(fileId);
+    return data;
+  })();
+
+  inflight.set(fileId, promise);
+  return promise;
 }

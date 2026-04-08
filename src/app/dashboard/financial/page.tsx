@@ -29,7 +29,8 @@ export default async function FinancialPage({
   try {
     data = await getManagementAccountsData(period);
   } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
+    console.error("Management accounts load failed:", err);
+    error = "Unable to load management accounts. Please try again or check the Slack integration.";
   }
 
   return (

@@ -46,6 +46,10 @@ export async function getManagementAccountsData(
   period?: string
 ): Promise<ManagementAccountsData> {
   const rawFiles = await getManagementAccountFiles();
+  if (rawFiles.length === 0) {
+    throw new Error("No management account files found");
+  }
+
   const files = rawFiles.map(toFileInfo);
 
   // Find the requested period or default to latest
@@ -53,8 +57,10 @@ export async function getManagementAccountsData(
     ? files.find((f) => f.period === period) ?? files[0]
     : files[0];
 
-  // Find the raw file to get the download URL
-  const rawFile = rawFiles.find((f) => f.id === targetInfo.id)!;
+  const rawFile = rawFiles.find((f) => f.id === targetInfo.id);
+  if (!rawFile) {
+    throw new Error("File metadata mismatch");
+  }
 
   const sheetData = await getSheetData(rawFile.id, rawFile.url_private_download);
 
