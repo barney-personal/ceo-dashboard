@@ -10,7 +10,7 @@ export interface ColumnChartData {
   value: number;
 }
 
-type YFormatType = "compact" | "number" | "percent";
+type YFormatType = "compact" | "number" | "percent" | "currency";
 
 const Y_FORMATTERS: Record<YFormatType, (v: number) => string> = {
   compact: (v) => {
@@ -20,6 +20,7 @@ const Y_FORMATTERS: Record<YFormatType, (v: number) => string> = {
   },
   number: (v) => v.toLocaleString(),
   percent: (v) => `${(v * 100).toFixed(1)}%`,
+  currency: (v) => `$${v.toFixed(0)}`,
 };
 
 interface ColumnChartProps {
