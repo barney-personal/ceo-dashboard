@@ -8,6 +8,7 @@ import {
   inArray,
   lt,
   or,
+  sql,
 } from "drizzle-orm";
 import {
   evaluateQueueDecision,
@@ -322,4 +323,42 @@ export async function finalizeSyncRun(
       input.errorMessage ?? undefined
     );
   }
+}
+
+export async function markSyncRunsFailed(
+  runIds: number[],
+  errorMessage: string,
+  skipReason: string | null = "background_drain_failed"
+): Promise<number[]> {
+  if (runIds.length === 0) {
+    return [];
+  }
+
+  const completedAt = new Date();
+  const updated = await db
+    .update(syncLog)
+    .set({
+      completedAt,
+      status: "error",
+      skipReason,
+      errorMessage: sql`case
+        when ${syncLog.errorMessage} is null or ${syncLog.errorMessage} = '' then ${errorMessage}
+        else ${syncLog.errorMessage} || E'\n' || ${errorMessage}
+      end`,
+      heartbeatAt: completedAt,
+      leaseExpiresAt: null,
+    })
+    .where(
+      and(
+        inArray(syncLog.id, runIds),
+        inArray(syncLog.status, [...ACTIVE_STATUSES])
+      )
+    )
+    .returning({ id: syncLog.id });
+
+  for (const row of updated) {
+    await closeOpenPhases(row.id, "error", errorMessage);
+  }
+
+  return updated.map((row) => row.id);
 }

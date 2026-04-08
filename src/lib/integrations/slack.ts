@@ -1,4 +1,14 @@
-const SLACK_API = "https://slack.com/api";
+export const SLACK_API = "https://slack.com/api";
+const SLACK_REQUEST_TIMEOUT_MS = 15_000;
+const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
+const SLACK_MAX_RETRIES = 3;
+const RETRYABLE_SLACK_ERRORS = new Set([
+  "internal_error",
+  "fatal_error",
+  "request_timeout",
+  "service_unavailable",
+  "ratelimited",
+]);
 
 function getToken(): string {
   const token = process.env.SLACK_BOT_TOKEN;
@@ -6,9 +16,127 @@ function getToken(): string {
   return token;
 }
 
-async function slackRequest<T>(
+function getRetryDelayMs(attempt: number): number {
+  const baseMs = 500 * 2 ** (attempt - 1);
+  return baseMs + Math.floor(Math.random() * 250);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.message.toLowerCase().includes("timed out"))
+  );
+}
+
+function isRetryableSlackStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function isRetryableSlackEnvelope(data: {
+  ok?: boolean;
+  error?: string;
+}): boolean {
+  return data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error);
+}
+
+function composeSignal(
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+  timeoutMessage?: string
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parentSignal?.reason);
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(timeoutMessage ?? "Slack request timed out"));
+  }, timeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (parentSignal) {
+        parentSignal.removeEventListener("abort", onAbort);
+      }
+    },
+  };
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function slackFetch(
+  input: string,
+  init: RequestInit,
+  opts: {
+    timeoutMs: number;
+    maxRetries?: number;
+    timeoutMessage: string;
+  }
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= (opts.maxRetries ?? SLACK_MAX_RETRIES); attempt++) {
+    const { signal, cleanup } = composeSignal(
+      opts.timeoutMs,
+      init.signal ?? undefined,
+      opts.timeoutMessage
+    );
+
+    try {
+      const res = await fetch(input, {
+        ...init,
+        signal,
+      });
+
+      if (isRetryableSlackStatus(res.status) && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
+        const retryAfterSeconds = Number(res.headers.get("retry-after"));
+        const delayMs =
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : getRetryDelayMs(attempt);
+        lastError = new Error(`Slack API error ${res.status}`);
+        await sleep(delayMs);
+        continue;
+      }
+
+      return res;
+    } catch (error) {
+      const retryable =
+        isAbortError(error) ||
+        (error instanceof Error &&
+          /fetch failed|ECONNRESET|EAI_AGAIN|socket hang up/i.test(error.message));
+
+      if (retryable && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+
+      throw error;
+    } finally {
+      cleanup();
+    }
+  }
+
+  throw lastError ?? new Error("Slack request failed");
+}
+
+export async function slackApiRequest<T>(
   method: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  opts: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    maxRetries?: number;
+  } = {}
 ): Promise<T> {
   const url = new URL(`${SLACK_API}/${method}`);
   if (params) {
@@ -17,20 +145,68 @@ async function slackRequest<T>(
     }
   }
 
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  });
+  let lastEnvelopeError: Error | null = null;
+  const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
 
-  if (!res.ok) {
-    throw new Error(`Slack API error ${res.status}: ${await res.text()}`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const res = await slackFetch(
+      url.toString(),
+      {
+        headers: { Authorization: `Bearer ${getToken()}` },
+        signal: opts.signal,
+      },
+      {
+        timeoutMs: opts.timeoutMs ?? SLACK_REQUEST_TIMEOUT_MS,
+        maxRetries,
+        timeoutMessage: `Slack ${method} timed out after ${
+          opts.timeoutMs ?? SLACK_REQUEST_TIMEOUT_MS
+        }ms`,
+      }
+    );
+
+    if (!res.ok) {
+      throw new Error(`Slack API error ${res.status}: ${await res.text()}`);
+    }
+
+    const data = (await res.json()) as T & { ok: boolean; error?: string };
+    if (!data.ok) {
+      const error = new Error(`Slack API error: ${data.error}`);
+      if (isRetryableSlackEnvelope(data) && attempt < maxRetries) {
+        lastEnvelopeError = error;
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+      throw error;
+    }
+
+    return data;
   }
 
-  const data = (await res.json()) as T & { ok: boolean; error?: string };
-  if (!data.ok) {
-    throw new Error(`Slack API error: ${data.error}`);
-  }
+  throw lastEnvelopeError ?? new Error(`Slack ${method} request failed`);
+}
 
-  return data;
+export async function slackDownloadRequest(
+  url: string,
+  opts: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    maxRetries?: number;
+  } = {}
+): Promise<Response> {
+  return slackFetch(
+    url,
+    {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: opts.signal,
+    },
+    {
+      timeoutMs: opts.timeoutMs ?? SLACK_DOWNLOAD_TIMEOUT_MS,
+      maxRetries: opts.maxRetries ?? SLACK_MAX_RETRIES,
+      timeoutMessage: `Slack file download timed out after ${
+        opts.timeoutMs ?? SLACK_DOWNLOAD_TIMEOUT_MS
+      }ms`,
+    }
+  );
 }
 
 export interface SlackMessage {
@@ -81,7 +257,7 @@ export async function getChannelHistory(
     if (latest) params.latest = latest;
     if (cursor) params.cursor = cursor;
 
-    const data = await slackRequest<ConversationsHistoryResponse>(
+    const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.history",
       params
     );
@@ -114,7 +290,7 @@ export async function getThreadReplies(
     };
     if (cursor) params.cursor = cursor;
 
-    const data = await slackRequest<ConversationsHistoryResponse>(
+    const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.replies",
       params
     );
@@ -133,7 +309,7 @@ export async function getThreadReplies(
  * Get channel name by ID.
  */
 export async function getChannelName(channelId: string): Promise<string> {
-  const data = await slackRequest<ConversationsInfoResponse>(
+  const data = await slackApiRequest<ConversationsInfoResponse>(
     "conversations.info",
     { channel: channelId }
   );
@@ -149,7 +325,7 @@ export async function getUserName(userId: string): Promise<string> {
   if (userNameCache.has(userId)) return userNameCache.get(userId)!;
 
   try {
-    const data = await slackRequest<UsersInfoResponse>("users.info", {
+    const data = await slackApiRequest<UsersInfoResponse>("users.info", {
       user: userId,
     });
     const name =
