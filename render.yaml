@@ -9,7 +9,7 @@ services:
     name: ceo-dashboard
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build && npx drizzle-kit push
+    buildCommand: NODE_ENV=development npm ci && npm run build && npx drizzle-kit push
     startCommand: npm start
     healthCheckPath: /
     envVars:
