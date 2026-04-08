@@ -18,6 +18,10 @@ import {
 import { desc, count, inArray } from "drizzle-orm";
 import { getEffectiveSyncState } from "@/lib/sync/config";
 import {
+  getSchemaCompatibilityMessage,
+  isSchemaCompatibilityError,
+} from "@/lib/db/errors";
+import {
   Database,
   CheckCircle2,
   XCircle,
@@ -31,26 +35,34 @@ export default async function DataStatusPage() {
     redirect("/dashboard");
   }
 
-  // Fetch last 20 sync runs
-  const recentRuns = await db
-    .select()
-    .from(syncLog)
-    .orderBy(desc(syncLog.startedAt))
-    .limit(20);
+  const warnings: string[] = [];
 
-  // Fetch phases for those runs (gracefully handles missing table before schema push)
-  const runIds = recentRuns.map((r) => r.id);
+  let recentRuns: (typeof syncLog.$inferSelect)[] = [];
   let phases: (typeof syncPhases.$inferSelect)[] = [];
+
   try {
+    recentRuns = await db
+      .select()
+      .from(syncLog)
+      .orderBy(desc(syncLog.startedAt))
+      .limit(20);
+
+    const runIds = recentRuns.map((r) => r.id);
     if (runIds.length > 0) {
-      phases = await db
-        .select()
-        .from(syncPhases)
-        .where(inArray(syncPhases.syncLogId, runIds))
-        .orderBy(syncPhases.startedAt);
+      try {
+        phases = await db
+          .select()
+          .from(syncPhases)
+          .where(inArray(syncPhases.syncLogId, runIds))
+          .orderBy(syncPhases.startedAt);
+      } catch (error) {
+        if (!isSchemaCompatibilityError(error)) {
+          throw error;
+        }
+      }
     }
-  } catch {
-    // sync_phases table may not exist yet — page works without it
+  } catch (error) {
+    warnings.push(getSchemaCompatibilityMessage(error));
   }
 
   // Group phases by run
@@ -112,23 +124,43 @@ export default async function DataStatusPage() {
     return effectiveState === "queued" || effectiveState === "running";
   });
 
-  // Table record counts
-  const [modeReportCount] = await db.select({ count: count() }).from(modeReports);
-  const [modeDataCount] = await db.select({ count: count() }).from(modeReportData);
-  const [okrCount] = await db.select({ count: count() }).from(okrUpdates);
-  const [squadCount] = await db.select({ count: count() }).from(squads);
-  const [financialCount] = await db.select({ count: count() }).from(financialPeriods);
-
-  const okrPillars = await db.selectDistinct({ pillar: okrUpdates.pillar }).from(okrUpdates);
-  const okrSquads = await db.selectDistinct({ squad: okrUpdates.squadName }).from(okrUpdates);
-
-  const tables = [
-    { name: "mode_reports", label: "Mode Reports", count: modeReportCount.count, description: "Report definitions synced from Mode" },
-    { name: "mode_report_data", label: "Mode Report Data", count: modeDataCount.count, description: "Query result rows from Mode reports" },
-    { name: "okr_updates", label: "OKR Updates", count: okrCount.count, description: `Key results across ${okrPillars.length} pillars, ${okrSquads.length} squads` },
-    { name: "squads", label: "Squads", count: squadCount.count, description: "Canonical squad registry" },
-    { name: "financial_periods", label: "Financial Periods", count: financialCount.count, description: "Monthly management accounts" },
+  let tables = [
+    { name: "mode_reports", label: "Mode Reports", count: 0, description: "Report definitions synced from Mode" },
+    { name: "mode_report_data", label: "Mode Report Data", count: 0, description: "Query result rows from Mode reports" },
+    { name: "okr_updates", label: "OKR Updates", count: 0, description: "Key results across 0 pillars, 0 squads" },
+    { name: "squads", label: "Squads", count: 0, description: "Canonical squad registry" },
+    { name: "financial_periods", label: "Financial Periods", count: 0, description: "Monthly management accounts" },
   ];
+
+  try {
+    const [
+      [modeReportCount],
+      [modeDataCount],
+      [okrCount],
+      [squadCount],
+      [financialCount],
+      okrPillars,
+      okrSquads,
+    ] = await Promise.all([
+      db.select({ count: count() }).from(modeReports),
+      db.select({ count: count() }).from(modeReportData),
+      db.select({ count: count() }).from(okrUpdates),
+      db.select({ count: count() }).from(squads),
+      db.select({ count: count() }).from(financialPeriods),
+      db.selectDistinct({ pillar: okrUpdates.pillar }).from(okrUpdates),
+      db.selectDistinct({ squad: okrUpdates.squadName }).from(okrUpdates),
+    ]);
+
+    tables = [
+      { name: "mode_reports", label: "Mode Reports", count: modeReportCount.count, description: "Report definitions synced from Mode" },
+      { name: "mode_report_data", label: "Mode Report Data", count: modeDataCount.count, description: "Query result rows from Mode reports" },
+      { name: "okr_updates", label: "OKR Updates", count: okrCount.count, description: `Key results across ${okrPillars.length} pillars, ${okrSquads.length} squads` },
+      { name: "squads", label: "Squads", count: squadCount.count, description: "Canonical squad registry" },
+      { name: "financial_periods", label: "Financial Periods", count: financialCount.count, description: "Monthly management accounts" },
+    ];
+  } catch (error) {
+    warnings.push(getSchemaCompatibilityMessage(error));
+  }
 
   const envChecks = [
     { key: "DATABASE_URL", label: "Database", required: true },
@@ -153,6 +185,24 @@ export default async function DataStatusPage() {
         title="Data Status"
         description="Sync pipelines, database tables, and environment configuration"
       />
+
+      {warnings.length > 0 && (
+        <SectionCard
+          title="Schema Rollout Warning"
+          description="The page is showing partial data while the database catches up."
+        >
+          <div className="space-y-2">
+            {warnings.map((warning, index) => (
+              <div
+                key={`${warning}-${index}`}
+                className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
+              >
+                {warning}
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
 
       {/* Sync Run Log — the main feature */}
       <SyncRunLog runs={enrichedRuns} avgDurations={avgDurations} />

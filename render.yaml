@@ -53,7 +53,6 @@ services:
     runtime: node
     plan: pro
     buildCommand: NODE_ENV=development npm ci && npm run build
-    preDeployCommand: npx drizzle-kit migrate
     startCommand: npm run sync-worker
     maxShutdownDelaySeconds: 300
     envVars:
