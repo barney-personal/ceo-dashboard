@@ -1,7 +1,10 @@
-.PHONY: dev build start lint type-check test setup db-generate db-migrate db-studio
+.PHONY: dev build start lint type-check test setup deps db-generate db-migrate db-studio
 
 setup:
 	./scripts/setup.sh
+
+deps:
+	./scripts/ensure-node-modules.sh
 
 dev:
 	doppler run -- npm run dev
@@ -19,6 +22,7 @@ type-check:
 	npx tsc --noEmit
 
 test:
+	./scripts/ensure-node-modules.sh
 	npx vitest run
 
 db-generate:
