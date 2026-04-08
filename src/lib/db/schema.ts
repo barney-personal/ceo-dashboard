@@ -8,7 +8,10 @@ import {
   timestamp,
   jsonb,
   unique,
+  index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const squads = pgTable("squads", {
   id: serial("id").primaryKey(),
@@ -43,10 +46,17 @@ export const modeReportData = pgTable(
     queryName: text("query_name").notNull(),
     data: jsonb("data").notNull(), // Array of row objects
     columns: jsonb("columns").notNull(), // Column metadata [{name, type}]
-    rowCount: integer("row_count").notNull(),
+    rowCount: integer("row_count").notNull(), // Stored row count for backward compatibility
+    sourceRowCount: integer("source_row_count").default(0).notNull(),
+    storedRowCount: integer("stored_row_count").default(0).notNull(),
+    truncated: boolean("truncated").default(false).notNull(),
+    storageWindow: jsonb("storage_window"),
     syncedAt: timestamp("synced_at").defaultNow().notNull(),
   },
-  (table) => [unique().on(table.reportId, table.queryToken)]
+  (table) => [
+    unique().on(table.reportId, table.queryToken),
+    index("mode_report_data_report_synced_idx").on(table.reportId, table.syncedAt),
+  ]
 );
 
 export const okrUpdates = pgTable(
@@ -98,15 +108,32 @@ export const financialPeriods = pgTable("financial_periods", {
   syncedAt: timestamp("synced_at").defaultNow().notNull(),
 });
 
-export const syncLog = pgTable("sync_log", {
-  id: serial("id").primaryKey(),
-  source: text("source").notNull().default("mode"),
-  startedAt: timestamp("started_at").defaultNow().notNull(),
-  completedAt: timestamp("completed_at"),
-  status: text("status").notNull().default("running"), // 'running' | 'success' | 'error'
-  recordsSynced: integer("records_synced").default(0).notNull(),
-  errorMessage: text("error_message"),
-});
+export const syncLog = pgTable(
+  "sync_log",
+  {
+    id: serial("id").primaryKey(),
+    source: text("source").notNull().default("mode"),
+    trigger: text("trigger").notNull().default("system"),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    status: text("status").notNull().default("queued"), // 'queued' | 'running' | 'success' | 'partial' | 'error' | 'cancelled'
+    attempt: integer("attempt").default(1).notNull(),
+    maxAttempts: integer("max_attempts").default(1).notNull(),
+    heartbeatAt: timestamp("heartbeat_at"),
+    leaseExpiresAt: timestamp("lease_expires_at"),
+    workerId: text("worker_id"),
+    recordsSynced: integer("records_synced").default(0).notNull(),
+    skipReason: text("skip_reason"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("sync_log_source_started_idx").on(table.source, table.startedAt),
+    index("sync_log_source_completed_idx").on(table.source, table.completedAt),
+    uniqueIndex("sync_log_active_source_idx")
+      .on(table.source)
+      .where(sql`${table.status} in ('queued', 'running')`),
+  ]
+);
 
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),

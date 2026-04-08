@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { getEffectiveSyncState } from "@/lib/sync/config";
 import {
   CheckCircle2,
   XCircle,
@@ -29,9 +30,14 @@ interface SyncRun {
   id: number;
   source: string;
   status: string;
+  trigger: string;
+  attempt: number;
   startedAt: string;
   completedAt: string | null;
+  heartbeatAt: string | null;
+  leaseExpiresAt: string | null;
   recordsSynced: number;
+  skipReason: string | null;
   errorMessage: string | null;
   phases: Phase[];
 }
@@ -86,13 +92,27 @@ function formatPhaseName(phase: string): string {
 
 function StatusIcon({ status, className = "" }: { status: string; className?: string }) {
   if (status === "success") return <CheckCircle2 className={`text-positive ${className}`} />;
+  if (status === "partial") return <AlertTriangle className={`text-warning ${className}`} />;
   if (status === "error") return <XCircle className={`text-destructive ${className}`} />;
+  if (status === "abandoned") return <AlertTriangle className={`text-destructive ${className}`} />;
   if (status === "running") return <RefreshCw className={`text-warning animate-spin ${className}`} />;
+  if (status === "queued") return <Clock className={`text-warning ${className}`} />;
   if (status === "skipped") return <SkipForward className={`text-muted-foreground/40 ${className}`} />;
+  if (status === "cancelled") return <XCircle className={`text-muted-foreground/50 ${className}`} />;
   return <Clock className={`text-muted-foreground/40 ${className}`} />;
 }
 
-function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; totalDurationMs: number; now: number }) {
+function PhaseTimeline({
+  phases,
+  totalDurationMs,
+  now,
+  runEffectiveStatus,
+}: {
+  phases: Phase[];
+  totalDurationMs: number;
+  now: number;
+  runEffectiveStatus: string;
+}) {
   if (phases.length === 0) {
     return (
       <p className="py-4 text-center text-[12px] text-muted-foreground/40">
@@ -108,7 +128,11 @@ function PhaseTimeline({ phases, totalDurationMs, now }: { phases: Phase[]; tota
           ? new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime()
           : now - new Date(phase.startedAt).getTime();
         const widthPct = totalDurationMs > 0 ? Math.max(2, (durationMs / totalDurationMs) * 100) : 50;
-        const isInterrupted = phase.status === "running" && !phase.completedAt;
+        const isInterrupted =
+          phase.status === "running" &&
+          !phase.completedAt &&
+          runEffectiveStatus !== "running" &&
+          runEffectiveStatus !== "queued";
 
         return (
           <div key={phase.id} className="group">
@@ -174,16 +198,18 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
   const [now, setNow] = useState(() => Date.now());
   const Icon = SOURCE_ICONS[run.source] ?? Database;
   const label = SOURCE_LABELS[run.source] ?? run.source;
-  const isRunning = run.status === "running";
+  const effectiveStatus = getEffectiveSyncState(run, new Date(now));
+  const isActive = effectiveStatus === "running" || effectiveStatus === "queued";
+  const isRunning = effectiveStatus === "running";
 
-  // Tick `now` every 2s for running syncs
+  // Tick `now` every 2s for queued/running syncs
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isActive) return;
     const id = setInterval(() => setNow(Date.now()), 2000);
     return () => clearInterval(id);
-  }, [isRunning]);
+  }, [isActive]);
 
-  const isStale = isRunning && now - new Date(run.startedAt).getTime() > 600_000;
+  const isStale = effectiveStatus === "abandoned";
 
   const durationMs = run.completedAt
     ? new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()
@@ -203,7 +229,7 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
         <Icon className="h-4 w-4 shrink-0 text-muted-foreground/40" />
 
         {/* Status dot */}
-        <StatusIcon status={run.status} className="h-3.5 w-3.5 shrink-0" />
+        <StatusIcon status={effectiveStatus} className="h-3.5 w-3.5 shrink-0" />
 
         {/* Source label */}
         <span className="w-28 shrink-0 text-[13px] font-medium text-foreground/80">
@@ -258,7 +284,18 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
               <p className="mt-0.5 text-[11px] text-destructive/50">{run.errorMessage}</p>
             </div>
           )}
-          <PhaseTimeline phases={run.phases} totalDurationMs={durationMs} now={now} />
+          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-muted-foreground/50">
+            <span>State: {effectiveStatus}</span>
+            <span>Trigger: {run.trigger}</span>
+            <span>Attempt: {run.attempt}</span>
+            {run.skipReason && <span>Reason: {run.skipReason}</span>}
+          </div>
+          <PhaseTimeline
+            phases={run.phases}
+            totalDurationMs={durationMs}
+            now={now}
+            runEffectiveStatus={effectiveStatus}
+          />
         </div>
       )}
     </div>

@@ -16,6 +16,7 @@ import {
   squads,
 } from "@/lib/db/schema";
 import { desc, count, inArray } from "drizzle-orm";
+import { getEffectiveSyncState } from "@/lib/sync/config";
 import {
   Database,
   CheckCircle2,
@@ -65,9 +66,14 @@ export default async function DataStatusPage() {
     id: run.id,
     source: run.source,
     status: run.status,
+    trigger: run.trigger,
+    attempt: run.attempt,
     startedAt: run.startedAt.toISOString(),
     completedAt: run.completedAt?.toISOString() ?? null,
+    heartbeatAt: run.heartbeatAt?.toISOString() ?? null,
+    leaseExpiresAt: run.leaseExpiresAt?.toISOString() ?? null,
     recordsSynced: run.recordsSynced,
+    skipReason: run.skipReason,
     errorMessage: run.errorMessage,
     phases: (phasesByRun.get(run.id) ?? []).map((p) => ({
       id: p.id,
@@ -85,7 +91,10 @@ export default async function DataStatusPage() {
   const avgDurations: Record<string, number> = {};
   for (const source of ["mode", "slack", "management-accounts"]) {
     const successfulRuns = recentRuns.filter(
-      (r) => r.source === source && r.status === "success" && r.completedAt
+      (r) =>
+        r.source === source &&
+        (r.status === "success" || r.status === "partial") &&
+        r.completedAt
     ).slice(0, 5);
     if (successfulRuns.length > 0) {
       const totalMs = successfulRuns.reduce(
@@ -97,7 +106,11 @@ export default async function DataStatusPage() {
   }
 
   // Check if any sync is currently running (for auto-refresh)
-  const hasRunning = recentRuns.some((r) => r.status === "running");
+  const now = new Date();
+  const hasRunning = recentRuns.some((run) => {
+    const effectiveState = getEffectiveSyncState(run, now);
+    return effectiveState === "queued" || effectiveState === "running";
+  });
 
   // Table record counts
   const [modeReportCount] = await db.select({ count: count() }).from(modeReports);

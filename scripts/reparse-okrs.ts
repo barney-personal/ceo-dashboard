@@ -5,7 +5,8 @@
 import { db } from "@/lib/db";
 import { okrUpdates, syncLog } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { syncAllSlackOkrs } from "@/lib/sync/slack";
+import { claimQueuedSyncRun, enqueueSyncRun } from "@/lib/sync/coordinator";
+import { createWorkerId, runClaimedSync } from "@/lib/sync/runtime";
 
 async function main() {
   console.log("Clearing existing OKR updates...");
@@ -20,14 +21,20 @@ async function main() {
   console.log(`  Deleted ${deletedLogs.length} rows from sync_log`);
 
   console.log("\nRunning full OKR sync with claude-sonnet-4-6...");
-  const result = await syncAllSlackOkrs();
+  const workerId = createWorkerId("script");
+  await enqueueSyncRun("slack", { trigger: "manual", force: true });
+  const claimed = await claimQueuedSyncRun(workerId, "slack");
+  if (!claimed) {
+    throw new Error("Unable to claim queued Slack sync");
+  }
+  const result = await runClaimedSync(claimed);
 
   console.log(`\nDone!`);
   console.log(`  Status: ${result.status}`);
   console.log(`  Records synced: ${result.recordsSynced}`);
   if (result.errors.length > 0) {
     console.log(`  Errors:`);
-    result.errors.forEach((e) => console.log(`    - ${e}`));
+    result.errors.forEach((error: string) => console.log(`    - ${error}`));
   }
 
   process.exit(0);

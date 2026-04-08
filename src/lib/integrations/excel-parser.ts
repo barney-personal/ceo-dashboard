@@ -139,6 +139,35 @@ If a value cannot be found, use null.
 
 Return ONLY valid JSON. No markdown code blocks.`;
 
+function parseJsonFromModelResponse(text: string): Record<string, unknown> {
+  let trimmed = text.trim();
+  if (trimmed.startsWith("```")) {
+    trimmed = trimmed
+      .replace(/^```(?:json)?\n?/, "")
+      .replace(/\n?```$/, "")
+      .trim();
+  }
+
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+    }
+    throw new Error("Model response did not contain valid JSON");
+  }
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
 /**
  * Parse management accounts Excel file into structured financial data.
  * Uses xlsx to read the file, then Claude to extract the numbers.
@@ -164,33 +193,24 @@ export async function parseManagementAccounts(
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-
-  let trimmed = text.trim();
-  if (trimmed.startsWith("```")) {
-    trimmed = trimmed
-      .replace(/^```(?:json)?\n?/, "")
-      .replace(/\n?```$/, "")
-      .trim();
-  }
-
-  const parsed = JSON.parse(trimmed);
+  const parsed = parseJsonFromModelResponse(text);
 
   return {
-    period: parsed.period ?? "",
-    periodLabel: parsed.periodLabel ?? "",
-    revenue: parsed.revenue,
-    grossProfit: parsed.grossProfit,
-    grossMargin: parsed.grossMargin,
-    contributionProfit: parsed.contributionProfit,
-    contributionMargin: parsed.contributionMargin,
-    ebitda: parsed.ebitda,
-    ebitdaMargin: parsed.ebitdaMargin,
-    netIncome: parsed.netIncome,
-    cashPosition: parsed.cashPosition,
-    cashBurn: parsed.cashBurn,
-    opex: parsed.opex,
-    headcountCost: parsed.headcountCost,
-    marketingCost: parsed.marketingCost,
+    period: asString(parsed.period),
+    periodLabel: asString(parsed.periodLabel),
+    revenue: asNumberOrNull(parsed.revenue),
+    grossProfit: asNumberOrNull(parsed.grossProfit),
+    grossMargin: asNumberOrNull(parsed.grossMargin),
+    contributionProfit: asNumberOrNull(parsed.contributionProfit),
+    contributionMargin: asNumberOrNull(parsed.contributionMargin),
+    ebitda: asNumberOrNull(parsed.ebitda),
+    ebitdaMargin: asNumberOrNull(parsed.ebitdaMargin),
+    netIncome: asNumberOrNull(parsed.netIncome),
+    cashPosition: asNumberOrNull(parsed.cashPosition),
+    cashBurn: asNumberOrNull(parsed.cashBurn),
+    opex: asNumberOrNull(parsed.opex),
+    headcountCost: asNumberOrNull(parsed.headcountCost),
+    marketingCost: asNumberOrNull(parsed.marketingCost),
     rawSheets: sheets,
   };
 }

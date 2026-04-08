@@ -12,6 +12,25 @@ export interface ModeReportConfig {
   category?: string;
 }
 
+export type ModeStorageWindow =
+  | { kind: "all" }
+  | { kind: "since-date"; field: string; since: string }
+  | { kind: "last-months"; field: string; months: number }
+  | { kind: "last-days"; field: string; days: number }
+  | { kind: "last-cohorts"; field: string; count: number }
+  | { kind: "snapshot" }
+  | { kind: "full-if-under"; maxRows: number };
+
+export interface ModeQuerySyncProfile {
+  name: string;
+  storageWindow: ModeStorageWindow;
+}
+
+export interface ModeSyncProfile extends ModeReportConfig {
+  syncEnabled: boolean;
+  queries: ModeQuerySyncProfile[];
+}
+
 export interface ModeChartEmbed {
   url: string;
   title: string;
@@ -23,37 +42,81 @@ export interface ModeChartEmbed {
 /**
  * Map of Mode reports to dashboard sections (for data sync).
  */
-export const MODE_REPORT_MAP: ModeReportConfig[] = [
+export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
   // --- Unit Economics ---
   {
     reportToken: "11c3172037ac",
     name: "Strategic Finance KPIs",
     section: "unit-economics",
     category: "kpis",
+    syncEnabled: true,
+    queries: [
+      { name: "36M LTV", storageWindow: { kind: "all" } },
+      { name: "ARPU Annualized", storageWindow: { kind: "all" } },
+      { name: "CPA", storageWindow: { kind: "all" } },
+      { name: "M11 Plus CVR, past 7 days", storageWindow: { kind: "all" } },
+      {
+        name: "Subscribers at end of period: Growth accounting",
+        storageWindow: { kind: "all" },
+      },
+      {
+        name: "Query 3",
+        storageWindow: {
+          kind: "since-date",
+          field: "day",
+          since: "2023-01-01",
+        },
+      },
+      {
+        name: "Query 4",
+        storageWindow: {
+          kind: "last-months",
+          field: "month",
+          months: 84,
+        },
+      },
+    ],
   },
   {
     reportToken: "76bc42f598a7",
     name: "Premium Conversion Dashboard",
     section: "unit-economics",
     category: "conversion",
+    syncEnabled: false,
+    queries: [],
   },
   {
     reportToken: "774f14224dd9",
     name: "Growth Marketing Performance",
     section: "unit-economics",
     category: "cac",
+    syncEnabled: true,
+    queries: [
+      {
+        name: "LTV:Paid CAC",
+        storageWindow: {
+          kind: "since-date",
+          field: "period",
+          since: "2023-01-01",
+        },
+      },
+    ],
   },
   {
     reportToken: "9c02ab407985",
     name: "Retention Dashboard",
     section: "unit-economics",
     category: "retention",
+    syncEnabled: false,
+    queries: [],
   },
   {
     reportToken: "9da7db154e14",
     name: "Arrears Monitoring Deep Dive",
     section: "unit-economics",
     category: "cogs",
+    syncEnabled: false,
+    queries: [],
   },
 
   // --- Product ---
@@ -62,12 +125,34 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     name: "App Active Users",
     section: "product",
     category: "active-users",
+    syncEnabled: true,
+    queries: [
+      {
+        name: "dau-wau-mau query all time",
+        storageWindow: {
+          kind: "last-days",
+          field: "date",
+          days: 730,
+        },
+      },
+    ],
   },
   {
     reportToken: "5a033d810ddc",
     name: "App Retention",
     section: "product",
     category: "retention",
+    syncEnabled: true,
+    queries: [
+      {
+        name: "Query 1",
+        storageWindow: {
+          kind: "last-cohorts",
+          field: "cohort_month",
+          count: 24,
+        },
+      },
+    ],
   },
 
   // --- Financial ---
@@ -76,6 +161,8 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     name: "Seasonality Overview",
     section: "financial",
     category: "seasonality",
+    syncEnabled: false,
+    queries: [],
   },
 
   // --- OKRs ---
@@ -84,6 +171,17 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     name: "Company OKR Dashboard - T1-26",
     section: "okrs",
     category: "company",
+    syncEnabled: true,
+    queries: [
+      {
+        name: "OKR Reporting",
+        storageWindow: { kind: "full-if-under", maxRows: 5000 },
+      },
+      {
+        name: "User Acquisition",
+        storageWindow: { kind: "full-if-under", maxRows: 5000 },
+      },
+    ],
   },
 
   // --- People ---
@@ -92,14 +190,28 @@ export const MODE_REPORT_MAP: ModeReportConfig[] = [
     name: "Headcount SSoT Dashboard",
     section: "people",
     category: "headcount",
+    syncEnabled: true,
+    queries: [{ name: "headcount", storageWindow: { kind: "snapshot" } }],
   },
   {
     reportToken: "79ea96d310a9",
     name: "Performance Dashboard",
     section: "people",
     category: "performance",
+    syncEnabled: false,
+    queries: [],
   },
 ];
+
+export const MODE_REPORT_MAP: ModeReportConfig[] = MODE_SYNC_PROFILES.map(
+  ({ syncEnabled: _syncEnabled, queries: _queries, ...report }) => report
+);
+
+export function getModeSyncProfile(
+  reportToken: string
+): ModeSyncProfile | undefined {
+  return MODE_SYNC_PROFILES.find((profile) => profile.reportToken === reportToken);
+}
 
 /**
  * Mode chart embeds — specific visualisations from Jago's dashboard.
