@@ -28,7 +28,7 @@ export default async function PeopleOrgPage() {
   const tenureData = getTenureDistribution(employees);
   const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
-  const monthlyMovement = getMonthlyJoinersAndDepartures(employees, allRows, 36);
+  const monthlyMovement = getMonthlyJoinersAndDepartures(allRows, 36);
 
   // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({

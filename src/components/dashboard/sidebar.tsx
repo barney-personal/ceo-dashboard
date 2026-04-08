@@ -117,6 +117,19 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+// Paths that have sibling child routes need exact matching to avoid
+// multiple items highlighting at once (e.g. /dashboard/people vs /dashboard/people/performance).
+const exactMatchPaths = new Set<string>(["/dashboard"]);
+for (const group of NAV_GROUPS) {
+  for (const item of group.items) {
+    for (const sibling of group.items) {
+      if (sibling.href !== item.href && sibling.href.startsWith(item.href + "/")) {
+        exactMatchPaths.add(item.href);
+      }
+    }
+  }
+}
+
 export function Sidebar({ role }: { role: Role }) {
   const pathname = usePathname();
 
@@ -148,11 +161,9 @@ export function Sidebar({ role }: { role: Role }) {
             </span>
             {group.items.map((item) => {
               const Icon = item.icon;
-              const isActive =
-                item.href === "/dashboard" ||
-                item.href === "/dashboard/people"
-                  ? pathname === item.href
-                  : pathname.startsWith(item.href);
+              const isActive = exactMatchPaths.has(item.href)
+                ? pathname === item.href
+                : pathname.startsWith(item.href);
 
               return (
                 <Link

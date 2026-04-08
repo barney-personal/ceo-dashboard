@@ -270,7 +270,6 @@ export function getTenureDistribution(employees: Person[]): BarChartData[] {
  * Monthly joiners and departures for the last N months.
  */
 export function getMonthlyJoinersAndDepartures(
-  activeEmployees: Person[],
   allRows: Record<string, unknown>[],
   months: number = 36
 ): { joiners: { date: string; value: number }[]; departures: { date: string; value: number }[] } {
@@ -287,18 +286,9 @@ export function getMonthlyJoinersAndDepartures(
     });
   }
 
-  // Count joiners from active employees by start_date month
+  // Count all Cleo employee joiners by start_date month
   const joinerCounts = new Map<string, number>();
-  for (const p of activeEmployees) {
-    if (!p.startDate) continue;
-    const d = new Date(p.startDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    joinerCounts.set(key, (joinerCounts.get(key) ?? 0) + 1);
-  }
-
-  // Also count joiners from terminated employees (they joined then left)
   for (const r of allRows) {
-    if (r.lifecycle_status !== "Terminated" && r.lifecycle_status !== "terminated") continue;
     if (r.is_cleo_headcount !== 1) continue;
     const startDate = r.start_date as string | null;
     if (!startDate) continue;
