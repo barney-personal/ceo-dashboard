@@ -6,120 +6,165 @@ type ChartSeries = {
   dashed?: boolean;
 };
 import type { BarChartData } from "@/components/charts/bar-chart";
+import type { ColumnChartData } from "@/components/charts/column-chart";
+
+const CHARTS_START = new Date("2023-01-01").getTime();
 
 /**
- * ARPU + Margin monthly time series from the OKR Company Dashboard.
+ * 36-month LTV estimate over time — monthly bar chart.
+ * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
+ * with columns: month, user_ltv_36m_actual.
  */
-export async function getArpuMarginSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("okrs", "company");
-  const query = data.find((d) => d.queryName === "ARPU + Margin");
-  if (!query) return [];
+export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
+  const data = await getReportData("unit-economics", "kpis");
+  const query = data.find((d) => d.queryName === "Query 4");
+  if (!query || query.rows.length === 0) return [];
 
-  const rows = query.rows
-    .filter((r) => r.month)
-    .sort(
-      (a, b) =>
-        new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
-    );
-
-  return [
-    {
-      label: "Revenue / User",
-      color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: r.total_revenue as number,
-      })),
-    },
-    {
-      label: "Profit / User",
-      color: "#2d8a6e",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: r.total_profit as number,
-      })),
-    },
-    {
-      label: "Margin Target",
-      color: "#888",
-      dashed: true,
-      data: rows
-        .filter((r) => r.margin_term_target)
-        .map((r) => ({
-          date: r.month as string,
-          value: (r.margin_term_target as number) * 100,
-        })),
-    },
-  ];
+  return query.rows
+    .filter((r) => r.month && r.user_ltv_36m_actual != null)
+    .map((r) => ({
+      date: r.month as string,
+      value: r.user_ltv_36m_actual as number,
+    }))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
 /**
- * Margin trend from ARPU + Margin data.
+ * LTV:Paid CAC ratio over time (weekly).
+ * Computed as avg_ltv / (paid_spend_excl_test / paid_users_excl_test).
  */
-export async function getMarginSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("okrs", "company");
-  const query = data.find((d) => d.queryName === "ARPU + Margin");
-  if (!query) return [];
-
-  const rows = query.rows
-    .filter((r) => r.month)
-    .sort(
-      (a, b) =>
-        new Date(a.month as string).getTime() -
-        new Date(b.month as string).getTime()
-    );
-
-  return [
-    {
-      label: "Margin",
-      color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.month as string,
-        value: (r.margin as number) * 100,
-      })),
-    },
-    {
-      label: "Baseline",
-      color: "#888",
-      dashed: true,
-      data: rows
-        .filter((r) => r.margin_baseline)
-        .map((r) => ({
-          date: r.month as string,
-          value: (r.margin_baseline as number) * 100,
-        })),
-    },
-  ];
-}
-
-/**
- * Payback period data from Growth Marketing Performance.
- */
-export async function getPaybackSeries(): Promise<ChartSeries[]> {
+export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("unit-economics", "cac");
-  const query = data.find((d) => d.queryName === "Payback");
-  if (!query) return [];
+  const query = data.find((d) => d.queryName === "LTV:Paid CAC");
+  if (!query || query.rows.length === 0) return [];
 
   const rows = query.rows
-    .filter((r) => r.cohort && r.payback_month != null)
-    .sort(
-      (a, b) =>
-        new Date(a.cohort as string).getTime() -
-        new Date(b.cohort as string).getTime()
-    )
-    .slice(-24); // Last 24 cohorts
+    .filter((r) => r.period && new Date(r.period as string).getTime() >= CHARTS_START)
+    .map((r) => ({
+      date: r.period as string,
+      ltv: (r.ltv_36m as number) ?? 0,
+      paidSpend: (r.paid_spend_excl_test as number) ?? 0,
+      paidUsers: (r.paid_users_excl_test as number) ?? 0,
+    }))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Aggregate to weekly
+  const weekMap = new Map<string, { ltv: number; paidSpend: number; paidUsers: number; days: number }>();
+  for (const r of rows) {
+    const d = new Date(r.date);
+    const day = d.getDay();
+    const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
+    const key = monday.toISOString().slice(0, 10);
+    const b = weekMap.get(key) ?? { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 };
+    b.ltv += r.ltv;
+    b.paidSpend += r.paidSpend;
+    b.paidUsers += r.paidUsers;
+    b.days += 1;
+    weekMap.set(key, b);
+  }
+
+  const weeks = [...weekMap.entries()]
+    .filter(([date]) => date >= "2023-01-02")
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const ratioData = weeks
+    .filter(([, v]) => v.paidUsers > 0)
+    .map(([date, v]) => {
+      const avgLtv = v.ltv / v.days;
+      const paidCpa = v.paidSpend / v.paidUsers;
+      return { date, value: paidCpa > 0 ? avgLtv / paidCpa : 0 };
+    });
 
   return [
     {
-      label: "Payback Month",
+      label: "LTV:CAC",
       color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: r.cohort as string,
-        value: r.payback_month as number,
-      })),
+      data: ratioData,
+    },
+    {
+      label: "3x guardrail",
+      color: "#c44",
+      dashed: true,
+      data: ratioData.map((d) => ({ date: d.date, value: 3 })),
     },
   ];
+}
+
+/**
+ * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
+ * Weekly aggregates, split by actual vs target, from Jan 2023.
+ */
+export async function getQuery3Series(): Promise<{
+  spend: ChartSeries[];
+  users: ChartSeries[];
+  cpa: ChartSeries[];
+}> {
+  const data = await getReportData("unit-economics", "kpis");
+  const query = data.find((d) => d.queryName === "Query 3");
+  if (!query || query.rows.length === 0)
+    return { spend: [], users: [], cpa: [] };
+
+  const colors: Record<string, string> = {
+    actual: "#3b3bba",
+    target_base: "#888",
+    target_management: "#2d8a6e",
+  };
+
+  const byType = new Map<string, { date: string; spend: number; users: number; cpa: number }[]>();
+  for (const r of query.rows) {
+    if (!r.day) continue;
+    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
+    const type = r.actual_or_target as string;
+    let arr = byType.get(type);
+    if (!arr) { arr = []; byType.set(type, arr); }
+    arr.push({
+      date: r.day as string,
+      spend: (r.spend as number) ?? 0,
+      users: (r.new_bank_connected_users as number) ?? 0,
+      cpa: (r.cpa as number) ?? 0,
+    });
+  }
+
+  // Aggregate all types to weekly buckets (week starting Monday)
+  const weeklyByType = new Map<string, Map<string, { spend: number; users: number; cpa: number; days: number }>>();
+  for (const [type, rows] of byType) {
+    const weekMap = new Map<string, { spend: number; users: number; cpa: number; days: number }>();
+    for (const r of rows) {
+      const d = new Date(r.date);
+      const day = d.getDay();
+      const monday = new Date(d.getTime() - ((day === 0 ? 6 : day - 1) * 86400000));
+      const key = monday.toISOString().slice(0, 10);
+      const bucket = weekMap.get(key) ?? { spend: 0, users: 0, cpa: 0, days: 0 };
+      bucket.spend += r.spend;
+      bucket.users += r.users;
+      bucket.cpa += r.cpa;
+      bucket.days += 1;
+      weekMap.set(key, bucket);
+    }
+    weeklyByType.set(type, weekMap);
+  }
+
+  const startKey = "2023-01-02"; // First Monday of 2023
+
+  const makeSeries = (field: "spend" | "users" | "cpa"): ChartSeries[] =>
+    [...weeklyByType.entries()].map(([type, weekMap]) => ({
+      label: type,
+      color: colors[type] ?? "#999",
+      dashed: type !== "actual",
+      data: [...weekMap.entries()]
+        .filter(([date]) => date >= startKey)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, v]) => ({
+          date,
+          value: field === "cpa" ? v.cpa / v.days : v[field],
+        })),
+    }));
+
+  return {
+    spend: makeSeries("spend"),
+    users: makeSeries("users"),
+    cpa: makeSeries("cpa"),
+  };
 }
 
 // --- Product ---

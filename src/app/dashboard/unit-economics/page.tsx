@@ -2,12 +2,10 @@ import { redirect } from "next/navigation";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
-import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
-import { SectionDivider } from "@/components/dashboard/section-divider";
+import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
-import { getUnitEconomicsMetrics } from "@/lib/data/metrics";
-import { getArpuMarginSeries, getMarginSeries, getPaybackSeries } from "@/lib/data/chart-data";
+import { getLtvTimeSeries, getLtvCacRatioSeries, getQuery3Series } from "@/lib/data/chart-data";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function UnitEconomicsPage() {
@@ -17,20 +15,22 @@ export default async function UnitEconomicsPage() {
     redirect("/dashboard");
   }
 
-  const [metrics, arpuSeries, marginSeries, paybackSeries] = await Promise.all([
-    getUnitEconomicsMetrics().catch(() => null),
-    getArpuMarginSeries().catch(() => []),
-    getMarginSeries().catch(() => []),
-    getPaybackSeries().catch(() => []),
+  const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
+    getLtvTimeSeries().catch(() => []),
+    getLtvCacRatioSeries().catch(() => []),
+    getQuery3Series().catch(() => ({ spend: [], users: [], cpa: [] })),
   ]);
 
-  const kpiCharts = getChartEmbeds("unit-economics", "kpis");
-  const conversionCharts = getChartEmbeds("unit-economics", "conversion");
-  const cacCharts = getChartEmbeds("unit-economics", "cac");
-  const retentionCharts = getChartEmbeds("unit-economics", "retention");
-  const cogsCharts = getChartEmbeds("unit-economics", "cogs");
-
   const modeUrl = "https://app.mode.com/cleoai/reports/11c3172037ac";
+  const cacModeUrl = "https://app.mode.com/cleoai/reports/774f14224dd9";
+
+  const allEmbeds = [
+    { label: "Strategic Finance KPIs", charts: getChartEmbeds("unit-economics", "kpis") },
+    { label: "Conversion", charts: getChartEmbeds("unit-economics", "conversion") },
+    { label: "Retention", charts: getChartEmbeds("unit-economics", "retention") },
+    { label: "COGs / Arrears", charts: getChartEmbeds("unit-economics", "cogs") },
+    { label: "Growth Marketing", charts: getChartEmbeds("unit-economics", "cac") },
+  ].filter((g) => g.charts.length > 0);
 
   return (
     <div className="mx-auto max-w-6xl space-y-10">
@@ -39,136 +39,88 @@ export default async function UnitEconomicsPage() {
         description="Customer lifetime value and acquisition costs"
       />
 
-      {/* Hero strip — executive summary */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <MetricCard label="36M LTV" value={metrics?.ltv ?? "—"} subtitle={metrics?.ltv ? "per user" : "awaiting data"} modeUrl={modeUrl} delay={0} />
-        <MetricCard label="Blended CPA" value={metrics?.cpa ?? "—"} subtitle={metrics?.cpa ? "all channels" : "awaiting data"} modeUrl={modeUrl} delay={50} />
-        <MetricCard label="LTV:CAC" value={metrics?.ltvCac ?? "—"} subtitle={metrics?.ltvCac ? "ratio" : "awaiting data"} modeUrl={modeUrl} delay={100} />
-      </div>
-
-      {/* ── Section 1: LTV ── */}
-      <section className="space-y-6">
-        <SectionDivider
-          title="Customer Lifetime Value"
-          subtitle="How much is a customer worth over their lifetime?"
-          formula="LTV = ARPU × Lifetime (retention) × Margin (after COGs)"
+      {/* LTV:Paid CAC ratio */}
+      {ltvCacRatio.length > 0 && (
+        <LineChart
+          series={ltvCacRatio}
+          title="LTV:Paid CAC"
+          subtitle="Weekly, LTV ÷ Paid CPA"
+          yLabel="x"
+          yFormatType="number"
+          modeUrl={cacModeUrl}
         />
+      )}
 
-        {/* LTV component metrics */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          {[
-            { label: "ARPU", value: metrics?.arpu },
-            { label: "Gross Margin", value: metrics?.grossMargin },
-            { label: "Contribution Margin", value: metrics?.contributionMargin },
-            { label: "M11+ CVR", value: metrics?.cvr },
-          ].map((item) => (
-            <a key={item.label} href={modeUrl} target="_blank" rel="noopener noreferrer" className="group rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm transition-all hover:border-primary/30 hover:shadow-warm-lg">
-              <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
-              <p className="font-display text-lg text-foreground">{item.value ?? "—"}</p>
-            </a>
-          ))}
+      {/* LTV over time */}
+      {ltvSeries.length > 0 ? (
+        <ColumnChart
+          data={ltvSeries}
+          title="36-Month LTV"
+          subtitle="By cohort month"
+          yLabel="LTV ($)"
+          yFormatType="currency"
+          modeUrl={modeUrl}
+        />
+      ) : (
+        <div className="rounded-xl border border-border/60 bg-card px-5 py-10 text-center shadow-warm">
+          <p className="text-sm text-muted-foreground">LTV chart awaiting data sync</p>
         </div>
+      )}
 
-        {/* LTV charts — ARPU trend & margin trend */}
-        <div className="grid gap-4 lg:grid-cols-2">
-          {arpuSeries.length > 0 && (
-            <LineChart
-              series={arpuSeries}
-              title="Revenue & Profit per User"
-              subtitle="Monthly trend"
-              yLabel="$ per user"
-              yFormatType="currency"
-              modeUrl="https://app.mode.com/cleoai/reports/b301cc0c9572"
-            />
-          )}
-          {marginSeries.length > 0 && (
-            <LineChart
-              series={marginSeries}
-              title="Margin Trend"
-              subtitle="vs baseline"
-              yLabel="%"
-              yFormatType="percent"
-              modeUrl="https://app.mode.com/cleoai/reports/b301cc0c9572"
-            />
-          )}
-        </div>
+      {/* CPA — actual vs targets */}
+      {q3.cpa.length > 0 && (
+        <LineChart
+          series={q3.cpa}
+          title="Paid CPA"
+          subtitle="Weekly avg, actual vs targets"
+          yLabel="$"
+          yFormatType="currency"
+          modeUrl={modeUrl}
+        />
+      )}
 
-        {/* LTV deep dives */}
-        <div className="space-y-4">
+      {/* Spend — actual vs targets */}
+      {q3.spend.length > 0 && (
+        <LineChart
+          series={q3.spend}
+          title="Marketing Spend"
+          subtitle="Weekly, actual vs targets"
+          yLabel="$"
+          yFormatType="currency"
+          modeUrl={modeUrl}
+        />
+      )}
+
+      {/* New users — actual vs targets */}
+      {q3.users.length > 0 && (
+        <LineChart
+          series={q3.users}
+          title="New Bank Connected Users"
+          subtitle="Weekly, actual vs targets"
+          yLabel="Users"
+          yFormatType="number"
+          modeUrl={modeUrl}
+        />
+      )}
+
+      {/* Mode dashboard links */}
+      {allEmbeds.length > 0 && (
+        <section className="space-y-4">
           <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Deep Dives
+            Mode Dashboards
           </p>
-          {[
-            { label: "Strategic Finance KPIs", charts: kpiCharts },
-            { label: "Conversion", charts: conversionCharts },
-            { label: "Retention", charts: retentionCharts },
-            { label: "COGs / Arrears", charts: cogsCharts },
-          ]
-            .filter((g) => g.charts.length > 0)
-            .map((group) => (
-              <div key={group.label} className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
-                <div className="grid gap-2 lg:grid-cols-2">
-                  {group.charts.map((chart) => (
-                    <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View in Mode" />
-                  ))}
-                </div>
-              </div>
-            ))}
-        </div>
-      </section>
-
-      {/* ── Section 2: CPA ── */}
-      <section className="space-y-6">
-        <SectionDivider
-          title="Customer Acquisition Cost"
-          subtitle="What does it cost to acquire a paying customer?"
-          formula="Paid CPA = Total Spend ÷ Paying Customers Acquired"
-        />
-
-        {/* CPA component metrics */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: "Blended CPA", value: metrics?.cpa },
-            { label: "MAU", value: metrics?.mau },
-            { label: "Revenue", value: metrics?.revenue },
-          ].map((item) => (
-            <a key={item.label} href={modeUrl} target="_blank" rel="noopener noreferrer" className="group rounded-lg border border-border/50 bg-card px-3 py-2 shadow-warm transition-all hover:border-primary/30 hover:shadow-warm-lg">
-              <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{item.label}</p>
-              <p className="font-display text-lg text-foreground">{item.value ?? "—"}</p>
-            </a>
-          ))}
-        </div>
-
-        {/* CPA chart — payback period */}
-        {paybackSeries.length > 0 && (
-          <LineChart
-            series={paybackSeries}
-            title="Payback Period"
-            subtitle="By cohort"
-            yLabel="Months"
-            yFormatType="months"
-            modeUrl="https://app.mode.com/cleoai/reports/774f14224dd9"
-          />
-        )}
-
-        {/* CPA deep dives */}
-        {cacCharts.length > 0 && (
-          <div className="space-y-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-              Deep Dives
-            </p>
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Growth Marketing Performance</p>
+          {allEmbeds.map((group) => (
+            <div key={group.label} className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">{group.label}</p>
               <div className="grid gap-2 lg:grid-cols-2">
-                {cacCharts.map((chart) => (
+                {group.charts.map((chart) => (
                   <ModeEmbed key={chart.url} url={chart.url} title={chart.title} subtitle="View in Mode" />
                 ))}
               </div>
             </div>
-          </div>
-        )}
-      </section>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
