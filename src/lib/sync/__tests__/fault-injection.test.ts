@@ -292,6 +292,42 @@ describe("sync runner fault injection", () => {
     });
   });
 
+  it("returns a structured Slack sync error when seeding squads hits a DB outage", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CPREFLIGHT";
+    mocks.seedSquads.mockRejectedValue(new Error("db unavailable"));
+
+    await expect(runSlackSync({ id: 45 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to seed squads: db unavailable"],
+    });
+    expect(mocks.getChannelName).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured Slack sync error when loading the user fallback map fails", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CFALLBACK";
+    mocks.queueSelect(new Error("db unavailable"));
+
+    await expect(runSlackSync({ id: 46 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to load user name fallback map: db unavailable"],
+    });
+    expect(mocks.getChannelName).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured Slack sync error when fetching the last sync timestamp fails", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CLASTSYNC";
+    mocks.queueSelect([], new Error("sync log unavailable"));
+
+    await expect(runSlackSync({ id: 47 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to fetch last successful sync time: sync log unavailable"],
+    });
+    expect(mocks.getChannelName).not.toHaveBeenCalled();
+  });
+
   it("returns a structured Slack sync error when the OKR parser throws on malformed JSON", async () => {
     process.env.SLACK_OKR_CHANNEL_IDS = "CJSON";
     mocks.queueSelect([], []);
@@ -314,6 +350,28 @@ describe("sync runner fault injection", () => {
         "Failed to sync channel CJSON: Failed to parse LLM response: unexpected token",
       ],
     });
+  });
+
+  it("returns a structured Mode sync error when seeding reports hits a DB outage", async () => {
+    mocks.queueSelect(new Error("db unavailable"));
+
+    await expect(runModeSync({ id: 48 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to seed report definitions: db unavailable"],
+    });
+    expect(mocks.getLatestRun).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured Mode sync error when loading active reports fails", async () => {
+    mocks.queueSelect([{ id: 1 }], [{ id: 2 }], new Error("db unavailable"));
+
+    await expect(runModeSync({ id: 49 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to load active reports: db unavailable"],
+    });
+    expect(mocks.getLatestRun).not.toHaveBeenCalled();
   });
 
   it("returns partial when one Mode report times out but another report syncs", async () => {
@@ -354,7 +412,7 @@ describe("sync runner fault injection", () => {
         responseBytes: 128,
       });
 
-    await expect(runModeSync({ id: 44 })).resolves.toEqual({
+    await expect(runModeSync({ id: 50 })).resolves.toEqual({
       status: "partial",
       recordsSynced: 1,
       errors: [

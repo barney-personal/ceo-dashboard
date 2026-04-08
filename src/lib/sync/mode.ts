@@ -292,14 +292,35 @@ async function syncReport(
   };
 }
 
-export async function runModeSync(
-  run: { id: number },
-  opts: SyncControl = {},
-): Promise<{
+type ModeSyncResult = {
   status: "success" | "partial" | "error" | "cancelled";
   recordsSynced: number;
   errors: string[];
-}> {
+};
+
+async function failModePreflightPhase(
+  tracker: ReturnType<typeof createPhaseTracker>,
+  phaseId: number,
+  phaseLabel: string,
+  error: unknown
+): Promise<ModeSyncResult> {
+  const message = `Failed to ${phaseLabel}: ${formatSyncError(error)}`;
+  await tracker.endPhase(phaseId, {
+    status: "error",
+    errorMessage: message,
+  });
+
+  return {
+    status: "error",
+    recordsSynced: 0,
+    errors: [message],
+  };
+}
+
+export async function runModeSync(
+  run: { id: number },
+  opts: SyncControl = {}
+): Promise<ModeSyncResult> {
   const tracker = createPhaseTracker(run.id);
   let totalRecords = 0;
   const errors: string[] = [];
@@ -309,7 +330,11 @@ export async function runModeSync(
       "seed_reports",
       "Ensuring config reports exist in DB",
     );
-    await seedReports();
+    try {
+      await seedReports();
+    } catch (error) {
+      return failModePreflightPhase(tracker, phaseId, "seed report definitions", error);
+    }
     await tracker.endPhase(phaseId, {
       detail: `Checked ${MODE_SYNC_PROFILES.length} report definitions`,
     });
@@ -322,17 +347,22 @@ export async function runModeSync(
       "fetch_active_reports",
       "Loading active reports from DB",
     );
-    const reports = enabledTokens.length
-      ? await db
-          .select()
-          .from(modeReports)
-          .where(
-            and(
-              eq(modeReports.isActive, true),
-              inArray(modeReports.reportToken, enabledTokens),
-            ),
-          )
-      : [];
+    let reports: typeof modeReports.$inferSelect[] = [];
+    try {
+      reports = enabledTokens.length
+        ? await db
+            .select()
+            .from(modeReports)
+            .where(
+              and(
+                eq(modeReports.isActive, true),
+                inArray(modeReports.reportToken, enabledTokens)
+              )
+            )
+        : [];
+    } catch (error) {
+      return failModePreflightPhase(tracker, phaseId, "load active reports", error);
+    }
     await tracker.endPhase(phaseId, {
       itemsProcessed: reports.length,
       detail: `Found ${reports.length} active sync-enabled reports`,
