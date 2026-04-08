@@ -3,11 +3,14 @@ import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
-import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users } from "lucide-react";
+import { ArrowUpRight, Calculator, PoundSterling, BarChart3, Target, Users, Database, Clock, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { getUnitEconomicsMetrics, getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
+import { getHeadcountMetrics, formatCompact } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
 import { getLatestARR } from "@/lib/data/management-accounts";
+import { db } from "@/lib/db";
+import { syncLog } from "@/lib/db/schema";
+import { desc } from "drizzle-orm";
 
 function SectionLink({
   href,
@@ -41,17 +44,22 @@ function SectionLink({
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
-  const [metrics, headcount, ltvCacRatio, latestARR, latestMAU] =
+  const [headcount, ltvCacRatio, latestARR, latestMAU, recentSyncs] =
     await Promise.all([
-      getUnitEconomicsMetrics().catch(() => null),
       getHeadcountMetrics().catch(() => null),
       getLatestLtvCacRatio().catch(() => null),
       getLatestARR().catch(() => null),
       getLatestMAU().catch(() => null),
+      db
+        .select()
+        .from(syncLog)
+        .orderBy(desc(syncLog.startedAt))
+        .limit(10)
+        .catch(() => []),
     ]);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-10">
+    <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
       <PageHeader
         title="Overview"
         description="Key metrics across the business"
@@ -107,7 +115,7 @@ export default async function DashboardOverview() {
               href="/dashboard/unit-economics"
               icon={Calculator}
               title="Unit Economics"
-              description="LTV, CAC, ARPU, retention"
+              description="LTV:Paid CAC ratio, 36-month LTV by cohort, paid CPA trend, marketing spend and new user acquisition — all from Mode"
             />
           </PermissionGate>
           <PermissionGate role={role} requiredRole="ceo">
@@ -115,7 +123,7 @@ export default async function DashboardOverview() {
               href="/dashboard/financial"
               icon={PoundSterling}
               title="Financial"
-              description="Management accounts, FP&A"
+              description="Embedded P&L Summary, Balance Sheet, Cash Flow, Treasury Dashboard, KPIs, and Headcount from Slack xlsx files"
             />
           </PermissionGate>
           <PermissionGate role={role} requiredRole="leadership">
@@ -123,21 +131,21 @@ export default async function DashboardOverview() {
               href="/dashboard/product"
               icon={BarChart3}
               title="Product"
-              description="Usage, activation, retention"
+              description="MAU, WAU, and DAU bar charts, WAU/MAU engagement trend, and MAU retention cohort heatmap"
             />
           </PermissionGate>
           <SectionLink
             href="/dashboard/okrs"
             icon={Target}
             title="OKRs"
-            description="Company, pillar, and squad objectives"
+            description="Key results by pillar and squad, parsed from Slack updates with RAG status indicators"
           />
           <PermissionGate role={role} requiredRole="leadership">
             <SectionLink
               href="/dashboard/people"
               icon={Users}
               title="People"
-              description="Performance, engagement"
+              description="Team directory with pillar and squad drill-down, headcount by department, joiners and departures from HiBob"
             />
           </PermissionGate>
         </div>
@@ -145,59 +153,105 @@ export default async function DashboardOverview() {
 
       {/* Bottom detail cards */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <PermissionGate role={role} requiredRole="leadership">
-          <SectionCard
-            title="Key Ratios"
-            description="From Strategic Finance KPIs"
-            action={
-              <a
-                href="https://app.mode.com/cleoai/reports/11c3172037ac"
-                target="_blank"
-                rel="noopener noreferrer"
+        <SectionCard
+          title="Recent Sync Activity"
+          description="Data pipeline status"
+          action={
+            <PermissionGate role={role} requiredRole="ceo">
+              <Link
+                href="/dashboard/admin/status"
                 className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                Mode
+                Details
                 <ArrowUpRight className="h-3 w-3" />
-              </a>
-            }
-          >
-            <div className="grid grid-cols-2 gap-3">
+              </Link>
+            </PermissionGate>
+          }
+        >
+          <div className="space-y-2.5">
+            {recentSyncs.length > 0 ? (
+              recentSyncs.map((sync) => {
+                const sourceLabels: Record<string, string> = {
+                  mode: "Mode Analytics",
+                  slack: "Slack OKRs",
+                  "management-accounts": "Management Accounts",
+                };
+                const ago = Math.floor(
+                  (Date.now() - sync.startedAt.getTime()) / 60000
+                );
+                const timeLabel =
+                  ago < 60
+                    ? `${ago}m ago`
+                    : ago < 1440
+                      ? `${Math.floor(ago / 60)}h ago`
+                      : `${Math.floor(ago / 1440)}d ago`;
+
+                return (
+                  <div key={sync.id} className="flex items-center gap-3">
+                    {sync.status === "success" ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
+                    ) : sync.status === "error" ? (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-foreground">
+                        {sourceLabels[sync.source] ?? sync.source}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {sync.recordsSynced > 0 && (
+                        <span>{sync.recordsSynced.toLocaleString()} records</span>
+                      )}
+                      <span>{timeLabel}</span>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="text-sm text-muted-foreground">No sync activity yet</p>
+            )}
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="About This Dashboard"
+          description="Data sources and how it works"
+        >
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <div className="space-y-2">
               {[
-                { label: "Gross Margin", value: metrics?.grossMargin },
-                { label: "Contribution Margin", value: metrics?.contributionMargin },
-                { label: "M11+ CVR", value: metrics?.cvr },
-                { label: "Blended CPA", value: metrics?.cpa },
-              ].map((item) => (
-                <div key={item.label} className="rounded-lg bg-muted/30 px-3 py-2">
-                  <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
-                    {item.label}
-                  </p>
-                  <p className="font-display text-lg text-foreground">
-                    {item.value ?? "—"}
-                  </p>
+                {
+                  icon: Database,
+                  label: "Mode Analytics",
+                  detail: "Unit economics, product metrics, retention cohorts — synced every 4 hours",
+                },
+                {
+                  icon: PoundSterling,
+                  label: "Slack → Management Accounts",
+                  detail: "Monthly xlsx files from #fyi-management_accounts, parsed server-side",
+                },
+                {
+                  icon: Target,
+                  label: "Slack → OKRs",
+                  detail: "Key results parsed from pillar channels via Claude — synced every 2 hours",
+                },
+                {
+                  icon: Users,
+                  label: "HiBob",
+                  detail: "Team directory, tenure, org structure from HR system",
+                },
+              ].map((source) => (
+                <div key={source.label} className="flex items-start gap-2.5">
+                  <source.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{source.label}</p>
+                    <p className="text-xs text-muted-foreground">{source.detail}</p>
+                  </div>
                 </div>
               ))}
             </div>
-          </SectionCard>
-        </PermissionGate>
-
-        <SectionCard
-          title="Recent Activity"
-          description="Latest updates"
-        >
-          <div className="space-y-3">
-            {[
-              { text: "Mode data synced", time: "1.2M records across 8 reports", dot: "bg-positive" },
-              { text: "Dashboard live", time: "Phase 1 complete", dot: "bg-primary" },
-            ].map((activity) => (
-              <div key={activity.text} className="flex items-start gap-3">
-                <div className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${activity.dot}`} />
-                <div className="flex-1">
-                  <p className="text-sm text-foreground">{activity.text}</p>
-                  <p className="text-xs text-muted-foreground">{activity.time}</p>
-                </div>
-              </div>
-            ))}
           </div>
         </SectionCard>
       </div>

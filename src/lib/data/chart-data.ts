@@ -101,6 +101,32 @@ export async function getLatestLtvCacRatio(): Promise<number | null> {
 }
 
 /**
+ * Latest WAU/MAU ratio from the engagement series (last complete month).
+ */
+export async function getLatestWauMau(): Promise<number | null> {
+  const series = await getEngagementSeries();
+  const wauMau = series.find((s) => s.label === "WAU / MAU");
+  if (!wauMau || wauMau.data.length === 0) return null;
+  return wauMau.data[wauMau.data.length - 1].value;
+}
+
+/**
+ * Latest M11 retention from the cohort triangle.
+ * Finds the most recent cohort that has an M11 data point.
+ */
+export async function getLatestM11Retention(): Promise<number | null> {
+  const cohorts = await getMauRetentionCohorts();
+  // Walk backwards through cohorts to find one with an M11 value
+  for (let i = cohorts.length - 1; i >= 0; i--) {
+    const periods = cohorts[i].periods;
+    if (periods.length > 11 && periods[11] != null) {
+      return periods[11];
+    }
+  }
+  return null;
+}
+
+/**
  * Spend, new users, and CPA from "Query 3" (Strategic Finance KPIs).
  * Weekly aggregates, split by actual vs target, from Jan 2023.
  */
@@ -292,9 +318,9 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   const avg = (arr: number[]) =>
     arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
 
-  const months = [...byMonth.keys()]
-    .sort()
-    .slice(-18);
+  // Exclude current partial month (< 20 days of data skews the average)
+  const allMonths = [...byMonth.keys()].sort();
+  const months = allMonths.filter((m) => byMonth.get(m)!.maus.length >= 20);
 
   return [
     {
@@ -304,15 +330,6 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
         const b = byMonth.get(m)!;
         const mau = avg(b.maus);
         return { date: `${m}-01`, value: mau > 0 ? (avg(b.waus) / mau) * 100 : 0 };
-      }),
-    },
-    {
-      label: "DAU / MAU",
-      color: "#2d8a6e",
-      data: months.map((m) => {
-        const b = byMonth.get(m)!;
-        const mau = avg(b.maus);
-        return { date: `${m}-01`, value: mau > 0 ? (avg(b.daus) / mau) * 100 : 0 };
       }),
     },
   ];
@@ -346,22 +363,25 @@ export async function getMauRetentionCohorts(): Promise<
     periods.set(period, (periods.get(period) ?? 0) + maus);
   }
 
-  const cohorts = [...byCohort.keys()].sort().slice(-18);
+  const cohorts = [...byCohort.keys()].sort();
 
-  // Use M0 MAUs as the base for each cohort
+  // Use M0 MAUs as the base for each cohort.
+  // Drop the last period per cohort — it's always the current incomplete month.
   return cohorts
     .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
     .map((cohort) => {
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
-      const maxPeriod = Math.max(...periods.keys());
+      const maxPeriod = Math.max(...periods.keys()) - 1;
+      if (maxPeriod < 0) return { cohort, periods: [] as (number | null)[] };
       return {
         cohort,
         periods: Array.from({ length: maxPeriod + 1 }, (_, i) =>
           periods.has(i) ? periods.get(i)! / base : null
         ),
       };
-    });
+    })
+    .filter((c) => c.periods.length > 0);
 }
 
 /**
