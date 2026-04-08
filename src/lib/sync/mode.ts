@@ -152,7 +152,9 @@ export async function syncAllModeReports(): Promise<{
     for (const report of reports) {
       const reportPhaseId = await tracker.startPhase(`sync_report:${report.name}`, `Fetching latest run and queries`);
       try {
+        console.log(`Mode sync: starting report ${report.name}`);
         const count = await syncReport(report);
+        console.log(`Mode sync: completed ${report.name} (${count} records)`);
         totalRecords += count;
         await tracker.endPhase(reportPhaseId, { itemsProcessed: count, detail: `Synced ${count} rows` });
       } catch (err) {
@@ -175,6 +177,8 @@ export async function syncAllModeReports(): Promise<{
         errorMessage: errors.length > 0 ? errors.join("\n") : null,
       })
       .where(eq(syncLog.id, log.id));
+
+    console.log("Mode sync: all reports complete");
 
     return { status, recordsSynced: totalRecords, errors };
   } catch (err) {

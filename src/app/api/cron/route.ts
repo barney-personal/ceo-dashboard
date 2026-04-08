@@ -29,43 +29,40 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const results: Record<string, unknown> = {};
+  const results: Record<string, string> = {};
 
   // Mode sync (every 4 hours)
   const lastModeSync = await getLastSyncTime("mode");
   if (!lastModeSync || Date.now() - lastModeSync.getTime() > MODE_INTERVAL_MS) {
-    try {
-      results.mode = await syncAllModeReports();
-    } catch (err) {
-      results.mode = { error: err instanceof Error ? err.message : String(err) };
-    }
+    results.mode = "triggered";
+    syncAllModeReports()
+      .then((r) => console.log("Cron: Mode sync finished", r))
+      .catch((err) => console.error("Cron: Mode sync failed", err));
   } else {
-    results.mode = { skipped: true, lastSync: lastModeSync };
+    results.mode = "skipped";
   }
 
   // Slack OKR sync (every 2 hours)
   const lastSlackSync = await getLastSyncTime("slack");
   if (!lastSlackSync || Date.now() - lastSlackSync.getTime() > SLACK_INTERVAL_MS) {
-    try {
-      results.slack = await syncAllSlackOkrs();
-    } catch (err) {
-      results.slack = { error: err instanceof Error ? err.message : String(err) };
-    }
+    results.slack = "triggered";
+    syncAllSlackOkrs()
+      .then((r) => console.log("Cron: Slack sync finished", r))
+      .catch((err) => console.error("Cron: Slack sync failed", err));
   } else {
-    results.slack = { skipped: true, lastSync: lastSlackSync };
+    results.slack = "skipped";
   }
 
   // Management accounts sync (daily)
   const lastMgmtSync = await getLastSyncTime("management-accounts");
   if (!lastMgmtSync || Date.now() - lastMgmtSync.getTime() > MGMT_ACCOUNTS_INTERVAL_MS) {
-    try {
-      results.managementAccounts = await syncManagementAccounts();
-    } catch (err) {
-      results.managementAccounts = { error: err instanceof Error ? err.message : String(err) };
-    }
+    results.managementAccounts = "triggered";
+    syncManagementAccounts()
+      .then((r) => console.log("Cron: Management accounts sync finished", r))
+      .catch((err) => console.error("Cron: Management accounts sync failed", err));
   } else {
-    results.managementAccounts = { skipped: true, lastSync: lastMgmtSync };
+    results.managementAccounts = "skipped";
   }
 
-  return NextResponse.json({ synced: results });
+  return NextResponse.json({ status: "syncs triggered", results });
 }
