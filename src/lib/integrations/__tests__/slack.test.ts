@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockCaptureException } = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+}));
+
 import { downloadSlackFile } from "../slack-files";
 import { getChannelName } from "../slack";
 
@@ -15,6 +24,7 @@ describe("Slack transport resilience", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    mockCaptureException.mockClear();
   });
 
   it("retries Slack API calls after rate limiting", async () => {
@@ -71,5 +81,109 @@ describe("Slack transport resilience", () => {
 
     await expect(promise).resolves.toEqual(Buffer.from([1, 2, 3]));
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails immediately on Slack HTTP auth errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("invalid token", {
+        status: 401,
+      })
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getChannelName("C123")).rejects.toThrow(
+      "Slack API authentication failed, check SLACK_BOT_TOKEN"
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "slack",
+          auth_failure: "true",
+        }),
+        extra: expect.objectContaining({
+          status: 401,
+          source: "http",
+        }),
+      })
+    );
+  });
+
+  it("fails immediately on Slack download auth errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("forbidden", {
+        status: 403,
+      })
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadSlackFile("https://files.slack.test/example")
+    ).rejects.toThrow("Slack API authentication failed, check SLACK_BOT_TOKEN");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "slack",
+          auth_failure: "true",
+        }),
+        extra: expect.objectContaining({
+          status: 403,
+          source: "http",
+        }),
+      })
+    );
+  });
+
+  it("fails immediately on Slack envelope auth errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: "invalid_auth",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      )
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getChannelName("C123")).rejects.toThrow(
+      "Slack API authentication failed, check SLACK_BOT_TOKEN"
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "slack",
+          auth_failure: "true",
+        }),
+        extra: expect.objectContaining({
+          method: "conversations.info",
+          code: "invalid_auth",
+          source: "envelope",
+        }),
+      })
+    );
   });
 });

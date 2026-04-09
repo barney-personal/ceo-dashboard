@@ -4,6 +4,15 @@ export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
 const SLACK_MAX_RETRIES = 3;
+const SLACK_AUTH_ERROR_MESSAGE =
+  "Slack API authentication failed, check SLACK_BOT_TOKEN";
+const SLACK_AUTH_ERROR_CODES = new Set([
+  "not_authed",
+  "invalid_auth",
+  "account_inactive",
+  "token_revoked",
+  "token_expired",
+]);
 const RETRYABLE_SLACK_ERRORS = new Set([
   "internal_error",
   "fatal_error",
@@ -46,6 +55,45 @@ function isRetryableSlackEnvelope(data: {
   error?: string;
 }): boolean {
   return data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error);
+}
+
+class SlackAuthError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+
+  constructor(input: { status?: number; code?: string }) {
+    super(SLACK_AUTH_ERROR_MESSAGE);
+    this.name = "SlackAuthError";
+    this.status = input.status;
+    this.code = input.code;
+  }
+}
+
+function captureSlackAuthError(input: {
+  input?: string;
+  method?: string;
+  status?: number;
+  code?: string;
+  responseBody?: string;
+  source: "http" | "envelope";
+}): never {
+  const error = new SlackAuthError({
+    status: input.status,
+    code: input.code,
+  });
+  Sentry.captureException(error, {
+    level: "error",
+    tags: { integration: "slack", auth_failure: "true" },
+    extra: {
+      input: input.input,
+      method: input.method,
+      source: input.source,
+      status: input.status,
+      code: input.code,
+      responseBody: input.responseBody,
+    },
+  });
+  throw error;
 }
 
 function composeSignal(
@@ -112,6 +160,15 @@ async function slackFetch(
         signal,
       });
 
+      if (res.status === 401 || res.status === 403) {
+        captureSlackAuthError({
+          input,
+          status: res.status,
+          responseBody: await res.text(),
+          source: "http",
+        });
+      }
+
       if (isRetryableSlackStatus(res.status) && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
         const retryAfterSeconds = Number(res.headers.get("retry-after"));
         const delayMs =
@@ -131,6 +188,10 @@ async function slackFetch(
         }
 
         throw new Error("Slack request was aborted");
+      }
+
+      if (error instanceof SlackAuthError) {
+        throw error;
       }
 
       const retryable =
@@ -211,6 +272,14 @@ export async function slackApiRequest<T>(
 
     const data = (await res.json()) as T & { ok: boolean; error?: string };
     if (!data.ok) {
+      if (data.error && SLACK_AUTH_ERROR_CODES.has(data.error)) {
+        captureSlackAuthError({
+          method,
+          code: data.error,
+          source: "envelope",
+        });
+      }
+
       const error = new Error(`Slack API error: ${data.error}`);
       if (isRetryableSlackEnvelope(data) && attempt < maxRetries) {
         lastEnvelopeError = error;
