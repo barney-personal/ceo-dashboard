@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
+import { AlertTriangle } from "lucide-react";
 import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
@@ -12,6 +13,20 @@ import {
   getModeReportLink,
 } from "@/lib/integrations/mode-config";
 
+function ChartPlaceholder({ title, reason }: { title: string; reason: string }) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-card shadow-warm">
+      <div className="border-b border-border/50 px-5 py-3">
+        <span className="text-sm font-semibold text-foreground">{title}</span>
+      </div>
+      <div className="flex h-48 items-center justify-center gap-3 p-5">
+        <AlertTriangle className="h-5 w-5 text-warning" />
+        <p className="text-sm text-muted-foreground">{reason}</p>
+      </div>
+    </div>
+  );
+}
+
 export default async function UnitEconomicsPage() {
 
   const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
@@ -21,7 +36,6 @@ export default async function UnitEconomicsPage() {
   ]);
 
   const modeUrl = getModeReportLink("unit-economics", "kpis");
-  const cacModeUrl = getModeReportLink("unit-economics", "cac");
 
   const allEmbeds = [
     {
@@ -54,15 +68,17 @@ export default async function UnitEconomicsPage() {
       />
 
       {/* LTV:Paid CAC ratio */}
-      {ltvCacRatio.length > 0 && (
+      {ltvCacRatio.length > 0 ? (
         <LineChart
           series={ltvCacRatio}
           title="LTV:Paid CAC"
           subtitle="Weekly, LTV ÷ Paid CPA"
           yLabel="x"
           yFormatType="number"
-          modeUrl={cacModeUrl}
+          modeUrl={modeUrl}
         />
+      ) : (
+        <ChartPlaceholder title="LTV:Paid CAC" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
       )}
 
       {/* LTV over time */}
@@ -76,15 +92,11 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <div className="rounded-xl border border-border/60 bg-card px-5 py-10 text-center shadow-warm">
-          <p className="text-sm text-muted-foreground">
-            LTV chart awaiting data sync
-          </p>
-        </div>
+        <ChartPlaceholder title="36-Month LTV" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
       )}
 
       {/* CPA — actual vs targets */}
-      {q3.cpa.length > 0 && (
+      {q3.cpa.length > 0 ? (
         <LineChart
           series={q3.cpa}
           title="Paid CPA"
@@ -93,10 +105,12 @@ export default async function UnitEconomicsPage() {
           yFormatType="currency"
           modeUrl={modeUrl}
         />
+      ) : (
+        <ChartPlaceholder title="Paid CPA" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
       )}
 
       {/* Spend — actual vs targets */}
-      {q3.spend.length > 0 && (
+      {q3.spend.length > 0 ? (
         <LineChart
           series={q3.spend}
           title="Marketing Spend"
@@ -105,10 +119,12 @@ export default async function UnitEconomicsPage() {
           yFormatType="currency"
           modeUrl={modeUrl}
         />
+      ) : (
+        <ChartPlaceholder title="Marketing Spend" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
       )}
 
       {/* New users — actual vs targets */}
-      {q3.users.length > 0 && (
+      {q3.users.length > 0 ? (
         <LineChart
           series={q3.users}
           title="New Bank Connected Users"
@@ -117,6 +133,8 @@ export default async function UnitEconomicsPage() {
           yFormatType="number"
           modeUrl={modeUrl}
         />
+      ) : (
+        <ChartPlaceholder title="New Bank Connected Users" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
       )}
 
       {/* Mode dashboard links */}
