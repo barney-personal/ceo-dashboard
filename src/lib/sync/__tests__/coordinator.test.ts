@@ -171,7 +171,7 @@ describe("expireStaleSyncRuns", () => {
         id: 55,
         source: "mode",
         startedAt: new Date(now - 20 * 60_000),
-        leaseExpiresAt: new Date(now + 60_000),
+        leaseExpiresAt: new Date(now - 60_000), // lease expired — abandoned
         workerId: "worker-55",
       }),
     ]);
@@ -193,14 +193,13 @@ describe("expireStaleSyncRuns", () => {
     expect(mockUpdate).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves locally protected runs untouched", async () => {
-    vi.mocked(isLocalSyncRunProtected).mockReturnValue(true);
+  it("does not expire runs that are still heartbeating", async () => {
     const now = Date.now();
     mockLimit.mockResolvedValueOnce([
       makeRow({
         id: 56,
         startedAt: new Date(now - 20 * 60_000),
-        leaseExpiresAt: new Date(now + 60_000),
+        leaseExpiresAt: new Date(now + 60_000), // lease still valid
       }),
     ]);
 
@@ -210,7 +209,8 @@ describe("expireStaleSyncRuns", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
-  it("does not reclassify lease-expired runs as stale", async () => {
+  it("leaves locally protected runs untouched", async () => {
+    vi.mocked(isLocalSyncRunProtected).mockReturnValue(true);
     const now = Date.now();
     mockLimit.mockResolvedValueOnce([
       makeRow({
