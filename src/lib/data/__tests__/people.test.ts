@@ -62,6 +62,19 @@ afterEach(() => {
 });
 
 describe("transformToPersons", () => {
+  it("gives zero tenure when start_date is null or invalid", () => {
+    const people = transformToPersons([
+      { preferred_name: "NullDate", email: "a@example.com", start_date: null },
+      {
+        preferred_name: "InvalidDate",
+        email: "b@example.com",
+        start_date: "not-a-date",
+      },
+    ]);
+    expect(people.every((p) => Number.isFinite(p.tenureMonths))).toBe(true);
+    expect(people.every((p) => p.tenureMonths >= 0)).toBe(true);
+  });
+
   it("maps fields, fills fallbacks, calculates tenure, and sorts by name", () => {
     const people = transformToPersons([
       {
@@ -181,29 +194,29 @@ describe("groupByPillarAndSquad", () => {
     ]);
 
     expect(grouped.map((pillar) => pillar.name)).toEqual([
-      "Business Operations",
       "Finance",
       "Growth",
+      "Other",
     ]);
     expect(grouped[0]).toMatchObject({
-      name: "Business Operations",
-      count: 1,
-      isProduct: false,
-    });
-    expect(grouped[1]).toMatchObject({
       name: "Finance",
       count: 1,
       isProduct: false,
     });
-    expect(grouped[2]).toMatchObject({
+    expect(grouped[1]).toMatchObject({
       name: "Growth",
       count: 3,
       isProduct: true,
     });
-    expect(grouped[2].squads.map((squad) => squad.name)).toEqual([
+    expect(grouped[1].squads.map((squad) => squad.name)).toEqual([
       "Growth Marketing",
       "Growth Conversion",
     ]);
+    expect(grouped[2]).toMatchObject({
+      name: "Other",
+      count: 1,
+      isProduct: false,
+    });
   });
 });
 
@@ -222,7 +235,37 @@ describe("getTenureDistribution", () => {
   });
 });
 
+describe("getPeopleMetrics — null safety", () => {
+  it("excludes rows with null lifecycle_status or null is_cleo_headcount from attrition count", () => {
+    const metrics = getPeopleMetrics([], [
+      // null lifecycle_status — should not count
+      { lifecycle_status: null, is_cleo_headcount: 1, termination_date: "2026-02-15T12:00:00Z" },
+      // null is_cleo_headcount — should not count
+      { lifecycle_status: "Terminated", is_cleo_headcount: null, termination_date: "2026-02-15T12:00:00Z" },
+      // valid terminated row — should count
+      { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: "2026-03-01T12:00:00Z" },
+    ]);
+    expect(metrics.attritionLast90Days).toBe(1);
+  });
+});
+
 describe("getMonthlyJoinersAndDepartures", () => {
+  it("skips rows with null or invalid start_date or termination_date", () => {
+    const result = getMonthlyJoinersAndDepartures(
+      [
+        { is_cleo_headcount: 1, start_date: null },
+        { is_cleo_headcount: 1, start_date: "not-a-date" },
+        { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: null },
+        { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: "bad-date" },
+        // one valid joiner in April 2026
+        { is_cleo_headcount: 1, start_date: "2026-04-01T12:00:00Z" },
+      ],
+      1,
+    );
+    expect(result.joiners[0].value).toBe(1);
+    expect(result.departures[0].value).toBe(0);
+  });
+
   it("builds monthly joiner and departure counts across the requested window", () => {
     const result = getMonthlyJoinersAndDepartures(
       [

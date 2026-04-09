@@ -51,7 +51,8 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
   return rows
     .map((r) => {
       const startDate = rowStr(r, "start_date");
-      const startMs = startDate ? new Date(startDate).getTime() : now;
+      const startTs = startDate ? new Date(startDate).getTime() : NaN;
+      const startMs = Number.isFinite(startTs) ? startTs : now;
       const tenureMonths = Math.max(
         0,
         Math.floor((now - startMs) / (DAYS_PER_MONTH * 24 * 60 * 60 * 1000)),
