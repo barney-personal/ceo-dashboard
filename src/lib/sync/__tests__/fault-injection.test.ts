@@ -1,8 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalSlackChannelIds = process.env.SLACK_OKR_CHANNEL_IDS;
+const sentryMocks = vi.hoisted(() => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+  setTag: vi.fn(),
+}));
 
 const mocks = vi.hoisted(() => {
+  class SlackApiError extends Error {
+    readonly status?: number;
+    readonly code?: string;
+    readonly method?: string;
+
+    constructor(
+      message: string,
+      input: { status?: number; code?: string; method?: string } = {}
+    ) {
+      super(message);
+      this.name = "SlackApiError";
+      this.status = input.status;
+      this.code = input.code;
+      this.method = input.method;
+    }
+  }
+
   const selectQueue: unknown[] = [];
   const insertQueue: unknown[] = [];
   const deleteQueue: unknown[] = [];
@@ -86,6 +108,11 @@ const mocks = vi.hoisted(() => {
     extractPeriodFromFilename: vi.fn(),
     getChannelHistory: vi.fn(),
     getChannelName: vi.fn(),
+    isSlackChannelNotFoundError: vi.fn(
+      (error: unknown) =>
+        error instanceof SlackApiError &&
+        (error.status === 404 || error.code === "channel_not_found")
+    ),
     getLatestRun: vi.fn(),
     getModeQuerySyncProfile: vi.fn(),
     getQueryResultContent: vi.fn(),
@@ -99,9 +126,18 @@ const mocks = vi.hoisted(() => {
     parseManagementAccounts: vi.fn(),
     prepareModeRowsForStorage: vi.fn(),
     seedSquads: vi.fn(),
+    SlackApiError,
+    endPhaseMock: vi.fn(async () => {}),
     select,
+    startPhaseMock: vi.fn(async () => 1),
   };
 });
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: sentryMocks.captureException,
+  captureMessage: sentryMocks.captureMessage,
+  setTag: sentryMocks.setTag,
+}));
 
 vi.mock("@/lib/db", () => ({
   db: {
@@ -126,6 +162,7 @@ vi.mock("@/lib/integrations/slack", () => ({
   getChannelName: mocks.getChannelName,
   getThreadReplies: mocks.getThreadReplies,
   getUserName: mocks.getUserName,
+  isSlackChannelNotFoundError: mocks.isSlackChannelNotFoundError,
 }));
 
 vi.mock("@/lib/integrations/slack-files", () => ({
@@ -213,8 +250,8 @@ describe("sync runner fault injection", () => {
     vi.clearAllMocks();
 
     mocks.createPhaseTracker.mockReturnValue({
-      startPhase: vi.fn(async () => 1),
-      endPhase: vi.fn(async () => {}),
+      startPhase: mocks.startPhaseMock,
+      endPhase: mocks.endPhaseMock,
     });
 
     mocks.seedSquads.mockResolvedValue(0);
@@ -332,6 +369,122 @@ describe("sync runner fault injection", () => {
       errors: ["Failed to fetch last successful sync time: sync log unavailable"],
     });
     expect(mocks.getChannelName).not.toHaveBeenCalled();
+  });
+
+  it("skips invalid Slack channels during validation and continues syncing valid channels", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CVALID,CINVALID";
+    mocks.queueSelect([], []);
+    mocks.getChannelName
+      .mockResolvedValueOnce("growth-valid")
+      .mockRejectedValueOnce(
+        new mocks.SlackApiError("Slack API error: channel_not_found", {
+          code: "channel_not_found",
+          method: "conversations.info",
+        })
+      );
+    mocks.getChannelHistory.mockResolvedValueOnce([]);
+
+    await expect(runSlackSync({ id: 52 })).resolves.toEqual({
+      status: "partial",
+      recordsSynced: 0,
+      errors: [
+        "Skipped invalid Slack channel CINVALID: Slack API error: channel_not_found",
+      ],
+    });
+
+    expect(mocks.getChannelHistory).toHaveBeenCalledTimes(1);
+    expect(mocks.getChannelHistory).toHaveBeenCalledWith(
+      "CVALID",
+      expect.any(String),
+      undefined,
+      expect.anything()
+    );
+    expect(sentryMocks.captureMessage).toHaveBeenCalledWith(
+      "Skipped invalid Slack channel CINVALID: Slack API error: channel_not_found",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "slack",
+        }),
+        extra: expect.objectContaining({
+          runId: 52,
+          channelId: "CINVALID",
+          code: "channel_not_found",
+        }),
+      })
+    );
+    expect(mocks.endPhaseMock).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        itemsProcessed: 1,
+        detail: "Validated 1 channels; skipped 1 invalid: CINVALID",
+      })
+    );
+  });
+
+  it("returns an error when every configured Slack channel is invalid", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CBAD1,CBAD2";
+    mocks.queueSelect([], []);
+    mocks.getChannelName
+      .mockRejectedValueOnce(
+        new mocks.SlackApiError("Slack API error: channel_not_found", {
+          code: "channel_not_found",
+          method: "conversations.info",
+        })
+      )
+      .mockRejectedValueOnce(
+        new mocks.SlackApiError("Slack API error 404: channel missing", {
+          status: 404,
+          method: "conversations.info",
+        })
+      );
+
+    await expect(runSlackSync({ id: 53 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: [
+        "Skipped invalid Slack channel CBAD1: Slack API error: channel_not_found",
+        "Skipped invalid Slack channel CBAD2: Slack API error 404: channel missing",
+      ],
+    });
+
+    expect(mocks.getChannelHistory).not.toHaveBeenCalled();
+    expect(mocks.endPhaseMock).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        itemsProcessed: 0,
+        detail: "Validated 0 channels; skipped 2 invalid: CBAD1, CBAD2",
+      })
+    );
+  });
+
+  it("fails the Slack sync when channel validation hits an auth error", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CAUTH";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockRejectedValue(
+      new Error("Slack API authentication failed, check SLACK_BOT_TOKEN")
+    );
+
+    await expect(runSlackSync({ id: 54 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: [
+        "Failed to validate configured Slack channel IDs: Slack API authentication failed, check SLACK_BOT_TOKEN",
+      ],
+    });
+
+    expect(mocks.getChannelHistory).not.toHaveBeenCalled();
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          sync_source: "slack",
+          failure_scope: "preflight",
+        }),
+      })
+    );
   });
 
   it("returns a structured Slack sync error when the OKR parser throws on malformed JSON", async () => {

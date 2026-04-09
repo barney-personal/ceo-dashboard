@@ -5,6 +5,7 @@ import {
   getChannelName,
   getThreadReplies,
   getUserName,
+  isSlackChannelNotFoundError,
 } from "@/lib/integrations/slack";
 import {
   buildSquadContext,
@@ -135,7 +136,7 @@ function isLikelyUpdate(text: string, subtype?: string): boolean {
  * Sync OKR updates from a single Slack channel using LLM parsing.
  */
 async function syncChannel(
-  channelId: string,
+  channel: { id: string; name: string },
   lastSyncTs: string | undefined,
   systemPrompt: string,
   userNameFallback: Map<string, string>,
@@ -147,7 +148,8 @@ async function syncChannel(
       "Slack sync exceeded its execution budget before channel fetch started",
   });
 
-  const channelName = await getChannelName(channelId, { signal: opts.signal });
+  const channelId = channel.id;
+  const channelName = channel.name;
   const pillar = derivePillar(channelName);
   const channelContext = `#${channelName} (${pillar} pillar)`;
 
@@ -274,6 +276,60 @@ async function syncChannel(
   }
 
   return count;
+}
+
+async function validateSlackChannels(
+  channelIds: readonly string[],
+  runId: number,
+  opts: SyncControl = {}
+): Promise<{
+  validChannels: Array<{ id: string; name: string }>;
+  invalidChannelIds: string[];
+  invalidMessages: string[];
+}> {
+  const validChannels: Array<{ id: string; name: string }> = [];
+  const invalidChannelIds: string[] = [];
+  const invalidMessages: string[] = [];
+
+  for (const channelId of channelIds) {
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled during channel validation",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget during channel validation",
+    });
+
+    try {
+      const channelName = await getChannelName(channelId, { signal: opts.signal });
+      validChannels.push({ id: channelId, name: channelName });
+    } catch (error) {
+      if (!isSlackChannelNotFoundError(error)) {
+        throw error;
+      }
+
+      const message = `Skipped invalid Slack channel ${channelId}: ${formatSyncError(error)}`;
+      invalidChannelIds.push(channelId);
+      invalidMessages.push(message);
+
+      Sentry.captureMessage(message, {
+        level: "warning",
+        tags: {
+          sync_source: "slack",
+        },
+        extra: {
+          runId,
+          channelId,
+          status: error.status,
+          code: error.code,
+        },
+      });
+    }
+  }
+
+  return {
+    validChannels,
+    invalidChannelIds,
+    invalidMessages,
+  };
 }
 
 async function fetchLastSlackSuccessTimestamp(): Promise<string | undefined> {
@@ -419,7 +475,37 @@ export async function runSlackSync(
         : "Full scan (no prior sync)",
     });
 
-    for (const channelId of channelIds) {
+    phaseId = await tracker.startPhase(
+      "validate_channels",
+      "Validating configured Slack channel IDs"
+    );
+    let validChannels: Array<{ id: string; name: string }>;
+    let invalidChannelIds: string[];
+    let invalidMessages: string[];
+    try {
+      const validationResult = await validateSlackChannels(channelIds, run.id, opts);
+      validChannels = validationResult.validChannels;
+      invalidChannelIds = validationResult.invalidChannelIds;
+      invalidMessages = validationResult.invalidMessages;
+    } catch (error) {
+      return failSlackPreflightPhase(
+        tracker,
+        run.id,
+        phaseId,
+        "validate configured Slack channel IDs",
+        error
+      );
+    }
+    errors.push(...invalidMessages);
+    await tracker.endPhase(phaseId, {
+      itemsProcessed: validChannels.length,
+      detail:
+        invalidMessages.length > 0
+          ? `Validated ${validChannels.length} channels; skipped ${invalidMessages.length} invalid: ${invalidChannelIds.join(", ")}`
+          : `Validated ${validChannels.length} channels; skipped 0 invalid`,
+    });
+
+    for (const channel of validChannels) {
       throwIfSyncShouldStop(opts, {
         cancelled: "Slack sync cancelled between channels",
         deadlineExceeded:
@@ -427,13 +513,13 @@ export async function runSlackSync(
       });
 
       const channelPhaseId = await tracker.startPhase(
-        `sync_channel:${channelId}`,
+        `sync_channel:${channel.id}`,
         "Fetching messages and parsing OKRs"
       );
 
       try {
         const count = await syncChannel(
-          channelId,
+          channel,
           lastSyncTs,
           systemPrompt,
           userNameFallback,
@@ -464,7 +550,7 @@ export async function runSlackSync(
           throw error;
         }
 
-        const message = `Failed to sync channel ${channelId}: ${formatSyncError(error)}`;
+        const message = `Failed to sync channel ${channel.id}: ${formatSyncError(error)}`;
         errors.push(message);
         await tracker.endPhase(channelPhaseId, {
           status: "error",

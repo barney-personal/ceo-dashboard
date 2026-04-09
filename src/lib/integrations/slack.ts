@@ -57,16 +57,39 @@ function isRetryableSlackEnvelope(data: {
   return data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error);
 }
 
-class SlackAuthError extends Error {
+export class SlackApiError extends Error {
   readonly status?: number;
   readonly code?: string;
+  readonly method?: string;
 
-  constructor(input: { status?: number; code?: string }) {
-    super(SLACK_AUTH_ERROR_MESSAGE);
-    this.name = "SlackAuthError";
+  constructor(
+    message: string,
+    input: { status?: number; code?: string; method?: string } = {}
+  ) {
+    super(message);
+    this.name = "SlackApiError";
     this.status = input.status;
     this.code = input.code;
+    this.method = input.method;
   }
+}
+
+export class SlackAuthError extends SlackApiError {
+  constructor(input: { status?: number; code?: string; method?: string }) {
+    super(SLACK_AUTH_ERROR_MESSAGE, input);
+    this.name = "SlackAuthError";
+  }
+}
+
+export function isSlackAuthError(error: unknown): error is SlackAuthError {
+  return error instanceof SlackAuthError;
+}
+
+export function isSlackChannelNotFoundError(error: unknown): error is SlackApiError {
+  return (
+    error instanceof SlackApiError &&
+    (error.status === 404 || error.code === "channel_not_found")
+  );
 }
 
 function captureSlackAuthError(input: {
@@ -80,6 +103,7 @@ function captureSlackAuthError(input: {
   const error = new SlackAuthError({
     status: input.status,
     code: input.code,
+    method: input.method,
   });
   Sentry.captureException(error, {
     level: "error",
@@ -190,7 +214,7 @@ async function slackFetch(
         throw new Error("Slack request was aborted");
       }
 
-      if (error instanceof SlackAuthError) {
+      if (isSlackAuthError(error)) {
         throw error;
       }
 
@@ -267,7 +291,15 @@ export async function slackApiRequest<T>(
     );
 
     if (!res.ok) {
-      throw new Error(`Slack API error ${res.status}: ${await res.text()}`);
+      const error = new SlackApiError(`Slack API error ${res.status}: ${await res.text()}`, {
+        status: res.status,
+        method,
+      });
+      Sentry.captureException(error, {
+        tags: { integration: "slack" },
+        extra: { method, attempt, operation: "slackApiRequest" },
+      });
+      throw error;
     }
 
     const data = (await res.json()) as T & { ok: boolean; error?: string };
@@ -280,7 +312,10 @@ export async function slackApiRequest<T>(
         });
       }
 
-      const error = new Error(`Slack API error: ${data.error}`);
+      const error = new SlackApiError(`Slack API error: ${data.error}`, {
+        code: data.error,
+        method,
+      });
       if (isRetryableSlackEnvelope(data) && attempt < maxRetries) {
         lastEnvelopeError = error;
         await sleep(getRetryDelayMs(attempt));
