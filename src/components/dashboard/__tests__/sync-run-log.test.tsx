@@ -3,6 +3,36 @@ import { describe, expect, it } from "vitest";
 import { SyncRunLog } from "@/components/dashboard/sync-run-log";
 
 describe("SyncRunLog", () => {
+  it("shows stale state for stale-timeout runs", () => {
+    render(
+      <SyncRunLog
+        avgDurations={{ mode: 60_000 }}
+        runs={[
+          {
+            id: 10,
+            source: "mode",
+            status: "error",
+            trigger: "cron",
+            attempt: 1,
+            startedAt: "2026-04-08T11:00:00.000Z",
+            completedAt: "2026-04-08T11:16:00.000Z",
+            heartbeatAt: "2026-04-08T11:16:00.000Z",
+            leaseExpiresAt: null,
+            recordsSynced: 0,
+            skipReason: "stale_timeout",
+            errorMessage: "Sync exceeded the stale timeout before completion.",
+            phases: [],
+          },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: /mode/i })[1]);
+
+    expect(screen.getByText("State: stale")).toBeInTheDocument();
+    expect(screen.getByText("Reason: stale_timeout")).toBeInTheDocument();
+  });
+
   it("shows abandoned state for expired running leases", () => {
     render(
       <SyncRunLog

@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 import {
   claimQueuedSyncRun,
   expireAbandonedSyncRuns,
+  expireStaleSyncRuns,
   finalizeSyncRun,
   formatSyncError,
   isSyncRunCancelled,
@@ -205,9 +206,15 @@ async function runAbandonedSyncSweep(): Promise<void> {
   abandonedSyncSweepInFlight = (async () => {
     try {
       const expiredIds = await expireAbandonedSyncRuns();
+      const staleIds = await expireStaleSyncRuns();
       if (expiredIds.length > 0) {
         console.warn(
           `[sync-worker] expired abandoned sync runs: ${expiredIds.join(", ")}`
+        );
+      }
+      if (staleIds.length > 0) {
+        console.warn(
+          `[sync-worker] expired stale sync runs: ${staleIds.join(", ")}`
         );
       }
     } catch (error) {

@@ -8,6 +8,7 @@ import {
 const mocks = vi.hoisted(() => ({
   claimQueuedSyncRun: vi.fn(),
   expireAbandonedSyncRuns: vi.fn(),
+  expireStaleSyncRuns: vi.fn(),
   finalizeSyncRun: vi.fn(),
   isSyncRunCancelled: vi.fn(),
   markSyncRunsFailed: vi.fn(),
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../coordinator", () => ({
   claimQueuedSyncRun: mocks.claimQueuedSyncRun,
   expireAbandonedSyncRuns: mocks.expireAbandonedSyncRuns,
+  expireStaleSyncRuns: mocks.expireStaleSyncRuns,
   finalizeSyncRun: mocks.finalizeSyncRun,
   formatSyncError: (error: unknown) =>
     error instanceof Error ? error.message : String(error),
@@ -59,6 +61,7 @@ describe("sync runtime resilience", () => {
     vi.useFakeTimers();
     resetLocalSyncRunProtectionForTest();
     mocks.expireAbandonedSyncRuns.mockReset();
+    mocks.expireStaleSyncRuns.mockReset();
     mocks.finalizeSyncRun.mockReset();
     mocks.isSyncRunCancelled.mockReset();
     mocks.claimQueuedSyncRun.mockReset();
@@ -68,6 +71,7 @@ describe("sync runtime resilience", () => {
     mocks.runManagementAccountsSync.mockReset();
     mocks.startSyncHeartbeat.mockReset();
     mocks.expireAbandonedSyncRuns.mockResolvedValue([]);
+    mocks.expireStaleSyncRuns.mockResolvedValue([]);
     mocks.finalizeSyncRun.mockResolvedValue({ finalized: true });
     mocks.isSyncRunCancelled.mockResolvedValue(false);
     mocks.startSyncHeartbeat.mockReturnValue(async () => {});
@@ -245,5 +249,23 @@ describe("sync runtime resilience", () => {
       errorMessage: null,
     });
     expect(isLocalSyncRunProtected({ runId: 31 })).toBe(false);
+  });
+
+  it("runs stale-timeout cleanup alongside abandoned cleanup in the recovery sweep", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { ensureSyncRecoverySweep } = await import("../runtime");
+
+    mocks.expireAbandonedSyncRuns.mockResolvedValueOnce([41]);
+    mocks.expireStaleSyncRuns.mockResolvedValueOnce([42]);
+
+    ensureSyncRecoverySweep();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(mocks.expireAbandonedSyncRuns).toHaveBeenCalled();
+    expect(mocks.expireStaleSyncRuns).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      "[sync-worker] expired stale sync runs: 42"
+    );
   });
 });
