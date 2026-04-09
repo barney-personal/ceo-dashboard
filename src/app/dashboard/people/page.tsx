@@ -17,6 +17,7 @@ const DivergingBarChart = dynamic(
 );
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
+import { getModeEmptyStateReason } from "@/lib/data/mode";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -30,9 +31,14 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, allRows }, deptData] = await Promise.all([
+  const [{ employees, allRows }, deptData, headcountEmptyReason] = await Promise.all([
     getActiveEmployees(),
     getHeadcountByDepartment(),
+    getModeEmptyStateReason({
+      section: "people",
+      category: "headcount",
+      emptyReason: "Sync the Headcount SSoT Dashboard report to view org charts",
+    }),
   ]);
 
   const metrics = getPeopleMetrics(employees, allRows);
@@ -40,6 +46,10 @@ export default async function PeopleOrgPage() {
   const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
   const monthlyMovement = getMonthlyJoinersAndDepartures(allRows, 36);
+  const hasTenureData = tenureData.some((d) => d.value > 0);
+  const hasMonthlyMovement = monthlyMovement.joiners.some((d) => d.value > 0);
+  const hasAnyVisualData =
+    deptData.length > 0 || hasTenureData || hasMonthlyMovement;
 
   // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({
@@ -125,7 +135,7 @@ export default async function PeopleOrgPage() {
       )}
 
       {/* Tenure distribution */}
-      {tenureData.some((d) => d.value > 0) && (
+      {hasTenureData && (
         <BarChart
           data={tenureData}
           title="Tenure Distribution"
@@ -135,7 +145,7 @@ export default async function PeopleOrgPage() {
       )}
 
       {/* Joiners & departures — diverging from zero */}
-      {monthlyMovement.joiners.some((d) => d.value > 0) && (
+      {hasMonthlyMovement && (
         <DivergingBarChart
           data={monthlyMovement.joiners.map((j, i) => ({
             date: j.date,
@@ -146,6 +156,12 @@ export default async function PeopleOrgPage() {
           subtitle="last 3 years, monthly"
           modeUrl={modeUrl}
         />
+      )}
+
+      {!hasAnyVisualData && (
+        <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/50">
+          <p className="text-sm text-muted-foreground">{headcountEmptyReason}</p>
+        </div>
       )}
 
       {/* Team directory */}

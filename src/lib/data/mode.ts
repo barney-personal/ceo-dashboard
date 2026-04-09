@@ -27,8 +27,24 @@ export interface ColumnValidationResult<TColumn extends string = string> {
   isValid: boolean;
 }
 
+export interface LatestTerminalSyncRun {
+  status: string;
+  completedAt: Date | null;
+}
+
 const REPORT_DATA_CACHE_TTL_MS = 60_000;
 export const REPORT_DATA_CACHE_MAX_ENTRIES = 20;
+const TERMINAL_SYNC_STATUSES = new Set([
+  "success",
+  "partial",
+  "error",
+  "cancelled",
+]);
+const STALE_EMPTY_STATE_DATE_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  dateStyle: "medium",
+  timeStyle: "short",
+  timeZone: "UTC",
+});
 
 type ReportDataCacheEntry =
   | {
@@ -355,4 +371,68 @@ export async function getLastSyncTime(
 
     return result[0]?.completedAt ?? null;
   });
+}
+
+export async function getLatestTerminalSyncRun(
+  source: string = "mode"
+): Promise<LatestTerminalSyncRun | null> {
+  return withDatabaseReadFallback(
+    `load latest terminal sync run for ${source}`,
+    null,
+    async () => {
+      const result = await db
+        .select({
+          status: syncLog.status,
+          completedAt: syncLog.completedAt,
+          startedAt: syncLog.startedAt,
+        })
+        .from(syncLog)
+        .where(eq(syncLog.source, source))
+        .orderBy(desc(syncLog.startedAt));
+
+      const latestTerminal = result.find((run) =>
+        TERMINAL_SYNC_STATUSES.has(run.status)
+      );
+
+      if (!latestTerminal) {
+        return null;
+      }
+
+      return {
+        status: latestTerminal.status,
+        completedAt: latestTerminal.completedAt ?? latestTerminal.startedAt ?? null,
+      };
+    }
+  );
+}
+
+function formatFailedSyncTimestamp(timestamp: Date | null): string {
+  if (!timestamp) {
+    return "an unknown time";
+  }
+
+  return `${STALE_EMPTY_STATE_DATE_FORMATTER.format(timestamp)} UTC`;
+}
+
+export async function getModeEmptyStateReason({
+  section,
+  category,
+  emptyReason,
+  source = "mode",
+}: {
+  section: DashboardSection;
+  category: string;
+  emptyReason: string;
+  source?: string;
+}): Promise<string> {
+  const [reportData, latestSyncRun] = await Promise.all([
+    getReportData(section, category),
+    getLatestTerminalSyncRun(source),
+  ]);
+
+  if (reportData.length === 0 && latestSyncRun?.status === "error") {
+    return `Data temporarily unavailable — last sync failed at ${formatFailedSyncTimestamp(latestSyncRun.completedAt)}`;
+  }
+
+  return emptyReason;
 }

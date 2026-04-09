@@ -17,7 +17,7 @@ const {
   const mockOrderBy = vi.fn();
   const mockWhere = vi.fn(() => ({ orderBy: mockOrderBy }));
   const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
-  const mockFrom = vi.fn(() => ({ innerJoin: mockInnerJoin }));
+  const mockFrom = vi.fn(() => ({ innerJoin: mockInnerJoin, where: mockWhere }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
   return {
@@ -69,12 +69,15 @@ vi.mock("@/lib/db/schema", () => ({
   syncLog: {
     completedAt: "syncLog.completedAt",
     source: "syncLog.source",
+    startedAt: "syncLog.startedAt",
     status: "syncLog.status",
   },
 }));
 
 import {
   getReportData,
+  getLatestTerminalSyncRun,
+  getModeEmptyStateReason,
   resetReportDataCacheForTests,
   REPORT_DATA_CACHE_MAX_ENTRIES,
   validateModeColumns,
@@ -93,6 +96,20 @@ function createReportRows(rowValue: number) {
       syncedAt: new Date("2026-04-08T09:00:00.000Z"),
     },
   ];
+}
+
+function createSyncRows(
+  ...rows: Array<{
+    status: string;
+    startedAt: Date;
+    completedAt?: Date | null;
+  }>
+) {
+  return rows.map((row) => ({
+    status: row.status,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt ?? null,
+  }));
 }
 
 function createDeferred<T>() {
@@ -335,6 +352,70 @@ describe("getReportData cache", () => {
         }),
       })
     );
+  });
+});
+
+describe("Mode sync metadata helpers", () => {
+  it("returns the latest terminal sync run for a source", async () => {
+    const failedAt = new Date("2026-04-09T11:30:00.000Z");
+
+    mockOrderBy.mockResolvedValueOnce(
+      createSyncRows(
+        {
+          status: "running",
+          startedAt: new Date("2026-04-09T12:00:00.000Z"),
+        },
+        {
+          status: "error",
+          startedAt: new Date("2026-04-09T11:00:00.000Z"),
+          completedAt: failedAt,
+        },
+        {
+          status: "success",
+          startedAt: new Date("2026-04-09T10:00:00.000Z"),
+          completedAt: new Date("2026-04-09T10:20:00.000Z"),
+        }
+      )
+    );
+
+    await expect(getLatestTerminalSyncRun("mode")).resolves.toEqual({
+      status: "error",
+      completedAt: failedAt,
+    });
+  });
+
+  it("returns a stale-data message when the latest mode sync failed and report data is empty", async () => {
+    mockOrderBy
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(
+        createSyncRows({
+          status: "error",
+          startedAt: new Date("2026-04-09T11:00:00.000Z"),
+          completedAt: new Date("2026-04-09T11:30:00.000Z"),
+        })
+      );
+
+    await expect(
+      getModeEmptyStateReason({
+        section: "product",
+        category: "active-users",
+        emptyReason: "Sync the App Active Users report to view charts",
+      })
+    ).resolves.toMatch(
+      /^Data temporarily unavailable — last sync failed at .+ UTC$/
+    );
+  });
+
+  it("preserves the default empty-state reason when Mode has never synced successfully or failed", async () => {
+    mockOrderBy.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    await expect(
+      getModeEmptyStateReason({
+        section: "product",
+        category: "retention",
+        emptyReason: "Sync the App Retention report to view MAU retention cohorts",
+      })
+    ).resolves.toBe("Sync the App Retention report to view MAU retention cohorts");
   });
 });
 

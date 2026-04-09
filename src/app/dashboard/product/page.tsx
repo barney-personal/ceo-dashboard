@@ -24,6 +24,7 @@ import {
   getLatestWauMau,
   getLatestM11Retention,
 } from "@/lib/data/chart-data";
+import { getModeEmptyStateReason } from "@/lib/data/mode";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
@@ -34,6 +35,9 @@ export default async function ProductPage() {
     latestMAU,
     latestWauMau,
     latestM11,
+    activeUsersChartsEmptyReason,
+    activeUsersEngagementEmptyReason,
+    retentionEmptyReason,
   ] = await Promise.all([
     getActiveUsersSeries(),
     getEngagementSeries(),
@@ -41,6 +45,21 @@ export default async function ProductPage() {
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
+    getModeEmptyStateReason({
+      section: "product",
+      category: "active-users",
+      emptyReason: "Sync the App Active Users report to view charts",
+    }),
+    getModeEmptyStateReason({
+      section: "product",
+      category: "active-users",
+      emptyReason: "Sync the App Active Users report to view engagement",
+    }),
+    getModeEmptyStateReason({
+      section: "product",
+      category: "retention",
+      emptyReason: "Sync the App Retention report to view MAU retention cohorts",
+    }),
   ]);
 
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
@@ -128,7 +147,7 @@ export default async function ProductPage() {
         {activeUsers.mau.length === 0 && (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Active Users report to view charts
+              {activeUsersChartsEmptyReason}
             </p>
           </div>
         )}
@@ -167,7 +186,7 @@ export default async function ProductPage() {
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Active Users report to view engagement
+              {activeUsersEngagementEmptyReason}
             </p>
           </div>
         )}
@@ -199,7 +218,7 @@ export default async function ProductPage() {
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Retention report to view MAU retention cohorts
+              {retentionEmptyReason}
             </p>
           </div>
         )}

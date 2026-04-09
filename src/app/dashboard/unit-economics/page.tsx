@@ -8,6 +8,7 @@ import {
   getLtvCacRatioSeries,
   getQuery3Series,
 } from "@/lib/data/chart-data";
+import { getModeEmptyStateReason } from "@/lib/data/mode";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -28,11 +29,15 @@ function ChartPlaceholder({ title, reason }: { title: string; reason: string }) 
 }
 
 export default async function UnitEconomicsPage() {
-
-  const [ltvSeries, ltvCacRatio, q3] = await Promise.all([
+  const [ltvSeries, ltvCacRatio, q3, kpisEmptyReason] = await Promise.all([
     getLtvTimeSeries(),
     getLtvCacRatioSeries(),
     getQuery3Series(),
+    getModeEmptyStateReason({
+      section: "unit-economics",
+      category: "kpis",
+      emptyReason: "No data — sync Mode 'Strategic Finance KPIs' report",
+    }),
   ]);
 
   const modeUrl = getModeReportLink("unit-economics", "kpis");
@@ -78,7 +83,7 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <ChartPlaceholder title="LTV:Paid CAC" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
+        <ChartPlaceholder title="LTV:Paid CAC" reason={kpisEmptyReason} />
       )}
 
       {/* LTV over time */}
@@ -92,7 +97,7 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <ChartPlaceholder title="36-Month LTV" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
+        <ChartPlaceholder title="36-Month LTV" reason={kpisEmptyReason} />
       )}
 
       {/* CPA — actual vs targets */}
@@ -106,7 +111,7 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <ChartPlaceholder title="Paid CPA" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
+        <ChartPlaceholder title="Paid CPA" reason={kpisEmptyReason} />
       )}
 
       {/* Spend — actual vs targets */}
@@ -120,7 +125,7 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <ChartPlaceholder title="Marketing Spend" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
+        <ChartPlaceholder title="Marketing Spend" reason={kpisEmptyReason} />
       )}
 
       {/* New users — actual vs targets */}
@@ -134,7 +139,10 @@ export default async function UnitEconomicsPage() {
           modeUrl={modeUrl}
         />
       ) : (
-        <ChartPlaceholder title="New Bank Connected Users" reason="No data — sync Mode 'Strategic Finance KPIs' report" />
+        <ChartPlaceholder
+          title="New Bank Connected Users"
+          reason={kpisEmptyReason}
+        />
       )}
 
       {/* Mode dashboard links */}
