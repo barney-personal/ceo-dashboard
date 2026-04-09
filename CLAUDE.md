@@ -58,15 +58,17 @@ Dashboard
 ```
 src/app/                        # Next.js App Router pages
 src/app/dashboard/              # Auth-protected dashboard routes
-src/app/api/                    # API routes (cron, sync triggers)
+src/app/api/                    # API routes (cron, sync triggers, squads)
 src/lib/auth/roles.ts           # Role model (pure functions, client-safe)
 src/lib/auth/roles.server.ts    # getCurrentUserRole() (server-only)
 src/lib/auth/routes.ts          # Public/protected route classification
-src/lib/db/schema.ts            # Drizzle schema (squads, modeReports, okrUpdates, etc.)
+src/lib/config/                 # Shared runtime constants (chart dates, people maps, Slack URLs)
+src/lib/db/schema.ts            # Drizzle schema (squads, modeReports, okrUpdates, syncPhases, etc.)
 src/lib/db/index.ts             # Drizzle client
+src/lib/db/errors.ts            # DB error classification (schema compat, unavailability)
 src/lib/integrations/           # API clients (Mode, Slack, Excel parser, LLM)
-src/lib/sync/                   # Data sync logic (Mode, Slack OKRs, management accounts)
-src/lib/data/                   # Data loaders (metrics, chart-data, mode)
+src/lib/sync/                   # Sync coordinator, runtime, config, errors, helpers
+src/lib/data/                   # Data loaders (metrics, chart-data, mode, okrs, people)
 src/components/dashboard/       # Dashboard UI components
 src/components/charts/          # D3.js chart components
 src/components/ui/              # shadcn/ui primitives
@@ -84,11 +86,30 @@ scripts/                        # Setup, guard, worktree, and utility scripts
 | Notion | API | — | Planned |
 | Culture Amp | API | — | Planned |
 
-Sync is triggered by a Render cron job (`0 */2 * * *`) hitting `GET /api/cron` with a bearer token. Each source checks its last sync time and skips if the interval hasn't elapsed. Manual sync triggers available at `POST /api/sync/mode` and `POST /api/sync/slack` (CEO or cron-authorized).
+Sync is triggered by a Render cron job (`0 */2 * * *`) hitting `GET /api/cron` with a bearer token. The cron handler fans out to all three sources (mode, slack, management-accounts) and skips each source if its interval hasn't elapsed. Manual sync triggers are available at `POST /api/sync/mode`, `POST /api/sync/slack`, and `POST /api/sync/management-accounts` (CEO or cron-authorized). A running sync can be cancelled via `POST /api/sync/cancel` (CEO only).
+
+### Sync Architecture
+
+The sync pipeline is split across focused modules in `src/lib/sync/`:
+
+| Module | Responsibility |
+|--------|---------------|
+| `config.ts` | Source definitions (intervals, retry windows, lease/budget timeouts), `SyncSource`/`SyncStatus`/`SyncTrigger` types, `evaluateQueueDecision` |
+| `coordinator.ts` | DB-level run lifecycle: enqueue, claim (with unique-constraint dedup), heartbeat, finalize, expire abandoned runs |
+| `runtime.ts` | Execution layer: claims a queued run, dispatches to the correct runner (mode/slack/management-accounts), enforces deadline, handles cancellation |
+| `errors.ts` | `SyncCancelledError`, `SyncDeadlineExceededError`, `SyncControl` interface, `throwIfSyncShouldStop` helper |
+| `phase-tracker.ts` | `PhaseTracker` class — writes `syncPhases` rows to record named steps within a sync run |
+| `worker-state.ts` | Process-local protection map for active runs; prevents a cancel request from marking a run failed while it is still executing in this process |
+| `request-auth.ts` | `requireRole` / `authorizeSyncRequest` — shared auth helpers for API route handlers |
+| `response.ts` | `serializeEnqueueSyncResult` — serialises `EnqueueSyncResult` to plain JSON |
+| `mode-storage.ts` | Low-level helpers for writing Mode query results to `modeReportData` |
+| `mode.ts` | Full Mode sync runner: fetches runs, stores results via mode-storage |
+| `slack.ts` | Slack OKR sync runner |
+| `management-accounts.ts` | Management accounts (Slack Excel) sync runner |
 
 ### Database Schema
 
-Six tables in `src/lib/db/schema.ts`:
+Seven tables in `src/lib/db/schema.ts`:
 
 | Table | Purpose |
 |-------|---------|
@@ -97,7 +118,8 @@ Six tables in `src/lib/db/schema.ts`:
 | `modeReportData` | Synced query results from Mode (JSONB rows) |
 | `okrUpdates` | Parsed OKR updates from Slack (status, metrics, squad) |
 | `financialPeriods` | Monthly P&L from Slack Excel files |
-| `syncLog` | Audit trail of all sync runs |
+| `syncLog` | Audit trail of all sync runs (status, lease, heartbeat, worker ID) |
+| `syncPhases` | Named phase steps within a sync run (phase, status, items processed, error) |
 
 ### Permission Model
 
@@ -141,6 +163,16 @@ All in `src/components/charts/`, built with D3.js:
 | `CohortHeatmap` | Retention triangle | MAU retention by cohort |
 
 All support: Mode link badges, responsive sizing, interactive tooltips.
+
+### Config Modules
+
+Shared runtime constants live in `src/lib/config/` (not environment variables):
+
+| Module | Exports |
+|--------|---------|
+| `charts.ts` | `CHART_HISTORY_START_DATE`, `CHART_HISTORY_FIRST_FULL_WEEK`, `CHART_HISTORY_START_TS` — chart window bounds |
+| `people.ts` | `DAYS_PER_MONTH`, `SQUAD_PILLAR_MAP`, tenure helpers — people metrics constants |
+| `slack.ts` | `SLACK_WORKSPACE_URL`, `buildSlackMessageUrl` — Slack deep-link construction |
 
 ### Mode Reports
 
@@ -194,7 +226,16 @@ make dev                                   # Run with secrets injected
 make test
 ```
 
-Tests cover: role hierarchy, role extraction, route classification, and PermissionGate component rendering.
+Tests are co-located with their modules in `__tests__/` subdirectories. Current coverage:
+
+| Area | Test files |
+|------|-----------|
+| Auth | `src/lib/auth/__tests__/roles.test.ts`, `routes.test.ts` |
+| Data loaders | `src/lib/data/__tests__/chart-data.test.ts`, `metrics.test.ts`, `mode.test.ts`, `okrs.test.ts`, `people.test.ts`, `sync.test.ts` |
+| DB | `src/lib/db/__tests__/errors.test.ts` |
+| Integrations | `src/lib/integrations/__tests__/llm-okr-parser.test.ts`, `mode-config.test.ts`, `slack.test.ts` |
+| Sync | `src/lib/sync/__tests__/config.test.ts`, `coordinator.test.ts`, `errors.test.ts`, `mode-storage.test.ts`, `request-auth.test.ts`, `runtime.test.ts` |
+| API routes | `src/app/api/cron/__tests__/route.test.ts`, `sync/__tests__/manual-routes.test.ts`, `sync/cancel/__tests__/route.test.ts` |
 
 ## Git Workflow (MUST follow -- enforced by hooks)
 
@@ -237,3 +278,5 @@ Creates a sibling directory with its own branch (`agent/<name>/<task>`). Never r
 - **Server vs Client**: Clerk's `currentUser()` is server-only. Keep it in `.server.ts` files. Pure role logic goes in `roles.ts` for shared use.
 - **Data flow**: Mode/Slack data is synced to Postgres on a schedule, then read by server components. Never call external APIs directly from pages.
 - **Charts**: All charts are client components using D3.js. Data is fetched server-side and passed as props.
+- **DB errors**: Use `src/lib/db/errors.ts` helpers (`isSchemaCompatibilityError`, `isDatabaseUnavailableError`, `normalizeDatabaseError`) when catching Postgres errors — do not re-implement pg error code detection inline.
+- **Sync auth**: Use `authorizeSyncRequest` from `src/lib/sync/request-auth.ts` in sync route handlers. It handles both cron bearer-token auth and CEO session auth in one call.
