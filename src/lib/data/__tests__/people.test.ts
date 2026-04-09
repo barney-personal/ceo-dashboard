@@ -431,10 +431,10 @@ describe("getActiveEmployees", () => {
         ]);
       },
     );
-    // First call (FTE validation) fails, second call (headcount validation) succeeds
+    // First call (headcount validation) succeeds, second call (FTE validation) fails
     mockValidateModeColumns
-      .mockReturnValueOnce({ isValid: false, expectedColumns: [], presentColumns: [], missingColumns: ["squad_name"] })
-      .mockReturnValueOnce({ isValid: true, expectedColumns: [], presentColumns: [], missingColumns: [] });
+      .mockReturnValueOnce({ isValid: true, expectedColumns: [], presentColumns: [], missingColumns: [] })
+      .mockReturnValueOnce({ isValid: false, expectedColumns: [], presentColumns: [], missingColumns: ["squad_name"] });
 
     const result = await getActiveEmployees();
 

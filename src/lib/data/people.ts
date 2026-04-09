@@ -337,10 +337,23 @@ export async function getActiveEmployees(): Promise<{
   const fteQuery = fteData.find((d) => d.queryName === "current_employees");
   const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
 
-  // allRows from old report — used for attrition/departures metrics.
-  // If headcount data is unavailable, these metrics degrade to zero rather than
-  // erroring, which is acceptable since both reports sync on the same schedule.
-  const allRows = headcountQuery?.rows ?? [];
+  // Validate headcount schema upfront — allRows is used for attrition/departures
+  // metrics, so if the schema has drifted we clear it to avoid silent bad data.
+  let allRows: Record<string, unknown>[] = [];
+  if (headcountQuery && headcountQuery.rows.length > 0) {
+    const hcColumnSource = headcountQuery.columns?.length
+      ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
+      : headcountQuery.rows[0] ?? {};
+    const hcValidation = validateModeColumns({
+      row: hcColumnSource as Record<string, unknown>,
+      expectedColumns: HEADCOUNT_QUERY_COLUMNS,
+      reportName: headcountQuery.reportName,
+      queryName: headcountQuery.queryName,
+    });
+    if (hcValidation.isValid) {
+      allRows = headcountQuery.rows;
+    }
+  }
 
   // Primary path: Current FTEs available
   if (fteQuery && fteQuery.rows.length > 0) {
@@ -363,22 +376,8 @@ export async function getActiveEmployees(): Promise<{
     }
   }
 
-  // Fallback: use Headcount SSoT alone
-  if (!headcountQuery || headcountQuery.rows.length === 0) {
-    return { employees: [], allRows: [], lastSync: null };
-  }
-
-  const columnSource = headcountQuery.columns?.length
-    ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
-    : headcountQuery.rows[0] ?? {};
-  const validation = validateModeColumns({
-    row: columnSource as Record<string, unknown>,
-    expectedColumns: HEADCOUNT_QUERY_COLUMNS,
-    reportName: headcountQuery.reportName,
-    queryName: headcountQuery.queryName,
-  });
-
-  if (!validation.isValid) {
+  // Fallback: use Headcount SSoT alone (allRows already validated above)
+  if (allRows.length === 0) {
     return { employees: [], allRows: [], lastSync: null };
   }
 
