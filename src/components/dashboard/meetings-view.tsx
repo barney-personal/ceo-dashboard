@@ -560,9 +560,10 @@ interface MeetingsViewProps {
   initialDays: DayData[];
   initialWeekStart: string; // YYYY-MM-DD
   calendarConnected?: boolean;
+  granolaConnected?: boolean;
 }
 
-export function MeetingsView({ initialDays, initialWeekStart, calendarConnected = true }: MeetingsViewProps) {
+export function MeetingsView({ initialDays, initialWeekStart, calendarConnected = true, granolaConnected = true }: MeetingsViewProps) {
   const [days, setDays] = useState(initialDays);
   const [weekStart, setWeekStart] = useState(initialWeekStart);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -731,17 +732,40 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
       </div>
 
       {/* Connect calendar prompt */}
-      {!calendarConnected && (
-        <div className="flex items-center gap-3 rounded-xl border border-amber-200/60 bg-amber-50/50 px-4 py-3">
-          <CalendarDays className="h-5 w-5 shrink-0 text-amber-600" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-amber-900">
-              Connect your Google Calendar
-            </p>
-            <p className="text-xs text-amber-700/80">
-              Sign out and back in to grant calendar access, then your personal meetings will appear here.
-            </p>
-          </div>
+      {(!calendarConnected || !granolaConnected) && (
+        <div className="space-y-2">
+          {!calendarConnected && (
+            <div className="flex items-center gap-3 rounded-xl border border-amber-200/60 bg-amber-50/50 px-4 py-3">
+              <CalendarDays className="h-5 w-5 shrink-0 text-amber-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-amber-900">
+                  Connect your Google Calendar
+                </p>
+                <p className="text-xs text-amber-700/80">
+                  Sign out and back in to grant calendar access, then your personal meetings will appear here.
+                </p>
+              </div>
+            </div>
+          )}
+          {!granolaConnected && (
+            <div className="flex items-center gap-3 rounded-xl border border-amber-200/60 bg-amber-50/50 px-4 py-3">
+              <BookOpen className="h-5 w-5 shrink-0 text-amber-600" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-amber-900">
+                  Connect Granola for meeting notes
+                </p>
+                <p className="text-xs text-amber-700/80">
+                  Add your Granola API key to see summaries and transcripts.
+                </p>
+              </div>
+              <Link
+                href="/dashboard/settings"
+                className="shrink-0 rounded-md bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-200"
+              >
+                Settings
+              </Link>
+            </div>
+          )}
         </div>
       )}
 

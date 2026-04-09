@@ -10,6 +10,9 @@ import {
   getWeekStart,
   getWeekEnd,
 } from "@/lib/data/meetings";
+import { db } from "@/lib/db";
+import { userIntegrations } from "@/lib/db/schema";
+import { and, eq } from "drizzle-orm";
 
 export default async function MeetingsPage({
   searchParams,
@@ -32,6 +35,21 @@ export default async function MeetingsPage({
     ? await getUserGoogleAccessToken(userId)
     : null;
 
+  // Check if user has Granola connected
+  const granolaRow = userId
+    ? await db
+        .select({ id: userIntegrations.id })
+        .from(userIntegrations)
+        .where(
+          and(
+            eq(userIntegrations.clerkUserId, userId),
+            eq(userIntegrations.provider, "granola")
+          )
+        )
+        .limit(1)
+    : [];
+  const granolaConnected = granolaRow.length > 0;
+
   const days = await getMeetingsForRange(weekStart, weekEnd, { accessToken: accessToken ?? undefined });
 
   return (
@@ -45,6 +63,7 @@ export default async function MeetingsPage({
         initialDays={days}
         initialWeekStart={`${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`}
         calendarConnected={!!accessToken}
+        granolaConnected={granolaConnected}
       />
     </div>
   );

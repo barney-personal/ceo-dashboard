@@ -29,6 +29,13 @@
       "when": 1775725808237,
       "tag": "0003_lively_enchantress",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1775734774204,
+      "tag": "0004_bumpy_mastermind",
+      "breakpoints": true
     }
   ]
 }
