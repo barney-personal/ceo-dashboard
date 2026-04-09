@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { modeReports, modeReportData } from "@/lib/db/schema";
+import { modeReports, modeReportData, syncLog } from "@/lib/db/schema";
 import {
   MODE_SYNC_PROFILES,
   getModeSyncProfile,
@@ -29,10 +29,13 @@ import {
   formatSyncError,
   type SyncRunScope,
 } from "./coordinator";
+import { getSyncSourceConfig } from "./config";
 import { debugLog } from "@/lib/debug-logger";
 import * as Sentry from "@sentry/nextjs";
 
 const MODE_QUERY_FETCH_CONCURRENCY = 3;
+const MODE_REPORT_FRESHNESS_WINDOW_MS =
+  getSyncSourceConfig("mode").normalIntervalMs;
 
 type ModeQueryJob = {
   queryRunToken: string;
@@ -65,6 +68,10 @@ type ModeQueryJobResult =
 
 type ExistingModeQueryData = typeof modeReportData.$inferSelect;
 type ModeReportDataDeleteExecutor = Pick<typeof db, "delete">;
+type ModeReportFreshnessRow = Pick<
+  typeof modeReportData.$inferSelect,
+  "queryToken" | "syncedAt"
+>;
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -82,6 +89,10 @@ function getHeapMb(): number {
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function getModeFreshnessCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - MODE_REPORT_FRESHNESS_WINDOW_MS);
 }
 
 async function mapWithConcurrencyLimit<T, TResult>(
@@ -238,6 +249,125 @@ function getStoredRowCount(row: { storedRowCount?: number; rowCount?: number } |
 
 function getColumnCount(columns: unknown): number {
   return Array.isArray(columns) ? columns.length : 0;
+}
+
+async function checkpointModeSyncProgress(
+  runId: number,
+  recordsSynced: number,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(syncLog)
+    .set({
+      status: "running",
+      recordsSynced,
+      heartbeatAt: now,
+    })
+    .where(and(eq(syncLog.id, runId), eq(syncLog.status, "running")));
+}
+
+async function getExpectedModeQueryTokens(
+  reportToken: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const profile = getModeSyncProfile(reportToken);
+  if (!profile?.syncEnabled || profile.queries.length === 0) {
+    return [];
+  }
+
+  const configuredQueryNames = new Set(profile.queries.map((query) => query.name));
+  const queries = await getReportQueries(reportToken, { signal });
+  const expectedTokens: string[] = [];
+  const resolvedQueryNames = new Set<string>();
+
+  for (const query of queries) {
+    if (!configuredQueryNames.has(query.name)) {
+      continue;
+    }
+
+    if (!getModeQuerySyncProfile(reportToken, query.name)) {
+      continue;
+    }
+
+    expectedTokens.push(query.token);
+    resolvedQueryNames.add(query.name);
+  }
+
+  if (resolvedQueryNames.size !== configuredQueryNames.size) {
+    return [];
+  }
+
+  return [...new Set(expectedTokens)];
+}
+
+async function getFreshStoredModeRows(
+  reportId: number,
+  expectedQueryTokens: string[],
+): Promise<ModeReportFreshnessRow[]> {
+  if (expectedQueryTokens.length === 0) {
+    return [];
+  }
+
+  return db
+    .select({
+      queryToken: modeReportData.queryToken,
+      syncedAt: modeReportData.syncedAt,
+    })
+    .from(modeReportData)
+    .where(
+      and(
+        eq(modeReportData.reportId, reportId),
+        inArray(modeReportData.queryToken, expectedQueryTokens),
+      ),
+    );
+}
+
+async function shouldSkipFreshModeReport(
+  report: typeof modeReports.$inferSelect,
+  opts: { signal?: AbortSignal; now?: Date } = {},
+): Promise<{
+  shouldSkip: boolean;
+  expectedQueryCount: number;
+}> {
+  const expectedQueryTokens = await getExpectedModeQueryTokens(
+    report.reportToken,
+    opts.signal,
+  );
+
+  if (expectedQueryTokens.length === 0) {
+    return {
+      shouldSkip: false,
+      expectedQueryCount: 0,
+    };
+  }
+
+  const storedRows = await getFreshStoredModeRows(report.id, expectedQueryTokens);
+  if (storedRows.length !== expectedQueryTokens.length) {
+    return {
+      shouldSkip: false,
+      expectedQueryCount: expectedQueryTokens.length,
+    };
+  }
+
+  const freshnessCutoff = getModeFreshnessCutoff(opts.now);
+  const storedRowsByToken = new Map(
+    storedRows.map((row) => [row.queryToken, row.syncedAt]),
+  );
+
+  for (const queryToken of expectedQueryTokens) {
+    const syncedAt = storedRowsByToken.get(queryToken);
+    if (!syncedAt || syncedAt.getTime() < freshnessCutoff.getTime()) {
+      return {
+        shouldSkip: false,
+        expectedQueryCount: expectedQueryTokens.length,
+      };
+    }
+  }
+
+  return {
+    shouldSkip: true,
+    expectedQueryCount: expectedQueryTokens.length,
+  };
 }
 
 function captureModeValidationWarning(
@@ -937,6 +1067,31 @@ export async function runModeSync(
           heapMb: getHeapMb(),
         });
 
+        const freshness = await shouldSkipFreshModeReport(report, {
+          signal: opts.signal,
+        });
+        if (freshness.shouldSkip) {
+          succeededReports += 1;
+          await checkpointModeSyncProgress(run.id, totalRecords);
+          await tracker.endPhase(reportPhaseId, {
+            status: "skipped",
+            itemsProcessed: 0,
+            detail: `Skipped report sync because ${freshness.expectedQueryCount} query row${freshness.expectedQueryCount === 1 ? "" : "s"} already cover the configured report and are still fresh`,
+          });
+
+          logModeEvent("report_skipped_fresh", {
+            runId: run.id,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            expectedQueryCount: freshness.expectedQueryCount,
+            durationMs: Date.now() - reportStartedAt,
+            heapMb: getHeapMb(),
+          });
+
+          await yieldToEventLoop();
+          continue;
+        }
+
         const result = await syncReport(report, { ...opts, syncRunId: run.id });
         totalRecords += result.recordsSynced;
         errors.push(...result.errors);
@@ -951,6 +1106,8 @@ export async function runModeSync(
         if (phaseStatus !== "error") {
           succeededReports += 1;
         }
+
+        await checkpointModeSyncProgress(run.id, totalRecords);
 
         const queryCountDetail =
           result.queriesSucceeded + result.queriesFailed > 0

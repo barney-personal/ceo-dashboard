@@ -6,10 +6,16 @@ const mocks = vi.hoisted(() => {
   const selectQueue: unknown[] = [];
   const insertQueue: unknown[] = [];
   const deleteQueue: unknown[] = [];
+  const updateQueue: unknown[] = [];
   const committedTransactionOperations: Array<{
     type: "insert" | "delete";
     table: unknown;
     values?: unknown;
+    where?: unknown;
+  }> = [];
+  const updateOperations: Array<{
+    table: unknown;
+    values: unknown;
     where?: unknown;
   }> = [];
 
@@ -87,6 +93,16 @@ const mocks = vi.hoisted(() => {
   const del = vi.fn(() => ({
     where: vi.fn(() => getNext(deleteQueue, undefined)),
   }));
+  const update = vi.fn((table: unknown) => ({
+    set: vi.fn((values: unknown) => ({
+      where: vi.fn((where: unknown) =>
+        getNext(updateQueue, undefined).then((value) => {
+          updateOperations.push({ table, values, where });
+          return value;
+        })
+      ),
+    })),
+  }));
   const transaction = vi.fn(async (callback: (tx: {
     insert: typeof insert;
     delete: typeof del;
@@ -118,14 +134,18 @@ const mocks = vi.hoisted(() => {
 
   return {
     getCommittedTransactionOperations: () => [...committedTransactionOperations],
+    getUpdateOperations: () => [...updateOperations],
     queueSelect: (...values: unknown[]) => selectQueue.push(...values),
     queueInsert: (...values: unknown[]) => insertQueue.push(...values),
     queueDelete: (...values: unknown[]) => deleteQueue.push(...values),
+    queueUpdate: (...values: unknown[]) => updateQueue.push(...values),
     resetQueues: () => {
       selectQueue.length = 0;
       insertQueue.length = 0;
       deleteQueue.length = 0;
+      updateQueue.length = 0;
       committedTransactionOperations.length = 0;
+      updateOperations.length = 0;
     },
     buildSquadContext: vi.fn(),
     buildSystemPromptFromContext: vi.fn(),
@@ -154,6 +174,7 @@ const mocks = vi.hoisted(() => {
     seedSquads: vi.fn(),
     setTag: vi.fn(),
     select,
+    update,
     transaction,
   };
 });
@@ -163,6 +184,7 @@ vi.mock("@/lib/db", () => ({
     delete: mocks.del,
     insert: mocks.insert,
     select: mocks.select,
+    update: mocks.update,
     transaction: mocks.transaction,
   },
 }));
@@ -880,6 +902,112 @@ describe("sync runner fault injection", () => {
     expect(mocks.getCommittedTransactionOperations()).toEqual([]);
   });
 
+  it("checkpoints completed Mode reports and skips fully fresh reports on rerun", async () => {
+    const freshSyncedAt = new Date();
+
+    mocks.queueSelect(
+      [
+        {
+          id: 21,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+        {
+          id: 22,
+          reportToken: "report-beta",
+          name: "Beta Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+      [],
+      [
+        {
+          id: 21,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+        {
+          id: 22,
+          reportToken: "report-beta",
+          name: "Beta Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [{ queryToken: "query-1", syncedAt: freshSyncedAt }],
+      [],
+      [],
+    );
+    mocks.getLatestRun
+      .mockResolvedValueOnce({ token: "run-alpha-1" })
+      .mockRejectedValueOnce(new Error("mode exploded"))
+      .mockResolvedValueOnce({ token: "run-beta-2" });
+    mocks.getReportQueries.mockImplementation(async (reportToken: string) => {
+      if (reportToken === "report-alpha") {
+        return [{ token: "query-1", name: "Timeout Query" }];
+      }
+
+      return [{ token: "query-2", name: "Healthy Query" }];
+    });
+    mocks.getQueryRuns.mockImplementation(async (reportToken: string) => {
+      if (reportToken === "report-alpha") {
+        return [
+          {
+            token: "query-run-1",
+            queryToken: "query-1",
+            state: "succeeded",
+            _links: { query: { href: "/queries/query-1" } },
+          },
+        ];
+      }
+
+      return [
+        {
+          token: "query-run-2",
+          queryToken: "query-2",
+          state: "succeeded",
+          _links: { query: { href: "/queries/query-2" } },
+        },
+      ];
+    });
+    mocks.getQueryResultContent.mockImplementation(async (reportToken: string) => ({
+      rows: [{ reportToken }],
+      responseBytes: 64,
+    }));
+
+    const firstRun = await runModeSync({ id: 79 });
+    const secondRun = await runModeSync({ id: 80 });
+
+    expect(firstRun).toEqual({
+      status: "partial",
+      recordsSynced: 1,
+      errors: ['Failed to sync report "Beta Report" (report-beta): mode exploded'],
+    });
+    expect(secondRun).toEqual({
+      status: "success",
+      recordsSynced: 1,
+      errors: [],
+    });
+    expect(mocks.getLatestRun).toHaveBeenCalledTimes(3);
+    expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(2);
+    expect(mocks.getUpdateOperations().map((operation) => operation.values)).toEqual([
+      expect.objectContaining({ status: "running", recordsSynced: 1 }),
+      expect.objectContaining({ status: "running", recordsSynced: 0 }),
+      expect.objectContaining({ status: "running", recordsSynced: 1 }),
+    ]);
+  });
+
   it("Mode report phase becomes error when any query fails before the transaction starts", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);
@@ -978,6 +1106,22 @@ describe("sync runner fault injection", () => {
           syncedAt: new Date("2026-04-01T00:00:00.000Z"),
         },
       ],
+      [
+        {
+          id: 99,
+          reportId: 15,
+          queryToken: "query-1",
+          queryName: "Timeout Query",
+          data: [{ v: 1 }],
+          columns: [{ name: "v", type: "number" }],
+          rowCount: 12,
+          sourceRowCount: 12,
+          storedRowCount: 12,
+          truncated: false,
+          storageWindow: { kind: "all" },
+          syncedAt: new Date("2026-04-01T00:00:00.000Z"),
+        },
+      ],
     );
     mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
     mocks.getReportQueries.mockResolvedValue([
@@ -1017,6 +1161,55 @@ describe("sync runner fault injection", () => {
     );
     expect(reportPhaseCall?.[1].status).toBe("partial");
     expect(reportPhaseCall?.[1].detail).toMatch(/Stored 0 rows/);
+  });
+
+  it("does not skip a Mode report when stored query data is stale", async () => {
+    const staleSyncedAt = new Date(Date.now() - 5 * 60 * 60 * 1000);
+
+    mocks.queueSelect(
+      [
+        {
+          id: 17,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [{ queryToken: "query-1", syncedAt: staleSyncedAt }],
+      [
+        {
+          rowCount: 1,
+          storedRowCount: 1,
+          columns: [{ name: "v", type: "number" }],
+        },
+      ],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "query-run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({
+      rows: [{ v: 2 }],
+      responseBytes: 32,
+    });
+
+    await expect(runModeSync({ id: 81 })).resolves.toEqual({
+      status: "success",
+      recordsSynced: 1,
+      errors: [],
+    });
+    expect(mocks.getLatestRun).toHaveBeenCalledTimes(1);
+    expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(1);
   });
 
   it("returns run status error when all queries fail for every Mode report", async () => {
