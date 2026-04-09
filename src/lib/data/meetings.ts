@@ -199,11 +199,12 @@ export async function getMeetingsForRange(
     }
   }
 
-  // Build day data for each day in the range
+  // Build day data for each day in the range (always Mon-Fri)
   const days: DayData[] = [];
   const cursor = new Date(startDate);
-  while (cursor <= endDate) {
-    const dayStr = cursor.toISOString().slice(0, 10);
+  // Generate exactly 5 weekdays from the Monday start
+  for (let i = 0; i < 5; i++) {
+    const dayStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
     const dayMeetings = meetingsByDay.get(dayStr) ?? [];
 
     const linkedMeetings: LinkedMeeting[] = dayMeetings.map((m) => ({

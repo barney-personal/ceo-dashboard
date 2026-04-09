@@ -457,9 +457,7 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
   });
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
 
-  // Only show Mon-Fri
-  const weekdays = initialDays.filter((d) => isWeekday(d.date));
-  const days = weekdays.length > 0 ? weekdays : initialDays;
+  const days = initialDays;
 
   const weekStart = days[0]?.date ?? initialWeekStart;
   const weekEnd = days[days.length - 1]?.date ?? initialWeekStart;
