@@ -1,6 +1,5 @@
 import { db } from "@/lib/db";
-import { meetings, meetingNotes, preReads, syncLog } from "@/lib/db/schema";
-import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
+import { meetingNotes, preReads, syncLog } from "@/lib/db/schema";
 import { getAllNotesSince, getNote, type GranolaNote } from "@/lib/integrations/granola";
 import {
   getChannelHistory,
@@ -44,91 +43,6 @@ async function fetchLastMeetingsSyncTimestamp(): Promise<Date | undefined> {
 }
 
 // ---------------------------------------------------------------------------
-// Google Calendar sync
-// ---------------------------------------------------------------------------
-
-async function syncCalendarEvents(
-  sinceDate: Date,
-  opts: SyncControl = {}
-): Promise<{ count: number; errors: string[] }> {
-  const timeMin = sinceDate.toISOString();
-  // Sync up to 30 days in the future for upcoming meetings
-  const timeMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-  let events: CalendarEvent[];
-  try {
-    events = await getAllEvents(timeMin, timeMax, { signal: opts.signal });
-  } catch (error) {
-    return {
-      count: 0,
-      errors: [`Failed to fetch calendar events: ${formatSyncError(error)}`],
-    };
-  }
-
-  let count = 0;
-  const errors: string[] = [];
-
-  for (const event of events) {
-    throwIfSyncShouldStop(opts, {
-      cancelled: "Meetings sync cancelled while storing calendar events",
-      deadlineExceeded: "Meetings sync exceeded budget while storing calendar events",
-    });
-
-    const startTime = event.start.dateTime ?? event.start.date;
-    const endTime = event.end.dateTime ?? event.end.date;
-    if (!startTime || !endTime) continue;
-
-    try {
-      await db
-        .insert(meetings)
-        .values({
-          calendarEventId: event.id,
-          title: event.summary ?? "(No title)",
-          description: event.description ?? null,
-          startTime: new Date(startTime),
-          endTime: new Date(endTime),
-          location: event.location ?? null,
-          organizer: event.organizer?.displayName ?? event.organizer?.email ?? null,
-          attendees: event.attendees
-            ? event.attendees.map((a) => ({
-                email: a.email,
-                name: a.displayName ?? null,
-                responseStatus: a.responseStatus ?? null,
-              }))
-            : null,
-          recurringEventId: event.recurringEventId ?? null,
-          htmlLink: event.htmlLink ?? null,
-          calendarId: process.env.GOOGLE_CALENDAR_ID ?? "primary",
-        })
-        .onConflictDoUpdate({
-          target: meetings.calendarEventId,
-          set: {
-            title: event.summary ?? "(No title)",
-            description: event.description ?? null,
-            startTime: new Date(startTime),
-            endTime: new Date(endTime),
-            location: event.location ?? null,
-            organizer: event.organizer?.displayName ?? event.organizer?.email ?? null,
-            attendees: event.attendees
-              ? event.attendees.map((a) => ({
-                  email: a.email,
-                  name: a.displayName ?? null,
-                  responseStatus: a.responseStatus ?? null,
-                }))
-              : null,
-            syncedAt: new Date(),
-          },
-        });
-      count++;
-    } catch (error) {
-      errors.push(`Failed to store event ${event.id}: ${formatSyncError(error)}`);
-    }
-  }
-
-  return { count, errors };
-}
-
-// ---------------------------------------------------------------------------
 // Granola sync
 // ---------------------------------------------------------------------------
 
@@ -158,13 +72,11 @@ async function syncGranolaNotes(
     });
 
     try {
-      // Fetch full note with transcript
       const full = await getNote(note.id, {
         includeTranscript: true,
         signal: opts.signal,
       });
 
-      // Concatenate transcript entries into a single string
       const transcriptText = full.transcript
         ?.map((entry) => `${entry.speaker_source}: ${entry.text}`)
         .join("\n") ?? null;
@@ -238,7 +150,6 @@ async function syncPreReads(
       deadlineExceeded: "Meetings sync exceeded budget while storing pre-reads",
     });
 
-    // Skip bot messages / subtypes
     if (msg.subtype || !msg.text) continue;
 
     const userName = msg.user
@@ -247,7 +158,6 @@ async function syncPreReads(
 
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
 
-    // Extract a title from the first line of the message
     const firstLine = msg.text.split("\n")[0]?.trim() ?? "";
     const title = firstLine.length > 200 ? firstLine.slice(0, 200) + "..." : firstLine;
 
@@ -283,7 +193,8 @@ async function syncPreReads(
 }
 
 // ---------------------------------------------------------------------------
-// Main runner
+// Main runner — syncs Granola notes + Slack pre-reads
+// (Google Calendar is fetched live per-user via Clerk OAuth, not synced)
 // ---------------------------------------------------------------------------
 
 export async function runMeetingsSync(
@@ -316,35 +227,7 @@ export async function runMeetingsSync(
         : "Full scan (no prior sync)",
     });
 
-    // Phase 1: Google Calendar
-    throwIfSyncShouldStop(opts, {
-      cancelled: "Meetings sync cancelled before calendar sync",
-      deadlineExceeded: "Meetings sync exceeded budget before calendar sync",
-    });
-
-    phaseId = await tracker.startPhase("sync_calendar", "Syncing Google Calendar events");
-    try {
-      const cal = await syncCalendarEvents(sinceDate, opts);
-      totalRecords += cal.count;
-      allErrors.push(...cal.errors);
-      if (cal.errors.length === 0 || cal.count > 0) succeededSources++;
-      await tracker.endPhase(phaseId, {
-        status: cal.errors.length > 0 && cal.count === 0 ? "error" : "success",
-        itemsProcessed: cal.count,
-        detail: `Synced ${cal.count} calendar events`,
-        errorMessage: cal.errors.length > 0 ? cal.errors.join("; ") : undefined,
-      });
-    } catch (error) {
-      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
-        await tracker.endPhase(phaseId, { status: "skipped", errorMessage: error.message });
-        throw error;
-      }
-      const message = `Calendar sync failed: ${formatSyncError(error)}`;
-      allErrors.push(message);
-      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
-    }
-
-    // Phase 2: Granola meeting notes
+    // Phase 1: Granola meeting notes
     throwIfSyncShouldStop(opts, {
       cancelled: "Meetings sync cancelled before Granola sync",
       deadlineExceeded: "Meetings sync exceeded budget before Granola sync",
@@ -372,7 +255,7 @@ export async function runMeetingsSync(
       await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
     }
 
-    // Phase 3: Slack #pre-reads
+    // Phase 2: Slack #pre-reads
     throwIfSyncShouldStop(opts, {
       cancelled: "Meetings sync cancelled before pre-reads sync",
       deadlineExceeded: "Meetings sync exceeded budget before pre-reads sync",

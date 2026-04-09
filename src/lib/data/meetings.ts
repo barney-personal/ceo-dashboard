@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
-import { meetings, preReads } from "@/lib/db/schema";
-import { and, gte, lte, desc, asc } from "drizzle-orm";
+import { preReads } from "@/lib/db/schema";
+import { and, gte, lte, desc } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
@@ -87,41 +87,7 @@ function isWorkMeeting(
 // Data fetching
 // ---------------------------------------------------------------------------
 
-/** Fetch meetings from DB (synced data, for cron/service mode). */
-async function fetchDbMeetings(
-  startDate: Date,
-  endDate: Date,
-  minAttendees: number
-): Promise<MeetingRow[]> {
-  const meetingRows = await db
-    .select()
-    .from(meetings)
-    .where(
-      and(
-        gte(meetings.startTime, startDate),
-        lte(meetings.startTime, endDate)
-      )
-    )
-    .orderBy(asc(meetings.startTime));
-
-  return meetingRows
-    .filter((m) => isWorkMeeting(m, minAttendees))
-    .map((m) => ({
-      id: m.id,
-      calendarEventId: m.calendarEventId,
-      title: m.title,
-      description: m.description,
-      startTime: m.startTime.toISOString(),
-      endTime: m.endTime.toISOString(),
-      location: m.location,
-      organizer: m.organizer,
-      attendees: m.attendees as MeetingRow["attendees"],
-      recurringEventId: m.recurringEventId,
-      htmlLink: m.htmlLink,
-    }));
-}
-
-/** Fetch meetings live from Google Calendar API (per-user mode). */
+/** Fetch meetings live from Google Calendar API via per-user Clerk token. */
 async function fetchLiveCalendarMeetings(
   startDate: Date,
   endDate: Date,
@@ -176,8 +142,8 @@ function calendarEventToMeetingRow(
  * Get meetings and pre-reads for a date range, with linking.
  * Pre-reads posted on day D are matched to meetings on day D or D+1.
  *
- * When `accessToken` is provided, fetches live from Google Calendar API (per-user).
- * Otherwise reads from the synced meetings DB table (service/cron mode).
+ * Requires an accessToken from Clerk's Google OAuth to fetch calendar events.
+ * If no token provided, returns days with only pre-reads (no calendar events).
  */
 export async function getMeetingsForRange(
   startDate: Date,
@@ -189,11 +155,11 @@ export async function getMeetingsForRange(
   // Fetch pre-reads from 1 day before the range start (they may link to day 1 meetings)
   const preReadStart = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
 
-  // Fetch meetings: live from Google API or from DB
+  // Fetch meetings live from Google Calendar (or empty if no token)
   const [serializedMeetings, preReadRows] = await Promise.all([
     opts.accessToken
       ? fetchLiveCalendarMeetings(startDate, endDate, opts.accessToken, minAttendees)
-      : fetchDbMeetings(startDate, endDate, minAttendees),
+      : Promise.resolve([] as MeetingRow[]),
     db
       .select()
       .from(preReads)
