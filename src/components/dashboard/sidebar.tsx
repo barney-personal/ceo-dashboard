@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type Role, hasAccess } from "@/lib/auth/roles";
+import { RolePreview } from "@/components/dashboard/role-preview";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -166,7 +167,7 @@ for (const group of NAV_GROUPS) {
   }
 }
 
-export function Sidebar({ role }: { role: Role }) {
+export function Sidebar({ role, isCeo = false }: { role: Role; isCeo?: boolean }) {
   const pathname = usePathname();
 
   const visibleGroups = NAV_GROUPS.map((group) => ({
@@ -227,6 +228,9 @@ export function Sidebar({ role }: { role: Role }) {
           </div>
         ))}
       </nav>
+
+      {/* Role preview — CEO only */}
+      {isCeo && <RolePreview activeRole={role} />}
 
       {/* Bottom section */}
       <div className="border-t border-sidebar-border px-4 py-3">
