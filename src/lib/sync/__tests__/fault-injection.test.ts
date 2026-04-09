@@ -1325,6 +1325,75 @@ describe("sync runner fault injection", () => {
     expect(phaseOpts.detail).toMatch(/2 queries succeeded, 0 failed/);
   });
 
+  it("resumes Slack channels from per-channel checkpoints when prior run left partial checkpoints", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CKPT-1,CKPT-2";
+
+    // Prior partial run left a checkpoint for CKPT-1 at "1712512350.0003"
+    const globalTs = new Date("2026-04-01T00:00:00.000Z");
+    const checkpointTs = "1712512350.0003";
+    mocks.queueSelect(
+      [],                                                                                         // squads fallback
+      [{ completedAt: globalTs }],                                                               // last sync ts → global cursor
+      [{ scope: { slackChannelCheckpoints: { "CKPT-1": checkpointTs } } }],                     // resumable checkpoints
+    );
+
+    mocks.getChannelName
+      .mockResolvedValueOnce("growth-alpha")
+      .mockResolvedValueOnce("growth-beta");
+    mocks.getChannelHistory.mockResolvedValue([]);
+
+    await runSlackSync({ id: 90 });
+
+    const globalCursorStr = String(globalTs.getTime() / 1000);
+
+    // CKPT-1 should use the per-channel checkpoint cursor
+    expect(mocks.getChannelHistory).toHaveBeenCalledWith(
+      "CKPT-1",
+      checkpointTs,
+      undefined,
+      expect.anything()
+    );
+    // CKPT-2 has no checkpoint — falls back to global lastSyncTs
+    expect(mocks.getChannelHistory).toHaveBeenCalledWith(
+      "CKPT-2",
+      globalCursorStr,
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it("writes per-channel checkpoint to syncLog.scope after each successful Slack channel sync", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CWRITE";
+
+    const latestTs = "1712512350.0005";
+    mocks.queueSelect(
+      [],   // squads fallback
+      [],   // last sync ts (no prior success)
+      [],   // resumable checkpoints (none)
+    );
+    mocks.getChannelName.mockResolvedValue("growth-write");
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712512350.0003", text: makeLongSlackText("older msg"), user: "U1" },
+      { ts: latestTs, text: makeLongSlackText("newest msg"), user: "U2" },
+    ]);
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+
+    await runSlackSync({ id: 91 });
+
+    // checkpointSlackSyncProgress should have been called, updating syncLog.scope
+    // with the latestMessageTs for this channel
+    const updates = mocks.getUpdateOperations();
+    expect(updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          values: expect.objectContaining({
+            scope: { slackChannelCheckpoints: { "CWRITE": latestTs } },
+          }),
+        }),
+      ])
+    );
+  });
+
   it("Slack channel phase detail includes channel name and message counts", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);
