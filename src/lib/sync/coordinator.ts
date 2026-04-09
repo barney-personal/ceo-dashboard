@@ -234,9 +234,10 @@ export async function expireStaleSyncRuns(
       continue;
     }
 
-    if (leaseExpired || startedAt.getTime() > staleCutoff.getTime()) {
-      continue;
-    }
+    // Skip if started recently (not yet past stale timeout)
+    if (startedAt.getTime() > staleCutoff.getTime()) continue;
+    // Skip if still heartbeating (lease has not expired yet)
+    if (leaseExpiresAt != null && !leaseExpired) continue;
 
     if (
       isLocalSyncRunProtected({
