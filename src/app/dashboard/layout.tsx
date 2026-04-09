@@ -1,5 +1,5 @@
 import { UserButton } from "@clerk/nextjs";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { getCurrentUserRole, getRealUserRole } from "@/lib/auth/roles.server";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Bell } from "lucide-react";
 
@@ -8,11 +8,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const role = await getCurrentUserRole();
+  const [role, realRole] = await Promise.all([
+    getCurrentUserRole(),
+    getRealUserRole(),
+  ]);
 
   return (
     <div className="flex flex-1">
-      <Sidebar role={role} />
+      <Sidebar role={role} isCeo={realRole === "ceo"} />
       <div className="flex flex-1 flex-col">
         <header className="flex h-14 items-center justify-between border-b border-border/50 px-6">
           <div className="flex items-center gap-3">
