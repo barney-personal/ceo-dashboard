@@ -345,6 +345,7 @@ function DayColumn({
   const totalPreReads =
     day.meetings.reduce((sum, m) => sum + m.preReads.length, 0) +
     day.unlinkedPreReads.length;
+  const totalDayNotes = day.meetings.reduce((sum, m) => sum + m.notes.length, 0) + day.unlinkedNotes.length;
 
   const today = isToday(day.date);
 
@@ -382,6 +383,12 @@ function DayColumn({
                 {day.meetings.length}
               </span>
             )}
+            {totalDayNotes > 0 && (
+              <span className="flex items-center gap-0.5 text-[10px] text-emerald-600">
+                <BookOpen className="h-2.5 w-2.5" />
+                {totalDayNotes}
+              </span>
+            )}
             {totalPreReads > 0 && (
               <span className="flex items-center gap-0.5 text-[10px] text-primary">
                 <FileText className="h-2.5 w-2.5" />
@@ -396,18 +403,28 @@ function DayColumn({
               extractLinks(pr.content ?? "")
             );
 
+            const hasNotes = m.notes.length > 0;
+
             return (
               <div
                 key={m.id}
                 className={cn(
                   "rounded-lg border border-border/40 bg-card px-2.5 py-1.5",
-                  m.preReads.length > 0 && "border-l-2 border-l-primary/40"
+                  hasNotes
+                    ? "border-l-2 border-l-emerald-500/60 bg-emerald-50/30"
+                    : m.preReads.length > 0 && "border-l-2 border-l-primary/40"
                 )}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
                     {formatTime(m.startTime)}
                   </span>
+                  {hasNotes && (
+                    <span className="flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-px text-[9px] font-medium text-emerald-700">
+                      <BookOpen className="h-2.5 w-2.5" />
+                      Notes
+                    </span>
+                  )}
                 </div>
                 <p className="mt-0.5 truncate text-xs font-medium text-foreground">
                   {m.title}
