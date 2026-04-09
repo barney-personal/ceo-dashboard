@@ -22,6 +22,8 @@ import {
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 
+const SLACK_THREAD_REPLY_CONCURRENCY = 5;
+
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
   const rows = await db
@@ -35,17 +37,59 @@ async function buildUserNameFallback(): Promise<Map<string, string>> {
   return map;
 }
 
-/** Resolve a Slack user ID to a display name, falling back to seed data. */
+/** Resolve a Slack user ID to a display name, falling back to seed data.
+ *
+ * `localCache` is a sync-local Map<userId, resolvedName> that persists across
+ * all calls within a single syncChannel() run. It caches every outcome —
+ * successful Slack display names, fallback PM names, and raw user IDs returned
+ * when the Slack API lookup fails — so repeated authors within a run perform at
+ * most one resolution attempt per userId.
+ */
 async function resolveAuthorName(
   userId: string,
   fallback: Map<string, string>,
+  localCache: Map<string, string>,
   opts: SyncControl = {}
 ): Promise<string> {
+  if (localCache.has(userId)) return localCache.get(userId)!;
   const name = await getUserName(userId, { signal: opts.signal });
-  if (name === userId && fallback.has(userId)) {
-    return fallback.get(userId)!;
+  const resolved = name === userId && fallback.has(userId) ? fallback.get(userId)! : name;
+  localCache.set(userId, resolved);
+  return resolved;
+}
+
+async function mapWithConcurrencyLimit<T, TResult>(
+  items: readonly T[],
+  concurrencyLimit: number,
+  mapper: (item: T, index: number) => Promise<TResult>
+): Promise<PromiseSettledResult<TResult>[]> {
+  const settledResults: PromiseSettledResult<TResult>[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workerCount = Math.min(concurrencyLimit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      try {
+        const value = await mapper(items[currentIndex], currentIndex);
+        settledResults[currentIndex] = { status: "fulfilled", value };
+      } catch (reason) {
+        settledResults[currentIndex] = { status: "rejected", reason };
+      }
+    }
+  });
+
+  const workerResults = await Promise.allSettled(workers);
+  const rejectedWorker = workerResults.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  );
+  if (rejectedWorker) {
+    throw rejectedWorker.reason;
   }
-  return name;
+
+  return settledResults;
 }
 
 /** Map channel name to pillar for grouping */
@@ -113,8 +157,35 @@ async function syncChannel(
   const topLevelMessages = await getChannelHistory(channelId, oldest, undefined, {
     signal: opts.signal,
   });
-  const messages = [];
+  const threadParents = topLevelMessages.filter(
+    (msg) => msg.reply_count && msg.reply_count > 0
+  );
+  const replyFetchResults = await mapWithConcurrencyLimit(
+    threadParents,
+    SLACK_THREAD_REPLY_CONCURRENCY,
+    async (msg) => {
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Slack sync cancelled while expanding threads",
+        deadlineExceeded:
+          "Slack sync exceeded its execution budget while expanding threads",
+      });
 
+      return getThreadReplies(channelId, msg.ts, {
+        signal: opts.signal,
+      });
+    }
+  );
+
+  const repliesByParentTs = new Map<string, Awaited<ReturnType<typeof getThreadReplies>>>();
+  for (const [index, result] of replyFetchResults.entries()) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+
+    repliesByParentTs.set(threadParents[index].ts, result.value);
+  }
+
+  const messages = [];
   for (const msg of topLevelMessages) {
     throwIfSyncShouldStop(opts, {
       cancelled: "Slack sync cancelled while expanding threads",
@@ -124,14 +195,12 @@ async function syncChannel(
 
     messages.push(msg);
     if (msg.reply_count && msg.reply_count > 0) {
-      const replies = await getThreadReplies(channelId, msg.ts, {
-        signal: opts.signal,
-      });
-      messages.push(...replies);
+      messages.push(...(repliesByParentTs.get(msg.ts) ?? []));
     }
   }
 
   let count = 0;
+  const authorNameCache = new Map<string, string>();
 
   for (const msg of messages) {
     throwIfSyncShouldStop(opts, {
@@ -143,7 +212,7 @@ async function syncChannel(
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
     const authorName = msg.user
-      ? await resolveAuthorName(msg.user, userNameFallback, opts)
+      ? await resolveAuthorName(msg.user, userNameFallback, authorNameCache, opts)
       : "unknown";
 
     const parsed = await llmParseOkrUpdate(

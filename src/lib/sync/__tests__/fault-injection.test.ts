@@ -87,6 +87,7 @@ const mocks = vi.hoisted(() => {
     getChannelHistory: vi.fn(),
     getChannelName: vi.fn(),
     getLatestRun: vi.fn(),
+    getModeQuerySyncProfile: vi.fn(),
     getQueryResultContent: vi.fn(),
     getQueryRuns: vi.fn(),
     getReportQueries: vi.fn(),
@@ -185,10 +186,7 @@ vi.mock("../coordinator", () => ({
 }));
 
 vi.mock("../mode-storage", () => ({
-  getModeQuerySyncProfile: vi.fn((_: string, queryName: string) => ({
-    name: queryName,
-    storageWindow: { kind: "all" },
-  })),
+  getModeQuerySyncProfile: mocks.getModeQuerySyncProfile,
   prepareModeRowsForStorage: mocks.prepareModeRowsForStorage,
 }));
 
@@ -204,6 +202,10 @@ vi.mock("drizzle-orm", () => ({
 import { runManagementAccountsSync } from "../management-accounts";
 import { runModeSync } from "../mode";
 import { runSlackSync } from "../slack";
+
+function makeLongSlackText(label: string): string {
+  return `${label} ${"Objective update ".repeat(20)}`;
+}
 
 describe("sync runner fault injection", () => {
   beforeEach(() => {
@@ -226,6 +228,10 @@ describe("sync runner fault injection", () => {
       sourceRowCount: rows.length,
       storedRowCount: rows.length,
       truncated: false,
+      storageWindow: { kind: "all" },
+    }));
+    mocks.getModeQuerySyncProfile.mockImplementation((_: string, queryName: string) => ({
+      name: queryName,
       storageWindow: { kind: "all" },
     }));
 
@@ -352,6 +358,352 @@ describe("sync runner fault injection", () => {
     });
   });
 
-  // TODO: Mode sync fault injection tests need updating to match
-  // the current runModeSync error handling contract after resilience PR merge.
+  it("fetches Slack thread replies with bounded concurrency and preserves parent-reply ordering", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CBATCH";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-alpha");
+
+    const topLevelMessages = [
+      {
+        ts: "1712512345.0001",
+        text: makeLongSlackText("parent-1"),
+        user: "U1",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0002",
+        text: makeLongSlackText("parent-2"),
+        user: "U2",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0003",
+        text: makeLongSlackText("parent-3"),
+        user: "U3",
+      },
+      {
+        ts: "1712512345.0004",
+        text: makeLongSlackText("parent-4"),
+        user: "U4",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0005",
+        text: makeLongSlackText("parent-5"),
+        user: "U5",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0006",
+        text: makeLongSlackText("parent-6"),
+        user: "U6",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0007",
+        text: makeLongSlackText("parent-7"),
+        user: "U7",
+        reply_count: 1,
+      },
+    ];
+
+    let activeReplyFetches = 0;
+    let maxConcurrentReplyFetches = 0;
+    mocks.getChannelHistory.mockResolvedValue(topLevelMessages);
+    mocks.getThreadReplies.mockImplementation(async (_channelId, threadTs: string) => {
+      activeReplyFetches += 1;
+      maxConcurrentReplyFetches = Math.max(
+        maxConcurrentReplyFetches,
+        activeReplyFetches
+      );
+
+      const suffix = Number(threadTs.split(".")[1] ?? "0");
+      await new Promise((resolve) => setTimeout(resolve, (suffix % 3) * 10));
+
+      activeReplyFetches -= 1;
+      return [
+        {
+          ts: `${threadTs}-reply`,
+          text: makeLongSlackText(`reply-for-${threadTs}`),
+          user: `U-${threadTs}`,
+          thread_ts: threadTs,
+        },
+      ];
+    });
+
+    const parsedMessages: string[] = [];
+    mocks.llmParseOkrUpdate.mockImplementation(async (text: string) => {
+      parsedMessages.push(text);
+      return null;
+    });
+
+    await expect(runSlackSync({ id: 48 })).resolves.toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+
+    expect(maxConcurrentReplyFetches).toBe(5);
+    expect(parsedMessages).toEqual([
+      makeLongSlackText("parent-1"),
+      makeLongSlackText("reply-for-1712512345.0001"),
+      makeLongSlackText("parent-2"),
+      makeLongSlackText("reply-for-1712512345.0002"),
+      makeLongSlackText("parent-3"),
+      makeLongSlackText("parent-4"),
+      makeLongSlackText("reply-for-1712512345.0004"),
+      makeLongSlackText("parent-5"),
+      makeLongSlackText("reply-for-1712512345.0005"),
+      makeLongSlackText("parent-6"),
+      makeLongSlackText("reply-for-1712512345.0006"),
+      makeLongSlackText("parent-7"),
+      makeLongSlackText("reply-for-1712512345.0007"),
+    ]);
+  });
+
+  it("surfaces a failed thread reply fetch as a channel sync error", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CTHREAD";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-alpha");
+    mocks.getChannelHistory.mockResolvedValue([
+      {
+        ts: "1712512345.1001",
+        text: makeLongSlackText("parent-1"),
+        user: "U1",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.1002",
+        text: makeLongSlackText("parent-2"),
+        user: "U2",
+        reply_count: 1,
+      },
+    ]);
+
+    mocks.getThreadReplies.mockImplementation(async (_channelId, threadTs: string) => {
+      if (threadTs.endsWith("1002")) {
+        throw new Error("reply fetch exploded");
+      }
+
+      return [
+        {
+          ts: `${threadTs}-reply`,
+          text: makeLongSlackText(`reply-for-${threadTs}`),
+          user: `U-${threadTs}`,
+          thread_ts: threadTs,
+        },
+      ];
+    });
+
+    await expect(runSlackSync({ id: 49 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to sync channel CTHREAD: reply fetch exploded"],
+    });
+    expect(mocks.llmParseOkrUpdate).not.toHaveBeenCalled();
+  });
+
+  it("resolves repeated authors from the success path only once per syncChannel run", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CCACHE";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-cache");
+
+    // Three messages from the same user U123
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712512345.0001", text: makeLongSlackText("msg-1"), user: "U123" },
+      { ts: "1712512345.0002", text: makeLongSlackText("msg-2"), user: "U123" },
+      { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U123" },
+    ]);
+    mocks.getUserName.mockResolvedValue("Alice PM");
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+
+    await runSlackSync({ id: 50 });
+
+    // getUserName should be called at most once for U123 across all three messages
+    expect(mocks.getUserName).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserName).toHaveBeenCalledWith("U123", expect.anything());
+  });
+
+  it("resolves repeated authors from the fallback and raw-id paths only once per syncChannel run", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CCACHEFALLBACK";
+    // First select: userNameFallback (squads query) returns U456 -> "Bob PM"
+    // Second select: syncLog timestamp query returns []
+    mocks.queueSelect([{ pmSlackId: "U456", pmName: "Bob PM" }], []);
+    mocks.getChannelName.mockResolvedValue("growth-fallback");
+
+    // Two messages from U456 (fallback path) and two from U789 (raw-id path)
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712512345.0001", text: makeLongSlackText("msg-1"), user: "U456" },
+      { ts: "1712512345.0002", text: makeLongSlackText("msg-2"), user: "U456" },
+      { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U789" },
+      { ts: "1712512345.0004", text: makeLongSlackText("msg-4"), user: "U789" },
+    ]);
+    // getUserName returns the raw userId (simulates API failure path — no caching at process level)
+    mocks.getUserName.mockImplementation(async (userId: string) => userId);
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+
+    await runSlackSync({ id: 51 });
+
+    // getUserName should be called once per unique userId, not once per message
+    expect(mocks.getUserName).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserName).toHaveBeenCalledWith("U456", expect.anything());
+    expect(mocks.getUserName).toHaveBeenCalledWith("U789", expect.anything());
+  });
+
+  it("fetches Mode query results with bounded concurrency", async () => {
+    mocks.queueSelect([
+      {
+        id: 11,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+
+    const queryDefinitions = Array.from({ length: 5 }, (_, index) => ({
+      token: `query-${index + 1}`,
+      name: `Query ${index + 1}`,
+    }));
+    mocks.getReportQueries.mockResolvedValue(queryDefinitions);
+    mocks.getQueryRuns.mockResolvedValue(
+      queryDefinitions.map((query, index) => ({
+        token: `query-run-${index + 1}`,
+        queryToken: query.token,
+        state: "succeeded",
+        _links: { query: { href: `/queries/${query.token}` } },
+      }))
+    );
+
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+    const releaseFetches: Array<() => void> = [];
+    mocks.getQueryResultContent.mockImplementation(async (_reportToken, _runToken, queryRunToken: string) => {
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+
+      await new Promise<void>((resolve) => {
+        releaseFetches.push(() => {
+          activeFetches -= 1;
+          resolve();
+        });
+      });
+
+      return {
+        rows: [{ queryRunToken }],
+        responseBytes: 128,
+      };
+    });
+
+    const runPromise = runModeSync({ id: 71 });
+
+    await vi.waitFor(() => {
+      expect(maxActiveFetches).toBe(3);
+      expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(3);
+    });
+
+    releaseFetches.splice(0).forEach((release) => release());
+
+    await vi.waitFor(() => {
+      expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(5);
+    });
+
+    releaseFetches.splice(0).forEach((release) => release());
+
+    const result = await runPromise;
+
+    expect(result).toEqual({
+      status: "success",
+      recordsSynced: 5,
+      errors: [],
+    });
+    expect(maxActiveFetches).toBe(3);
+  });
+
+  it("keeps Mode per-query failures isolated while preserving cleanup tokens", async () => {
+    mocks.queueSelect([
+      {
+        id: 12,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+      { token: "query-2", name: "Healthy Query" },
+      { token: "query-3", name: "Skipped Query" },
+      { token: "query-4", name: "Unconfigured Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "query-run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+      {
+        token: "query-run-2",
+        queryToken: "query-2",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-2" } },
+      },
+      {
+        token: "query-run-3",
+        queryToken: "query-3",
+        state: "running",
+        _links: { query: { href: "/queries/query-3" } },
+      },
+      {
+        token: "query-run-4",
+        queryToken: "query-4",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-4" } },
+      },
+    ]);
+    mocks.getModeQuerySyncProfile.mockImplementation((_: string, queryName: string) => {
+      if (queryName === "Unconfigured Query") {
+        return null;
+      }
+
+      return {
+        name: queryName,
+        storageWindow: { kind: "all" },
+      };
+    });
+    mocks.getQueryResultContent.mockImplementation(async (_reportToken, _runToken, queryRunToken: string) => {
+      if (queryRunToken === "query-run-2") {
+        throw new Error("query fetch exploded");
+      }
+
+      return {
+        rows: [{ queryRunToken }],
+        responseBytes: 64,
+      };
+    });
+
+    const result = await runModeSync({ id: 72 });
+
+    expect(result.status).toBe("partial");
+    expect(result.recordsSynced).toBe(1);
+    expect(result.errors).toEqual([
+      'Failed to sync query "Healthy Query" in report "Alpha Report": query fetch exploded',
+    ]);
+    expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(2);
+
+    const cleanupDelete = mocks.del.mock.results.at(-1)?.value as
+      | { where: ReturnType<typeof vi.fn> }
+      | undefined;
+    const cleanupWhereArg = cleanupDelete?.where.mock.calls[0]?.[0] as
+      | { and: Array<{ notInArray?: [unknown, string[]] }> }
+      | undefined;
+    const notInArrayClause = cleanupWhereArg?.and.find((clause) => clause.notInArray);
+
+    expect(notInArrayClause?.notInArray?.[1]).toEqual(["query-1", "query-2"]);
+  });
 });
