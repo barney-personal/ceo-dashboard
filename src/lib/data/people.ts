@@ -390,6 +390,6 @@ export async function getActiveEmployees(): Promise<{
   return {
     employees: transformToPersons(activeRows),
     allRows,
-    lastSync: headcountQuery.syncedAt,
+    lastSync: headcountQuery?.syncedAt ?? null,
   };
 }
