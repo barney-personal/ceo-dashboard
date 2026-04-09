@@ -90,6 +90,142 @@ function formatPhaseName(phase: string): string {
   return rest.length > 0 ? `${label} — ${rest.join(":")}` : label;
 }
 
+type PhaseDisplayStatus = "success" | "partial" | "error" | "skipped" | "running" | "queued" | "cancelled" | "abandoned";
+
+type PhaseBadge = {
+  label: string;
+  value: string;
+};
+
+function getDisplayPhaseStatus(
+  phase: Phase,
+  runEffectiveStatus: string,
+): PhaseDisplayStatus {
+  const isInterrupted =
+    phase.status === "running" &&
+    !phase.completedAt &&
+    runEffectiveStatus !== "running" &&
+    runEffectiveStatus !== "queued";
+
+  return (isInterrupted ? "error" : phase.status) as PhaseDisplayStatus;
+}
+
+function getPhaseTone(status: PhaseDisplayStatus) {
+  if (status === "success") {
+    return {
+      container: "border-positive/20 bg-positive/[0.04]",
+      bar: "var(--positive)",
+      badge: "border-positive/20 bg-positive/10 text-positive",
+    };
+  }
+
+  if (status === "partial" || status === "running" || status === "queued") {
+    return {
+      container: "border-warning/20 bg-warning/[0.05]",
+      bar: "var(--warning)",
+      badge: "border-warning/20 bg-warning/10 text-warning",
+    };
+  }
+
+  if (status === "error" || status === "abandoned") {
+    return {
+      container: "border-destructive/20 bg-destructive/[0.04]",
+      bar: "var(--destructive)",
+      badge: "border-destructive/20 bg-destructive/10 text-destructive",
+    };
+  }
+
+  return {
+    container: "border-border/40 bg-background/40",
+    bar: "var(--muted-foreground)",
+    badge: "border-border/40 bg-muted/40 text-muted-foreground",
+  };
+}
+
+function getPhaseBadges(phase: Phase): PhaseBadge[] {
+  if (!phase.detail) {
+    return phase.itemsProcessed > 0
+      ? [{ label: "Items", value: String(phase.itemsProcessed) }]
+      : [];
+  }
+
+  if (phase.phase.startsWith("sync_report:")) {
+    const match = phase.detail.match(
+      /Stored (\d+) rows(?:\s+[—-]\s+(\d+) queries succeeded, (\d+) failed)?(?:,\s+(\d+) warnings?)?/,
+    );
+    if (match) {
+      const [, rows, ok, failed, warnings] = match;
+      const badges: PhaseBadge[] = [{ label: "Rows", value: rows }];
+      if (ok && failed) {
+        badges.push({ label: "Queries", value: `${ok} ok / ${failed} failed` });
+      }
+      if (warnings) {
+        badges.push({ label: "Warnings", value: warnings });
+      }
+      return badges;
+    }
+  }
+
+  if (phase.phase.startsWith("sync_channel:")) {
+    const match = phase.detail.match(
+      /#(.+?)\s+[—-]\s+(\d+) parsed, (\d+) skipped, (\d+) KRs stored/,
+    );
+    if (match) {
+      const [, channel, parsed, skipped, stored] = match;
+      return [
+        { label: "Channel", value: `#${channel}` },
+        { label: "Messages", value: `${parsed} parsed / ${skipped} skipped` },
+        { label: "KRs", value: stored },
+      ];
+    }
+  }
+
+  return phase.itemsProcessed > 0
+    ? [{ label: "Items", value: String(phase.itemsProcessed) }]
+    : [];
+}
+
+function PhaseSummary({
+  phases,
+  runEffectiveStatus,
+}: {
+  phases: Phase[];
+  runEffectiveStatus: string;
+}) {
+  const statuses = phases.map((phase) => getDisplayPhaseStatus(phase, runEffectiveStatus));
+  const warningCount = statuses.filter((status) => status === "partial").length;
+  const errorCount = statuses.filter((status) => status === "error").length;
+  const skippedCount = statuses.filter((status) => status === "skipped").length;
+  const processedItems = phases.reduce(
+    (sum, phase) => sum + (phase.itemsProcessed > 0 ? phase.itemsProcessed : 0),
+    0,
+  );
+
+  const stats = [
+    { label: "Phases", value: String(phases.length) },
+    { label: "Warnings", value: String(warningCount) },
+    { label: "Errors", value: String(errorCount) },
+    { label: "Skipped", value: String(skippedCount) },
+    ...(processedItems > 0 ? [{ label: "Items", value: String(processedItems) }] : []),
+  ];
+
+  return (
+    <div
+      className="mt-3 grid gap-2 rounded-lg border border-border/50 bg-background/70 p-3 sm:grid-cols-5"
+      data-testid="phase-summary"
+    >
+      {stats.map((stat) => (
+        <div key={stat.label} className="rounded-md border border-border/40 bg-background/70 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground/40">
+            {stat.label}
+          </p>
+          <p className="mt-1 font-mono text-sm text-foreground/80">{stat.value}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StatusIcon({ status, className = "" }: { status: string; className?: string }) {
   if (status === "success") return <CheckCircle2 className={`text-positive ${className}`} />;
   if (status === "partial") return <AlertTriangle className={`text-warning ${className}`} />;
@@ -123,22 +259,27 @@ function PhaseTimeline({
 
   return (
     <div className="space-y-1 py-3">
+      <PhaseSummary phases={phases} runEffectiveStatus={runEffectiveStatus} />
       {phases.map((phase) => {
         const durationMs = phase.completedAt
           ? new Date(phase.completedAt).getTime() - new Date(phase.startedAt).getTime()
           : now - new Date(phase.startedAt).getTime();
         const widthPct = totalDurationMs > 0 ? Math.max(2, (durationMs / totalDurationMs) * 100) : 50;
-        const isInterrupted =
-          phase.status === "running" &&
-          !phase.completedAt &&
-          runEffectiveStatus !== "running" &&
-          runEffectiveStatus !== "queued";
+        const displayStatus = getDisplayPhaseStatus(phase, runEffectiveStatus);
+        const isInterrupted = displayStatus === "error" && phase.status === "running" && !phase.completedAt;
+        const tone = getPhaseTone(displayStatus);
+        const badges = getPhaseBadges(phase);
 
         return (
-          <div key={phase.id} className="group">
+          <div
+            key={phase.id}
+            className={`group rounded-lg border px-3 py-2 transition-colors ${tone.container}`}
+            data-phase-status={displayStatus}
+            data-testid={`phase-row-${phase.id}`}
+          >
             <div className="flex items-center gap-3">
               <StatusIcon
-                status={isInterrupted ? "error" : phase.status}
+                status={displayStatus}
                 className="h-3 w-3 shrink-0"
               />
               <div className="flex-1 min-w-0">
@@ -156,20 +297,27 @@ function PhaseTimeline({
                     className="h-full rounded-full transition-all duration-500"
                     style={{
                       width: `${widthPct}%`,
-                      backgroundColor:
-                        phase.status === "error" ? "var(--destructive)" :
-                        phase.status === "skipped" ? "var(--muted-foreground)" :
-                        phase.status === "running" ? "var(--warning)" :
-                        "var(--primary)",
-                      opacity: phase.status === "skipped" ? 0.2 : 0.3,
+                      backgroundColor: tone.bar,
+                      opacity: displayStatus === "skipped" ? 0.2 : 0.3,
                     }}
                   />
                 </div>
+                {badges.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {badges.map((badge) => (
+                      <span
+                        key={`${phase.id}-${badge.label}`}
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone.badge}`}
+                      >
+                        {badge.label}: {badge.value}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {/* Detail text */}
                 {phase.detail && (
                   <p className="mt-0.5 text-[11px] text-muted-foreground/40">
                     {phase.detail}
-                    {phase.itemsProcessed > 0 && ` (${phase.itemsProcessed} items)`}
                   </p>
                 )}
               </div>
