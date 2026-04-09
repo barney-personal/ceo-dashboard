@@ -9,10 +9,13 @@ interface Integration {
   label: string;
   description: string;
   placeholder: string;
-  icon: React.ElementType;
   connected: boolean;
   updatedAt: string | null;
 }
+
+const PROVIDER_ICONS: Record<string, React.ElementType> = {
+  granola: BookOpen,
+};
 
 interface SettingsIntegrationsProps {
   initialIntegrations: Integration[];
@@ -24,7 +27,7 @@ function IntegrationCard({ integration }: { integration: Integration }) {
   const [errorMessage, setErrorMessage] = useState("");
   const [connected, setConnected] = useState(integration.connected);
   const [disconnecting, setDisconnecting] = useState(false);
-  const Icon = integration.icon;
+  const Icon = PROVIDER_ICONS[integration.provider] ?? BookOpen;
 
   const handleSave = async () => {
     if (!apiKey.trim()) return;
