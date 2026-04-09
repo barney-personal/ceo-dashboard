@@ -99,6 +99,7 @@ const mocks = vi.hoisted(() => {
     insert,
     listChannelFiles: vi.fn(),
     llmParseOkrUpdate: vi.fn(),
+    llmParseOkrUpdates: vi.fn(),
     parseManagementAccounts: vi.fn(),
     prepareModeRowsForStorage: vi.fn(),
     seedSquads: vi.fn(),
@@ -130,6 +131,7 @@ vi.mock("@/lib/integrations/llm-okr-parser", () => ({
   buildSquadContext: mocks.buildSquadContext,
   buildSystemPromptFromContext: mocks.buildSystemPromptFromContext,
   llmParseOkrUpdate: mocks.llmParseOkrUpdate,
+  llmParseOkrUpdates: mocks.llmParseOkrUpdates,
 }));
 
 vi.mock("@/lib/integrations/slack", () => ({
@@ -233,6 +235,9 @@ describe("sync runner fault injection", () => {
     mocks.buildSystemPromptFromContext.mockReturnValue("system prompt");
     mocks.getThreadReplies.mockResolvedValue([]);
     mocks.getUserName.mockResolvedValue("Alice PM");
+    mocks.llmParseOkrUpdates.mockImplementation(async (inputs: unknown[]) =>
+      inputs.map(() => null)
+    );
     mocks.extractPeriodFromFilename.mockReturnValue("2026-03");
     mocks.prepareModeRowsForStorage.mockImplementation((rows: Record<string, unknown>[]) => ({
       rows,
@@ -411,7 +416,7 @@ describe("sync runner fault injection", () => {
         user: "U123",
       },
     ]);
-    mocks.llmParseOkrUpdate.mockRejectedValue(
+    mocks.llmParseOkrUpdates.mockRejectedValue(
       new Error("Failed to parse LLM response: unexpected token")
     );
 
@@ -498,9 +503,9 @@ describe("sync runner fault injection", () => {
     });
 
     const parsedMessages: string[] = [];
-    mocks.llmParseOkrUpdate.mockImplementation(async (text: string) => {
-      parsedMessages.push(text);
-      return null;
+    mocks.llmParseOkrUpdates.mockImplementation(async (inputs: Array<{ messageText: string }>) => {
+      parsedMessages.push(...inputs.map((input) => input.messageText));
+      return inputs.map(() => null);
     });
 
     await expect(runSlackSync({ id: 48 })).resolves.toEqual({
@@ -525,6 +530,10 @@ describe("sync runner fault injection", () => {
       makeLongSlackText("parent-7"),
       makeLongSlackText("reply-for-1712512345.0007"),
     ]);
+    expect(mocks.llmParseOkrUpdates).toHaveBeenCalledTimes(4);
+    expect(
+      mocks.llmParseOkrUpdates.mock.calls.map(([inputs]) => inputs.length)
+    ).toEqual([4, 4, 4, 1]);
   });
 
   it("surfaces a failed thread reply fetch as a channel sync error", async () => {
@@ -566,7 +575,7 @@ describe("sync runner fault injection", () => {
       recordsSynced: 0,
       errors: ["Failed to sync channel CTHREAD: reply fetch exploded"],
     });
-    expect(mocks.llmParseOkrUpdate).not.toHaveBeenCalled();
+    expect(mocks.llmParseOkrUpdates).not.toHaveBeenCalled();
   });
 
   it("resolves repeated authors from the success path only once per syncChannel run", async () => {
@@ -581,7 +590,7 @@ describe("sync runner fault injection", () => {
       { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U123" },
     ]);
     mocks.getUserName.mockResolvedValue("Alice PM");
-    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+    mocks.llmParseOkrUpdates.mockResolvedValue([null, null, null]);
 
     await runSlackSync({ id: 50 });
 
@@ -606,7 +615,7 @@ describe("sync runner fault injection", () => {
     ]);
     // getUserName returns the raw userId (simulates API failure path — no caching at process level)
     mocks.getUserName.mockImplementation(async (userId: string) => userId);
-    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+    mocks.llmParseOkrUpdates.mockResolvedValue([null, null, null, null]);
 
     await runSlackSync({ id: 51 });
 
@@ -1052,18 +1061,19 @@ describe("sync runner fault injection", () => {
       { ts: "1712512345.0004", text: makeLongSlackText("empty validation"), user: "U4" },
       { ts: "1712512345.0005", text: "Brief", user: "U5" },
     ]);
-    mocks.llmParseOkrUpdate
-      .mockResolvedValueOnce({
+    mocks.llmParseOkrUpdates.mockResolvedValue([
+      {
         squadName: "Alpha",
         tldr: "on track",
         krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
-      })
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
+      },
+      null,
+      {
         squadName: "Alpha",
         tldr: "dropped",
         krs: [],
-      });
+      },
+    ]);
 
     await runSlackSync({ id: 75 });
 
@@ -1075,7 +1085,7 @@ describe("sync runner fault injection", () => {
     const phaseOpts = channelEndPhaseCall![1];
     expect(phaseOpts.itemsProcessed).toBe(1);
     expect(phaseOpts.detail).toBe(
-      "#growth-okrs: Parsed 1 KRs from 2 messages (2 filtered, 1 LLM null, 1 empty after validation)"
+      "#growth-okrs: Parsed 1 KRs from 3 messages (2 filtered, 1 LLM null, 1 empty after validation)"
     );
 
     expect(mocks.addBreadcrumb).toHaveBeenCalledWith({
@@ -1086,7 +1096,7 @@ describe("sync runner fault injection", () => {
         channelId: "CDETAIL",
         channelName: "growth-okrs",
         krCount: 1,
-        parsedMessageCount: 2,
+        parsedMessageCount: 3,
         skippedByFilterCount: 2,
         llmNullCount: 1,
         emptyAfterValidationCount: 1,
