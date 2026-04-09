@@ -49,15 +49,10 @@ function IntegrationCard({ integration }: { integration: Integration }) {
         return;
       }
 
-      const data = (await res.json()) as { status: string; notesSynced?: number };
       setStatus("success");
       setConnected(true);
       setApiKey("");
-      setSuccessMessage(
-        data.notesSynced
-          ? `Connected — synced ${data.notesSynced} meeting notes`
-          : "Connected"
-      );
+      setSuccessMessage("Connected — notes are syncing in the background");
       setTimeout(() => { setStatus("idle"); setSuccessMessage(""); }, 5000);
     } catch {
       setErrorMessage("Network error");
