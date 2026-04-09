@@ -258,8 +258,12 @@ export async function getActiveEmployees(): Promise<{
     return { employees: [], allRows: [], lastSync: null };
   }
 
+  // Validate against column metadata (not first row, which may be sparse)
+  const columnSource = query.columns?.length
+    ? Object.fromEntries(query.columns.map((c) => [c.name, true]))
+    : query.rows[0] ?? {};
   const validation = validateModeColumns({
-    row: query.rows[0],
+    row: columnSource as Record<string, unknown>,
     expectedColumns: HEADCOUNT_QUERY_COLUMNS,
     reportName: query.reportName,
     queryName: query.queryName,

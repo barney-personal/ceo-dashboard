@@ -126,7 +126,7 @@ export async function getUnitEconomicsMetrics() {
         "Subscribers at end of period: Growth accounting",
       );
 
-      if (!ltv || !arpu || !cpa || !cvr || !subscribers) {
+      if (!ltv || !arpu || !cpa || !cvr) {
         return fallback;
       }
 
