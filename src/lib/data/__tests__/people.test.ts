@@ -20,7 +20,6 @@ import {
   getPeopleMetrics,
   getTenureDistribution,
   groupByPillarAndSquad,
-  mergeEmployeeData,
   transformToPersons,
   type Person,
 } from "../people";
