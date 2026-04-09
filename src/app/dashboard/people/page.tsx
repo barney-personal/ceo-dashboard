@@ -1,8 +1,21 @@
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { BarChart } from "@/components/charts/bar-chart";
-import { DivergingBarChart } from "@/components/charts/diverging-bar-chart";
+
+const DivergingBarChart = dynamic(
+  () =>
+    import("@/components/charts/diverging-bar-chart").then(
+      (m) => m.DivergingBarChart
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-80 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  }
+);
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import {

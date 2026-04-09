@@ -1,10 +1,21 @@
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
-import { CohortHeatmap } from "@/components/charts/cohort-heatmap";
+
+const CohortHeatmap = dynamic(
+  () =>
+    import("@/components/charts/cohort-heatmap").then((m) => m.CohortHeatmap),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  }
+);
 import { formatCompact, formatPercent } from "@/lib/format/number";
 import {
   getActiveUsersSeries,
