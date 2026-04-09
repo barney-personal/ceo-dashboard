@@ -81,26 +81,28 @@ async function syncGranolaNotes(
         ?.map((entry) => `${entry.speaker_source}: ${entry.text}`)
         .join("\n") ?? null;
 
+      const summary = full.summary_markdown ?? full.summary_text ?? null;
+
       await db
         .insert(meetingNotes)
         .values({
           granolaMeetingId: full.id,
           title: full.title,
-          summary: full.summary ?? null,
+          summary,
           transcript: transcriptText,
           actionItems: null,
-          participants: full.participants ?? null,
+          participants: full.attendees ?? null,
           meetingDate: new Date(full.created_at),
           durationMinutes: null,
-          calendarEventId: full.calendar_event_id ?? null,
+          calendarEventId: full.calendar_event?.organiser ?? null,
         })
         .onConflictDoUpdate({
           target: meetingNotes.granolaMeetingId,
           set: {
             title: full.title,
-            summary: full.summary ?? null,
+            summary,
             transcript: transcriptText,
-            participants: full.participants ?? null,
+            participants: full.attendees ?? null,
             syncedAt: new Date(),
           },
         });
