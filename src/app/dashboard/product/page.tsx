@@ -10,7 +10,6 @@ const CohortHeatmap = dynamic(
   () =>
     import("@/components/charts/cohort-heatmap").then((m) => m.CohortHeatmap),
   {
-    ssr: false,
     loading: () => (
       <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
     ),

@@ -10,7 +10,6 @@ const DivergingBarChart = dynamic(
       (m) => m.DivergingBarChart
     ),
   {
-    ssr: false,
     loading: () => (
       <div className="h-80 animate-pulse rounded-lg bg-muted/40" />
     ),
