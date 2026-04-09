@@ -40,6 +40,15 @@ const HEADCOUNT_QUERY_COLUMNS = [
   "hb_function",
 ] as const;
 
+/**
+ * Returns true only if `str` is non-empty and parses to a finite timestamp.
+ * Guards against invalid date strings that would cause RangeError on toISOString()
+ * or NaN propagation in arithmetic.
+ */
+function isValidDateStr(str: string): boolean {
+  return str.length > 0 && Number.isFinite(new Date(str).getTime());
+}
+
 function getValidatedQuery<TColumn extends string>(
   data: Awaited<ReturnType<typeof getReportData>>,
   queryName: string,
@@ -63,6 +72,7 @@ function getValidatedQuery<TColumn extends string>(
 export function getWeekStart(date: string | Date): string {
   const value =
     date instanceof Date ? new Date(date.getTime()) : new Date(date);
+  if (!Number.isFinite(value.getTime())) return "";
   const day = value.getDay();
   const monday = new Date(
     value.getTime() - (day === 0 ? 6 : day - 1) * 86400000,
@@ -81,6 +91,7 @@ export function groupByWeek<T extends Record<string, unknown>>(
     if (!date) continue;
 
     const key = getWeekStart(date as string | Date);
+    if (!key) continue;
     const bucket = weekMap.get(key) ?? [];
     bucket.push(row);
     weekMap.set(key, bucket);
@@ -101,7 +112,9 @@ export function aggregateCohortRows(
   for (const row of rows) {
     if (row.cohort_month == null || row.activity_month == null) continue;
 
-    const cohortDate = new Date(rowStr(row, "cohort_month"));
+    const cohortStr = rowStr(row, "cohort_month");
+    if (!isValidDateStr(cohortStr)) continue;
+    const cohortDate = new Date(cohortStr);
     const cohort = `${cohortDate.getFullYear()}-${String(
       cohortDate.getMonth() + 1,
     ).padStart(2, "0")}`;
@@ -130,11 +143,15 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
   if (!query) return [];
 
   return query.rows
-    .filter((r) => r.month && r.user_ltv_36m_actual != null)
+    .filter((r) => {
+      const month = rowStr(r, "month");
+      return month && isValidDateStr(month) && r.user_ltv_36m_actual != null;
+    })
     .map((r) => ({
       date: rowStr(r, "month"),
       value: rowNum(r, "user_ltv_36m_actual"),
     }))
+    .filter((p) => Number.isFinite(p.value))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
@@ -157,11 +174,12 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
 
   const ltvByMonth = new Map<string, number>();
   for (const row of ltvQuery.rows) {
-    if (row.month && row.user_ltv_36m_actual != null) {
-      const d = new Date(row.month as string);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      ltvByMonth.set(key, row.user_ltv_36m_actual as number);
-    }
+    const month = rowStr(row, "month");
+    const ltv = rowNumOrNull(row, "user_ltv_36m_actual");
+    if (!month || !isValidDateStr(month) || ltv == null) continue;
+    const d = new Date(month);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    ltvByMonth.set(key, ltv);
   }
 
   // Sort months to find the latest available LTV
@@ -189,20 +207,18 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     { spend: number; users: number; days: number }
   >();
   for (const r of q3.rows) {
-    if (!r.day) continue;
-    if ((r.actual_or_target as string) !== "actual") continue;
-    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
+    const day = rowStr(r, "day");
+    if (!day || !isValidDateStr(day)) continue;
+    if (rowStr(r, "actual_or_target") !== "actual") continue;
+    const d = new Date(day);
+    if (d.getTime() < CHARTS_START) continue;
 
-    const d = new Date(r.day as string);
-    const day = d.getDay();
-    const monday = new Date(
-      d.getTime() - (day === 0 ? 6 : day - 1) * 86400000,
-    );
-    const key = monday.toISOString().slice(0, 10);
+    const key = getWeekStart(d);
+    if (!key) continue;
 
     const b = weekMap.get(key) ?? { spend: 0, users: 0, days: 0 };
-    b.spend += ((r.spend as number) ?? 0);
-    b.users += ((r.new_bank_connected_users as number) ?? 0);
+    b.spend += rowNum(r, "spend");
+    b.users += rowNum(r, "new_bank_connected_users");
     b.days += 1;
     weekMap.set(key, b);
   }
@@ -306,8 +322,9 @@ export async function getQuery3Series(): Promise<{
     { date: string; spend: number; users: number }[]
   >();
   for (const r of query.rows) {
-    if (!r.day) continue;
-    if (new Date(rowStr(r, "day")).getTime() < CHART_HISTORY_START_TS) continue;
+    const day = rowStr(r, "day");
+    if (!day || !isValidDateStr(day)) continue;
+    if (new Date(day).getTime() < CHART_HISTORY_START_TS) continue;
     const type = rowStr(r, "actual_or_target");
     let arr = byType.get(type);
     if (!arr) {
@@ -380,7 +397,10 @@ export async function getLatestMAU(): Promise<number | null> {
   if (!query || query.rows.length === 0) return null;
 
   const sorted = query.rows
-    .filter((r) => r.date && r.maus != null)
+    .filter((r) => {
+      const dateStr = rowStr(r, "date");
+      return dateStr && isValidDateStr(dateStr) && r.maus != null;
+    })
     .sort(
       (a, b) =>
         new Date(rowStr(b, "date")).getTime() -
@@ -414,7 +434,10 @@ export async function getActiveUsersSeries(): Promise<{
   if (!query) return { dau: [], wau: [], mau: [] };
 
   const rows = query.rows
-    .filter((r) => r.date)
+    .filter((r) => {
+      const dateStr = rowStr(r, "date");
+      return dateStr && isValidDateStr(dateStr);
+    })
     .map((r) => ({
       date: new Date(rowStr(r, "date")),
       daus: rowNumOrNull(r, "daus"),
@@ -434,8 +457,12 @@ export async function getActiveUsersSeries(): Promise<{
     }
     if (r.maus != null) arr.push(r.maus);
   }
-  const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const months = [...byMonth.keys()].sort().slice(-18);
+  const avg = (arr: number[]) =>
+    arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const months = [...byMonth.keys()]
+    .filter((m) => byMonth.get(m)!.length > 0)
+    .sort()
+    .slice(-18);
   const mau = months.map((m) => ({
     date: `${m}-01`,
     value: avg(byMonth.get(m)!),
@@ -457,7 +484,10 @@ export async function getActiveUsersSeries(): Promise<{
     }
     if (r.waus != null) arr.push(r.waus);
   }
-  const weeks = [...byWeek.keys()].sort().slice(-26);
+  const weeks = [...byWeek.keys()]
+    .filter((w) => byWeek.get(w)!.length > 0)
+    .sort()
+    .slice(-26);
   // Use the Monday of each week as the date label
   const wau = weeks.map((w) => {
     const [yr, wk] = w.split("-W").map(Number);
@@ -505,8 +535,9 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   >();
 
   for (const row of query.rows) {
-    if (!row.date) continue;
-    const d = new Date(rowStr(row, "date"));
+    const dateStr = rowStr(row, "date");
+    if (!dateStr || !isValidDateStr(dateStr)) continue;
+    const d = new Date(dateStr);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     let bucket = byMonth.get(key);
     if (!bucket) {
@@ -586,13 +617,13 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
 
   const active = query.rows.filter(
     (r) =>
-      String(r.lifecycle_status).toLowerCase() === "employed" &&
+      rowStr(r, "lifecycle_status").toLowerCase() === "employed" &&
       rowNum(r, "is_cleo_headcount") === 1,
   );
 
   const byDept = new Map<string, number>();
   for (const emp of active) {
-    const dept = (emp.hb_function as string) || "Unknown";
+    const dept = rowStr(emp, "hb_function") || "Unknown";
     byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
   }
 
@@ -610,7 +641,10 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
   if (!query) return [];
 
   const rows = query.rows
-    .filter((r) => r.month)
+    .filter((r) => {
+      const month = rowStr(r, "month");
+      return month && isValidDateStr(month);
+    })
     .sort(
       (a, b) =>
         new Date(rowStr(a, "month")).getTime() -
