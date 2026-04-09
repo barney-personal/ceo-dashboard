@@ -67,6 +67,12 @@ describe("GET /api/cron", () => {
         runId: 3,
         reason: null,
         nextEligibleAt: new Date("2026-04-08T09:30:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        outcome: "queued",
+        runId: 4,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T10:30:00.000Z"),
       });
 
     const response = await GET(makeRequest("Bearer test-secret"));
@@ -84,9 +90,12 @@ describe("GET /api/cron", () => {
         trigger: "cron",
       }
     );
+    expect(mockEnqueueSyncRun).toHaveBeenNthCalledWith(4, "meetings", {
+      trigger: "cron",
+    });
     expect(mockCreateWorkerId).toHaveBeenCalledWith("web-cron");
     expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith("web-cron", {
-      runIds: [1, 2, 3],
+      runIds: [1, 2, 3, 4],
       triggerLabel: "cron trigger",
     });
     expect(await response.json()).toEqual({
@@ -109,6 +118,12 @@ describe("GET /api/cron", () => {
           runId: 3,
           reason: null,
           nextEligibleAt: "2026-04-08T09:30:00.000Z",
+        },
+        meetings: {
+          outcome: "queued",
+          runId: 4,
+          reason: null,
+          nextEligibleAt: "2026-04-08T10:30:00.000Z",
         },
       },
     });
@@ -179,6 +194,12 @@ describe("GET /api/cron", () => {
         runId: 3,
         reason: null,
         nextEligibleAt: new Date("2026-04-08T09:30:00.000Z"),
+      })
+      .mockResolvedValueOnce({
+        outcome: "skipped",
+        runId: null,
+        reason: "within_interval",
+        nextEligibleAt: new Date("2026-04-08T11:00:00.000Z"),
       });
     mockStartBackgroundSyncDrain.mockImplementation(() => {
       throw error;

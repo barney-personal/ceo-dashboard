@@ -16,6 +16,7 @@ import {
   TrendingUp,
   Heart,
   Database,
+  Calendar,
 } from "lucide-react";
 
 interface NavItem {
@@ -73,6 +74,17 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/okrs",
         requiredRole: "everyone",
         icon: Target,
+      },
+    ],
+  },
+  {
+    label: "Meetings",
+    items: [
+      {
+        label: "Meetings",
+        href: "/dashboard/meetings",
+        requiredRole: "leadership",
+        icon: Calendar,
       },
     ],
   },
