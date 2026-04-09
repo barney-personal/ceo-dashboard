@@ -8,7 +8,10 @@ import {
   extractPeriodFromFilename,
   parseManagementAccounts,
 } from "@/lib/integrations/excel-parser";
-import { getChannelHistory } from "@/lib/integrations/slack";
+import {
+  checkSlackHealth,
+  getChannelHistory,
+} from "@/lib/integrations/slack";
 import { eq } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import {
@@ -102,6 +105,40 @@ export async function runManagementAccountsSync(
 
   try {
     let phaseId = await tracker.startPhase(
+      "health_check",
+      "Checking Slack API connectivity"
+    );
+    try {
+      await checkSlackHealth({ signal: opts.signal });
+    } catch (error) {
+      const message = `Slack API unreachable, skipping sync: ${formatSyncError(error)}`;
+      Sentry.captureMessage("Slack API unreachable, skipping sync", {
+        level: "warning",
+        tags: {
+          sync_source: "management-accounts",
+          failure_scope: "health_check",
+        },
+        extra: {
+          runId: run.id,
+          message,
+        },
+      });
+      await tracker.endPhase(phaseId, {
+        status: "error",
+        detail: "Slack API unreachable, sync skipped",
+        errorMessage: message,
+      });
+      return {
+        status: "error",
+        recordsSynced: 0,
+        errors: [message],
+      };
+    }
+    await tracker.endPhase(phaseId, {
+      detail: "Slack API reachable",
+    });
+
+    phaseId = await tracker.startPhase(
       "list_files",
       "Fetching files from Slack channel"
     );
