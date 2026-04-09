@@ -15,6 +15,7 @@ import {
   Activity,
   TrendingUp,
   Heart,
+  Database,
 } from "lucide-react";
 
 interface NavItem {
@@ -118,6 +119,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/admin/status",
         requiredRole: "ceo",
         icon: Activity,
+      },
+      {
+        label: "Mode Explorer",
+        href: "/dashboard/admin/mode-explorer",
+        requiredRole: "ceo",
+        icon: Database,
       },
     ],
   },
