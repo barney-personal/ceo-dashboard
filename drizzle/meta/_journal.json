@@ -8,6 +8,13 @@
       "when": 1775649600000,
       "tag": "0000_sync_hardening_render",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1775712917204,
+      "tag": "0001_worried_hairball",
+      "breakpoints": true
     }
   ]
 }

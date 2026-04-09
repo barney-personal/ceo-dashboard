@@ -24,6 +24,7 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import { debugLog } from "@/lib/debug-logger";
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -93,7 +94,7 @@ async function cleanupReportData(
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect,
-  opts: SyncControl = {},
+  opts: SyncControl & { syncRunId?: number } = {},
 ): Promise<{ recordsSynced: number; errors: string[] }> {
   throwIfSyncShouldStop(opts, {
     cancelled: "Mode sync cancelled before report fetch started",
@@ -144,6 +145,17 @@ async function syncReport(
     isGrowthMarketing,
   });
 
+  await debugLog("mode", "report_query_resolution", {
+    reportToken: report.reportToken,
+    reportName: report.name,
+    runToken: run.token,
+    queryDefinitionCount: queries.length,
+    queryDefinitionNames: queries.map((q) => q.name),
+    queryRunCount: queryRuns.length,
+    extractedQueryTokens: queryRuns.map((qr) => extractQueryToken(qr)),
+    isGrowthMarketing,
+  }, { syncRunId: opts.syncRunId });
+
   if (isGrowthMarketing) {
     // Extra diagnostic: check if extracted query tokens from runs match any definition tokens
     const definitionTokenSet = new Set(queries.map((q) => q.token));
@@ -192,6 +204,14 @@ async function syncReport(
       configuredQueryNames: profile?.queries.map((q) => q.name) ?? [],
     });
 
+    await debugLog("mode", "query_run_check", {
+      reportName: report.name,
+      queryName,
+      queryToken,
+      hasProfile: !!queryProfile,
+      profileQueryNames: profile?.queries?.map((q) => q.name) ?? [],
+    }, { syncRunId: opts.syncRunId });
+
     if (!queryProfile) {
       logModeEvent("query_run_skipped_no_profile", {
         reportName: report.name,
@@ -200,6 +220,13 @@ async function syncReport(
         queryRunToken: queryRun.token,
         availableProfiles: profile?.queries.map((q) => q.name) ?? [],
       });
+
+      await debugLog("mode", "query_run_skipped_no_profile", {
+        reportName: report.name,
+        queryName,
+        queryToken,
+        availableProfiles: profile?.queries.map((q) => q.name) ?? [],
+      }, { level: "warn", syncRunId: opts.syncRunId });
       continue;
     }
 
@@ -266,6 +293,15 @@ async function syncReport(
         truncated: prepared.truncated,
         heapMb: getHeapMb(),
       });
+
+      await debugLog("mode", "query_synced", {
+        reportName: report.name,
+        queryName,
+        queryToken,
+        sourceRows: prepared.sourceRowCount,
+        storedRows: prepared.storedRowCount,
+        durationMs: Date.now() - queryStartedAt,
+      }, { syncRunId: opts.syncRunId });
     } catch (error) {
       const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
         error instanceof Error ? error.message : String(error)
@@ -281,6 +317,14 @@ async function syncReport(
         error: message,
         heapMb: getHeapMb(),
       });
+
+      await debugLog("mode", "query_failed", {
+        reportName: report.name,
+        queryName,
+        queryToken,
+        error: message,
+        durationMs: Date.now() - queryStartedAt,
+      }, { level: "error", syncRunId: opts.syncRunId });
     }
   }
 
@@ -391,7 +435,7 @@ export async function runModeSync(
           heapMb: getHeapMb(),
         });
 
-        const result = await syncReport(report, opts);
+        const result = await syncReport(report, { ...opts, syncRunId: run.id });
         totalRecords += result.recordsSynced;
         errors.push(...result.errors);
         succeededReports += 1;
