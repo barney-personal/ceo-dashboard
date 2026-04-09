@@ -19,8 +19,8 @@ import {
 import { desc, count, inArray } from "drizzle-orm";
 import { getEffectiveSyncState } from "@/lib/sync/config";
 import {
-  buildModeReportUrl,
-  getModeSyncProfile,
+  getSyncEnabledModeReportControls,
+  getModeReportNamesByToken,
 } from "@/lib/integrations/mode-config";
 import {
   getSchemaCompatibilityMessage,
@@ -84,9 +84,9 @@ export default async function DataStatusPage() {
     arr.push(phase);
     phasesByRun.set(phase.syncLogId, arr);
   }
-  const modeReportNamesByToken = new Map(
-    modeSyncReports.map((report) => [report.reportToken, report.name])
-  );
+  // Source report names from config so they're available before any sync seeds
+  // the mode_reports table (fresh-DB environments).
+  const modeReportNamesByToken = getModeReportNamesByToken();
   const describeModeScope = (scope: unknown): string | null => {
     if (!scope || typeof scope !== "object") {
       return null;
@@ -166,21 +166,12 @@ export default async function DataStatusPage() {
     activeModeRun != null
       ? describeModeScope(activeModeRun.scope) ?? "all Mode reports"
       : null;
-  const syncEnabledModeReports = modeSyncReports
-    .filter((report) => report.isActive)
-    .filter((report) => getModeSyncProfile(report.reportToken)?.syncEnabled)
-    .sort((left, right) => {
-      const sectionOrder = left.section.localeCompare(right.section);
-      return sectionOrder !== 0
-        ? sectionOrder
-        : left.name.localeCompare(right.name);
-    })
-    .map((report) => ({
-      name: report.name,
-      reportToken: report.reportToken,
-      section: report.section,
-      modeUrl: buildModeReportUrl(report.reportToken),
-    }));
+  // Build controls from config so they appear even on a fresh DB with no
+  // mode_reports rows. Any DB row explicitly marked inactive is still excluded.
+  const inactiveTokens = new Set(
+    modeSyncReports.filter((r) => !r.isActive).map((r) => r.reportToken)
+  );
+  const syncEnabledModeReports = getSyncEnabledModeReportControls(inactiveTokens);
 
   let tables = [
     { name: "mode_reports", label: "Mode Reports", count: 0, description: "Report definitions synced from Mode" },
