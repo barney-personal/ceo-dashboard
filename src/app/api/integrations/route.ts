@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { userIntegrations } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
+import { syncGranolaNotes } from "@/lib/sync/meetings";
 
 async function getAuthenticatedUserId(): Promise<string | null> {
   const { userId } = await auth();
@@ -92,7 +93,17 @@ export async function PUT(request: NextRequest) {
       },
     });
 
-  return NextResponse.json({ status: "connected" });
+  // Trigger an immediate sync of the user's Granola notes
+  let notesSynced = 0;
+  try {
+    const sinceDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // last 90 days
+    const result = await syncGranolaNotes(sinceDate, { token: body.apiKey });
+    notesSynced = result.count;
+  } catch {
+    // Sync failure shouldn't fail the key save
+  }
+
+  return NextResponse.json({ status: "connected", notesSynced });
 }
 
 /**
