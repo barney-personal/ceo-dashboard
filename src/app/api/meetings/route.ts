@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { requireRole } from "@/lib/sync/request-auth";
+import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import {
   getMeetingsForRange,
   getWeekStart,
@@ -7,9 +9,9 @@ import {
 } from "@/lib/data/meetings";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRole("leadership");
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const roleCheck = await requireRole("leadership");
+  if (!roleCheck.ok) {
+    return NextResponse.json({ error: roleCheck.error }, { status: roleCheck.status });
   }
 
   const weekParam = request.nextUrl.searchParams.get("week");
@@ -18,10 +20,20 @@ export async function GET(request: NextRequest) {
     : new Date();
   const weekStart = getWeekStart(baseDate);
   const weekEnd = getWeekEnd(weekStart);
-  const days = await getMeetingsForRange(weekStart, weekEnd);
+
+  // Get per-user Google Calendar token from Clerk
+  const { userId } = await auth();
+  const accessToken = userId
+    ? await getUserGoogleAccessToken(userId)
+    : null;
+
+  const days = await getMeetingsForRange(weekStart, weekEnd, {
+    accessToken: accessToken ?? undefined,
+  });
 
   return NextResponse.json({
     days,
     weekStart: `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`,
+    calendarConnected: !!accessToken,
   });
 }
