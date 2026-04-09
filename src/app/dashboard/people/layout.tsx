@@ -9,7 +9,7 @@ export default async function PeopleLayout({
 }) {
   const role = await getCurrentUserRole();
 
-  if (!hasAccess(role, "leadership")) {
+  if (!hasAccess(role, "everyone")) {
     redirect("/dashboard");
   }
 
