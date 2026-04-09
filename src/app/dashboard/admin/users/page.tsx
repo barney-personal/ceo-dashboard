@@ -15,6 +15,24 @@ export default async function UsersAdminPage() {
   const client = await clerkClient();
   const { data: users } = await client.users.getUserList({ limit: 100 });
 
+  // Fetch session counts for all users in parallel
+  const sessionCounts = await Promise.all(
+    users.map(async (u) => {
+      try {
+        const { data: sessions } = await client.sessions.getSessionList({
+          userId: u.id,
+          limit: 100,
+        });
+        return { userId: u.id, count: sessions.length };
+      } catch {
+        return { userId: u.id, count: 0 };
+      }
+    })
+  );
+  const sessionCountMap = new Map(
+    sessionCounts.map((s) => [s.userId, s.count])
+  );
+
   const serialized = users.map((u) => ({
     id: u.id,
     firstName: u.firstName,
@@ -27,6 +45,10 @@ export default async function UsersAdminPage() {
     lastSignInAt: u.lastSignInAt
       ? new Date(u.lastSignInAt).toISOString()
       : null,
+    lastActiveAt: u.lastActiveAt
+      ? new Date(u.lastActiveAt).toISOString()
+      : null,
+    sessionCount: sessionCountMap.get(u.id) ?? 0,
   }));
 
   return (
