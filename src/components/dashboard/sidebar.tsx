@@ -112,6 +112,17 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Settings",
+    items: [
+      {
+        label: "Integrations",
+        href: "/dashboard/settings",
+        requiredRole: "everyone",
+        icon: Settings,
+      },
+    ],
+  },
+  {
     label: "Admin",
     items: [
       {

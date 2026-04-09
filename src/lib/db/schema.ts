@@ -212,6 +212,23 @@ export const preReads = pgTable(
   ]
 );
 
+// ---------------------------------------------------------------------------
+// User integrations (per-user API keys for third-party services)
+// ---------------------------------------------------------------------------
+
+export const userIntegrations = pgTable(
+  "user_integrations",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    provider: text("provider").notNull(), // "granola"
+    apiKey: text("api_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [unique().on(table.clerkUserId, table.provider)]
+);
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")
