@@ -978,6 +978,11 @@ export async function runModeSync(
     try {
       await checkModeHealth({ signal: opts.signal });
     } catch (error) {
+      // Re-throw cancellation/deadline errors — don't misclassify as health check failure
+      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+        await tracker.endPhase(phaseId, { status: "error", errorMessage: error.message });
+        throw error;
+      }
       return failModeHealthCheck(tracker, run.id, phaseId, error);
     }
     await tracker.endPhase(phaseId, {
