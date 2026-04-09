@@ -248,7 +248,11 @@ async function syncChannel(
         "Slack sync exceeded its execution budget while parsing messages",
     });
 
-    if (!latestMessageTs || msg.ts > latestMessageTs) {
+    // Only track top-level message timestamps for checkpointing —
+    // thread replies have later ts values that would cause the next
+    // sync to skip top-level messages posted before the reply.
+    const isTopLevel = !msg.thread_ts || msg.thread_ts === msg.ts;
+    if (isTopLevel && (!latestMessageTs || msg.ts > latestMessageTs)) {
       latestMessageTs = msg.ts;
     }
 
