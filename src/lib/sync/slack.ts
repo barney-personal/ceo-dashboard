@@ -219,17 +219,38 @@ async function fetchLastSlackSuccessTimestamp(): Promise<string | undefined> {
     : undefined;
 }
 
+type SlackSyncResult = {
+  status: "success" | "partial" | "error" | "cancelled";
+  recordsSynced: number;
+  errors: string[];
+};
+
+async function failSlackPreflightPhase(
+  tracker: ReturnType<typeof createPhaseTracker>,
+  phaseId: number,
+  phaseLabel: string,
+  error: unknown
+): Promise<SlackSyncResult> {
+  const message = `Failed to ${phaseLabel}: ${formatSyncError(error)}`;
+  await tracker.endPhase(phaseId, {
+    status: "error",
+    errorMessage: message,
+  });
+
+  return {
+    status: "error",
+    recordsSynced: 0,
+    errors: [message],
+  };
+}
+
 /**
  * Sync all configured OKR channels.
  */
 export async function runSlackSync(
   run: { id: number },
   opts: SyncControl = {}
-): Promise<{
-  status: "success" | "partial" | "error" | "cancelled";
-  recordsSynced: number;
-  errors: string[];
-}> {
+): Promise<SlackSyncResult> {
   const channelIds = (process.env.SLACK_OKR_CHANNEL_IDS ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -246,7 +267,11 @@ export async function runSlackSync(
 
   try {
     let phaseId = await tracker.startPhase("seed_squads", "Seeding squad definitions");
-    await seedSquads();
+    try {
+      await seedSquads();
+    } catch (error) {
+      return failSlackPreflightPhase(tracker, phaseId, "seed squads", error);
+    }
     await tracker.endPhase(phaseId);
 
     phaseId = await tracker.startPhase(
@@ -261,7 +286,17 @@ export async function runSlackSync(
       "build_user_fallback",
       "Loading user name fallback map"
     );
-    const userNameFallback = await buildUserNameFallback();
+    let userNameFallback: Map<string, string>;
+    try {
+      userNameFallback = await buildUserNameFallback();
+    } catch (error) {
+      return failSlackPreflightPhase(
+        tracker,
+        phaseId,
+        "load user name fallback map",
+        error
+      );
+    }
     await tracker.endPhase(phaseId, {
       itemsProcessed: userNameFallback.size,
       detail: `Loaded ${userNameFallback.size} user mappings`,
@@ -271,7 +306,17 @@ export async function runSlackSync(
       "fetch_last_sync",
       "Checking last successful sync time"
     );
-    const lastSyncTs = await fetchLastSlackSuccessTimestamp();
+    let lastSyncTs: string | undefined;
+    try {
+      lastSyncTs = await fetchLastSlackSuccessTimestamp();
+    } catch (error) {
+      return failSlackPreflightPhase(
+        tracker,
+        phaseId,
+        "fetch last successful sync time",
+        error
+      );
+    }
     await tracker.endPhase(phaseId, {
       detail: lastSyncTs
         ? `Since ${new Date(Number(lastSyncTs) * 1000).toISOString()}`
