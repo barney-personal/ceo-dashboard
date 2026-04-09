@@ -139,6 +139,29 @@ describe("sync runtime resilience", () => {
     });
   });
 
+  it("passes a claimed Mode run scope through to the Mode runner", async () => {
+    mocks.runModeSync.mockImplementation(async (run) => {
+      expect(run).toMatchObject({
+        id: 27,
+        source: "mode",
+        scope: { reportToken: "report-alpha" },
+      });
+      return { status: "success", recordsSynced: 3, errors: [] };
+    });
+
+    await expect(
+      runClaimedSync({
+        id: 27,
+        source: "mode",
+        scope: { reportToken: "report-alpha" },
+      } as never)
+    ).resolves.toEqual({
+      status: "success",
+      recordsSynced: 3,
+      errors: [],
+    });
+  });
+
   it("aborts a long-running sync step via the execution-budget signal", async () => {
     mocks.runSlackSync.mockImplementation(
       async (_run, opts) =>

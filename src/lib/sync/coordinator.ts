@@ -22,11 +22,16 @@ import { isLocalSyncRunProtected } from "./worker-state";
 const ACTIVE_STATUSES = ["queued", "running"] as const;
 const TERMINAL_STATUSES = ["success", "partial", "error", "cancelled"] as const;
 
+export interface SyncRunScope {
+  reportToken?: string;
+}
+
 export interface EnqueueSyncResult {
   outcome: "queued" | "already-running" | "skipped" | "forced";
   runId: number | null;
   reason: string | null;
   nextEligibleAt: Date | null;
+  activeScopeDescription?: string | null;
 }
 
 export interface FinalizeSyncRunInput {
@@ -37,6 +42,21 @@ export interface FinalizeSyncRunInput {
 }
 
 export type SyncLogRow = typeof syncLog.$inferSelect;
+
+function getSyncRunScopeDescription(
+  source: SyncSource,
+  scope: SyncRunScope | null | undefined
+): string | null {
+  if (source !== "mode") {
+    return null;
+  }
+
+  if (scope?.reportToken) {
+    return `Mode report ${scope.reportToken}`;
+  }
+
+  return "all Mode reports";
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -184,6 +204,7 @@ export async function enqueueSyncRun(
     trigger: SyncTrigger;
     force?: boolean;
     now?: Date;
+    scope?: SyncRunScope | null;
   }
 ): Promise<EnqueueSyncResult> {
   const now = opts.now ?? new Date();
@@ -198,6 +219,10 @@ export async function enqueueSyncRun(
       runId: active.id,
       reason: active.status,
       nextEligibleAt: null,
+      activeScopeDescription: getSyncRunScopeDescription(
+        source,
+        active.scope as SyncRunScope | null | undefined
+      ),
     };
   }
 
@@ -228,6 +253,7 @@ export async function enqueueSyncRun(
         attempt: 1,
         maxAttempts: config.maxAttempts,
         startedAt: now,
+        scope: opts.scope ?? null,
       })
       .returning();
 
@@ -248,6 +274,10 @@ export async function enqueueSyncRun(
       runId: lockedRun?.id ?? null,
       reason: "active_run_exists",
       nextEligibleAt: null,
+      activeScopeDescription: getSyncRunScopeDescription(
+        source,
+        lockedRun?.scope as SyncRunScope | null | undefined
+      ),
     };
   }
 }

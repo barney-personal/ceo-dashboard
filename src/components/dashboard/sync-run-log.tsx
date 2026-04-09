@@ -39,6 +39,7 @@ interface SyncRun {
   recordsSynced: number;
   skipReason: string | null;
   errorMessage: string | null;
+  scopeDescription?: string | null;
   phases: Phase[];
 }
 
@@ -436,6 +437,7 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
             <span>State: {effectiveStatus}</span>
             <span>Trigger: {run.trigger}</span>
             <span>Attempt: {run.attempt}</span>
+            {run.scopeDescription && <span>Scope: {run.scopeDescription}</span>}
             {run.skipReason && <span>Reason: {run.skipReason}</span>}
           </div>
           <PhaseTimeline
