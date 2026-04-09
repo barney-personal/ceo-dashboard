@@ -18,6 +18,7 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import * as Sentry from "@sentry/nextjs";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -61,6 +62,7 @@ export async function runManagementAccountsSync(
   recordsSynced: number;
   errors: string[];
 }> {
+  Sentry.setTag("sync_source", "management-accounts");
   const tracker = createPhaseTracker(run.id);
   let count = 0;
   const errors: string[] = [];

@@ -25,6 +25,7 @@ import {
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 import { debugLog } from "@/lib/debug-logger";
+import * as Sentry from "@sentry/nextjs";
 
 const MODE_QUERY_FETCH_CONCURRENCY = 3;
 
@@ -457,6 +458,7 @@ export async function runModeSync(
   run: { id: number },
   opts: SyncControl = {}
 ): Promise<ModeSyncResult> {
+  Sentry.setTag("sync_source", "mode");
   const tracker = createPhaseTracker(run.id);
   let totalRecords = 0;
   const errors: string[] = [];

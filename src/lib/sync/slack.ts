@@ -21,6 +21,7 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import * as Sentry from "@sentry/nextjs";
 
 const SLACK_THREAD_REPLY_CONCURRENCY = 5;
 
@@ -320,6 +321,7 @@ export async function runSlackSync(
   run: { id: number },
   opts: SyncControl = {}
 ): Promise<SlackSyncResult> {
+  Sentry.setTag("sync_source", "slack");
   const channelIds = (process.env.SLACK_OKR_CHANNEL_IDS ?? "")
     .split(",")
     .map((value) => value.trim())
