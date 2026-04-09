@@ -14,7 +14,7 @@ export async function getUserGoogleAccessToken(
     const client = await clerkClient();
     const response = await client.users.getUserOauthAccessToken(
       userId,
-      "google"
+      "oauth_google"
     );
 
     const token = response.data[0];
