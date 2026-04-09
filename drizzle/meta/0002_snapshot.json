@@ -430,12 +430,11 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "meetings_calendar_event_id_calendar_id_unique": {
-          "name": "meetings_calendar_event_id_calendar_id_unique",
+        "meetings_calendar_event_id_unique": {
+          "name": "meetings_calendar_event_id_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "calendar_event_id",
-            "calendar_id"
+            "calendar_event_id"
           ]
         }
       },

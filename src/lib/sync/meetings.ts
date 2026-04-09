@@ -98,10 +98,10 @@ async function syncCalendarEvents(
             : null,
           recurringEventId: event.recurringEventId ?? null,
           htmlLink: event.htmlLink ?? null,
-          calendarId: null,
+          calendarId: process.env.GOOGLE_CALENDAR_ID ?? "primary",
         })
         .onConflictDoUpdate({
-          target: [meetings.calendarEventId, meetings.calendarId],
+          target: meetings.calendarEventId,
           set: {
             title: event.summary ?? "(No title)",
             description: event.description ?? null,

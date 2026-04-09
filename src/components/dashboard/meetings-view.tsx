@@ -66,7 +66,9 @@ function extractLinks(text: string): { url: string; label: string }[] {
 }
 
 function isToday(dateStr: string): boolean {
-  return dateStr === new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return dateStr === today;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +366,8 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
   const [days] = useState(initialDays);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const idx = initialDays.findIndex((d) => d.date === todayStr);
     return idx >= 0 ? idx : 0;
   });

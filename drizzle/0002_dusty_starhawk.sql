@@ -27,7 +27,7 @@ CREATE TABLE "meetings" (
 	"html_link" text,
 	"calendar_id" text,
 	"synced_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "meetings_calendar_event_id_calendar_id_unique" UNIQUE("calendar_event_id","calendar_id")
+	CONSTRAINT "meetings_calendar_event_id_unique" UNIQUE("calendar_event_id")
 );
 --> statement-breakpoint
 CREATE TABLE "pre_reads" (

@@ -167,7 +167,7 @@ export const meetings = pgTable(
     syncedAt: timestamp("synced_at").defaultNow().notNull(),
   },
   (table) => [
-    unique().on(table.calendarEventId, table.calendarId),
+    unique().on(table.calendarEventId),
     index("meetings_start_time_idx").on(table.startTime),
   ]
 );
