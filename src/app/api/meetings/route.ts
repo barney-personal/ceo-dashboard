@@ -9,7 +9,7 @@ import {
 } from "@/lib/data/meetings";
 
 export async function GET(request: NextRequest) {
-  const roleCheck = await requireRole("leadership");
+  const roleCheck = await requireRole("everyone");
   if (!roleCheck.ok) {
     return NextResponse.json({ error: roleCheck.error }, { status: roleCheck.status });
   }

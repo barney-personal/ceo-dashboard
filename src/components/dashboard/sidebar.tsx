@@ -83,7 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Meetings",
         href: "/dashboard/meetings",
-        requiredRole: "leadership",
+        requiredRole: "everyone",
         icon: Calendar,
       },
     ],
