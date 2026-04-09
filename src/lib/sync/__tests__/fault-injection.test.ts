@@ -921,6 +921,60 @@ describe("sync runner fault injection", () => {
     expect(phaseOpts.detail).toMatch(/1 queries succeeded, 1 failed/);
   });
 
+  it("returns run status error when all queries fail for every Mode report", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    // Both reports from config are active in DB
+    mocks.queueSelect([
+      {
+        id: 13,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+      {
+        id: 14,
+        reportToken: "report-beta",
+        name: "Beta Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-any" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+    ]);
+    // All query fetches fail
+    mocks.getQueryResultContent.mockRejectedValue(new Error("network timeout"));
+
+    const result = await runModeSync({ id: 76 });
+
+    // Run-level status must be "error" — no report contributed a succeeded query
+    expect(result.status).toBe("error");
+    expect(result.recordsSynced).toBe(0);
+    expect(result.errors).toHaveLength(2);
+
+    // Each report phase must have been ended with status "error"
+    type EndPhaseCall = [number, { status?: string; detail?: string; errorMessage?: string }];
+    const reportPhaseErrors = (endPhase.mock.calls as unknown as EndPhaseCall[]).filter(
+      ([, opts]) => opts?.status === "error" && opts?.errorMessage
+    );
+    expect(reportPhaseErrors).toHaveLength(2);
+  });
+
   it("Mode report phase gets success status and detail with all-succeed query counts", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);

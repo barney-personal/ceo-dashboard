@@ -583,7 +583,6 @@ export async function runModeSync(
         const result = await syncReport(report, { ...opts, syncRunId: run.id });
         totalRecords += result.recordsSynced;
         errors.push(...result.errors);
-        succeededReports += 1;
 
         const phaseStatus =
           result.queriesFailed === 0
@@ -591,6 +590,10 @@ export async function runModeSync(
             : result.queriesSucceeded > 0
               ? "partial"
               : "error";
+
+        if (phaseStatus !== "error") {
+          succeededReports += 1;
+        }
 
         const queryCountDetail =
           result.queriesSucceeded + result.queriesFailed > 0
