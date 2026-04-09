@@ -194,14 +194,12 @@ export default async function DashboardOverview() {
             title="Meetings"
             description="Your calendar, meeting notes from Granola, and pre-reads from Slack"
           />
-          <PermissionGate role={role} requiredRole="leadership">
-            <SectionLink
-              href="/dashboard/people"
-              icon={Users}
-              title="People"
-              description="Team directory with pillar and squad drill-down, headcount by department, joiners and departures from HiBob"
-            />
-          </PermissionGate>
+          <SectionLink
+            href="/dashboard/people"
+            icon={Users}
+            title="People"
+            description="Team directory with pillar and squad drill-down, headcount by department, joiners and departures"
+          />
         </div>
       </div>
 
