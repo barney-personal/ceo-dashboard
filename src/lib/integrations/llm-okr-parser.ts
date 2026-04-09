@@ -32,6 +32,11 @@ export interface ParsedOkrUpdate {
   krs: ParsedKr[];
 }
 
+export interface OkrParseInput {
+  messageText: string;
+  channelContext: string;
+}
+
 interface ParseOkrOptions {
   signal?: AbortSignal;
 }
@@ -171,18 +176,18 @@ function waitForRetryBackoff(
 
 async function createMessageWithRetry(
   prompt: string,
-  messageText: string,
-  channelContext: string,
-  signal: AbortSignal
+  userContent: string,
+  signal: AbortSignal,
+  maxTokens = 2000
 ): Promise<AnthropicMessage> {
   const request: MessageCreateParamsNonStreaming = {
     model: "claude-sonnet-4-6",
-    max_tokens: 2000,
+    max_tokens: maxTokens,
     system: prompt,
     messages: [
       {
         role: "user",
-        content: `Channel: ${channelContext}\n\nSlack message:\n${messageText}`,
+        content: userContent,
       },
     ],
   };
@@ -218,6 +223,24 @@ async function createMessageWithRetry(
   }
 
   throw new Error("LLM OKR parse exhausted all retry attempts");
+}
+
+function buildSingleMessagePromptContent(input: OkrParseInput): string {
+  return `Channel: ${input.channelContext}\n\nSlack message:\n${input.messageText}`;
+}
+
+function buildBatchMessagePromptContent(inputs: readonly OkrParseInput[]): string {
+  return [
+    `Parse ${inputs.length} Slack messages and return a JSON array with exactly ${inputs.length} items.`,
+    "Each array item must correspond to the input message at the same index.",
+    "Return null for messages that are not weekly squad OKR updates.",
+    "Do not omit items, reorder items, or wrap the array in another object.",
+    "",
+    ...inputs.map(
+      (input, index) =>
+        `Message ${index}\nChannel: ${input.channelContext}\n\nSlack message:\n${input.messageText}`
+    ),
+  ].join("\n\n");
 }
 
 function toShortPreview(value: unknown): string {
@@ -301,6 +324,31 @@ function validateParsedEnvelope(parsed: unknown): ValidParsedEnvelope | null {
     squadName: envelope.squadName,
     tldr: envelope.tldr,
     krs: envelope.krs,
+  };
+}
+
+function normalizeResponseText(response: AnthropicMessage): string | null {
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  let trimmed = text.trim();
+  if (trimmed.startsWith("```")) {
+    trimmed = trimmed
+      .replace(/^```(?:json)?\n?/, "")
+      .replace(/\n?```$/, "")
+      .trim();
+  }
+
+  return trimmed === "null" || trimmed === "" ? null : trimmed;
+}
+
+function toParsedOkrUpdate(envelope: ValidParsedEnvelope): ParsedOkrUpdate {
+  return {
+    squadName: envelope.squadName,
+    tldr: typeof envelope.tldr === "string" ? envelope.tldr : "",
+    krs: envelope.krs
+      .map((kr, index) => validateParsedKr(kr, index))
+      .filter((kr): kr is ParsedKr => kr !== null),
   };
 }
 
@@ -389,21 +437,12 @@ If the message is NOT a weekly squad OKR update (e.g. meeting agenda, action ite
 Return ONLY valid JSON (object or null). No markdown code blocks.`;
 }
 
-/**
- * Use Claude to parse a raw Slack message into structured OKR data.
- * Returns null if the message is not an OKR update.
- */
-export async function llmParseOkrUpdate(
-  messageText: string,
-  channelContext: string,
-  systemPrompt?: string,
-  opts: ParseOkrOptions = {}
-): Promise<ParsedOkrUpdate | null> {
-  // Build prompt from DB if not provided
-  const prompt =
-    systemPrompt ??
-    buildSystemPromptFromContext(await buildSquadContext());
-
+async function requestOkrParse(
+  prompt: string,
+  userContent: string,
+  opts: ParseOkrOptions = {},
+  maxTokens = 2000
+): Promise<string | null> {
   const { signal, cleanup, timedOut } = composeAbortSignal(
     LLM_CALL_TIMEOUT_MS,
     opts.signal,
@@ -412,12 +451,7 @@ export async function llmParseOkrUpdate(
 
   let response: AnthropicMessage;
   try {
-    response = await createMessageWithRetry(
-      prompt,
-      messageText,
-      channelContext,
-      signal
-    );
+    response = await createMessageWithRetry(prompt, userContent, signal, maxTokens);
   } catch (error) {
     if (signal.aborted) {
       if (timedOut()) {
@@ -433,6 +467,7 @@ export async function llmParseOkrUpdate(
 
       throw abortReasonToError(signal.reason);
     }
+
     Sentry.captureException(error, {
       tags: { integration: "llm-okr-parser" },
       extra: { operation: "messages.create" },
@@ -442,32 +477,32 @@ export async function llmParseOkrUpdate(
     cleanup();
   }
 
-  const text =
-    response.content[0].type === "text" ? response.content[0].text : "";
+  return normalizeResponseText(response);
+}
 
-  // Parse the JSON response — strip markdown code blocks if present
-  let trimmed = text.trim();
-  if (trimmed.startsWith("```")) {
-    trimmed = trimmed
-      .replace(/^```(?:json)?\n?/, "")
-      .replace(/\n?```$/, "")
-      .trim();
+async function parseSingleOkrUpdate(
+  input: OkrParseInput,
+  prompt: string,
+  opts: ParseOkrOptions = {}
+): Promise<ParsedOkrUpdate | null> {
+  const trimmed = await requestOkrParse(
+    prompt,
+    buildSingleMessagePromptContent(input),
+    opts
+  );
+
+  if (trimmed == null) {
+    return null;
   }
-  if (trimmed === "null" || trimmed === "") return null;
 
   try {
     const parsed = JSON.parse(trimmed);
     const envelope = validateParsedEnvelope(parsed);
-    if (!envelope)
+    if (!envelope) {
       return null;
+    }
 
-    return {
-      squadName: envelope.squadName,
-      tldr: typeof envelope.tldr === "string" ? envelope.tldr : "",
-      krs: envelope.krs
-        .map((kr, index) => validateParsedKr(kr, index))
-        .filter((kr): kr is ParsedKr => kr !== null),
-    };
+    return toParsedOkrUpdate(envelope);
   } catch (error) {
     Sentry.captureException(error, {
       tags: { integration: "llm-okr-parser" },
@@ -478,5 +513,123 @@ export async function llmParseOkrUpdate(
     });
     console.warn("Failed to parse LLM response:", trimmed.slice(0, 200));
     return null;
+  }
+}
+
+async function fallbackToSingleMessageParses(
+  inputs: readonly OkrParseInput[],
+  prompt: string,
+  opts: ParseOkrOptions = {}
+): Promise<Array<ParsedOkrUpdate | null>> {
+  const results: Array<ParsedOkrUpdate | null> = [];
+
+  for (const input of inputs) {
+    results.push(await parseSingleOkrUpdate(input, prompt, opts));
+  }
+
+  return results;
+}
+
+/**
+ * Use Claude to parse a raw Slack message into structured OKR data.
+ * Returns null if the message is not an OKR update.
+ */
+export async function llmParseOkrUpdate(
+  messageText: string,
+  channelContext: string,
+  systemPrompt?: string,
+  opts: ParseOkrOptions = {}
+): Promise<ParsedOkrUpdate | null> {
+  const prompt =
+    systemPrompt ??
+    buildSystemPromptFromContext(await buildSquadContext());
+
+  return parseSingleOkrUpdate({ messageText, channelContext }, prompt, opts);
+}
+
+export async function llmParseOkrUpdates(
+  inputs: readonly OkrParseInput[],
+  systemPrompt?: string,
+  opts: ParseOkrOptions = {}
+): Promise<Array<ParsedOkrUpdate | null>> {
+  if (inputs.length === 0) {
+    return [];
+  }
+
+  const prompt =
+    systemPrompt ??
+    buildSystemPromptFromContext(await buildSquadContext());
+
+  if (inputs.length === 1) {
+    return [await parseSingleOkrUpdate(inputs[0], prompt, opts)];
+  }
+
+  const trimmed = await requestOkrParse(
+    prompt,
+    buildBatchMessagePromptContent(inputs),
+    opts,
+    4000
+  );
+
+  if (trimmed == null) {
+    Sentry.captureMessage(
+      "Falling back to single-message OKR parsing after unusable batch payload",
+      {
+        level: "warning",
+        tags: { integration: "llm-okr-parser" },
+        extra: {
+          operation: "parseBatchResponse",
+          reason: "null_or_empty_response",
+          batchSize: inputs.length,
+        },
+      }
+    );
+    return fallbackToSingleMessageParses(inputs, prompt, opts);
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || parsed.length !== inputs.length) {
+      Sentry.captureMessage(
+        "Falling back to single-message OKR parsing after unusable batch payload",
+        {
+          level: "warning",
+          tags: { integration: "llm-okr-parser" },
+          extra: {
+            operation: "parseBatchResponse",
+            reason: Array.isArray(parsed)
+              ? "wrong_array_length"
+              : "wrong_top_level_shape",
+            batchSize: inputs.length,
+            responsePreview: trimmed.slice(0, 200),
+          },
+        }
+      );
+      return fallbackToSingleMessageParses(inputs, prompt, opts);
+    }
+
+    return parsed.map((item) => {
+      if (item == null) {
+        return null;
+      }
+
+      const envelope = validateParsedEnvelope(item);
+      return envelope ? toParsedOkrUpdate(envelope) : null;
+    });
+  } catch {
+    Sentry.captureMessage(
+      "Falling back to single-message OKR parsing after unusable batch payload",
+      {
+        level: "warning",
+        tags: { integration: "llm-okr-parser" },
+        extra: {
+          operation: "parseBatchResponse",
+          reason: "invalid_json",
+          batchSize: inputs.length,
+          responsePreview: trimmed.slice(0, 200),
+        },
+      }
+    );
+    return fallbackToSingleMessageParses(inputs, prompt, opts);
   }
 }

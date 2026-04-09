@@ -30,7 +30,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 
 vi.mock("@sentry/nextjs", () => mockSentry);
 
-import { llmParseOkrUpdate } from "../llm-okr-parser";
+import { llmParseOkrUpdate, llmParseOkrUpdates } from "../llm-okr-parser";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -230,6 +230,193 @@ describe("llmParseOkrUpdate timeout", () => {
 
     // Advance well past the timeout — no unhandled rejection should fire.
     await vi.advanceTimersByTimeAsync(120_000);
+  });
+
+  it("parses a batch response into index-aligned OKR results", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify([
+            {
+              squadName: "Growth",
+              tldr: "first summary",
+              krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+            },
+            null,
+            {
+              squadName: "Product",
+              tldr: "third summary",
+              krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+            },
+          ]),
+        },
+      ],
+    });
+
+    await expect(
+      llmParseOkrUpdates(
+        [
+          { messageText: "message-1", channelContext: "#growth\nAuthor: Alice" },
+          { messageText: "message-2", channelContext: "#growth\nAuthor: Bob" },
+          { messageText: "message-3", channelContext: "#product\nAuthor: Carol" },
+        ],
+        "system prompt"
+      )
+    ).resolves.toEqual([
+      {
+        squadName: "Growth",
+        tldr: "first summary",
+        krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+      },
+      null,
+      {
+        squadName: "Product",
+        tldr: "third summary",
+        krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+      },
+    ]);
+
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+    expect(mockMessages.create.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({
+            content: expect.stringContaining("Message 2"),
+          }),
+        ],
+      })
+    );
+  });
+
+  it("drops only the invalid element from an otherwise valid batch response", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify([
+            {
+              squadName: "Growth",
+              tldr: "valid summary",
+              krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+            },
+            { squadName: "   ", tldr: "bad summary", krs: [] },
+            {
+              squadName: "Product",
+              tldr: "mixed summary",
+              krs: [
+                { objective: "Objective 3", name: "KR3", rag: "red", metric: "20%" },
+                { objective: "", name: "KR4", rag: "amber", metric: "10%" },
+              ],
+            },
+          ]),
+        },
+      ],
+    });
+
+    await expect(
+      llmParseOkrUpdates(
+        [
+          { messageText: "message-1", channelContext: "#growth\nAuthor: Alice" },
+          { messageText: "message-2", channelContext: "#growth\nAuthor: Bob" },
+          { messageText: "message-3", channelContext: "#product\nAuthor: Carol" },
+        ],
+        "system prompt"
+      )
+    ).resolves.toEqual([
+      {
+        squadName: "Growth",
+        tldr: "valid summary",
+        krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+      },
+      null,
+      {
+        squadName: "Product",
+        tldr: "mixed summary",
+        krs: [{ objective: "Objective 3", name: "KR3", rag: "red", metric: "20%" }],
+      },
+    ]);
+
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "Dropped invalid OKR key result from Claude response",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          invalidFields: ["objective"],
+        }),
+      })
+    );
+  });
+
+  it("falls back to single-message parsing when the batch payload is unusable", async () => {
+    mockMessages.create
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: JSON.stringify({ not: "an array" }) }],
+      })
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              squadName: "Growth",
+              tldr: "first summary",
+              krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "null" }],
+      })
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              squadName: "Product",
+              tldr: "third summary",
+              krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+            }),
+          },
+        ],
+      });
+
+    await expect(
+      llmParseOkrUpdates(
+        [
+          { messageText: "message-1", channelContext: "#growth\nAuthor: Alice" },
+          { messageText: "message-2", channelContext: "#growth\nAuthor: Bob" },
+          { messageText: "message-3", channelContext: "#product\nAuthor: Carol" },
+        ],
+        "system prompt"
+      )
+    ).resolves.toEqual([
+      {
+        squadName: "Growth",
+        tldr: "first summary",
+        krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+      },
+      null,
+      {
+        squadName: "Product",
+        tldr: "third summary",
+        krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+      },
+    ]);
+
+    expect(mockMessages.create).toHaveBeenCalledTimes(4);
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "Falling back to single-message OKR parsing after unusable batch payload",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          operation: "parseBatchResponse",
+          reason: "wrong_top_level_shape",
+          batchSize: 3,
+        }),
+      })
+    );
   });
 
   it("returns null when the parsed envelope is missing a non-empty squad name", async () => {

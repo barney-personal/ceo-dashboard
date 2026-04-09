@@ -24,6 +24,10 @@ import {
   getLatestWauMau,
   getLatestM11Retention,
 } from "@/lib/data/chart-data";
+import {
+  getLatestTerminalSyncRun,
+  resolveModeStaleReason,
+} from "@/lib/data/mode";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
@@ -34,6 +38,7 @@ export default async function ProductPage() {
     latestMAU,
     latestWauMau,
     latestM11,
+    latestSyncRun,
   ] = await Promise.all([
     getActiveUsersSeries(),
     getEngagementSeries(),
@@ -41,7 +46,24 @@ export default async function ProductPage() {
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
+    getLatestTerminalSyncRun("mode"),
   ]);
+
+  const activeUsersChartsEmptyReason = resolveModeStaleReason(
+    activeUsers.mau.length === 0,
+    latestSyncRun,
+    "Sync the App Active Users report to view charts"
+  );
+  const activeUsersEngagementEmptyReason = resolveModeStaleReason(
+    engagement.length === 0,
+    latestSyncRun,
+    "Sync the App Active Users report to view engagement"
+  );
+  const retentionEmptyReason = resolveModeStaleReason(
+    retentionCohorts.length === 0,
+    latestSyncRun,
+    "Sync the App Retention report to view MAU retention cohorts"
+  );
 
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
   const modeUrlActiveUsers = getModeReportLink("product", "active-users");
@@ -128,7 +150,7 @@ export default async function ProductPage() {
         {activeUsers.mau.length === 0 && (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Active Users report to view charts
+              {activeUsersChartsEmptyReason}
             </p>
           </div>
         )}
@@ -167,7 +189,7 @@ export default async function ProductPage() {
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Active Users report to view engagement
+              {activeUsersEngagementEmptyReason}
             </p>
           </div>
         )}
@@ -199,7 +221,7 @@ export default async function ProductPage() {
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Sync the App Retention report to view MAU retention cohorts
+              {retentionEmptyReason}
             </p>
           </div>
         )}

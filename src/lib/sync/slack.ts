@@ -10,7 +10,8 @@ import {
 import {
   buildSquadContext,
   buildSystemPromptFromContext,
-  llmParseOkrUpdate,
+  llmParseOkrUpdates,
+  type OkrParseInput,
 } from "@/lib/integrations/llm-okr-parser";
 import { seedSquads } from "@/lib/data/seed-squads";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
@@ -25,6 +26,7 @@ import { determineSyncStatus, formatSyncError } from "./coordinator";
 import * as Sentry from "@sentry/nextjs";
 
 const SLACK_THREAD_REPLY_CONCURRENCY = 5;
+const SLACK_OKR_PARSE_BATCH_SIZE = 4;
 
 type SyncChannelResult = {
   krCount: number;
@@ -100,6 +102,16 @@ async function mapWithConcurrencyLimit<T, TResult>(
   }
 
   return settledResults;
+}
+
+function chunkArray<T>(items: readonly T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }
 
 /** Map channel name to pillar for grouping */
@@ -216,6 +228,11 @@ async function syncChannel(
   let llmNullCount = 0;
   let emptyAfterValidationCount = 0;
   const authorNameCache = new Map<string, string>();
+  const parseCandidates: Array<{
+    authorName: string;
+    channelContext: string;
+    msg: (typeof messages)[number];
+  }> = [];
 
   for (const msg of messages) {
     throwIfSyncShouldStop(opts, {
@@ -232,55 +249,62 @@ async function syncChannel(
     const authorName = msg.user
       ? await resolveAuthorName(msg.user, userNameFallback, authorNameCache, opts)
       : "unknown";
+    parseCandidates.push({
+      authorName,
+      channelContext: `${channelContext}\nAuthor: ${authorName}`,
+      msg,
+    });
+  }
 
-    const parsed = await llmParseOkrUpdate(
-      msg.text,
-      `${channelContext}\nAuthor: ${authorName}`,
+  for (const batch of chunkArray(parseCandidates, SLACK_OKR_PARSE_BATCH_SIZE)) {
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Slack sync cancelled while parsing messages",
+      deadlineExceeded:
+        "Slack sync exceeded its execution budget while parsing messages",
+    });
+
+    const parsedBatch = await llmParseOkrUpdates(
+      batch.map<OkrParseInput>(({ channelContext, msg }) => ({
+        messageText: msg.text,
+        channelContext,
+      })),
       systemPrompt,
       { signal: opts.signal }
     );
-    parsedMessageCount += 1;
-    if (!parsed) {
-      llmNullCount += 1;
-      continue;
-    }
-    if (parsed.krs.length === 0) {
-      emptyAfterValidationCount += 1;
-      continue;
-    }
+    parsedMessageCount += batch.length;
 
-    const postedAt = new Date(parseFloat(msg.ts) * 1000);
+    for (const [index, parsed] of parsedBatch.entries()) {
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Slack sync cancelled while storing parsed OKRs",
+        deadlineExceeded:
+          "Slack sync exceeded its execution budget while storing parsed OKRs",
+      });
 
-    for (const kr of parsed.krs) {
-      await db
-        .insert(okrUpdates)
-        .values({
-          slackTs: msg.ts,
-          channelId,
-          channelName,
-          userId: msg.user ?? null,
-          userName: authorName !== "unknown" ? authorName : null,
-          squadName: parsed.squadName,
-          pillar,
-          objectiveName: kr.objective,
-          krName: kr.name,
-          status:
-            kr.rag === "green"
-              ? "on_track"
-              : kr.rag === "amber"
-                ? "at_risk"
-                : kr.rag === "red"
-                  ? "behind"
-                  : "not_started",
-          actual: kr.metric ?? null,
-          target: null,
-          tldr: parsed.tldr ?? null,
-          rawText: msg.text.slice(0, 10000),
-          postedAt,
-        })
-        .onConflictDoUpdate({
-          target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
-          set: {
+      const { authorName, msg } = batch[index];
+      if (!parsed) {
+        llmNullCount += 1;
+        continue;
+      }
+      if (parsed.krs.length === 0) {
+        emptyAfterValidationCount += 1;
+        continue;
+      }
+
+      const postedAt = new Date(parseFloat(msg.ts) * 1000);
+
+      for (const kr of parsed.krs) {
+        await db
+          .insert(okrUpdates)
+          .values({
+            slackTs: msg.ts,
+            channelId,
+            channelName,
+            userId: msg.user ?? null,
+            userName: authorName !== "unknown" ? authorName : null,
+            squadName: parsed.squadName,
+            pillar,
+            objectiveName: kr.objective,
+            krName: kr.name,
             status:
               kr.rag === "green"
                 ? "on_track"
@@ -290,12 +314,30 @@ async function syncChannel(
                     ? "behind"
                     : "not_started",
             actual: kr.metric ?? null,
+            target: null,
             tldr: parsed.tldr ?? null,
-            syncedAt: new Date(),
-          },
-        });
+            rawText: msg.text.slice(0, 10000),
+            postedAt,
+          })
+          .onConflictDoUpdate({
+            target: [okrUpdates.slackTs, okrUpdates.channelId, okrUpdates.krName],
+            set: {
+              status:
+                kr.rag === "green"
+                  ? "on_track"
+                  : kr.rag === "amber"
+                    ? "at_risk"
+                    : kr.rag === "red"
+                      ? "behind"
+                      : "not_started",
+              actual: kr.metric ?? null,
+              tldr: parsed.tldr ?? null,
+              syncedAt: new Date(),
+            },
+          });
 
-      krCount++;
+        krCount++;
+      }
     }
   }
 
