@@ -20,6 +20,7 @@ export interface ReportData {
 }
 
 const REPORT_DATA_CACHE_TTL_MS = 60_000;
+export const REPORT_DATA_CACHE_MAX_ENTRIES = 20;
 
 type ReportDataCacheEntry =
   | {
@@ -32,7 +33,23 @@ type ReportDataCacheEntry =
       value: ReportData[];
     };
 
+// Map preserves insertion order: first entry = LRU, last entry = MRU.
 const reportDataCache = new Map<string, ReportDataCacheEntry>();
+
+function evictOneEntry(): void {
+  // Prefer evicting a resolved entry (oldest first) so in-flight promises aren't wasted.
+  for (const [key, entry] of reportDataCache) {
+    if (entry.kind === "resolved") {
+      reportDataCache.delete(key);
+      return;
+    }
+  }
+  // All entries are pending — evict the oldest one.
+  const firstKey = reportDataCache.keys().next().value;
+  if (firstKey !== undefined) {
+    reportDataCache.delete(firstKey);
+  }
+}
 
 async function withDatabaseReadFallback<T>(
   context: string,
@@ -107,24 +124,38 @@ async function getCachedReportData(
   const entry = reportDataCache.get(cacheKey);
 
   if (entry?.kind === "pending") {
+    // Refresh LRU position on hit (delete + re-insert moves to MRU end).
+    reportDataCache.delete(cacheKey);
+    reportDataCache.set(cacheKey, entry);
     return entry.promise;
   }
 
   if (entry?.kind === "resolved") {
     if (entry.expiresAt > Date.now()) {
+      // Refresh LRU position on hit.
+      reportDataCache.delete(cacheKey);
+      reportDataCache.set(cacheKey, entry);
       return entry.value;
     }
 
     reportDataCache.delete(cacheKey);
   }
 
+  if (reportDataCache.size >= REPORT_DATA_CACHE_MAX_ENTRIES) {
+    evictOneEntry();
+  }
+
   const pending = loadReportDataFromDatabase(section, category)
     .then((results) => {
-      reportDataCache.set(cacheKey, {
-        kind: "resolved",
-        expiresAt: Date.now() + REPORT_DATA_CACHE_TTL_MS,
-        value: results,
-      });
+      // Guard: only update if this pending entry is still the current one.
+      const current = reportDataCache.get(cacheKey);
+      if (current?.kind === "pending" && current.promise === pending) {
+        reportDataCache.set(cacheKey, {
+          kind: "resolved",
+          expiresAt: Date.now() + REPORT_DATA_CACHE_TTL_MS,
+          value: results,
+        });
+      }
       return results;
     })
     .catch((error) => {

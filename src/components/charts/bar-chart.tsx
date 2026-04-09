@@ -1,7 +1,10 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleLinear, scaleBand } from "d3-scale";
+import { axisBottom } from "d3-axis";
+import { max } from "d3-array";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -40,10 +43,9 @@ export function BarChart({
     const height = data.length * barHeight + margin.top + margin.bottom;
     const innerWidth = width - margin.left - margin.right;
 
-    d3.select(svgRef.current).selectAll("*").remove();
+    select(svgRef.current).selectAll("*").remove();
 
-    const svg = d3
-      .select(svgRef.current)
+    const svg = select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
 
@@ -51,12 +53,11 @@ export function BarChart({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const maxVal = d3.max(data, (d) => d.value) ?? 1;
+    const maxVal = max(data, (d) => d.value) ?? 1;
 
-    const x = d3.scaleLinear().domain([0, maxVal]).range([0, innerWidth]);
+    const x = scaleLinear().domain([0, maxVal]).range([0, innerWidth]);
 
-    const y = d3
-      .scaleBand()
+    const y = scaleBand()
       .domain(data.map((d) => d.label))
       .range([0, data.length * barHeight])
       .padding(0.35);
@@ -64,8 +65,7 @@ export function BarChart({
     // Light grid lines
     g.append("g")
       .call(
-        d3
-          .axisBottom(x)
+        axisBottom(x)
           .ticks(5)
           .tickSize(data.length * barHeight)
           .tickFormat(() => "")
@@ -82,8 +82,7 @@ export function BarChart({
     g.append("g")
       .attr("transform", `translate(0,${data.length * barHeight})`)
       .call(
-        d3
-          .axisBottom(x)
+        axisBottom(x)
           .ticks(5)
           .tickSizeOuter(0)
       )
@@ -106,7 +105,7 @@ export function BarChart({
       .attr("font-size", "11px")
       .text("Employees");
 
-    const tooltip = d3.select(tooltipRef.current);
+    const tooltip = select(tooltipRef.current);
 
     // Bars
     g.selectAll("rect")
@@ -121,7 +120,7 @@ export function BarChart({
       .attr("opacity", 0.85)
       .style("cursor", "pointer")
       .on("mouseenter", function (event: MouseEvent, d: BarChartData) {
-        d3.select(this).attr("opacity", 1);
+        select(this).attr("opacity", 1);
         const pct = ((d.value / maxVal) * 100).toFixed(0);
         tooltip
           .html(
@@ -133,7 +132,7 @@ export function BarChart({
           .style("top", `${event.offsetY - 16}px`);
       })
       .on("mouseleave", function () {
-        d3.select(this).attr("opacity", 0.85);
+        select(this).attr("opacity", 0.85);
         tooltip.style("opacity", 0);
       });
 
