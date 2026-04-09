@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockCaptureException,
+  mockCaptureMessage,
   mockAnd,
   mockDesc,
   mockEq,
@@ -12,6 +13,7 @@ const {
   mockWhere,
 } = vi.hoisted(() => {
   const mockCaptureException = vi.fn();
+  const mockCaptureMessage = vi.fn();
   const mockOrderBy = vi.fn();
   const mockWhere = vi.fn(() => ({ orderBy: mockOrderBy }));
   const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
@@ -20,6 +22,7 @@ const {
 
   return {
     mockCaptureException,
+    mockCaptureMessage,
     mockAnd: vi.fn((...conditions: unknown[]) => conditions),
     mockDesc: vi.fn((value: unknown) => value),
     mockEq: vi.fn((left: unknown, right: unknown) => [left, right]),
@@ -33,6 +36,7 @@ const {
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -69,7 +73,12 @@ vi.mock("@/lib/db/schema", () => ({
   },
 }));
 
-import { getReportData, resetReportDataCacheForTests, REPORT_DATA_CACHE_MAX_ENTRIES } from "../mode";
+import {
+  getReportData,
+  resetReportDataCacheForTests,
+  REPORT_DATA_CACHE_MAX_ENTRIES,
+  validateModeColumns,
+} from "../mode";
 
 function createReportRows(rowValue: number) {
   return [
@@ -103,6 +112,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   resetReportDataCacheForTests();
   mockCaptureException.mockClear();
+  mockCaptureMessage.mockClear();
   mockAnd.mockClear();
   mockDesc.mockClear();
   mockEq.mockClear();
@@ -111,6 +121,52 @@ afterEach(() => {
   mockOrderBy.mockReset();
   mockSelect.mockClear();
   mockWhere.mockClear();
+});
+
+describe("validateModeColumns", () => {
+  it("returns present and missing columns and warns when required columns are absent", () => {
+    const result = validateModeColumns({
+      row: { week: "2026-04-01", actual: 42 },
+      expectedColumns: ["week", "actual", "target"] as const,
+      reportName: "Strategic Finance KPIs",
+      queryName: "Query 3",
+    });
+
+    expect(result).toEqual({
+      expectedColumns: ["week", "actual", "target"],
+      presentColumns: ["week", "actual"],
+      missingColumns: ["target"],
+      isValid: false,
+    });
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      "Mode schema drift: missing expected columns",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          reportName: "Strategic Finance KPIs",
+          queryName: "Query 3",
+          missingColumns: ["target"],
+        }),
+      })
+    );
+  });
+
+  it("does not warn when every expected column is present", () => {
+    const result = validateModeColumns({
+      row: { week: "2026-04-01", actual: 42, target: 55 },
+      expectedColumns: ["week", "actual", "target"] as const,
+      reportName: "Strategic Finance KPIs",
+      queryName: "Query 3",
+    });
+
+    expect(result).toEqual({
+      expectedColumns: ["week", "actual", "target"],
+      presentColumns: ["week", "actual", "target"],
+      missingColumns: [],
+      isValid: true,
+    });
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe("getReportData cache", () => {
@@ -235,6 +291,50 @@ describe("getReportData cache", () => {
     ]);
 
     expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it("warns when expected queries are missing without changing the return value", async () => {
+    mockOrderBy.mockResolvedValueOnce(createReportRows(12));
+
+    await expect(
+      getReportData("unit-economics", "kpis", ["Query 1", "Query 2"])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        queryName: "Query 1",
+        rows: [{ value: 12 }],
+      }),
+    ]);
+
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      "Mode schema drift: missing expected queries",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          section: "unit-economics",
+          category: "kpis",
+          missingQueries: ["Query 2"],
+          availableQueryNames: ["Query 1"],
+        }),
+      })
+    );
+  });
+
+  it("does not fragment the cache when expectedQueries changes", async () => {
+    mockOrderBy.mockResolvedValueOnce(createReportRows(12));
+
+    await getReportData("unit-economics", "kpis", ["Query 1"]);
+    await getReportData("unit-economics", "kpis", ["Query 1", "Query 2"]);
+
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      "Mode schema drift: missing expected queries",
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          missingQueries: ["Query 2"],
+        }),
+      })
+    );
   });
 });
 
