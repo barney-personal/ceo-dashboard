@@ -83,6 +83,8 @@ const mocks = vi.hoisted(() => {
     addBreadcrumb: vi.fn(),
     captureException: vi.fn(),
     captureMessage: vi.fn(),
+    checkModeHealth: vi.fn(),
+    checkSlackHealth: vi.fn(),
     createPhaseTracker: vi.fn(),
     del,
     downloadSlackFile: vi.fn(),
@@ -133,6 +135,7 @@ vi.mock("@/lib/integrations/llm-okr-parser", () => ({
 }));
 
 vi.mock("@/lib/integrations/slack", () => ({
+  checkSlackHealth: mocks.checkSlackHealth,
   getChannelHistory: mocks.getChannelHistory,
   getChannelName: mocks.getChannelName,
   getThreadReplies: mocks.getThreadReplies,
@@ -176,6 +179,7 @@ vi.mock("@/lib/integrations/mode-config", () => {
 });
 
 vi.mock("@/lib/integrations/mode", () => ({
+  checkModeHealth: mocks.checkModeHealth,
   extractQueryToken: vi.fn((queryRun: { queryToken?: string; token?: string }) =>
     queryRun.queryToken ?? queryRun.token ?? "unknown-query"
   ),
@@ -234,6 +238,8 @@ describe("sync runner fault injection", () => {
     mocks.getThreadReplies.mockResolvedValue([]);
     mocks.getUserName.mockResolvedValue("Alice PM");
     mocks.extractPeriodFromFilename.mockReturnValue("2026-03");
+    mocks.checkModeHealth.mockResolvedValue(undefined);
+    mocks.checkSlackHealth.mockResolvedValue(undefined);
     mocks.prepareModeRowsForStorage.mockImplementation((rows: Record<string, unknown>[]) => ({
       rows,
       sourceRowCount: rows.length,
@@ -289,6 +295,40 @@ describe("sync runner fault injection", () => {
         "Failed to sync Management Accounts March 2026.xlsx: db offline",
       ],
     });
+  });
+
+  it("returns a structured error when management accounts Slack health check fails", async () => {
+    const startPhase = vi.fn(async () => 1);
+    const endPhase = vi.fn(async () => {});
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+    mocks.checkSlackHealth.mockRejectedValue(new Error("auth.test timed out"));
+
+    await expect(runManagementAccountsSync({ id: 52 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Slack API unreachable, skipping sync: auth.test timed out"],
+    });
+
+    expect(startPhase).toHaveBeenCalledWith(
+      "health_check",
+      "Checking Slack API connectivity"
+    );
+    expect(endPhase).toHaveBeenCalledWith(1, {
+      status: "error",
+      detail: "Slack API unreachable, sync skipped",
+      errorMessage: "Slack API unreachable, skipping sync: auth.test timed out",
+    });
+    expect(mocks.listChannelFiles).not.toHaveBeenCalled();
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "Slack API unreachable, skipping sync",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "management-accounts",
+          failure_scope: "health_check",
+        }),
+      }),
+    );
   });
 
   it("skips management accounts upsert when revenue and gross profit are both missing", async () => {
@@ -374,6 +414,55 @@ describe("sync runner fault injection", () => {
       errors: ["Failed to seed squads: db unavailable"],
     });
     expect(mocks.getChannelName).not.toHaveBeenCalled();
+  });
+
+  it("preserves the no-channel Slack fast path without running the health check", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "";
+
+    await expect(runSlackSync({ id: 44 })).resolves.toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+
+    expect(mocks.checkSlackHealth).not.toHaveBeenCalled();
+    expect(mocks.createPhaseTracker).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured Slack sync error when the health check fails", async () => {
+    const startPhase = vi.fn(async () => 1);
+    const endPhase = vi.fn(async () => {});
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+    process.env.SLACK_OKR_CHANNEL_IDS = "CHEALTH";
+    mocks.checkSlackHealth.mockRejectedValue(new Error("auth.test failed"));
+
+    await expect(runSlackSync({ id: 53 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Slack API unreachable, skipping sync: auth.test failed"],
+    });
+
+    expect(startPhase).toHaveBeenCalledWith(
+      "health_check",
+      "Checking Slack API connectivity"
+    );
+    expect(endPhase).toHaveBeenCalledWith(1, {
+      status: "error",
+      detail: "Slack API unreachable, sync skipped",
+      errorMessage: "Slack API unreachable, skipping sync: auth.test failed",
+    });
+    expect(mocks.seedSquads).not.toHaveBeenCalled();
+    expect(mocks.getChannelName).not.toHaveBeenCalled();
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "Slack API unreachable, skipping sync",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "slack",
+          failure_scope: "health_check",
+        }),
+      }),
+    );
   });
 
   it("returns a structured Slack sync error when loading the user fallback map fails", async () => {
@@ -693,6 +782,44 @@ describe("sync runner fault injection", () => {
       errors: [],
     });
     expect(maxActiveFetches).toBe(3);
+  });
+
+  it("returns a structured Mode sync error when the health check fails", async () => {
+    const startPhase = vi.fn(async () => 1);
+    const endPhase = vi.fn(async () => {});
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+    mocks.checkModeHealth.mockRejectedValue(new Error("Mode health check timed out"));
+
+    await expect(runModeSync({ id: 78 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: [
+        "Mode API unreachable, skipping sync: Mode health check timed out",
+      ],
+    });
+
+    expect(startPhase).toHaveBeenCalledWith(
+      "health_check",
+      "Checking Mode API connectivity"
+    );
+    expect(endPhase).toHaveBeenCalledWith(1, {
+      status: "error",
+      detail: "Mode API unreachable, sync skipped",
+      errorMessage:
+        "Mode API unreachable, skipping sync: Mode health check timed out",
+    });
+    expect(mocks.insert).not.toHaveBeenCalled();
+    expect(mocks.getLatestRun).not.toHaveBeenCalled();
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "Mode API unreachable, skipping sync",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "mode",
+          failure_scope: "health_check",
+        }),
+      }),
+    );
   });
 
   it("keeps Mode per-query failures isolated while preserving cleanup tokens", async () => {

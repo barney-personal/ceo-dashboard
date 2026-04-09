@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 const MODE_BASE_URL = "https://app.mode.com/api";
 const MODE_METADATA_TIMEOUT_MS = 30_000;
 const MODE_RESULTS_TIMEOUT_MS = 120_000;
+const MODE_HEALTH_TIMEOUT_MS = 5_000;
 const MODE_MAX_RESULT_BYTES = 25 * 1024 * 1024;
 const MODE_MAX_RETRIES = 3;
 const MODE_AUTH_ERROR_MESSAGE =
@@ -514,6 +515,55 @@ export async function getModeJsonWithLimit<T>(
   opts?: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<{ data: T; bytesRead: number }> {
   return modeRequestJson<T>(path, opts);
+}
+
+export async function checkModeHealth(opts: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+} = {}): Promise<void> {
+  const config = getConfig();
+  const { signal, cleanup, timedOut } = composeSignal(
+    opts.timeoutMs ?? MODE_HEALTH_TIMEOUT_MS,
+    opts.signal,
+    "Mode health check timed out",
+  );
+
+  try {
+    const res = await fetch(`${MODE_BASE_URL}/${config.workspace}`, {
+      signal,
+      headers: authHeaders(config),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      if (res.status === 401 || res.status === 403) {
+        captureModeAuthError({
+          path: "",
+          requestType: "metadata",
+          status: res.status,
+          body,
+        });
+      }
+
+      throw new Error(`Mode health check failed with status ${res.status}: ${body}`);
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      if (timedOut()) {
+        throw new Error("Mode health check timed out");
+      }
+
+      if (signal.reason instanceof Error) {
+        throw signal.reason;
+      }
+
+      throw new Error("Mode health check was aborted");
+    }
+
+    throw error;
+  } finally {
+    cleanup();
+  }
 }
 
 /**

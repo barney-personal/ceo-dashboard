@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
+const SLACK_HEALTH_TIMEOUT_MS = 5_000;
 const SLACK_MAX_RETRIES = 3;
 const SLACK_AUTH_ERROR_MESSAGE =
   "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler";
@@ -431,6 +432,21 @@ export async function slackDownloadRequest(
       timeoutMessage: `Slack file download timed out after ${
         opts.timeoutMs ?? SLACK_DOWNLOAD_TIMEOUT_MS
       }ms`,
+    },
+  );
+}
+
+export async function checkSlackHealth(opts: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+} = {}): Promise<void> {
+  await slackApiRequest<{ ok: true }>(
+    "auth.test",
+    undefined,
+    {
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs ?? SLACK_HEALTH_TIMEOUT_MS,
+      maxRetries: 1,
     },
   );
 }

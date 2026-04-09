@@ -10,7 +10,11 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
 }));
 
-import { getLatestRun, getQueryResultContent } from "../mode";
+import {
+  checkModeHealth,
+  getLatestRun,
+  getQueryResultContent,
+} from "../mode";
 
 describe("Mode transport resilience", () => {
   const originalToken = process.env.MODE_API_TOKEN;
@@ -214,5 +218,30 @@ describe("Mode transport resilience", () => {
         }),
       }),
     );
+  });
+
+  it("fails Mode health checks on timeout without retrying", async () => {
+    const fetchMock = vi.fn((_input, init?: RequestInit) => {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = checkModeHealth();
+    const rejection = expect(promise).rejects.toThrow("Mode health check timed out");
+
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

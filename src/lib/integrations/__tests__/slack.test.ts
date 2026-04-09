@@ -14,7 +14,7 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 import { downloadSlackFile } from "../slack-files";
-import { getChannelName } from "../slack";
+import { checkSlackHealth, getChannelName } from "../slack";
 
 describe("Slack transport resilience", () => {
   const originalToken = process.env.SLACK_BOT_TOKEN;
@@ -309,5 +309,32 @@ describe("Slack transport resilience", () => {
     // Invalid channel config must not produce an exception-level Sentry event —
     // validateSlackChannels() emits the warning-level signal instead.
     expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it("fails Slack health checks on timeout without retrying", async () => {
+    const fetchMock = vi.fn((_input, init?: RequestInit) => {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason ?? new Error("aborted")),
+          { once: true },
+        );
+      });
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = checkSlackHealth();
+    const rejection = expect(promise).rejects.toThrow(
+      "Slack auth.test timed out after 5000ms",
+    );
+
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
