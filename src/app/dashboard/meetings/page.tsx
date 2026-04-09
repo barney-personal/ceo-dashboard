@@ -17,7 +17,7 @@ export default async function MeetingsPage({
   searchParams: Promise<{ week?: string }>;
 }) {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
+  if (!hasAccess(role, "everyone")) {
     redirect("/dashboard");
   }
 

@@ -1,8 +1,10 @@
+import { auth } from "@clerk/nextjs/server";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { TodayMeetings } from "@/components/dashboard/today-meetings";
 import {
   ArrowUpRight,
   Calculator,
@@ -11,6 +13,7 @@ import {
   Target,
   Users,
   Database,
+  Calendar,
   CheckCircle2,
   XCircle,
   RefreshCw,
@@ -20,6 +23,8 @@ import { getHeadcountMetrics } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
 import { getLatestARR } from "@/lib/data/management-accounts";
 import { getRecentSyncRuns } from "@/lib/data/sync";
+import { getMeetingsForRange } from "@/lib/data/meetings";
+import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import { formatCompact } from "@/lib/format/number";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 import { getEffectiveSyncState } from "@/lib/sync/config";
@@ -56,20 +61,38 @@ function SectionLink({
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
-  const [headcount, ltvCacRatio, latestARR, latestMAU, recentSyncs] =
+  const { userId } = await auth();
+
+  // Get per-user Google Calendar token
+  const accessToken = userId
+    ? await getUserGoogleAccessToken(userId)
+    : null;
+
+  // Today's date range for meetings
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+  const [headcount, ltvCacRatio, latestARR, latestMAU, recentSyncs, todayMeetings] =
     await Promise.all([
       getHeadcountMetrics(),
       getLatestLtvCacRatio(),
       getLatestARR(),
       getLatestMAU(),
       getRecentSyncRuns(10),
+      getMeetingsForRange(todayStart, todayEnd, {
+        accessToken: accessToken ?? undefined,
+      }),
     ]);
+
+  const todayData = todayMeetings[0] ?? null;
 
   const syncEntries = recentSyncs.map((sync) => {
     const sourceLabels: Record<string, string> = {
       mode: "Mode Analytics",
       slack: "Slack OKRs",
       "management-accounts": "Management Accounts",
+      meetings: "Meetings",
     };
     return {
       id: sync.id,
@@ -130,6 +153,9 @@ export default async function DashboardOverview() {
         </PermissionGate>
       </div>
 
+      {/* Today's meetings */}
+      <TodayMeetings day={todayData} calendarConnected={!!accessToken} />
+
       {/* Sections grid */}
       <div className="space-y-3">
         <h3 className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
@@ -162,6 +188,12 @@ export default async function DashboardOverview() {
             title="OKRs"
             description="Key results by pillar and squad, parsed from Slack updates with RAG status indicators"
           />
+          <SectionLink
+            href="/dashboard/meetings"
+            icon={Calendar}
+            title="Meetings"
+            description="Your calendar, meeting notes from Granola, and pre-reads from Slack"
+          />
           <PermissionGate role={role} requiredRole="leadership">
             <SectionLink
               href="/dashboard/people"
@@ -173,13 +205,13 @@ export default async function DashboardOverview() {
         </div>
       </div>
 
-      {/* Bottom detail cards */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard
-          title="Recent Sync Activity"
-          description="Data pipeline status"
-          action={
-            <PermissionGate role={role} requiredRole="ceo">
+      {/* Bottom detail cards — CEO only */}
+      <PermissionGate role={role} requiredRole="ceo">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SectionCard
+            title="Recent Sync Activity"
+            description="Data pipeline status"
+            action={
               <Link
                 href="/dashboard/admin/status"
                 className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -187,102 +219,108 @@ export default async function DashboardOverview() {
                 Details
                 <ArrowUpRight className="h-3 w-3" />
               </Link>
-            </PermissionGate>
-          }
-        >
-          <div className="space-y-2.5">
-            {syncEntries.length > 0 ? (
-              syncEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center gap-3">
-                  {entry.status === "success" ? (
-                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
-                  ) : entry.status === "partial" ? (
-                    <XCircle className="h-3.5 w-3.5 shrink-0 text-warning" />
-                  ) : entry.status === "queued" ? (
-                    <RefreshCw className="h-3.5 w-3.5 shrink-0 text-warning" />
-                  ) : entry.status === "abandoned" ? (
-                    <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-                  ) : entry.status === "error" ? (
-                    <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-foreground">{entry.source}</p>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    {entry.recordsSynced > 0 && (
-                      <span>
-                        {entry.recordsSynced.toLocaleString()} records
-                      </span>
+            }
+          >
+            <div className="space-y-2.5">
+              {syncEntries.length > 0 ? (
+                syncEntries.map((entry) => (
+                  <div key={entry.id} className="flex items-center gap-3">
+                    {entry.status === "success" ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-positive" />
+                    ) : entry.status === "partial" ? (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 text-warning" />
+                    ) : entry.status === "queued" ? (
+                      <RefreshCw className="h-3.5 w-3.5 shrink-0 text-warning" />
+                    ) : entry.status === "abandoned" ? (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    ) : entry.status === "error" ? (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
                     )}
-                    <time dateTime={entry.startedAt}>
-                      {new Date(entry.startedAt).toLocaleDateString("en-GB", {
-                        day: "numeric",
-                        month: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </time>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-foreground">{entry.source}</p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {entry.recordsSynced > 0 && (
+                        <span>
+                          {entry.recordsSynced.toLocaleString()} records
+                        </span>
+                      )}
+                      <time dateTime={entry.startedAt}>
+                        {new Date(entry.startedAt).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    </div>
                   </div>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                No sync activity yet
-              </p>
-            )}
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="About This Dashboard"
-          description="Data sources and how it works"
-        >
-          <div className="space-y-3 text-sm text-muted-foreground">
-            <div className="space-y-2">
-              {[
-                {
-                  icon: Database,
-                  label: "Mode Analytics",
-                  detail:
-                    "Unit economics, product metrics, retention cohorts — synced every 4 hours",
-                },
-                {
-                  icon: PoundSterling,
-                  label: "Slack → Management Accounts",
-                  detail:
-                    "Monthly xlsx files from #fyi-management_accounts, parsed server-side",
-                },
-                {
-                  icon: Target,
-                  label: "Slack → OKRs",
-                  detail:
-                    "Key results parsed from pillar channels via Claude — synced every 2 hours",
-                },
-                {
-                  icon: Users,
-                  label: "HiBob",
-                  detail:
-                    "Team directory, tenure, org structure from HR system",
-                },
-              ].map((source) => (
-                <div key={source.label} className="flex items-start gap-2.5">
-                  <source.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      {source.label}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {source.detail}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No sync activity yet
+                </p>
+              )}
             </div>
-          </div>
-        </SectionCard>
-      </div>
+          </SectionCard>
+
+          <SectionCard
+            title="About This Dashboard"
+            description="Data sources and how it works"
+          >
+            <div className="space-y-3 text-sm text-muted-foreground">
+              <div className="space-y-2">
+                {[
+                  {
+                    icon: Database,
+                    label: "Mode Analytics",
+                    detail:
+                      "Unit economics, product metrics, retention cohorts — synced every 4 hours",
+                  },
+                  {
+                    icon: PoundSterling,
+                    label: "Slack → Management Accounts",
+                    detail:
+                      "Monthly xlsx files from #fyi-management_accounts, parsed server-side",
+                  },
+                  {
+                    icon: Target,
+                    label: "Slack → OKRs",
+                    detail:
+                      "Key results parsed from pillar channels via Claude — synced every 2 hours",
+                  },
+                  {
+                    icon: Calendar,
+                    label: "Google Calendar + Granola",
+                    detail:
+                      "Per-user calendar events via OAuth, meeting notes from Granola API",
+                  },
+                  {
+                    icon: Users,
+                    label: "HiBob",
+                    detail:
+                      "Team directory, tenure, org structure from HR system",
+                  },
+                ].map((source) => (
+                  <div key={source.label} className="flex items-start gap-2.5">
+                    <source.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">
+                        {source.label}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {source.detail}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      </PermissionGate>
     </div>
   );
 }
