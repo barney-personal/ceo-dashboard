@@ -5,7 +5,7 @@ const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
 const SLACK_MAX_RETRIES = 3;
 const SLACK_AUTH_ERROR_MESSAGE =
-  "Slack API authentication failed, check SLACK_BOT_TOKEN";
+  "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler";
 const SLACK_AUTH_ERROR_CODES = new Set([
   "not_authed",
   "invalid_auth",
@@ -164,6 +164,7 @@ async function slackFetch(
   input: string,
   init: RequestInit,
   opts: {
+    method?: string;
     timeoutMs: number;
     maxRetries?: number;
     timeoutMessage: string;
@@ -187,6 +188,7 @@ async function slackFetch(
       if (res.status === 401 || res.status === 403) {
         captureSlackAuthError({
           input,
+          method: opts.method,
           status: res.status,
           responseBody: await res.text(),
           source: "http",
@@ -231,7 +233,7 @@ async function slackFetch(
 
       Sentry.captureException(error, {
         tags: { integration: "slack" },
-        extra: { input, attempt, operation: "slackFetch" },
+        extra: { input, method: opts.method, attempt, operation: "slackFetch" },
       });
       throw error;
     } finally {
@@ -242,7 +244,7 @@ async function slackFetch(
   const terminalError = lastError ?? new Error("Slack request failed");
   Sentry.captureException(terminalError, {
     tags: { integration: "slack" },
-    extra: { input, operation: "slackFetch" },
+    extra: { input, method: opts.method, operation: "slackFetch" },
   });
   throw terminalError;
 }
@@ -289,6 +291,7 @@ export async function slackApiRequest<T>(
         signal: opts.signal,
       },
       {
+        method,
         timeoutMs: opts.timeoutMs ?? SLACK_REQUEST_TIMEOUT_MS,
         maxRetries,
         timeoutMessage: `Slack ${method} timed out after ${

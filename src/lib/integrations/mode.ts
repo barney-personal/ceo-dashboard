@@ -6,7 +6,7 @@ const MODE_RESULTS_TIMEOUT_MS = 120_000;
 const MODE_MAX_RESULT_BYTES = 25 * 1024 * 1024;
 const MODE_MAX_RETRIES = 3;
 const MODE_AUTH_ERROR_MESSAGE =
-  "Mode API authentication failed, check MODE_API_TOKEN";
+  "Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler";
 
 interface ModeConfig {
   token: string;

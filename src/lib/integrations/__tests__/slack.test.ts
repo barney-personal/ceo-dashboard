@@ -96,13 +96,13 @@ describe("Slack transport resilience", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getChannelName("C123")).rejects.toThrow(
-      "Slack API authentication failed, check SLACK_BOT_TOKEN"
+      "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+        message: "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler",
       }),
       expect.objectContaining({
         level: "error",
@@ -111,8 +111,11 @@ describe("Slack transport resilience", () => {
           auth_failure: "true",
         }),
         extra: expect.objectContaining({
+          input: expect.stringContaining("/conversations.info?channel=C123"),
+          method: "conversations.info",
           status: 401,
           source: "http",
+          responseBody: "invalid token",
         }),
       })
     );
@@ -129,12 +132,12 @@ describe("Slack transport resilience", () => {
 
     await expect(
       downloadSlackFile("https://files.slack.test/example")
-    ).rejects.toThrow("Slack API authentication failed, check SLACK_BOT_TOKEN");
+    ).rejects.toThrow("Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+        message: "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler",
       }),
       expect.objectContaining({
         level: "error",
@@ -143,8 +146,10 @@ describe("Slack transport resilience", () => {
           auth_failure: "true",
         }),
         extra: expect.objectContaining({
+          input: "https://files.slack.test/example",
           status: 403,
           source: "http",
+          responseBody: "forbidden",
         }),
       })
     );
@@ -167,13 +172,13 @@ describe("Slack transport resilience", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getChannelName("C123")).rejects.toThrow(
-      "Slack API authentication failed, check SLACK_BOT_TOKEN"
+      "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
+        message: "Slack API returned 401 — check SLACK_BOT_TOKEN in Doppler",
       }),
       expect.objectContaining({
         level: "error",

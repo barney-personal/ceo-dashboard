@@ -1075,7 +1075,7 @@ describe("sync runner fault injection", () => {
     const phaseOpts = channelEndPhaseCall![1];
     expect(phaseOpts.itemsProcessed).toBe(1);
     expect(phaseOpts.detail).toBe(
-      "#growth-okrs: Parsed 1 KRs from 2 messages (2 filtered, 1 LLM null, 1 empty after validation)"
+      "#growth-okrs: Parsed 1 KRs from 3 messages (2 filtered, 1 LLM null, 1 empty after validation)"
     );
 
     expect(mocks.addBreadcrumb).toHaveBeenCalledWith({
@@ -1086,7 +1086,7 @@ describe("sync runner fault injection", () => {
         channelId: "CDETAIL",
         channelName: "growth-okrs",
         krCount: 1,
-        parsedMessageCount: 2,
+        parsedMessageCount: 3,
         skippedByFilterCount: 2,
         llmNullCount: 1,
         emptyAfterValidationCount: 1,

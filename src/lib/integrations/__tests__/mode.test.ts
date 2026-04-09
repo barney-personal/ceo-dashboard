@@ -40,13 +40,13 @@ describe("Mode transport auth errors", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getLatestRun("report-token")).rejects.toThrow(
-      "Mode API authentication failed, check MODE_API_TOKEN"
+      "Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Mode API authentication failed, check MODE_API_TOKEN",
+        message: "Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler",
       }),
       expect.objectContaining({
         level: "error",
@@ -58,6 +58,7 @@ describe("Mode transport auth errors", () => {
           path: "/reports/report-token/runs",
           requestType: "metadata",
           status: 401,
+          responseBody: "unauthorized",
         }),
       })
     );
@@ -74,12 +75,12 @@ describe("Mode transport auth errors", () => {
 
     await expect(
       getQueryResultContent("report-token", "run-token", "query-run-token")
-    ).rejects.toThrow("Mode API authentication failed, check MODE_API_TOKEN");
+    ).rejects.toThrow("Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Mode API authentication failed, check MODE_API_TOKEN",
+        message: "Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler",
       }),
       expect.objectContaining({
         level: "error",
@@ -92,6 +93,7 @@ describe("Mode transport auth errors", () => {
             "/reports/report-token/runs/run-token/query_runs/query-run-token/results/content.json?limit=1000",
           requestType: "query-result",
           status: 403,
+          responseBody: "forbidden",
         }),
       })
     );
