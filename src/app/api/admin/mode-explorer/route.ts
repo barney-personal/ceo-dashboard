@@ -9,15 +9,16 @@ export async function GET(request: NextRequest) {
   const authError = authErrorResponse(auth);
   if (authError) return authError;
 
-  const queryId = request.nextUrl.searchParams.get("queryId");
-  if (!queryId) {
-    return NextResponse.json({ error: "queryId is required" }, { status: 400 });
+  const queryIdParam = request.nextUrl.searchParams.get("queryId");
+  const queryId = queryIdParam ? parseInt(queryIdParam, 10) : NaN;
+  if (!queryIdParam || isNaN(queryId)) {
+    return NextResponse.json({ error: "queryId must be a valid integer" }, { status: 400 });
   }
 
   const [row] = await db
     .select()
     .from(modeReportData)
-    .where(eq(modeReportData.id, parseInt(queryId, 10)))
+    .where(eq(modeReportData.id, queryId))
     .limit(1);
 
   if (!row) {

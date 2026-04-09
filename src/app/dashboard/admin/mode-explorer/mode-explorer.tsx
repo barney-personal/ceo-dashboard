@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { SectionCard } from "@/components/dashboard/section-card";
 import {
   Database,
@@ -78,9 +78,15 @@ export function ModeExplorer({
     return map;
   }, [reports]);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const loadQueryData = async (queryId: number) => {
     const query = queries.find((q) => q.id === queryId);
     if (!query) return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setSelectedQueryId(queryId);
     setLoading(true);
@@ -91,19 +97,25 @@ export function ModeExplorer({
 
     try {
       const res = await fetch(
-        `/api/admin/mode-explorer?queryId=${queryId}`
+        `/api/admin/mode-explorer?queryId=${queryId}`,
+        { signal: controller.signal }
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Failed to load data (${res.status})`);
       }
       const data: QueryData = await res.json();
-      setQueryData(data);
+      if (!controller.signal.aborted) {
+        setQueryData(data);
+      }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Failed to load data");
       setQueryData(null);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
