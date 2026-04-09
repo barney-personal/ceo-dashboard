@@ -41,11 +41,30 @@ type ModeQueryJob = {
   queryProfile: NonNullable<ReturnType<typeof getModeQuerySyncProfile>>;
 };
 
+type PreparedModeQueryWrite = {
+  queryToken: string;
+  queryName: string;
+  rows: Record<string, unknown>[];
+  columns: Array<{ name: string; type: string }>;
+  sourceRowCount: number;
+  storedRowCount: number;
+  truncated: boolean;
+  storageWindow: ReturnType<typeof prepareModeRowsForStorage>["storageWindow"];
+  responseBytes: number;
+  durationMs: number;
+};
+
 type ModeQueryJobResult =
-  | { status: "success"; storedRecords: number; warnings: string[] }
+  | {
+      status: "success";
+      storedRecords: number;
+      warnings: string[];
+      preparedWrite: PreparedModeQueryWrite | null;
+    }
   | { status: "error"; message: string };
 
 type ExistingModeQueryData = typeof modeReportData.$inferSelect;
+type ModeReportDataDeleteExecutor = Pick<typeof db, "delete">;
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -188,17 +207,18 @@ export async function validateModeReportSyncTarget(
 }
 
 async function cleanupReportData(
+  executor: ModeReportDataDeleteExecutor,
   reportId: number,
   allowedQueryTokens: string[],
 ): Promise<void> {
   if (allowedQueryTokens.length === 0) {
-    await db
+    await executor
       .delete(modeReportData)
       .where(eq(modeReportData.reportId, reportId));
     return;
   }
 
-  await db
+  await executor
     .delete(modeReportData)
     .where(
       and(
@@ -250,6 +270,7 @@ type SyncReportResult = {
   queriesSucceeded: number;
   queriesFailed: number;
   warnings: string[];
+  committed: boolean;
 };
 
 /**
@@ -267,13 +288,14 @@ async function syncReport(
 
   const profile = getModeSyncProfile(report.reportToken);
   if (!profile?.syncEnabled) {
-    await cleanupReportData(report.id, []);
+    await cleanupReportData(db, report.id, []);
     return {
       recordsSynced: 0,
       errors: [],
       queriesSucceeded: 0,
       queriesFailed: 0,
       warnings: [],
+      committed: true,
     };
   }
 
@@ -295,8 +317,6 @@ async function syncReport(
   const allowedQueryTokens: string[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
-  let storedRecords = 0;
-  let queriesSucceeded = 0;
   let queriesFailed = 0;
   const queryJobs: ModeQueryJob[] = [];
 
@@ -512,6 +532,7 @@ async function syncReport(
             status: "success",
             storedRecords: 0,
             warnings: queryWarnings,
+            preparedWrite: null,
           };
         }
 
@@ -550,62 +571,22 @@ async function syncReport(
           });
         }
 
-        await db
-          .insert(modeReportData)
-          .values({
-            reportId: report.id,
-            queryToken,
-            queryName,
-            data: prepared.rows,
-            columns,
-            rowCount: prepared.storedRowCount,
-            sourceRowCount: prepared.sourceRowCount,
-            storedRowCount: prepared.storedRowCount,
-            truncated: prepared.truncated,
-            storageWindow: prepared.storageWindow,
-            syncedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: [modeReportData.reportId, modeReportData.queryToken],
-            set: {
-              queryName,
-              data: prepared.rows,
-              columns,
-              rowCount: prepared.storedRowCount,
-              sourceRowCount: prepared.sourceRowCount,
-              storedRowCount: prepared.storedRowCount,
-              truncated: prepared.truncated,
-              storageWindow: prepared.storageWindow,
-              syncedAt: new Date(),
-            },
-          });
-
-        logModeEvent("query_synced", {
-          reportToken: report.reportToken,
-          reportName: report.name,
-          queryToken,
-          queryName,
-          durationMs: Date.now() - queryStartedAt,
-          responseBytes,
-          sourceRows: prepared.sourceRowCount,
-          storedRows: prepared.storedRowCount,
-          truncated: prepared.truncated,
-          heapMb: getHeapMb(),
-        });
-
-        await debugLog("mode", "query_synced", {
-          reportName: report.name,
-          queryName,
-          queryToken,
-          sourceRows: prepared.sourceRowCount,
-          storedRows: prepared.storedRowCount,
-          durationMs: Date.now() - queryStartedAt,
-        }, { syncRunId: opts.syncRunId });
-
         return {
           status: "success",
           storedRecords: prepared.storedRowCount,
           warnings: queryWarnings,
+          preparedWrite: {
+            queryToken,
+            queryName,
+            rows: prepared.rows,
+            columns,
+            sourceRowCount: prepared.sourceRowCount,
+            storedRowCount: prepared.storedRowCount,
+            truncated: prepared.truncated,
+            storageWindow: prepared.storageWindow,
+            responseBytes,
+            durationMs: Date.now() - queryStartedAt,
+          },
         };
       } catch (error) {
         const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
@@ -652,6 +633,9 @@ async function syncReport(
     }
   );
 
+  const successfulQueryResults: Extract<ModeQueryJobResult, { status: "success" }>[] = [];
+  const preparedWrites: PreparedModeQueryWrite[] = [];
+
   for (const result of queryResults) {
     if (result.status === "rejected") {
       throw result.reason;
@@ -663,19 +647,105 @@ async function syncReport(
       continue;
     }
 
-    storedRecords += result.value.storedRecords;
-    queriesSucceeded++;
+    successfulQueryResults.push(result.value);
     warnings.push(...result.value.warnings);
+
+    if (result.value.preparedWrite) {
+      preparedWrites.push(result.value.preparedWrite);
+    }
   }
 
-  await cleanupReportData(report.id, allowedQueryTokens);
+  if (errors.length > 0) {
+    return {
+      recordsSynced: 0,
+      errors,
+      queriesSucceeded: 0,
+      queriesFailed,
+      warnings,
+      committed: false,
+    };
+  }
+
+  const syncedAt = new Date();
+  await db.transaction(async (tx) => {
+    for (const preparedWrite of preparedWrites) {
+      await tx
+        .insert(modeReportData)
+        .values({
+          reportId: report.id,
+          queryToken: preparedWrite.queryToken,
+          queryName: preparedWrite.queryName,
+          data: preparedWrite.rows,
+          columns: preparedWrite.columns,
+          rowCount: preparedWrite.storedRowCount,
+          sourceRowCount: preparedWrite.sourceRowCount,
+          storedRowCount: preparedWrite.storedRowCount,
+          truncated: preparedWrite.truncated,
+          storageWindow: preparedWrite.storageWindow,
+          syncedAt,
+        })
+        .onConflictDoUpdate({
+          target: [modeReportData.reportId, modeReportData.queryToken],
+          set: {
+            queryName: preparedWrite.queryName,
+            data: preparedWrite.rows,
+            columns: preparedWrite.columns,
+            rowCount: preparedWrite.storedRowCount,
+            sourceRowCount: preparedWrite.sourceRowCount,
+            storedRowCount: preparedWrite.storedRowCount,
+            truncated: preparedWrite.truncated,
+            storageWindow: preparedWrite.storageWindow,
+            syncedAt,
+          },
+        });
+    }
+
+    await cleanupReportData(tx, report.id, allowedQueryTokens);
+  });
+
+  let storedRecords = 0;
+  for (const queryResult of successfulQueryResults) {
+    storedRecords += queryResult.storedRecords;
+
+    if (!queryResult.preparedWrite) {
+      continue;
+    }
+
+    logModeEvent("query_synced", {
+      reportToken: report.reportToken,
+      reportName: report.name,
+      queryToken: queryResult.preparedWrite.queryToken,
+      queryName: queryResult.preparedWrite.queryName,
+      durationMs: queryResult.preparedWrite.durationMs,
+      responseBytes: queryResult.preparedWrite.responseBytes,
+      sourceRows: queryResult.preparedWrite.sourceRowCount,
+      storedRows: queryResult.preparedWrite.storedRowCount,
+      truncated: queryResult.preparedWrite.truncated,
+      heapMb: getHeapMb(),
+    });
+
+    await debugLog(
+      "mode",
+      "query_synced",
+      {
+        reportName: report.name,
+        queryName: queryResult.preparedWrite.queryName,
+        queryToken: queryResult.preparedWrite.queryToken,
+        sourceRows: queryResult.preparedWrite.sourceRowCount,
+        storedRows: queryResult.preparedWrite.storedRowCount,
+        durationMs: queryResult.preparedWrite.durationMs,
+      },
+      { syncRunId: opts.syncRunId },
+    );
+  }
 
   return {
     recordsSynced: storedRecords,
     errors,
-    queriesSucceeded,
+    queriesSucceeded: successfulQueryResults.length,
     queriesFailed,
     warnings,
+    committed: true,
   };
 }
 
@@ -874,7 +944,7 @@ export async function runModeSync(
         const phaseStatus =
           result.queriesFailed === 0 && result.warnings.length === 0
             ? "success"
-            : result.queriesSucceeded > 0 || result.warnings.length > 0
+            : result.committed && (result.queriesSucceeded > 0 || result.warnings.length > 0)
               ? "partial"
               : "error";
 

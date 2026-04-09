@@ -6,6 +6,12 @@ const mocks = vi.hoisted(() => {
   const selectQueue: unknown[] = [];
   const insertQueue: unknown[] = [];
   const deleteQueue: unknown[] = [];
+  const committedTransactionOperations: Array<{
+    type: "insert" | "delete";
+    table: unknown;
+    values?: unknown;
+    where?: unknown;
+  }> = [];
 
   const getNext = (queue: unknown[], fallback: unknown) => {
     const value = queue.length > 0 ? queue.shift() : fallback;
@@ -36,7 +42,7 @@ const mocks = vi.hoisted(() => {
     };
   };
 
-  const createInsertChain = () => {
+  const createInsertChain = (onSuccess?: () => void) => {
     let consumed = false;
     const consume = () => {
       if (consumed) {
@@ -44,12 +50,25 @@ const mocks = vi.hoisted(() => {
       }
 
       consumed = true;
-      return getNext(insertQueue, undefined);
+      return getNext(insertQueue, undefined).then((value) => {
+        onSuccess?.();
+        return value;
+      });
     };
 
     return {
-      onConflictDoUpdate: vi.fn(() => getNext(insertQueue, undefined)),
-      returning: vi.fn(() => getNext(insertQueue, [])),
+      onConflictDoUpdate: vi.fn(() =>
+        getNext(insertQueue, undefined).then((value) => {
+          onSuccess?.();
+          return value;
+        })
+      ),
+      returning: vi.fn(() =>
+        getNext(insertQueue, []).then((value) => {
+          onSuccess?.();
+          return value;
+        })
+      ),
       then: (onFulfilled?: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
         consume().then(onFulfilled, onRejected),
       catch: (onRejected?: (reason: unknown) => unknown) => consume().catch(onRejected),
@@ -68,8 +87,37 @@ const mocks = vi.hoisted(() => {
   const del = vi.fn(() => ({
     where: vi.fn(() => getNext(deleteQueue, undefined)),
   }));
+  const transaction = vi.fn(async (callback: (tx: {
+    insert: typeof insert;
+    delete: typeof del;
+  }) => unknown) => {
+    const pendingOperations: typeof committedTransactionOperations = [];
+    const txInsert = vi.fn((table: unknown) => ({
+      values: vi.fn((values: unknown) =>
+        createInsertChain(() => {
+          pendingOperations.push({ type: "insert", table, values });
+        })
+      ),
+    }));
+    const txDelete = vi.fn((table: unknown) => ({
+      where: vi.fn((where: unknown) =>
+        getNext(deleteQueue, undefined).then((value) => {
+          pendingOperations.push({ type: "delete", table, where });
+          return value;
+        })
+      ),
+    }));
+
+    const result = await callback({
+      insert: txInsert as typeof insert,
+      delete: txDelete as typeof del,
+    });
+    committedTransactionOperations.push(...pendingOperations);
+    return result;
+  });
 
   return {
+    getCommittedTransactionOperations: () => [...committedTransactionOperations],
     queueSelect: (...values: unknown[]) => selectQueue.push(...values),
     queueInsert: (...values: unknown[]) => insertQueue.push(...values),
     queueDelete: (...values: unknown[]) => deleteQueue.push(...values),
@@ -77,16 +125,16 @@ const mocks = vi.hoisted(() => {
       selectQueue.length = 0;
       insertQueue.length = 0;
       deleteQueue.length = 0;
+      committedTransactionOperations.length = 0;
     },
     buildSquadContext: vi.fn(),
     buildSystemPromptFromContext: vi.fn(),
     addBreadcrumb: vi.fn(),
     captureException: vi.fn(),
     captureMessage: vi.fn(),
-    checkModeHealth: vi.fn(),
-    checkSlackHealth: vi.fn(),
     createPhaseTracker: vi.fn(),
     del,
+    debugLog: vi.fn(),
     downloadSlackFile: vi.fn(),
     extractPeriodFromFilename: vi.fn(),
     getChannelHistory: vi.fn(),
@@ -101,12 +149,12 @@ const mocks = vi.hoisted(() => {
     insert,
     listChannelFiles: vi.fn(),
     llmParseOkrUpdate: vi.fn(),
-    llmParseOkrUpdates: vi.fn(),
     parseManagementAccounts: vi.fn(),
     prepareModeRowsForStorage: vi.fn(),
     seedSquads: vi.fn(),
     setTag: vi.fn(),
     select,
+    transaction,
   };
 });
 
@@ -115,6 +163,7 @@ vi.mock("@/lib/db", () => ({
     delete: mocks.del,
     insert: mocks.insert,
     select: mocks.select,
+    transaction: mocks.transaction,
   },
 }));
 
@@ -125,6 +174,10 @@ vi.mock("@sentry/nextjs", () => ({
   setTag: mocks.setTag,
 }));
 
+vi.mock("@/lib/debug-logger", () => ({
+  debugLog: mocks.debugLog,
+}));
+
 vi.mock("@/lib/data/seed-squads", () => ({
   seedSquads: mocks.seedSquads,
 }));
@@ -133,11 +186,9 @@ vi.mock("@/lib/integrations/llm-okr-parser", () => ({
   buildSquadContext: mocks.buildSquadContext,
   buildSystemPromptFromContext: mocks.buildSystemPromptFromContext,
   llmParseOkrUpdate: mocks.llmParseOkrUpdate,
-  llmParseOkrUpdates: mocks.llmParseOkrUpdates,
 }));
 
 vi.mock("@/lib/integrations/slack", () => ({
-  checkSlackHealth: mocks.checkSlackHealth,
   getChannelHistory: mocks.getChannelHistory,
   getChannelName: mocks.getChannelName,
   getThreadReplies: mocks.getThreadReplies,
@@ -181,7 +232,6 @@ vi.mock("@/lib/integrations/mode-config", () => {
 });
 
 vi.mock("@/lib/integrations/mode", () => ({
-  checkModeHealth: mocks.checkModeHealth,
   extractQueryToken: vi.fn((queryRun: { queryToken?: string; token?: string }) =>
     queryRun.queryToken ?? queryRun.token ?? "unknown-query"
   ),
@@ -239,12 +289,7 @@ describe("sync runner fault injection", () => {
     mocks.buildSystemPromptFromContext.mockReturnValue("system prompt");
     mocks.getThreadReplies.mockResolvedValue([]);
     mocks.getUserName.mockResolvedValue("Alice PM");
-    mocks.llmParseOkrUpdates.mockImplementation(async (inputs: unknown[]) =>
-      inputs.map(() => null)
-    );
     mocks.extractPeriodFromFilename.mockReturnValue("2026-03");
-    mocks.checkModeHealth.mockResolvedValue(undefined);
-    mocks.checkSlackHealth.mockResolvedValue(undefined);
     mocks.prepareModeRowsForStorage.mockImplementation((rows: Record<string, unknown>[]) => ({
       rows,
       sourceRowCount: rows.length,
@@ -300,40 +345,6 @@ describe("sync runner fault injection", () => {
         "Failed to sync Management Accounts March 2026.xlsx: db offline",
       ],
     });
-  });
-
-  it("returns a structured error when management accounts Slack health check fails", async () => {
-    const startPhase = vi.fn(async () => 1);
-    const endPhase = vi.fn(async () => {});
-    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
-    mocks.checkSlackHealth.mockRejectedValue(new Error("auth.test timed out"));
-
-    await expect(runManagementAccountsSync({ id: 52 })).resolves.toEqual({
-      status: "error",
-      recordsSynced: 0,
-      errors: ["Slack API unreachable, skipping sync: auth.test timed out"],
-    });
-
-    expect(startPhase).toHaveBeenCalledWith(
-      "health_check",
-      "Checking Slack API connectivity"
-    );
-    expect(endPhase).toHaveBeenCalledWith(1, {
-      status: "error",
-      detail: "Slack API unreachable, sync skipped",
-      errorMessage: "Slack API unreachable, skipping sync: auth.test timed out",
-    });
-    expect(mocks.listChannelFiles).not.toHaveBeenCalled();
-    expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "Slack API unreachable, skipping sync",
-      expect.objectContaining({
-        level: "warning",
-        tags: expect.objectContaining({
-          sync_source: "management-accounts",
-          failure_scope: "health_check",
-        }),
-      }),
-    );
   });
 
   it("skips management accounts upsert when revenue and gross profit are both missing", async () => {
@@ -421,55 +432,6 @@ describe("sync runner fault injection", () => {
     expect(mocks.getChannelName).not.toHaveBeenCalled();
   });
 
-  it("preserves the no-channel Slack fast path without running the health check", async () => {
-    process.env.SLACK_OKR_CHANNEL_IDS = "";
-
-    await expect(runSlackSync({ id: 44 })).resolves.toEqual({
-      status: "success",
-      recordsSynced: 0,
-      errors: [],
-    });
-
-    expect(mocks.checkSlackHealth).not.toHaveBeenCalled();
-    expect(mocks.createPhaseTracker).not.toHaveBeenCalled();
-  });
-
-  it("returns a structured Slack sync error when the health check fails", async () => {
-    const startPhase = vi.fn(async () => 1);
-    const endPhase = vi.fn(async () => {});
-    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
-    process.env.SLACK_OKR_CHANNEL_IDS = "CHEALTH";
-    mocks.checkSlackHealth.mockRejectedValue(new Error("auth.test failed"));
-
-    await expect(runSlackSync({ id: 53 })).resolves.toEqual({
-      status: "error",
-      recordsSynced: 0,
-      errors: ["Slack API unreachable, skipping sync: auth.test failed"],
-    });
-
-    expect(startPhase).toHaveBeenCalledWith(
-      "health_check",
-      "Checking Slack API connectivity"
-    );
-    expect(endPhase).toHaveBeenCalledWith(1, {
-      status: "error",
-      detail: "Slack API unreachable, sync skipped",
-      errorMessage: "Slack API unreachable, skipping sync: auth.test failed",
-    });
-    expect(mocks.seedSquads).not.toHaveBeenCalled();
-    expect(mocks.getChannelName).not.toHaveBeenCalled();
-    expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "Slack API unreachable, skipping sync",
-      expect.objectContaining({
-        level: "warning",
-        tags: expect.objectContaining({
-          sync_source: "slack",
-          failure_scope: "health_check",
-        }),
-      }),
-    );
-  });
-
   it("returns a structured Slack sync error when loading the user fallback map fails", async () => {
     process.env.SLACK_OKR_CHANNEL_IDS = "CFALLBACK";
     mocks.queueSelect(new Error("db unavailable"));
@@ -505,7 +467,7 @@ describe("sync runner fault injection", () => {
         user: "U123",
       },
     ]);
-    mocks.llmParseOkrUpdates.mockRejectedValue(
+    mocks.llmParseOkrUpdate.mockRejectedValue(
       new Error("Failed to parse LLM response: unexpected token")
     );
 
@@ -592,9 +554,9 @@ describe("sync runner fault injection", () => {
     });
 
     const parsedMessages: string[] = [];
-    mocks.llmParseOkrUpdates.mockImplementation(async (inputs: Array<{ messageText: string }>) => {
-      parsedMessages.push(...inputs.map((input) => input.messageText));
-      return inputs.map(() => null);
+    mocks.llmParseOkrUpdate.mockImplementation(async (text: string) => {
+      parsedMessages.push(text);
+      return null;
     });
 
     await expect(runSlackSync({ id: 48 })).resolves.toEqual({
@@ -619,10 +581,6 @@ describe("sync runner fault injection", () => {
       makeLongSlackText("parent-7"),
       makeLongSlackText("reply-for-1712512345.0007"),
     ]);
-    expect(mocks.llmParseOkrUpdates).toHaveBeenCalledTimes(4);
-    expect(
-      mocks.llmParseOkrUpdates.mock.calls.map(([inputs]) => inputs.length)
-    ).toEqual([4, 4, 4, 1]);
   });
 
   it("surfaces a failed thread reply fetch as a channel sync error", async () => {
@@ -664,7 +622,7 @@ describe("sync runner fault injection", () => {
       recordsSynced: 0,
       errors: ["Failed to sync channel CTHREAD: reply fetch exploded"],
     });
-    expect(mocks.llmParseOkrUpdates).not.toHaveBeenCalled();
+    expect(mocks.llmParseOkrUpdate).not.toHaveBeenCalled();
   });
 
   it("resolves repeated authors from the success path only once per syncChannel run", async () => {
@@ -679,7 +637,7 @@ describe("sync runner fault injection", () => {
       { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U123" },
     ]);
     mocks.getUserName.mockResolvedValue("Alice PM");
-    mocks.llmParseOkrUpdates.mockResolvedValue([null, null, null]);
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
 
     await runSlackSync({ id: 50 });
 
@@ -704,7 +662,7 @@ describe("sync runner fault injection", () => {
     ]);
     // getUserName returns the raw userId (simulates API failure path — no caching at process level)
     mocks.getUserName.mockImplementation(async (userId: string) => userId);
-    mocks.llmParseOkrUpdates.mockResolvedValue([null, null, null, null]);
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
 
     await runSlackSync({ id: 51 });
 
@@ -793,45 +751,7 @@ describe("sync runner fault injection", () => {
     expect(maxActiveFetches).toBe(3);
   });
 
-  it("returns a structured Mode sync error when the health check fails", async () => {
-    const startPhase = vi.fn(async () => 1);
-    const endPhase = vi.fn(async () => {});
-    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
-    mocks.checkModeHealth.mockRejectedValue(new Error("Mode health check timed out"));
-
-    await expect(runModeSync({ id: 78 })).resolves.toEqual({
-      status: "error",
-      recordsSynced: 0,
-      errors: [
-        "Mode API unreachable, skipping sync: Mode health check timed out",
-      ],
-    });
-
-    expect(startPhase).toHaveBeenCalledWith(
-      "health_check",
-      "Checking Mode API connectivity"
-    );
-    expect(endPhase).toHaveBeenCalledWith(1, {
-      status: "error",
-      detail: "Mode API unreachable, sync skipped",
-      errorMessage:
-        "Mode API unreachable, skipping sync: Mode health check timed out",
-    });
-    expect(mocks.insert).not.toHaveBeenCalled();
-    expect(mocks.getLatestRun).not.toHaveBeenCalled();
-    expect(mocks.captureMessage).toHaveBeenCalledWith(
-      "Mode API unreachable, skipping sync",
-      expect.objectContaining({
-        level: "warning",
-        tags: expect.objectContaining({
-          sync_source: "mode",
-          failure_scope: "health_check",
-        }),
-      }),
-    );
-  });
-
-  it("keeps Mode per-query failures isolated while preserving cleanup tokens", async () => {
+  it("does not commit a Mode report when any query fetch fails", async () => {
     mocks.queueSelect(
       [
         {
@@ -902,25 +822,65 @@ describe("sync runner fault injection", () => {
 
     const result = await runModeSync({ id: 72 });
 
-    expect(result.status).toBe("partial");
-    expect(result.recordsSynced).toBe(1);
+    expect(result.status).toBe("error");
+    expect(result.recordsSynced).toBe(0);
     expect(result.errors).toEqual([
       'Failed to sync query "Healthy Query" in report "Alpha Report": query fetch exploded',
     ]);
     expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(2);
-
-    const cleanupDelete = mocks.del.mock.results.at(-1)?.value as
-      | { where: ReturnType<typeof vi.fn> }
-      | undefined;
-    const cleanupWhereArg = cleanupDelete?.where.mock.calls[0]?.[0] as
-      | { and: Array<{ notInArray?: [unknown, string[]] }> }
-      | undefined;
-    const notInArrayClause = cleanupWhereArg?.and.find((clause) => clause.notInArray);
-
-    expect(notInArrayClause?.notInArray?.[1]).toEqual(["query-1", "query-2"]);
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.getCommittedTransactionOperations()).toEqual([]);
   });
 
-  it("Mode report phase gets partial status and query count detail when some queries fail", async () => {
+  it("rolls back prepared Mode query writes when a transactional upsert fails", async () => {
+    mocks.queueSelect(
+      [
+        {
+          id: 16,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
+    mocks.queueInsert(undefined, undefined, undefined, new Error("db write exploded"));
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+      { token: "query-2", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+      {
+        token: "run-2",
+        queryToken: "query-2",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-2" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({ rows: [{ v: 1 }], responseBytes: 64 });
+
+    await expect(runModeSync({ id: 78 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: [
+        'Failed to sync report "Alpha Report" (report-alpha): db write exploded',
+      ],
+    });
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+    expect(mocks.getCommittedTransactionOperations()).toEqual([]);
+  });
+
+  it("Mode report phase becomes error when any query fails before the transaction starts", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);
     mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
@@ -967,9 +927,9 @@ describe("sync runner fault injection", () => {
 
     const result = await runModeSync({ id: 73 });
 
-    // Run-level: partial because one query succeeded, one failed
-    expect(result.status).toBe("partial");
-    expect(result.recordsSynced).toBe(1);
+    // Run-level: error because the report is not committed unless every query prepares successfully
+    expect(result.status).toBe("error");
+    expect(result.recordsSynced).toBe(0);
     expect(result.errors).toHaveLength(1);
 
     // Find the endPhase call for the report phase (sync_report:Alpha Report)
@@ -979,10 +939,9 @@ describe("sync runner fault injection", () => {
     );
     expect(reportEndPhaseCall).toBeDefined();
     const phaseOpts = reportEndPhaseCall![1];
-    // Phase should be partial (not error) because one query succeeded
-    expect(phaseOpts.status).toBe("partial");
-    // Detail should include query counts
-    expect(phaseOpts.detail).toMatch(/1 queries succeeded, 1 failed/);
+    expect(phaseOpts.status).toBe("error");
+    expect(phaseOpts.detail).toMatch(/Stored 0 rows/);
+    expect(phaseOpts.detail).toMatch(/0 queries succeeded, 1 failed/);
   });
 
   it("preserves existing Mode rows when a fresh query result is empty", async () => {
@@ -1188,19 +1147,18 @@ describe("sync runner fault injection", () => {
       { ts: "1712512345.0004", text: makeLongSlackText("empty validation"), user: "U4" },
       { ts: "1712512345.0005", text: "Brief", user: "U5" },
     ]);
-    mocks.llmParseOkrUpdates.mockResolvedValue([
-      {
+    mocks.llmParseOkrUpdate
+      .mockResolvedValueOnce({
         squadName: "Alpha",
         tldr: "on track",
         krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
-      },
-      null,
-      {
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
         squadName: "Alpha",
         tldr: "dropped",
         krs: [],
-      },
-    ]);
+      });
 
     await runSlackSync({ id: 75 });
 
