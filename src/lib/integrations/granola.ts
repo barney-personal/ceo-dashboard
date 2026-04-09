@@ -2,12 +2,6 @@ const GRANOLA_API = "https://public-api.granola.ai/v1";
 const GRANOLA_REQUEST_TIMEOUT_MS = 30_000;
 const GRANOLA_MAX_RETRIES = 3;
 
-function getToken(): string {
-  const token = process.env.GRANOLA_API_TOKEN;
-  if (!token) throw new Error("Missing GRANOLA_API_TOKEN");
-  return token;
-}
-
 function getRetryDelayMs(attempt: number): number {
   const baseMs = 500 * 2 ** (attempt - 1);
   return baseMs + Math.floor(Math.random() * 250);
@@ -24,11 +18,12 @@ async function sleep(ms: number): Promise<void> {
 async function granolaRequest<T>(
   path: string,
   opts: {
+    token: string;
     signal?: AbortSignal;
     timeoutMs?: number;
     maxRetries?: number;
     params?: Record<string, string>;
-  } = {}
+  }
 ): Promise<T> {
   const url = new URL(`${GRANOLA_API}${path}`);
   if (opts.params) {
@@ -60,7 +55,7 @@ async function granolaRequest<T>(
     try {
       const res = await fetch(url.toString(), {
         headers: {
-          Authorization: `Bearer ${getToken()}`,
+          Authorization: `Bearer ${opts.token}`,
           "Content-Type": "application/json",
         },
         signal: controller.signal,
@@ -152,59 +147,52 @@ export interface GranolaNoteListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API — all require a token parameter
 // ---------------------------------------------------------------------------
 
-/**
- * List notes from Granola, optionally filtering by created_after date.
- * GET /notes
- */
 export async function listNotes(
   opts: {
-    createdAfter?: string; // ISO date
+    token: string;
+    createdAfter?: string;
     cursor?: string;
     signal?: AbortSignal;
-  } = {}
+  }
 ): Promise<GranolaNoteListResponse> {
   const params: Record<string, string> = {};
   if (opts.createdAfter) params.created_after = opts.createdAfter;
   if (opts.cursor) params.cursor = opts.cursor;
 
   return granolaRequest<GranolaNoteListResponse>("/notes", {
+    token: opts.token,
     params,
     signal: opts.signal,
   });
 }
 
-/**
- * Get a single note with full details. Pass include=transcript to get transcript.
- * GET /notes/{id}
- */
 export async function getNote(
   noteId: string,
-  opts: { includeTranscript?: boolean; signal?: AbortSignal } = {}
+  opts: { token: string; includeTranscript?: boolean; signal?: AbortSignal }
 ): Promise<GranolaNote> {
   const params: Record<string, string> = {};
   if (opts.includeTranscript) params.include = "transcript";
 
   return granolaRequest<GranolaNote>(`/notes/${noteId}`, {
+    token: opts.token,
     params,
     signal: opts.signal,
   });
 }
 
-/**
- * Fetch all notes since a given date, paginating through all pages.
- */
 export async function getAllNotesSince(
   createdAfter: string,
-  opts: { signal?: AbortSignal } = {}
+  opts: { token: string; signal?: AbortSignal }
 ): Promise<GranolaNote[]> {
   const all: GranolaNote[] = [];
   let cursor: string | undefined;
 
   do {
     const page = await listNotes({
+      token: opts.token,
       createdAfter,
       cursor,
       signal: opts.signal,

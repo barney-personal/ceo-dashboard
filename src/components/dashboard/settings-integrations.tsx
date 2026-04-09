@@ -25,6 +25,7 @@ function IntegrationCard({ integration }: { integration: Integration }) {
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const [connected, setConnected] = useState(integration.connected);
   const [disconnecting, setDisconnecting] = useState(false);
   const Icon = PROVIDER_ICONS[integration.provider] ?? BookOpen;
@@ -48,10 +49,16 @@ function IntegrationCard({ integration }: { integration: Integration }) {
         return;
       }
 
+      const data = (await res.json()) as { status: string; notesSynced?: number };
       setStatus("success");
       setConnected(true);
       setApiKey("");
-      setTimeout(() => setStatus("idle"), 2000);
+      setSuccessMessage(
+        data.notesSynced
+          ? `Connected — synced ${data.notesSynced} meeting notes`
+          : "Connected"
+      );
+      setTimeout(() => { setStatus("idle"); setSuccessMessage(""); }, 5000);
     } catch {
       setErrorMessage("Network error");
       setStatus("error");
@@ -143,6 +150,9 @@ function IntegrationCard({ integration }: { integration: Integration }) {
           </div>
           {status === "error" && (
             <p className="mt-1.5 text-xs text-destructive">{errorMessage}</p>
+          )}
+          {successMessage && (
+            <p className="mt-1.5 text-xs text-positive">{successMessage}</p>
           )}
           <p className="mt-2 text-[10px] text-muted-foreground/60">
             Add your <strong>personal</strong> API key: Open Granola &rarr; Settings &rarr; API &rarr; Create new key.

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { meetingNotes, preReads, syncLog } from "@/lib/db/schema";
+import { meetingNotes, preReads, syncLog, userIntegrations } from "@/lib/db/schema";
 import { getAllNotesSince, getNote, type GranolaNote } from "@/lib/integrations/granola";
 import {
   getChannelHistory,
@@ -46,13 +46,18 @@ async function fetchLastMeetingsSyncTimestamp(): Promise<Date | undefined> {
 // Granola sync
 // ---------------------------------------------------------------------------
 
-async function syncGranolaNotes(
+/**
+ * Sync Granola notes for a single API token.
+ * Exported so it can be called directly from the integrations API on key add.
+ */
+export async function syncGranolaNotes(
   sinceDate: Date,
-  opts: SyncControl = {}
+  opts: SyncControl & { token: string }
 ): Promise<{ count: number; errors: string[] }> {
   let noteList: GranolaNote[];
   try {
     noteList = await getAllNotesSince(sinceDate.toISOString(), {
+      token: opts.token,
       signal: opts.signal,
     });
   } catch (error) {
@@ -73,6 +78,7 @@ async function syncGranolaNotes(
 
     try {
       const full = await getNote(note.id, {
+        token: opts.token,
         includeTranscript: true,
         signal: opts.signal,
       });
@@ -103,6 +109,7 @@ async function syncGranolaNotes(
             summary,
             transcript: transcriptText,
             participants: full.attendees ?? null,
+            calendarEventId: full.calendar_event?.calendar_event_id ?? null,
             syncedAt: new Date(),
           },
         });
@@ -113,6 +120,85 @@ async function syncGranolaNotes(
   }
 
   return { count, errors };
+}
+
+/**
+ * Sync Granola notes from all sources: enterprise env var + all personal user keys.
+ */
+async function syncAllGranolaNotes(
+  sinceDate: Date,
+  tracker: ReturnType<typeof createPhaseTracker>,
+  opts: SyncControl = {}
+): Promise<{ count: number; errors: string[] }> {
+  let totalCount = 0;
+  const allErrors: string[] = [];
+
+  // Enterprise key from env var
+  const enterpriseToken = process.env.GRANOLA_API_TOKEN;
+  if (enterpriseToken) {
+    const phaseId = await tracker.startPhase(
+      "sync_granola:enterprise",
+      "Syncing Granola notes (enterprise)"
+    );
+    try {
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: enterpriseToken });
+      totalCount += result.count;
+      allErrors.push(...result.errors);
+      await tracker.endPhase(phaseId, {
+        status: result.errors.length > 0 && result.count === 0 ? "error" : "success",
+        itemsProcessed: result.count,
+        detail: `Synced ${result.count} enterprise notes`,
+        errorMessage: result.errors.length > 0 ? result.errors.join("; ") : undefined,
+      });
+    } catch (error) {
+      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+        await tracker.endPhase(phaseId, { status: "skipped", errorMessage: error.message });
+        throw error;
+      }
+      const message = `Enterprise Granola sync failed: ${formatSyncError(error)}`;
+      allErrors.push(message);
+      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
+    }
+  }
+
+  // Personal keys from userIntegrations
+  const userKeys = await db
+    .select({ clerkUserId: userIntegrations.clerkUserId, apiKey: userIntegrations.apiKey })
+    .from(userIntegrations)
+    .where(eq(userIntegrations.provider, "granola"));
+
+  for (const { clerkUserId, apiKey } of userKeys) {
+    throwIfSyncShouldStop(opts, {
+      cancelled: "Meetings sync cancelled between Granola user syncs",
+      deadlineExceeded: "Meetings sync exceeded budget between Granola user syncs",
+    });
+
+    const phaseId = await tracker.startPhase(
+      `sync_granola:user_${clerkUserId.slice(-6)}`,
+      `Syncing Granola notes (personal)`
+    );
+    try {
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey });
+      totalCount += result.count;
+      allErrors.push(...result.errors);
+      await tracker.endPhase(phaseId, {
+        status: result.errors.length > 0 && result.count === 0 ? "error" : "success",
+        itemsProcessed: result.count,
+        detail: `Synced ${result.count} personal notes`,
+        errorMessage: result.errors.length > 0 ? result.errors.join("; ") : undefined,
+      });
+    } catch (error) {
+      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+        await tracker.endPhase(phaseId, { status: "skipped", errorMessage: error.message });
+        throw error;
+      }
+      const message = `Personal Granola sync failed for user ${clerkUserId.slice(-6)}: ${formatSyncError(error)}`;
+      allErrors.push(message);
+      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
+    }
+  }
+
+  return { count: totalCount, errors: allErrors };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,32 +315,23 @@ export async function runMeetingsSync(
         : "Full scan (no prior sync)",
     });
 
-    // Phase 1: Granola meeting notes
+    // Phase 1: Granola meeting notes (enterprise + all personal keys)
     throwIfSyncShouldStop(opts, {
       cancelled: "Meetings sync cancelled before Granola sync",
       deadlineExceeded: "Meetings sync exceeded budget before Granola sync",
     });
 
-    phaseId = await tracker.startPhase("sync_granola", "Syncing Granola meeting notes");
     try {
-      const granola = await syncGranolaNotes(sinceDate, opts);
+      const granola = await syncAllGranolaNotes(sinceDate, tracker, opts);
       totalRecords += granola.count;
       allErrors.push(...granola.errors);
       if (granola.errors.length === 0 || granola.count > 0) succeededSources++;
-      await tracker.endPhase(phaseId, {
-        status: granola.errors.length > 0 && granola.count === 0 ? "error" : "success",
-        itemsProcessed: granola.count,
-        detail: `Synced ${granola.count} meeting notes`,
-        errorMessage: granola.errors.length > 0 ? granola.errors.join("; ") : undefined,
-      });
     } catch (error) {
       if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
-        await tracker.endPhase(phaseId, { status: "skipped", errorMessage: error.message });
         throw error;
       }
       const message = `Granola sync failed: ${formatSyncError(error)}`;
       allErrors.push(message);
-      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
     }
 
     // Phase 2: Slack #pre-reads
