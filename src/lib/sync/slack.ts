@@ -618,6 +618,10 @@ export async function runSlackSync(
     try {
       await checkSlackHealth({ signal: opts.signal });
     } catch (error) {
+      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+        await tracker.endPhase(phaseId, { status: "error", errorMessage: error.message });
+        throw error;
+      }
       return failSlackHealthCheck(tracker, run.id, phaseId, error);
     }
     await tracker.endPhase(phaseId, {
@@ -732,7 +736,14 @@ export async function runSlackSync(
         "Fetching messages and parsing OKRs"
       );
 
-      const channelCursor = channelCheckpoints[channel.id] ?? lastSyncTs;
+      // Use per-channel checkpoint if available, but never go backward past
+      // the last successful sync — stale checkpoints from failed runs could
+      // replay old messages and produce duplicate OKR entries.
+      const rawCheckpoint = channelCheckpoints[channel.id];
+      const channelCursor =
+        rawCheckpoint && lastSyncTs && rawCheckpoint >= lastSyncTs
+          ? rawCheckpoint
+          : lastSyncTs;
 
       try {
         const result = await syncChannel(
