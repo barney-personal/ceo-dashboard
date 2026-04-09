@@ -39,10 +39,42 @@ function getRetryDelayMs(attempt: number): number {
   return baseMs + Math.floor(Math.random() * 250);
 }
 
+function parseRetryAfterDelayMs(headerValue: string | null): number | null {
+  const retryAfterSeconds = Number(headerValue);
+  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return null;
+  }
+
+  return retryAfterSeconds * 1000;
+}
+
+function getSlackRateLimitDelay(input: { headers: Headers; attempt: number }): {
+  waitMs: number;
+  source: "retry-after" | "x-ratelimit-reset" | "backoff";
+} {
+  const retryAfterDelayMs = parseRetryAfterDelayMs(
+    input.headers.get("retry-after"),
+  );
+  if (retryAfterDelayMs !== null) {
+    return { waitMs: retryAfterDelayMs, source: "retry-after" };
+  }
+
+  const resetAtSeconds = Number(input.headers.get("x-ratelimit-reset"));
+  if (Number.isFinite(resetAtSeconds)) {
+    return {
+      waitMs: Math.max(0, resetAtSeconds * 1000 - Date.now()),
+      source: "x-ratelimit-reset",
+    };
+  }
+
+  return { waitMs: getRetryDelayMs(input.attempt), source: "backoff" };
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.name === "AbortError" || error.message.toLowerCase().includes("timed out"))
+    (error.name === "AbortError" ||
+      error.message.toLowerCase().includes("timed out"))
   );
 }
 
@@ -54,7 +86,9 @@ function isRetryableSlackEnvelope(data: {
   ok?: boolean;
   error?: string;
 }): boolean {
-  return data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error);
+  return (
+    data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error)
+  );
 }
 
 export class SlackApiError extends Error {
@@ -64,7 +98,7 @@ export class SlackApiError extends Error {
 
   constructor(
     message: string,
-    input: { status?: number; code?: string; method?: string } = {}
+    input: { status?: number; code?: string; method?: string } = {},
   ) {
     super(message);
     this.name = "SlackApiError";
@@ -85,7 +119,9 @@ export function isSlackAuthError(error: unknown): error is SlackAuthError {
   return error instanceof SlackAuthError;
 }
 
-export function isSlackChannelNotFoundError(error: unknown): error is SlackApiError {
+export function isSlackChannelNotFoundError(
+  error: unknown,
+): error is SlackApiError {
   return (
     error instanceof SlackApiError &&
     (error.status === 404 || error.code === "channel_not_found")
@@ -123,7 +159,7 @@ function captureSlackAuthError(input: {
 function composeSignal(
   timeoutMs: number,
   parentSignal?: AbortSignal,
-  timeoutMessage?: string
+  timeoutMessage?: string,
 ): {
   signal: AbortSignal;
   cleanup: () => void;
@@ -168,15 +204,16 @@ async function slackFetch(
     timeoutMs: number;
     maxRetries?: number;
     timeoutMessage: string;
-  }
+  },
 ): Promise<Response> {
   let lastError: Error | null = null;
+  const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
 
-  for (let attempt = 1; attempt <= (opts.maxRetries ?? SLACK_MAX_RETRIES); attempt++) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const { signal, cleanup, timedOut } = composeSignal(
       opts.timeoutMs,
       init.signal ?? undefined,
-      opts.timeoutMessage
+      opts.timeoutMessage,
     );
 
     try {
@@ -195,12 +232,27 @@ async function slackFetch(
         });
       }
 
-      if (isRetryableSlackStatus(res.status) && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
-        const retryAfterSeconds = Number(res.headers.get("retry-after"));
-        const delayMs =
-          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-            ? retryAfterSeconds * 1000
-            : getRetryDelayMs(attempt);
+      if (isRetryableSlackStatus(res.status) && attempt < maxRetries) {
+        let delayMs = getRetryDelayMs(attempt);
+        if (res.status === 429) {
+          const { waitMs, source } = getSlackRateLimitDelay({
+            headers: res.headers,
+            attempt,
+          });
+          delayMs = waitMs;
+          Sentry.addBreadcrumb({
+            category: "rate_limit.slack",
+            message: "Retrying Slack request after rate limit",
+            level: "info",
+            data: {
+              waitMs,
+              input,
+              method: opts.method,
+              attempt,
+              source,
+            },
+          });
+        }
         lastError = new Error(`Slack API error ${res.status}`);
         await sleep(delayMs);
         continue;
@@ -223,9 +275,11 @@ async function slackFetch(
       const retryable =
         (timedOut() && isAbortError(error)) ||
         (error instanceof Error &&
-          /fetch failed|ECONNRESET|EAI_AGAIN|socket hang up/i.test(error.message));
+          /fetch failed|ECONNRESET|EAI_AGAIN|socket hang up/i.test(
+            error.message,
+          ));
 
-      if (retryable && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
+      if (retryable && attempt < maxRetries) {
         lastError = error instanceof Error ? error : new Error(String(error));
         await sleep(getRetryDelayMs(attempt));
         continue;
@@ -260,7 +314,7 @@ export async function slackApiRequest<T>(
     suppressedStatuses?: number[];
     /** Slack envelope error codes to throw without capturing to Sentry (caller handles observability). */
     suppressedCodes?: string[];
-  } = {}
+  } = {},
 ): Promise<T> {
   const url = new URL(`${SLACK_API}/${method}`);
   if (params) {
@@ -297,14 +351,17 @@ export async function slackApiRequest<T>(
         timeoutMessage: `Slack ${method} timed out after ${
           opts.timeoutMs ?? SLACK_REQUEST_TIMEOUT_MS
         }ms`,
-      }
+      },
     );
 
     if (!res.ok) {
-      const error = new SlackApiError(`Slack API error ${res.status}: ${await res.text()}`, {
-        status: res.status,
-        method,
-      });
+      const error = new SlackApiError(
+        `Slack API error ${res.status}: ${await res.text()}`,
+        {
+          status: res.status,
+          method,
+        },
+      );
       if (!suppressedStatuses.has(res.status)) {
         Sentry.captureException(error, {
           tags: { integration: "slack" },
@@ -360,7 +417,7 @@ export async function slackDownloadRequest(
     signal?: AbortSignal;
     timeoutMs?: number;
     maxRetries?: number;
-  } = {}
+  } = {},
 ): Promise<Response> {
   return slackFetch(
     url,
@@ -374,7 +431,7 @@ export async function slackDownloadRequest(
       timeoutMessage: `Slack file download timed out after ${
         opts.timeoutMs ?? SLACK_DOWNLOAD_TIMEOUT_MS
       }ms`,
-    }
+    },
   );
 }
 
@@ -413,7 +470,7 @@ export async function getChannelHistory(
   channelId: string,
   oldest?: string,
   latest?: string,
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal } = {},
 ): Promise<SlackMessage[]> {
   const allMessages: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -430,13 +487,11 @@ export async function getChannelHistory(
     const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.history",
       params,
-      { signal: opts.signal }
+      { signal: opts.signal },
     );
 
     allMessages.push(...data.messages);
-    cursor = data.has_more
-      ? data.response_metadata?.next_cursor
-      : undefined;
+    cursor = data.has_more ? data.response_metadata?.next_cursor : undefined;
   } while (cursor);
 
   // Slack returns newest first, reverse to chronological
@@ -449,7 +504,7 @@ export async function getChannelHistory(
 export async function getThreadReplies(
   channelId: string,
   threadTs: string,
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal } = {},
 ): Promise<SlackMessage[]> {
   const allMessages: SlackMessage[] = [];
   let cursor: string | undefined;
@@ -465,13 +520,11 @@ export async function getThreadReplies(
     const data = await slackApiRequest<ConversationsHistoryResponse>(
       "conversations.replies",
       params,
-      { signal: opts.signal }
+      { signal: opts.signal },
     );
 
     allMessages.push(...data.messages);
-    cursor = data.has_more
-      ? data.response_metadata?.next_cursor
-      : undefined;
+    cursor = data.has_more ? data.response_metadata?.next_cursor : undefined;
   } while (cursor);
 
   // conversations.replies includes the parent as the first message — skip it
@@ -487,7 +540,7 @@ export async function getThreadReplies(
  */
 export async function getChannelName(
   channelId: string,
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
   const data = await slackApiRequest<ConversationsInfoResponse>(
     "conversations.info",
@@ -496,7 +549,7 @@ export async function getChannelName(
       signal: opts.signal,
       suppressedStatuses: [404],
       suppressedCodes: ["channel_not_found"],
-    }
+    },
   );
   return data.channel.name;
 }
@@ -508,14 +561,18 @@ const userNameCache = new Map<string, string>();
 
 export async function getUserName(
   userId: string,
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
   if (userNameCache.has(userId)) return userNameCache.get(userId)!;
 
   try {
-    const data = await slackApiRequest<UsersInfoResponse>("users.info", {
-      user: userId,
-    }, { signal: opts.signal });
+    const data = await slackApiRequest<UsersInfoResponse>(
+      "users.info",
+      {
+        user: userId,
+      },
+      { signal: opts.signal },
+    );
     const name =
       data.user.profile.display_name || data.user.real_name || userId;
     userNameCache.set(userId, name);
