@@ -5,6 +5,8 @@ const MODE_METADATA_TIMEOUT_MS = 30_000;
 const MODE_RESULTS_TIMEOUT_MS = 120_000;
 const MODE_MAX_RESULT_BYTES = 25 * 1024 * 1024;
 const MODE_MAX_RETRIES = 3;
+const MODE_AUTH_ERROR_MESSAGE =
+  "Mode API authentication failed, check MODE_API_TOKEN";
 
 interface ModeConfig {
   token: string;
@@ -39,6 +41,36 @@ function authHeaders(config: ModeConfig): HeadersInit {
     Authorization: `Basic ${encoded}`,
     Accept: "application/hal+json",
   };
+}
+
+class ModeAuthError extends Error {
+  readonly status: number;
+
+  constructor(status: number) {
+    super(MODE_AUTH_ERROR_MESSAGE);
+    this.name = "ModeAuthError";
+    this.status = status;
+  }
+}
+
+function captureModeAuthError(input: {
+  path: string;
+  requestType: "metadata" | "query-result";
+  status: number;
+  body: string;
+}): never {
+  const error = new ModeAuthError(input.status);
+  Sentry.captureException(error, {
+    level: "error",
+    tags: { integration: "mode", auth_failure: "true" },
+    extra: {
+      path: input.path,
+      requestType: input.requestType,
+      status: input.status,
+      responseBody: input.body,
+    },
+  });
+  throw error;
 }
 
 function composeSignal(
@@ -105,6 +137,14 @@ async function modeRequest<T>(
 
       if (!res.ok) {
         const body = await res.text();
+        if (res.status === 401 || res.status === 403) {
+          captureModeAuthError({
+            path,
+            requestType: "metadata",
+            status: res.status,
+            body,
+          });
+        }
         const error = new Error(`Mode API error ${res.status}: ${body}`);
         if (
           attempt < MODE_MAX_RETRIES &&
@@ -129,6 +169,10 @@ async function modeRequest<T>(
         }
 
         throw new Error("Mode request was aborted");
+      }
+
+      if (error instanceof ModeAuthError) {
+        throw error;
       }
 
       const message = error instanceof Error ? error.message : String(error);
@@ -247,6 +291,14 @@ async function modeRequestJson<T>(
 
       if (!res.ok) {
         const body = await res.text();
+        if (res.status === 401 || res.status === 403) {
+          captureModeAuthError({
+            path,
+            requestType: "query-result",
+            status: res.status,
+            body,
+          });
+        }
         const error = new Error(`Mode API error ${res.status}: ${body}`);
         if (
           attempt < MODE_MAX_RETRIES &&
@@ -271,6 +323,10 @@ async function modeRequestJson<T>(
         }
 
         throw new Error("Mode query result request was aborted");
+      }
+
+      if (error instanceof ModeAuthError) {
+        throw error;
       }
 
       const message = error instanceof Error ? error.message : String(error);

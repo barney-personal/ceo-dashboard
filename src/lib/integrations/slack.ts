@@ -4,6 +4,15 @@ export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
 const SLACK_MAX_RETRIES = 3;
+const SLACK_AUTH_ERROR_MESSAGE =
+  "Slack API authentication failed, check SLACK_BOT_TOKEN";
+const SLACK_AUTH_ERROR_CODES = new Set([
+  "not_authed",
+  "invalid_auth",
+  "account_inactive",
+  "token_revoked",
+  "token_expired",
+]);
 const RETRYABLE_SLACK_ERRORS = new Set([
   "internal_error",
   "fatal_error",
@@ -46,6 +55,69 @@ function isRetryableSlackEnvelope(data: {
   error?: string;
 }): boolean {
   return data.ok === false && !!data.error && RETRYABLE_SLACK_ERRORS.has(data.error);
+}
+
+export class SlackApiError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly method?: string;
+
+  constructor(
+    message: string,
+    input: { status?: number; code?: string; method?: string } = {}
+  ) {
+    super(message);
+    this.name = "SlackApiError";
+    this.status = input.status;
+    this.code = input.code;
+    this.method = input.method;
+  }
+}
+
+export class SlackAuthError extends SlackApiError {
+  constructor(input: { status?: number; code?: string; method?: string }) {
+    super(SLACK_AUTH_ERROR_MESSAGE, input);
+    this.name = "SlackAuthError";
+  }
+}
+
+export function isSlackAuthError(error: unknown): error is SlackAuthError {
+  return error instanceof SlackAuthError;
+}
+
+export function isSlackChannelNotFoundError(error: unknown): error is SlackApiError {
+  return (
+    error instanceof SlackApiError &&
+    (error.status === 404 || error.code === "channel_not_found")
+  );
+}
+
+function captureSlackAuthError(input: {
+  input?: string;
+  method?: string;
+  status?: number;
+  code?: string;
+  responseBody?: string;
+  source: "http" | "envelope";
+}): never {
+  const error = new SlackAuthError({
+    status: input.status,
+    code: input.code,
+    method: input.method,
+  });
+  Sentry.captureException(error, {
+    level: "error",
+    tags: { integration: "slack", auth_failure: "true" },
+    extra: {
+      input: input.input,
+      method: input.method,
+      source: input.source,
+      status: input.status,
+      code: input.code,
+      responseBody: input.responseBody,
+    },
+  });
+  throw error;
 }
 
 function composeSignal(
@@ -112,6 +184,15 @@ async function slackFetch(
         signal,
       });
 
+      if (res.status === 401 || res.status === 403) {
+        captureSlackAuthError({
+          input,
+          status: res.status,
+          responseBody: await res.text(),
+          source: "http",
+        });
+      }
+
       if (isRetryableSlackStatus(res.status) && attempt < (opts.maxRetries ?? SLACK_MAX_RETRIES)) {
         const retryAfterSeconds = Number(res.headers.get("retry-after"));
         const delayMs =
@@ -131,6 +212,10 @@ async function slackFetch(
         }
 
         throw new Error("Slack request was aborted");
+      }
+
+      if (isSlackAuthError(error)) {
+        throw error;
       }
 
       const retryable =
@@ -169,6 +254,10 @@ export async function slackApiRequest<T>(
     signal?: AbortSignal;
     timeoutMs?: number;
     maxRetries?: number;
+    /** HTTP status codes to throw without capturing to Sentry (caller handles observability). */
+    suppressedStatuses?: number[];
+    /** Slack envelope error codes to throw without capturing to Sentry (caller handles observability). */
+    suppressedCodes?: string[];
   } = {}
 ): Promise<T> {
   const url = new URL(`${SLACK_API}/${method}`);
@@ -177,6 +266,9 @@ export async function slackApiRequest<T>(
       url.searchParams.set(k, v);
     }
   }
+
+  const suppressedStatuses = new Set(opts.suppressedStatuses ?? []);
+  const suppressedCodes = new Set(opts.suppressedCodes ?? []);
 
   let lastEnvelopeError: Error | null = null;
   const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
@@ -206,21 +298,44 @@ export async function slackApiRequest<T>(
     );
 
     if (!res.ok) {
-      throw new Error(`Slack API error ${res.status}: ${await res.text()}`);
+      const error = new SlackApiError(`Slack API error ${res.status}: ${await res.text()}`, {
+        status: res.status,
+        method,
+      });
+      if (!suppressedStatuses.has(res.status)) {
+        Sentry.captureException(error, {
+          tags: { integration: "slack" },
+          extra: { method, attempt, operation: "slackApiRequest" },
+        });
+      }
+      throw error;
     }
 
     const data = (await res.json()) as T & { ok: boolean; error?: string };
     if (!data.ok) {
-      const error = new Error(`Slack API error: ${data.error}`);
+      if (data.error && SLACK_AUTH_ERROR_CODES.has(data.error)) {
+        captureSlackAuthError({
+          method,
+          code: data.error,
+          source: "envelope",
+        });
+      }
+
+      const error = new SlackApiError(`Slack API error: ${data.error}`, {
+        code: data.error,
+        method,
+      });
       if (isRetryableSlackEnvelope(data) && attempt < maxRetries) {
         lastEnvelopeError = error;
         await sleep(getRetryDelayMs(attempt));
         continue;
       }
-      Sentry.captureException(error, {
-        tags: { integration: "slack" },
-        extra: { method, attempt, operation: "slackApiRequest" },
-      });
+      if (!suppressedCodes.has(data.error ?? "")) {
+        Sentry.captureException(error, {
+          tags: { integration: "slack" },
+          extra: { method, attempt, operation: "slackApiRequest" },
+        });
+      }
       throw error;
     }
 
@@ -362,6 +477,10 @@ export async function getThreadReplies(
 
 /**
  * Get channel name by ID.
+ *
+ * HTTP 404 and `channel_not_found` envelope errors are thrown without Sentry
+ * capture — they indicate invalid configuration, and callers such as
+ * `validateSlackChannels()` emit the appropriate warning-level observability.
  */
 export async function getChannelName(
   channelId: string,
@@ -370,7 +489,11 @@ export async function getChannelName(
   const data = await slackApiRequest<ConversationsInfoResponse>(
     "conversations.info",
     { channel: channelId },
-    { signal: opts.signal }
+    {
+      signal: opts.signal,
+      suppressedStatuses: [404],
+      suppressedCodes: ["channel_not_found"],
+    }
   );
   return data.channel.name;
 }
