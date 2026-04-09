@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import * as Sentry from "@sentry/nextjs";
 import { db } from "@/lib/db";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { squads } from "@/lib/db/schema";
@@ -74,7 +75,12 @@ export async function buildSquadContext(): Promise<string> {
   try {
     allSquads = await db.select().from(squads).where(eq(squads.isActive, true));
   } catch (error) {
-    throw normalizeDatabaseError("Build LLM squad context", error);
+    const normalized = normalizeDatabaseError("Build LLM squad context", error);
+    Sentry.captureException(normalized, {
+      tags: { integration: "llm-okr-parser" },
+      extra: { operation: "buildSquadContext" },
+    });
+    throw normalized;
   }
 
   // Group by pillar
@@ -185,9 +191,14 @@ export async function llmParseOkrUpdate(
   } catch (error) {
     if (signal.aborted) {
       if (timedOut()) {
-        throw new Error(
+        const timeoutError = new Error(
           `LLM OKR parse timed out after ${LLM_CALL_TIMEOUT_MS / 1000}s`
         );
+        Sentry.captureException(timeoutError, {
+          tags: { integration: "llm-okr-parser" },
+          extra: { operation: "messages.create", failureType: "timeout" },
+        });
+        throw timeoutError;
       }
 
       if (signal.reason instanceof Error) {
@@ -196,6 +207,10 @@ export async function llmParseOkrUpdate(
 
       throw new Error("LLM OKR parse was aborted");
     }
+    Sentry.captureException(error, {
+      tags: { integration: "llm-okr-parser" },
+      extra: { operation: "messages.create" },
+    });
     throw error;
   } finally {
     cleanup();
@@ -238,7 +253,14 @@ export async function llmParseOkrUpdate(
           metric: (kr.metric as string) || null,
         })),
     };
-  } catch {
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { integration: "llm-okr-parser" },
+      extra: {
+        operation: "parseResponse",
+        responsePreview: trimmed.slice(0, 200),
+      },
+    });
     console.warn("Failed to parse LLM response:", trimmed.slice(0, 200));
     return null;
   }

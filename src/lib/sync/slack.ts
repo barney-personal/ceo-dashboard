@@ -297,11 +297,23 @@ type SlackSyncResult = {
 
 async function failSlackPreflightPhase(
   tracker: ReturnType<typeof createPhaseTracker>,
+  runId: number,
   phaseId: number,
   phaseLabel: string,
   error: unknown
 ): Promise<SlackSyncResult> {
   const message = `Failed to ${phaseLabel}: ${formatSyncError(error)}`;
+  Sentry.captureException(error, {
+    tags: {
+      sync_source: "slack",
+      failure_scope: "preflight",
+    },
+    extra: {
+      runId,
+      phaseLabel,
+      message,
+    },
+  });
   await tracker.endPhase(phaseId, {
     status: "error",
     errorMessage: message,
@@ -328,6 +340,17 @@ export async function runSlackSync(
     .filter(Boolean);
 
   if (channelIds.length === 0) {
+    Sentry.captureMessage("Slack sync completed", {
+      level: "info",
+      tags: {
+        sync_source: "slack",
+        status: "success",
+      },
+      extra: {
+        runId: run.id,
+        recordsSynced: 0,
+      },
+    });
     return { status: "success", recordsSynced: 0, errors: [] };
   }
 
@@ -341,7 +364,7 @@ export async function runSlackSync(
     try {
       await seedSquads();
     } catch (error) {
-      return failSlackPreflightPhase(tracker, phaseId, "seed squads", error);
+      return failSlackPreflightPhase(tracker, run.id, phaseId, "seed squads", error);
     }
     await tracker.endPhase(phaseId);
 
@@ -363,6 +386,7 @@ export async function runSlackSync(
     } catch (error) {
       return failSlackPreflightPhase(
         tracker,
+        run.id,
         phaseId,
         "load user name fallback map",
         error
@@ -383,6 +407,7 @@ export async function runSlackSync(
     } catch (error) {
       return failSlackPreflightPhase(
         tracker,
+        run.id,
         phaseId,
         "fetch last successful sync time",
         error
@@ -448,11 +473,22 @@ export async function runSlackSync(
       }
     }
 
-    return {
-      status: determineSyncStatus(errors, succeededChannels),
-      recordsSynced: totalRecords,
-      errors,
-    };
+    const status = determineSyncStatus(errors, succeededChannels);
+    if (status === "success" || status === "partial") {
+      Sentry.captureMessage("Slack sync completed", {
+        level: "info",
+        tags: {
+          sync_source: "slack",
+          status,
+        },
+        extra: {
+          runId: run.id,
+          recordsSynced: totalRecords,
+        },
+      });
+    }
+
+    return { status, recordsSynced: totalRecords, errors };
   } catch (error) {
     if (error instanceof SyncDeadlineExceededError) {
       return {
@@ -470,6 +506,17 @@ export async function runSlackSync(
       };
     }
 
+    Sentry.captureException(error, {
+      tags: {
+        sync_source: "slack",
+        failure_scope: "run",
+      },
+      extra: {
+        runId: run.id,
+        recordsSynced: totalRecords,
+        succeededChannels,
+      },
+    });
     throw error;
   }
 }
