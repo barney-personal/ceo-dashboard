@@ -70,6 +70,44 @@ describe("groupByWeek", () => {
   });
 });
 
+describe("getQuery3Series — null safety", () => {
+  it("skips rows with null spend or null new_bank_connected_users", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 3",
+        rows: [
+          // null spend — entire row skipped
+          {
+            day: "2023-01-02",
+            actual_or_target: "actual",
+            spend: null,
+            new_bank_connected_users: 5,
+          },
+          // null users — entire row skipped
+          {
+            day: "2023-01-03",
+            actual_or_target: "actual",
+            spend: 100,
+            new_bank_connected_users: null,
+          },
+          // valid row
+          {
+            day: "2023-01-04",
+            actual_or_target: "actual",
+            spend: 60,
+            new_bank_connected_users: 3,
+          },
+        ],
+      },
+    ]);
+
+    const series = await getQuery3Series();
+    // Only one valid row, so spend = 60, users = 3 for week of 2023-01-02
+    expect(series.spend.find((s) => s.label === "actual")?.data[0].value).toBe(60);
+    expect(series.users.find((s) => s.label === "actual")?.data[0].value).toBe(3);
+  });
+});
+
 describe("getQuery3Series", () => {
   it("sums weekly spend and users while deriving weekly CPA from totals", async () => {
     mockGetReportData.mockResolvedValue([
@@ -302,6 +340,75 @@ describe("getLtvCacRatioSeries", () => {
   });
 });
 
+describe("getLtvCacRatioSeries — null safety", () => {
+  it("skips Query 3 rows with null spend or null users instead of creating zero-spend weeks", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 4",
+        rows: [{ month: "2023-01-01", user_ltv_36m_actual: 120 }],
+      },
+      {
+        queryName: "Query 3",
+        rows: [
+          // null spend — skip entire row
+          {
+            day: "2023-01-02",
+            actual_or_target: "actual",
+            spend: null,
+            new_bank_connected_users: 5,
+          },
+          // null users — skip entire row
+          {
+            day: "2023-01-03",
+            actual_or_target: "actual",
+            spend: 50,
+            new_bank_connected_users: null,
+          },
+          // valid row
+          {
+            day: "2023-01-09",
+            actual_or_target: "actual",
+            spend: 60,
+            new_bank_connected_users: 3,
+          },
+        ],
+      },
+    ]);
+
+    const series = await getLtvCacRatioSeries();
+    const ltvcac = series.find((s) => s.label === "LTV:CAC");
+    // Only the valid week (2023-01-09) should produce a data point
+    expect(ltvcac?.data).toHaveLength(1);
+    expect(ltvcac?.data[0].date).toBe("2023-01-09");
+  });
+});
+
+describe("getEngagementSeries — null safety", () => {
+  it("skips null mau values rather than treating them as 0 in the average", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "dau-wau-mau query all time",
+        rows: [
+          // null maus — should be excluded from the MAU average (not counted as 0)
+          { date: "2026-03-01", daus: 10, waus: 100, maus: null },
+          // valid maus row
+          { date: "2026-03-15", daus: 20, waus: 100, maus: 200 },
+        ],
+      },
+    ]);
+
+    const series = await getEngagementSeries();
+    const wauMau = series.find((s) => s.label === "WAU / MAU");
+    // avg(maus) = [200] = 200 (null excluded, not 0+200/2=100)
+    // avg(waus) = [100, 100] = 100
+    // ratio = 100/200 * 100 = 50 (would be 100/100*100=100 if null treated as 0)
+    expect(wauMau?.data[0]).toMatchObject({ date: "2026-03-01", value: 50 });
+  });
+});
+
 describe("getEngagementSeries", () => {
   it("excludes the current month from WAU/MAU output", async () => {
     vi.useFakeTimers();
@@ -380,6 +487,31 @@ describe("aggregateCohortRows", () => {
 
     expect(aggregated.get("2026-01")?.get(0)).toBe(150);
     expect(aggregated.get("2026-01")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with null activity_month or null maus instead of coercing to 0", () => {
+    const aggregated = aggregateCohortRows([
+      // null maus — should be skipped, not counted as 0
+      { cohort_month: "2026-01-01", activity_month: 0, maus: null },
+      // null activity_month — should be skipped, not collapsed into M0
+      { cohort_month: "2026-01-01", activity_month: null, maus: 100 },
+      // valid row
+      { cohort_month: "2026-01-01", activity_month: 1, maus: 80 },
+    ]);
+
+    expect(aggregated.get("2026-01")?.has(0)).toBe(false);
+    expect(aggregated.get("2026-01")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with invalid cohort_month date strings", () => {
+    const aggregated = aggregateCohortRows([
+      { cohort_month: "not-a-date", activity_month: 0, maus: 100 },
+      { cohort_month: "", activity_month: 0, maus: 50 },
+      { cohort_month: "2026-02-01", activity_month: 0, maus: 200 },
+    ]);
+
+    expect(aggregated.size).toBe(1);
+    expect(aggregated.get("2026-02")?.get(0)).toBe(200);
   });
 });
 

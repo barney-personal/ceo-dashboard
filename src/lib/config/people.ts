@@ -101,7 +101,7 @@ export function getPillarForSquad(squad: string): string {
     if (pillar) return pillar;
   }
 
-  return "Business Operations";
+  return "Other";
 }
 
 export function isProductPillar(pillar: string): boolean {
