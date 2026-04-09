@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const {
+  mockCaptureException,
   mockAnd,
   mockDesc,
   mockEq,
@@ -10,6 +11,7 @@ const {
   mockSelect,
   mockWhere,
 } = vi.hoisted(() => {
+  const mockCaptureException = vi.fn();
   const mockOrderBy = vi.fn();
   const mockWhere = vi.fn(() => ({ orderBy: mockOrderBy }));
   const mockInnerJoin = vi.fn(() => ({ where: mockWhere }));
@@ -17,6 +19,7 @@ const {
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
   return {
+    mockCaptureException,
     mockAnd: vi.fn((...conditions: unknown[]) => conditions),
     mockDesc: vi.fn((value: unknown) => value),
     mockEq: vi.fn((left: unknown, right: unknown) => [left, right]),
@@ -27,6 +30,10 @@ const {
     mockWhere,
   };
 });
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+}));
 
 vi.mock("drizzle-orm", () => ({
   and: mockAnd,
@@ -95,6 +102,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetReportDataCacheForTests();
+  mockCaptureException.mockClear();
   mockAnd.mockClear();
   mockDesc.mockClear();
   mockEq.mockClear();
@@ -208,6 +216,7 @@ describe("getReportData cache", () => {
     ]);
 
     expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
     expect(mockSelect).toHaveBeenCalledTimes(2);
   });
 

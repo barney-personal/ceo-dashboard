@@ -18,6 +18,7 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import * as Sentry from "@sentry/nextjs";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
@@ -61,6 +62,7 @@ export async function runManagementAccountsSync(
   recordsSynced: number;
   errors: string[];
 }> {
+  Sentry.setTag("sync_source", "management-accounts");
   const tracker = createPhaseTracker(run.id);
   let count = 0;
   const errors: string[] = [];
@@ -230,11 +232,22 @@ export async function runManagementAccountsSync(
       }
     }
 
-    return {
-      status: determineSyncStatus(errors, count),
-      recordsSynced: count,
-      errors,
-    };
+    const status = determineSyncStatus(errors, count);
+    if (status === "success" || status === "partial") {
+      Sentry.captureMessage("Management accounts sync completed", {
+        level: "info",
+        tags: {
+          sync_source: "management-accounts",
+          status,
+        },
+        extra: {
+          runId: run.id,
+          recordsSynced: count,
+        },
+      });
+    }
+
+    return { status, recordsSynced: count, errors };
   } catch (error) {
     if (error instanceof SyncDeadlineExceededError) {
       return {
@@ -252,6 +265,16 @@ export async function runManagementAccountsSync(
       };
     }
 
+    Sentry.captureException(error, {
+      tags: {
+        sync_source: "management-accounts",
+        failure_scope: "run",
+      },
+      extra: {
+        runId: run.id,
+        recordsSynced: count,
+      },
+    });
     throw error;
   }
 }

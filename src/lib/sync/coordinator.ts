@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import * as Sentry from "@sentry/nextjs";
 import { syncLog, syncPhases } from "@/lib/db/schema";
 import {
   and,
@@ -308,6 +309,10 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
 
   const intervalId = setInterval(() => {
     void tick().catch((error) => {
+      Sentry.captureException(error, {
+        tags: { sync_source: run.source },
+        extra: { runId: run.id },
+      });
       console.error(
         `[sync-worker] heartbeat update failed for run ${run.id}:`,
         error
