@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData } = vi.hoisted(() => ({
+const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
+  mockValidateModeColumns: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
+  validateModeColumns: mockValidateModeColumns,
 }));
 
 import {
@@ -13,7 +15,21 @@ import {
   formatCurrency,
   formatPercent,
 } from "@/lib/format/number";
-import { getQueryRow } from "../metrics";
+import {
+  getHeadcountMetrics,
+  getQueryRow,
+  getUnitEconomicsMetrics,
+} from "../metrics";
+
+beforeEach(() => {
+  mockValidateModeColumns.mockReset();
+  mockValidateModeColumns.mockReturnValue({
+    expectedColumns: [],
+    presentColumns: [],
+    missingColumns: [],
+    isValid: true,
+  });
+});
 
 afterEach(() => {
   mockGetReportData.mockReset();
@@ -72,5 +88,101 @@ describe("getQueryRow", () => {
   it("returns null when the query or row match is missing", () => {
     expect(getQueryRow(data, "Missing")).toBeNull();
     expect(getQueryRow(data, "CPA", { time_period: "Yesterday" })).toBeNull();
+  });
+});
+
+describe("getUnitEconomicsMetrics", () => {
+  it("returns the null fallback when a required KPI column drifts", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "36M LTV",
+        rows: [{ user_pnl_36m: 240 }],
+      },
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "ARPU Annualized",
+        rows: [
+          {
+            arpmau: 10,
+            gross_margin: 0.4,
+            contribution_margin: 0.2,
+            mau: 1000,
+          },
+        ],
+      },
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "CPA",
+        rows: [{ time_period: "Previous 365 days", avg_cpa: 30 }],
+      },
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "M11 Plus CVR, past 7 days",
+        rows: [{ average_7d_plus_m11_cvr: 0.1 }],
+      },
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "Subscribers at end of period: Growth accounting",
+        rows: [{ total: 123 }],
+      },
+    ]);
+    mockValidateModeColumns.mockImplementation(({ queryName }) => ({
+      expectedColumns: [],
+      presentColumns: [],
+      missingColumns:
+        queryName === "ARPU Annualized" ? ["monthly_revenue"] : [],
+      isValid: queryName !== "ARPU Annualized",
+    }));
+
+    const metrics = await getUnitEconomicsMetrics();
+
+    expect(metrics).toEqual({
+      ltv: null,
+      arpu: null,
+      grossMargin: null,
+      contributionMargin: null,
+      cpa: null,
+      cvr: null,
+      mau: null,
+      revenue: null,
+      ltvCac: null,
+      subscribers: null,
+    });
+    expect(mockGetReportData).toHaveBeenCalledWith("unit-economics", "kpis", [
+      "36M LTV",
+      "ARPU Annualized",
+      "CPA",
+      "M11 Plus CVR, past 7 days",
+      "Subscribers at end of period: Growth accounting",
+    ]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("getHeadcountMetrics", () => {
+  it("returns the empty fallback when headcount columns drift", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        syncedAt: new Date("2026-04-08T12:00:00Z"),
+        rows: [{ lifecycle_status: "employed" }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["lifecycle_status", "is_cleo_headcount"],
+      presentColumns: ["lifecycle_status"],
+      missingColumns: ["is_cleo_headcount"],
+      isValid: false,
+    });
+
+    const metrics = await getHeadcountMetrics();
+
+    expect(metrics).toEqual({ total: null, lastSync: null });
+    expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
+      "headcount",
+    ]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 });

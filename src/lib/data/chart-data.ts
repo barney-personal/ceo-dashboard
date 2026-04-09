@@ -1,4 +1,10 @@
-import { getReportData, rowStr, rowNum, rowNumOrNull } from "./mode";
+import {
+  getReportData,
+  rowStr,
+  rowNum,
+  rowNumOrNull,
+  validateModeColumns,
+} from "./mode";
 import {
   CHART_HISTORY_FIRST_FULL_WEEK,
   CHART_HISTORY_START_TS,
@@ -12,6 +18,47 @@ type ChartSeries = {
   data: { date: string; value: number }[];
   dashed?: boolean;
 };
+
+type ModeQueryData = Awaited<ReturnType<typeof getReportData>>[number];
+
+const KPI_LTV_QUERY_COLUMNS = ["month", "user_ltv_36m_actual"] as const;
+const KPI_QUERY3_COLUMNS = [
+  "day",
+  "actual_or_target",
+  "spend",
+  "new_bank_connected_users",
+] as const;
+const ACTIVE_USERS_QUERY_COLUMNS = ["date", "daus", "waus", "maus"] as const;
+const RETENTION_QUERY_COLUMNS = [
+  "cohort_month",
+  "activity_month",
+  "maus",
+] as const;
+const HEADCOUNT_QUERY_COLUMNS = [
+  "lifecycle_status",
+  "is_cleo_headcount",
+  "hb_function",
+] as const;
+
+function getValidatedQuery<TColumn extends string>(
+  data: Awaited<ReturnType<typeof getReportData>>,
+  queryName: string,
+  expectedColumns: readonly TColumn[],
+): ModeQueryData | null {
+  const query = data.find((entry) => entry.queryName === queryName);
+  if (!query || query.rows.length === 0) {
+    return null;
+  }
+
+  const validation = validateModeColumns({
+    row: query.rows[0],
+    expectedColumns,
+    reportName: query.reportName,
+    queryName: query.queryName,
+  });
+
+  return validation.isValid ? query : null;
+}
 
 export function getWeekStart(date: string | Date): string {
   const value =
@@ -78,9 +125,9 @@ export function aggregateCohortRows(
  * with columns: month, user_ltv_36m_actual.
  */
 export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
-  const data = await getReportData("unit-economics", "kpis");
-  const query = data.find((d) => d.queryName === "Query 4");
-  if (!query || query.rows.length === 0) return [];
+  const data = await getReportData("unit-economics", "kpis", ["Query 4"]);
+  const query = getValidatedQuery(data, "Query 4", KPI_LTV_QUERY_COLUMNS);
+  if (!query) return [];
 
   return query.rows
     .filter((r) => r.month && r.user_ltv_36m_actual != null)
@@ -99,11 +146,14 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
  * Weekly CAC = weekly spend / weekly new users; ratio = LTV / CAC.
  */
 export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("unit-economics", "kpis");
+  const data = await getReportData("unit-economics", "kpis", [
+    "Query 4",
+    "Query 3",
+  ]);
 
   // 1. Build monthly LTV lookup from Query 4
-  const ltvQuery = data.find((d) => d.queryName === "Query 4");
-  if (!ltvQuery || ltvQuery.rows.length === 0) return [];
+  const ltvQuery = getValidatedQuery(data, "Query 4", KPI_LTV_QUERY_COLUMNS);
+  if (!ltvQuery) return [];
 
   const ltvByMonth = new Map<string, number>();
   for (const row of ltvQuery.rows) {
@@ -129,8 +179,8 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   }
 
   // 2. Aggregate Query 3 "actual" rows into weekly buckets
-  const q3 = data.find((d) => d.queryName === "Query 3");
-  if (!q3 || q3.rows.length === 0) return [];
+  const q3 = getValidatedQuery(data, "Query 3", KPI_QUERY3_COLUMNS);
+  if (!q3) return [];
 
   const CHARTS_START = new Date("2023-01-01").getTime();
 
@@ -240,9 +290,9 @@ export async function getQuery3Series(): Promise<{
   users: ChartSeries[];
   cpa: ChartSeries[];
 }> {
-  const data = await getReportData("unit-economics", "kpis");
-  const query = data.find((d) => d.queryName === "Query 3");
-  if (!query || query.rows.length === 0)
+  const data = await getReportData("unit-economics", "kpis", ["Query 3"]);
+  const query = getValidatedQuery(data, "Query 3", KPI_QUERY3_COLUMNS);
+  if (!query)
     return { spend: [], users: [], cpa: [] };
 
   const colors: Record<string, string> = {
@@ -253,7 +303,7 @@ export async function getQuery3Series(): Promise<{
 
   const byType = new Map<
     string,
-    { date: string; spend: number; users: number; cpa: number }[]
+    { date: string; spend: number; users: number }[]
   >();
   for (const r of query.rows) {
     if (!r.day) continue;
@@ -268,14 +318,13 @@ export async function getQuery3Series(): Promise<{
       date: rowStr(r, "day"),
       spend: rowNum(r, "spend"),
       users: rowNum(r, "new_bank_connected_users"),
-      cpa: rowNum(r, "cpa"),
     });
   }
 
   // Aggregate all types to weekly buckets (week starting Monday)
   const weeklyByType = new Map<
     string,
-    Map<string, { date: string; spend: number; users: number; cpa: number }[]>
+    Map<string, { date: string; spend: number; users: number }[]>
   >();
   for (const [type, rows] of byType) {
     weeklyByType.set(type, groupByWeek(rows, "date"));
@@ -354,8 +403,14 @@ export async function getActiveUsersSeries(): Promise<{
   wau: { date: string; value: number }[];
   mau: { date: string; value: number }[];
 }> {
-  const data = await getReportData("product", "active-users");
-  const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
+  const data = await getReportData("product", "active-users", [
+    "dau-wau-mau query all time",
+  ]);
+  const query = getValidatedQuery(
+    data,
+    "dau-wau-mau query all time",
+    ACTIVE_USERS_QUERY_COLUMNS,
+  );
   if (!query) return { dau: [], wau: [], mau: [] };
 
   const rows = query.rows
@@ -433,8 +488,14 @@ export async function getActiveUsersSeries(): Promise<{
  * Engagement ratios (WAU/MAU, DAU/MAU) over time.
  */
 export async function getEngagementSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("product", "active-users");
-  const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
+  const data = await getReportData("product", "active-users", [
+    "dau-wau-mau query all time",
+  ]);
+  const query = getValidatedQuery(
+    data,
+    "dau-wau-mau query all time",
+    ACTIVE_USERS_QUERY_COLUMNS,
+  );
   if (!query) return [];
 
   // Group by month, compute ratio of averages
@@ -488,8 +549,8 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
 export async function getMauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
-  const data = await getReportData("product", "retention");
-  const query = data.find((d) => d.queryName === "Query 1");
+  const data = await getReportData("product", "retention", ["Query 1"]);
+  const query = getValidatedQuery(data, "Query 1", RETENTION_QUERY_COLUMNS);
   if (!query) return [];
 
   const byCohort = aggregateCohortRows(query.rows);
@@ -519,8 +580,8 @@ export async function getMauRetentionCohorts(): Promise<
  * Headcount by department for bar chart.
  */
 export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
-  const data = await getReportData("people", "headcount");
-  const query = data.find((d) => d.queryName === "headcount");
+  const data = await getReportData("people", "headcount", ["headcount"]);
+  const query = getValidatedQuery(data, "headcount", HEADCOUNT_QUERY_COLUMNS);
   if (!query) return [];
 
   const active = query.rows.filter(

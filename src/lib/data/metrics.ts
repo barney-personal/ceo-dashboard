@@ -3,7 +3,7 @@ import {
   isSchemaCompatibilityError,
   normalizeDatabaseError,
 } from "@/lib/db/errors";
-import { getReportData } from "./mode";
+import { getReportData, validateModeColumns } from "./mode";
 import {
   formatCompact,
   formatCurrency,
@@ -27,6 +27,32 @@ export function getQueryRow(
       Object.entries(match).every(([k, v]) => row[k] === v),
     ) ?? null
   );
+}
+
+function getValidatedQueryRow<TColumn extends string>(
+  data: Awaited<ReturnType<typeof getReportData>>,
+  queryName: string,
+  expectedColumns: readonly TColumn[],
+  match?: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const query = data.find((entry) => entry.queryName === queryName);
+  if (!query) {
+    return null;
+  }
+
+  const row = getQueryRow(data, queryName, match);
+  if (!row) {
+    return null;
+  }
+
+  const validation = validateModeColumns({
+    row,
+    expectedColumns,
+    reportName: query.reportName,
+    queryName: query.queryName,
+  });
+
+  return validation.isValid ? row : null;
 }
 
 async function withMetricsFallback<T>(
@@ -53,31 +79,56 @@ async function withMetricsFallback<T>(
 // --- Unit Economics Metrics ---
 
 export async function getUnitEconomicsMetrics() {
+  const fallback = {
+    ltv: null,
+    arpu: null,
+    grossMargin: null,
+    contributionMargin: null,
+    cpa: null,
+    cvr: null,
+    mau: null,
+    revenue: null,
+    ltvCac: null,
+    subscribers: null as Record<string, unknown> | null,
+  };
+
   return withMetricsFallback(
     "load unit economics metrics",
-    {
-      ltv: null,
-      arpu: null,
-      grossMargin: null,
-      contributionMargin: null,
-      cpa: null,
-      cvr: null,
-      mau: null,
-      revenue: null,
-      ltvCac: null,
-      subscribers: null as Record<string, unknown> | null,
-    },
+    fallback,
     async () => {
-      const kpis = await getReportData("unit-economics", "kpis");
+      const kpis = await getReportData("unit-economics", "kpis", [
+        "36M LTV",
+        "ARPU Annualized",
+        "CPA",
+        "M11 Plus CVR, past 7 days",
+        "Subscribers at end of period: Growth accounting",
+      ]);
 
-      const ltv = getQueryRow(kpis, "36M LTV");
-      const arpu = getQueryRow(kpis, "ARPU Annualized");
-      const cpa = getQueryRow(kpis, "CPA", { time_period: "Previous 365 days" });
-      const cvr = getQueryRow(kpis, "M11 Plus CVR, past 7 days");
+      const ltv = getValidatedQueryRow(kpis, "36M LTV", ["user_pnl_36m"]);
+      const arpu = getValidatedQueryRow(kpis, "ARPU Annualized", [
+        "arpmau",
+        "gross_margin",
+        "contribution_margin",
+        "mau",
+        "monthly_revenue",
+      ]);
+      const cpa = getValidatedQueryRow(
+        kpis,
+        "CPA",
+        ["time_period", "avg_cpa"],
+        { time_period: "Previous 365 days" },
+      );
+      const cvr = getValidatedQueryRow(kpis, "M11 Plus CVR, past 7 days", [
+        "average_7d_plus_m11_cvr",
+      ]);
       const subscribers = getQueryRow(
         kpis,
         "Subscribers at end of period: Growth accounting",
       );
+
+      if (!ltv || !arpu || !cpa || !cvr) {
+        return fallback;
+      }
 
       const ltvValue = ltv?.user_pnl_36m as number | undefined;
       const arpuValue = arpu?.arpmau as number | undefined;
@@ -113,14 +164,29 @@ export async function getUnitEconomicsMetrics() {
 // --- Headcount Metrics ---
 
 export async function getHeadcountMetrics() {
+  const fallback = { total: null as number | null, lastSync: null as Date | null };
+
   return withMetricsFallback(
     "load headcount metrics",
-    { total: null as number | null, lastSync: null as Date | null },
+    fallback,
     async () => {
-      const data = await getReportData("people", "headcount");
+      const data = await getReportData("people", "headcount", ["headcount"]);
       const headcountData = data.find((d) => d.queryName === "headcount");
 
-      if (!headcountData) return { total: null, lastSync: null };
+      if (!headcountData || headcountData.rows.length === 0) {
+        return fallback;
+      }
+
+      const validation = validateModeColumns({
+        row: headcountData.rows[0],
+        expectedColumns: ["lifecycle_status", "is_cleo_headcount"],
+        reportName: headcountData.reportName,
+        queryName: headcountData.queryName,
+      });
+
+      if (!validation.isValid) {
+        return fallback;
+      }
 
       const activeEmployees = headcountData.rows.filter(
         (r) =>
