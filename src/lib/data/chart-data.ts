@@ -637,6 +637,8 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
   if (fteQuery) {
     const byDept = new Map<string, number>();
     for (const emp of fteQuery.rows) {
+      // Exclude part-time Customer Champions ("no pillar"/"no squad")
+      if (rowStr(emp, "pillar_name") === "no pillar") continue;
       const dept = rowStr(emp, "function_name") || "Unknown";
       byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
     }

@@ -312,7 +312,7 @@ describe("getActiveEmployees", () => {
 
     const result = await getActiveEmployees();
 
-    expect(result).toEqual({ employees: [], allRows: [], lastSync: null });
+    expect(result).toEqual({ employees: [], partTimeChampions: [], allRows: [], lastSync: null });
     expect(mockGetReportData).toHaveBeenCalledWith("people", "org", [
       "current_employees",
     ]);
