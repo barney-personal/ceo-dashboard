@@ -17,7 +17,12 @@ echo "Making scripts executable..."
 chmod +x "$REPO_ROOT"/scripts/*.sh
 echo "  Done"
 
-# 3. Optionally set up Doppler
+# 3. Ensure local dependencies exist (or reuse another checkout's install)
+echo "Ensuring npm dependencies are available..."
+"$REPO_ROOT/scripts/ensure-node-modules.sh"
+echo "  Done"
+
+# 4. Optionally set up Doppler
 if command -v doppler >/dev/null 2>&1; then
   printf "Doppler CLI detected. Run 'doppler setup' now? [y/N] "
   read -r answer
@@ -31,7 +36,7 @@ else
   echo "  Or use a .env file (copy .env.example to .env and fill in values)."
 fi
 
-# 4. Create .env from example if it doesn't exist
+# 5. Create .env from example if it doesn't exist
 if [ ! -f "$REPO_ROOT/.env" ]; then
   if [ -f "$REPO_ROOT/.env.example" ]; then
     printf "Create .env from .env.example? [y/N] "

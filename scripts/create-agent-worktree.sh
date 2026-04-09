@@ -43,5 +43,8 @@ git worktree add "$worktree_path" -b "$branch_name" "origin/$base_branch"
 # Ensure git hooks are active in the new worktree
 git -C "$worktree_path" config core.hooksPath .githooks
 
+# Reuse dependencies from an existing checkout when possible.
+"$worktree_path/scripts/ensure-node-modules.sh"
+
 printf 'Created worktree:\n  %s\n' "$worktree_path"
 printf 'Branch:\n  %s\n' "$branch_name"
