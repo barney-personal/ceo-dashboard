@@ -1,9 +1,17 @@
 import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
 
+const sentryRelease =
+  process.env.RENDER_GIT_COMMIT ||
+  process.env.VERCEL_GIT_COMMIT_SHA ||
+  "local";
+
 const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
+  },
+  env: {
+    NEXT_PUBLIC_SENTRY_RELEASE: sentryRelease,
   },
 };
 
