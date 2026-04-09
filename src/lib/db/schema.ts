@@ -145,6 +145,72 @@ export const debugLogs = pgTable("debug_logs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// ---------------------------------------------------------------------------
+// Meetings
+// ---------------------------------------------------------------------------
+
+export const meetings = pgTable(
+  "meetings",
+  {
+    id: serial("id").primaryKey(),
+    calendarEventId: text("calendar_event_id").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    startTime: timestamp("start_time").notNull(),
+    endTime: timestamp("end_time").notNull(),
+    location: text("location"),
+    organizer: text("organizer"),
+    attendees: jsonb("attendees"), // [{email, name, responseStatus}]
+    recurringEventId: text("recurring_event_id"),
+    htmlLink: text("html_link"),
+    calendarId: text("calendar_id"),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.calendarEventId),
+    index("meetings_start_time_idx").on(table.startTime),
+  ]
+);
+
+export const meetingNotes = pgTable(
+  "meeting_notes",
+  {
+    id: serial("id").primaryKey(),
+    granolaMeetingId: text("granola_meeting_id").notNull().unique(),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    transcript: text("transcript"),
+    actionItems: jsonb("action_items"), // [{text, assignee, done}]
+    participants: jsonb("participants"), // [{name, email}]
+    meetingDate: timestamp("meeting_date").notNull(),
+    durationMinutes: integer("duration_minutes"),
+    calendarEventId: text("calendar_event_id"), // link to meetings table
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [index("meeting_notes_date_idx").on(table.meetingDate)]
+);
+
+export const preReads = pgTable(
+  "pre_reads",
+  {
+    id: serial("id").primaryKey(),
+    slackTs: text("slack_ts").notNull(),
+    channelId: text("channel_id").notNull(),
+    userId: text("user_id"),
+    userName: text("user_name"),
+    title: text("title"),
+    content: text("content"),
+    attachments: jsonb("attachments"), // [{name, url, mimeType}]
+    meetingDate: timestamp("meeting_date"),
+    postedAt: timestamp("posted_at").notNull(),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.slackTs, table.channelId),
+    index("pre_reads_posted_at_idx").on(table.postedAt),
+  ]
+);
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")
