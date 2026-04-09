@@ -145,7 +145,8 @@ function IntegrationCard({ integration }: { integration: Integration }) {
             <p className="mt-1.5 text-xs text-destructive">{errorMessage}</p>
           )}
           <p className="mt-2 text-[10px] text-muted-foreground/60">
-            Open Granola &rarr; Settings &rarr; API &rarr; Create new key
+            Add your <strong>personal</strong> API key: Open Granola &rarr; Settings &rarr; API &rarr; Create new key.
+            This gives access to your own meeting notes. Don&apos;t use the enterprise key.
           </p>
         </div>
       )}
