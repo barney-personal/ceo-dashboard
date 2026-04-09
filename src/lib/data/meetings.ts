@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { meetingNotes, preReads } from "@/lib/db/schema";
-import { and, gte, lte, desc, like, or, inArray } from "drizzle-orm";
+import { and, gte, lte, desc, like, or, inArray, sql } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
@@ -278,13 +278,30 @@ export async function getMeetingsForRange(
     meetingByEventId.set(m.calendarEventId, m);
   }
 
-  // Build a recurring base ID index for meetings
+  // Build a recurring base ID index for meetings.
+  // Google Calendar recurringEventId can include a _R suffix (e.g.
+  // "baseId_R20251030T133000") when the series was modified. Individual
+  // instance IDs use "baseId_YYYYMMDDTHHMMSSZ". We strip the _R suffix
+  // so the LIKE query matches instance IDs correctly.
   const meetingsByRecurringBase = new Map<string, MeetingRow[]>();
   for (const m of serializedMeetings) {
     if (m.recurringEventId) {
-      const list = meetingsByRecurringBase.get(m.recurringEventId) ?? [];
+      const baseId = m.recurringEventId.replace(/_R\d{8}T\d{6}$/, "");
+      const list = meetingsByRecurringBase.get(baseId) ?? [];
       list.push(m);
-      meetingsByRecurringBase.set(m.recurringEventId, list);
+      meetingsByRecurringBase.set(baseId, list);
+    }
+  }
+
+  // Build a title index for title-based historical note matching (fallback
+  // for meetings without recurringEventId).
+  const meetingsByTitle = new Map<string, MeetingRow[]>();
+  for (const m of serializedMeetings) {
+    if (!m.recurringEventId && m.title) {
+      const key = m.title.toLowerCase().trim();
+      const list = meetingsByTitle.get(key) ?? [];
+      list.push(m);
+      meetingsByTitle.set(key, list);
     }
   }
 
@@ -331,7 +348,7 @@ export async function getMeetingsForRange(
     }
   }
 
-  // Fetch historical notes for recurring meetings
+  // Fetch historical notes for recurring meetings (by calendar event ID prefix)
   const recurringBaseIds = [...meetingsByRecurringBase.keys()];
   if (recurringBaseIds.length > 0) {
     const likeConditions = recurringBaseIds.map((baseId) =>
@@ -350,7 +367,6 @@ export async function getMeetingsForRange(
 
     for (const row of historicalRows) {
       if (!row.calendarEventId) continue;
-      // Find which recurring base this note belongs to
       const baseId = recurringBaseIds.find((id) =>
         row.calendarEventId!.startsWith(id)
       );
@@ -358,7 +374,36 @@ export async function getMeetingsForRange(
       const recurringMeetings = meetingsByRecurringBase.get(baseId) ?? [];
       for (const m of recurringMeetings) {
         const list = meetingNotesMap.get(m.id) ?? [];
-        // Avoid duplicates
+        if (list.some((n) => n.id === row.id)) continue;
+        list.push(serializeNote(row, true));
+        meetingNotesMap.set(m.id, list);
+      }
+    }
+  }
+
+  // Fetch historical notes by title match (fallback for non-recurring meetings)
+  const titleKeys = [...meetingsByTitle.keys()];
+  if (titleKeys.length > 0) {
+    const titleConditions = titleKeys.map((t) =>
+      sql`LOWER(TRIM(${meetingNotes.title})) = ${t}`
+    );
+    const titleMatchRows = await db
+      .select()
+      .from(meetingNotes)
+      .where(
+        and(
+          or(...titleConditions),
+          lte(meetingNotes.meetingDate, startDate),
+        )
+      )
+      .orderBy(desc(meetingNotes.meetingDate))
+      .limit(50);
+
+    for (const row of titleMatchRows) {
+      const key = (row.title ?? "").toLowerCase().trim();
+      const meetings = meetingsByTitle.get(key) ?? [];
+      for (const m of meetings) {
+        const list = meetingNotesMap.get(m.id) ?? [];
         if (list.some((n) => n.id === row.id)) continue;
         list.push(serializeNote(row, true));
         meetingNotesMap.set(m.id, list);
