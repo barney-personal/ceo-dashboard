@@ -1,7 +1,11 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleBand, scaleLinear } from "d3-scale";
+import { axisLeft, axisBottom } from "d3-axis";
+import { min, max } from "d3-array";
+import { timeFormat } from "d3-time-format";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -59,10 +63,9 @@ export function ColumnChart({
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
-    d3.select(svgRef.current).selectAll("*").remove();
+    select(svgRef.current).selectAll("*").remove();
 
-    const svg = d3
-      .select(svgRef.current)
+    const svg = select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
 
@@ -72,18 +75,16 @@ export function ColumnChart({
 
     const parsed = data.map((d) => ({ ...d, date: new Date(d.date) }));
 
-    const x = d3
-      .scaleBand()
+    const x = scaleBand()
       .domain(parsed.map((d) => d.date.toISOString()))
       .range([0, innerWidth])
       .padding(0.25);
 
-    const yMin = d3.min(parsed, (d) => d.value) ?? 0;
-    const yMax = d3.max(parsed, (d) => d.value) ?? 1;
+    const yMin = min(parsed, (d) => d.value) ?? 0;
+    const yMax = max(parsed, (d) => d.value) ?? 1;
     const yPadding = (yMax - yMin) * 0.15;
 
-    const y = d3
-      .scaleLinear()
+    const y = scaleLinear()
       .domain([Math.max(0, yMin - yPadding), yMax + yPadding])
       .nice()
       .range([innerHeight, 0]);
@@ -91,8 +92,7 @@ export function ColumnChart({
     // Grid lines
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(5)
           .tickSize(-innerWidth)
           .tickFormat(() => "")
@@ -120,18 +120,17 @@ export function ColumnChart({
 
     const tickFormat = (d: string) => {
       const date = new Date(d);
-      if (granularity === "daily") return d3.timeFormat("%-d %b")(date);
-      if (granularity === "weekly") return d3.timeFormat("%-d %b")(date);
+      if (granularity === "daily") return timeFormat("%-d %b")(date);
+      if (granularity === "weekly") return timeFormat("%-d %b")(date);
       return date.getMonth() === 0
-        ? d3.timeFormat("%b '%y")(date)
-        : d3.timeFormat("%b")(date);
+        ? timeFormat("%b '%y")(date)
+        : timeFormat("%b")(date);
     };
 
     g.append("g")
       .attr("transform", `translate(0,${innerHeight})`)
       .call(
-        d3
-          .axisBottom(x)
+        axisBottom(x)
           .tickValues(
             parsed
               .filter((_, i) => i % tickInterval === 0)
@@ -155,8 +154,7 @@ export function ColumnChart({
     // Y axis
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(5)
           .tickFormat((d) => yFormat(d as number))
           .tickSizeOuter(0)
@@ -181,7 +179,7 @@ export function ColumnChart({
         .text(yLabel);
     }
 
-    const tooltip = d3.select(tooltipRef.current);
+    const tooltip = select(tooltipRef.current);
 
     // Bars
     g.selectAll("rect.bar")
@@ -197,10 +195,10 @@ export function ColumnChart({
       .attr("opacity", 0.8)
       .style("cursor", "pointer")
       .on("mouseenter", function (event: MouseEvent, d) {
-        d3.select(this).attr("opacity", 1);
+        select(this).attr("opacity", 1);
         tooltip
           .html(
-            `<div style="font-size:11px;color:#999;margin-bottom:2px">${granularity === "daily" ? d3.timeFormat("%-d %B %Y")(d.date) : granularity === "weekly" ? "w/c " + d3.timeFormat("%-d %b %Y")(d.date) : d3.timeFormat("%B %Y")(d.date)}</div>
+            `<div style="font-size:11px;color:#999;margin-bottom:2px">${granularity === "daily" ? timeFormat("%-d %B %Y")(d.date) : granularity === "weekly" ? "w/c " + timeFormat("%-d %b %Y")(d.date) : timeFormat("%B %Y")(d.date)}</div>
              <div style="font-size:13px;font-weight:600;color:#333">${yFormat(d.value)}</div>`
           )
           .style("opacity", 1)
@@ -208,7 +206,7 @@ export function ColumnChart({
           .style("top", `${event.offsetY - 16}px`);
       })
       .on("mouseleave", function () {
-        d3.select(this).attr("opacity", 0.8);
+        select(this).attr("opacity", 0.8);
         tooltip.style("opacity", 0);
       });
   }, [data, yFormat, yLabel, color]);

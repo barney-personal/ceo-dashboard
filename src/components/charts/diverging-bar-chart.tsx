@@ -1,7 +1,12 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import * as d3 from "d3";
+import { select } from "d3-selection";
+import { scaleBand, scaleLinear } from "d3-scale";
+import { axisLeft, axisBottom } from "d3-axis";
+import { line, curveMonotoneX } from "d3-shape";
+import { max } from "d3-array";
+import { timeFormat } from "d3-time-format";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -50,10 +55,9 @@ export function DivergingBarChart({
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
-    d3.select(svgRef.current).selectAll("*").remove();
+    select(svgRef.current).selectAll("*").remove();
 
-    const svg = d3
-      .select(svgRef.current)
+    const svg = select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
 
@@ -68,19 +72,17 @@ export function DivergingBarChart({
     }));
 
     // X scale — band for columns
-    const x = d3
-      .scaleBand()
+    const x = scaleBand()
       .domain(parsed.map((d) => d.date.toISOString()))
       .range([0, innerWidth])
       .padding(0.2);
 
     // Y scale — symmetric around zero, tight to the data
-    const maxAbs = d3.max(parsed, (d) =>
+    const maxAbs = max(parsed, (d) =>
       Math.max(d.positive, d.negative)
     ) ?? 1;
 
-    const y = d3
-      .scaleLinear()
+    const y = scaleLinear()
       .domain([-maxAbs, maxAbs])
       .nice()
       .range([innerHeight, 0]);
@@ -88,8 +90,7 @@ export function DivergingBarChart({
     // Horizontal grid lines
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(8)
           .tickSize(-innerWidth)
           .tickFormat(() => "")
@@ -117,8 +118,7 @@ export function DivergingBarChart({
     g.append("g")
       .attr("transform", `translate(0,${innerHeight})`)
       .call(
-        d3
-          .axisBottom(x)
+        axisBottom(x)
           .tickValues(
             parsed
               .filter((_, i) => i % tickInterval === 0)
@@ -127,8 +127,8 @@ export function DivergingBarChart({
           .tickFormat((d) => {
             const date = new Date(d as string);
             return date.getMonth() === 0
-              ? d3.timeFormat("%b '%y")(date)
-              : d3.timeFormat("%b")(date);
+              ? timeFormat("%b '%y")(date)
+              : timeFormat("%b")(date);
           })
           .tickSizeOuter(0)
       )
@@ -147,8 +147,7 @@ export function DivergingBarChart({
     // Y axis
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(8)
           .tickFormat((d) => {
             const v = d as number;
@@ -165,7 +164,7 @@ export function DivergingBarChart({
       )
       .call((sel) => sel.selectAll(".tick line").remove());
 
-    const tooltip = d3.select(tooltipRef.current);
+    const tooltip = select(tooltipRef.current);
 
     // Positive bars (joiners — upward)
     g.selectAll("rect.pos")
@@ -195,11 +194,10 @@ export function DivergingBarChart({
 
     // Net change line
     if (showNetLine) {
-      const lineGen = d3
-        .line<(typeof parsed)[0]>()
+      const lineGen = line<(typeof parsed)[0]>()
         .x((d) => x(d.date.toISOString())! + x.bandwidth() / 2)
         .y((d) => y(d.net))
-        .curve(d3.curveMonotoneX);
+        .curve(curveMonotoneX);
 
       g.append("path")
         .datum(parsed)
@@ -248,7 +246,7 @@ export function DivergingBarChart({
         const netSign = net >= 0 ? "+" : "";
         tooltip
           .html(
-            `<div style="font-size:11px;color:#999;margin-bottom:4px">${d3.timeFormat("%B %Y")(d.date)}</div>
+            `<div style="font-size:11px;color:#999;margin-bottom:4px">${timeFormat("%B %Y")(d.date)}</div>
              <div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:2px">
                <span style="width:8px;height:8px;border-radius:2px;background:${positiveColor}"></span>
                <span style="color:#666">${positiveLabel}:</span>

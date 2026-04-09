@@ -1,7 +1,13 @@
 "use client";
 
 import { useRef, useEffect, useCallback } from "react";
-import * as d3 from "d3";
+import { select, pointer } from "d3-selection";
+import { scaleTime, scaleLinear } from "d3-scale";
+import { axisLeft, axisBottom } from "d3-axis";
+import { line as d3Line, curveMonotoneX } from "d3-shape";
+import { extent, min, max, bisector } from "d3-array";
+import { timeFormat } from "d3-time-format";
+import { timeMonth } from "d3-time";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -58,10 +64,9 @@ export function LineChart({
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
-    d3.select(svgRef.current).selectAll("*").remove();
+    select(svgRef.current).selectAll("*").remove();
 
-    const svg = d3
-      .select(svgRef.current)
+    const svg = select(svgRef.current)
       .attr("width", width)
       .attr("height", height);
 
@@ -78,17 +83,15 @@ export function LineChart({
     const allDates = parsedSeries.flatMap((s) => s.data.map((d) => d.date));
     const allValues = parsedSeries.flatMap((s) => s.data.map((d) => d.value));
 
-    const x = d3
-      .scaleTime()
-      .domain(d3.extent(allDates) as [Date, Date])
+    const x = scaleTime()
+      .domain(extent(allDates) as [Date, Date])
       .range([0, innerWidth]);
 
-    const yMin = d3.min(allValues) ?? 0;
-    const yMax = d3.max(allValues) ?? 1;
+    const yMin = min(allValues) ?? 0;
+    const yMax = max(allValues) ?? 1;
     const yPadding = (yMax - yMin) * 0.15;
 
-    const y = d3
-      .scaleLinear()
+    const y = scaleLinear()
       .domain([zoomY ? yMin - yPadding : Math.max(0, yMin - yPadding), yMax + yPadding])
       .nice()
       .range([innerHeight, 0]);
@@ -96,8 +99,7 @@ export function LineChart({
     // Horizontal grid lines
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(6)
           .tickSize(-innerWidth)
           .tickFormat(() => "")
@@ -117,24 +119,23 @@ export function LineChart({
       (1000 * 60 * 60 * 24 * 30);
     const tickInterval =
       rangeMonths > 36
-        ? d3.timeMonth.every(6)
+        ? timeMonth.every(6)
         : rangeMonths > 18
-          ? d3.timeMonth.every(3)
-          : d3.timeMonth.every(2);
+          ? timeMonth.every(3)
+          : timeMonth.every(2);
 
     g.append("g")
       .attr("transform", `translate(0,${innerHeight})`)
       .call(
-        d3
-          .axisBottom(x)
+        axisBottom(x)
           .ticks(tickInterval)
           .tickFormat((d) => {
             const date = d as Date;
             // Show "Jan 2024" for January, "Apr" for other months
             if (date.getMonth() === 0) {
-              return d3.timeFormat("%b %Y")(date);
+              return timeFormat("%b %Y")(date);
             }
-            return d3.timeFormat("%b")(date);
+            return timeFormat("%b")(date);
           })
           .tickSizeOuter(0)
       )
@@ -160,8 +161,7 @@ export function LineChart({
     // Y axis
     g.append("g")
       .call(
-        d3
-          .axisLeft(y)
+        axisLeft(y)
           .ticks(6)
           .tickFormat((d) => yFormat(d as number))
           .tickSizeOuter(0)
@@ -189,11 +189,10 @@ export function LineChart({
     }
 
     // Draw lines
-    const line = d3
-      .line<{ date: Date; value: number }>()
+    const linePath = d3Line<{ date: Date; value: number }>()
       .x((d) => x(d.date))
       .y((d) => y(d.value))
-      .curve(d3.curveMonotoneX);
+      .curve(curveMonotoneX);
 
     for (const s of parsedSeries) {
       g.append("path")
@@ -204,7 +203,7 @@ export function LineChart({
         .attr("stroke-dasharray", s.dashed ? "6,4" : "none")
         .attr("stroke-linejoin", "round")
         .attr("stroke-linecap", "round")
-        .attr("d", line);
+        .attr("d", linePath);
     }
 
     // End dots
@@ -241,7 +240,7 @@ export function LineChart({
         .style("opacity", 0)
     );
 
-    const tooltip = d3.select(tooltipRef.current);
+    const tooltip = select(tooltipRef.current);
 
     const overlay = g
       .append("rect")
@@ -252,13 +251,13 @@ export function LineChart({
       .style("cursor", "crosshair");
 
     overlay.on("mousemove", (event: MouseEvent) => {
-      const [mx] = d3.pointer(event);
+      const [mx] = pointer(event);
       const dateAtMouse = x.invert(mx);
 
       // Find closest date across all series
-      const bisect = d3.bisector((d: { date: Date }) => d.date).left;
+      const bisect = bisector((d: { date: Date }) => d.date).left;
 
-      let tooltipHtml = `<div style="font-size:11px;color:#999;margin-bottom:4px">${d3.timeFormat("%b %Y")(dateAtMouse)}</div>`;
+      let tooltipHtml = `<div style="font-size:11px;color:#999;margin-bottom:4px">${timeFormat("%b %Y")(dateAtMouse)}</div>`;
 
       crosshairLine.attr("x1", mx).attr("x2", mx).style("opacity", 1);
 
