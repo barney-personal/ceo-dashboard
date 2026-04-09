@@ -22,6 +22,6 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     days,
-    weekStart: weekStart.toISOString().slice(0, 10),
+    weekStart: `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`,
   });
 }

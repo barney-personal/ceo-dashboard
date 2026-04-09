@@ -34,7 +34,7 @@ export default async function MeetingsPage({
 
       <MeetingsView
         initialDays={days}
-        initialWeekStart={weekStart.toISOString().slice(0, 10)}
+        initialWeekStart={`${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`}
       />
     </div>
   );
