@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { DayData, LinkedMeeting, PreReadRow } from "@/lib/data/meetings";
 import {
@@ -56,7 +57,6 @@ function formatWeekLabel(startDate: string, endDate: string): string {
 
 function extractLinks(text: string): { url: string; label: string }[] {
   const links: { url: string; label: string }[] = [];
-  // Slack-style links: <url|label> or <url>
   const slackLinkRe = /<(https?:\/\/[^|>]+)\|?([^>]*)>/g;
   let match;
   while ((match = slackLinkRe.exec(text)) !== null) {
@@ -65,10 +65,24 @@ function extractLinks(text: string): { url: string; label: string }[] {
   return links;
 }
 
-function isToday(dateStr: string): boolean {
+function localToday(): string {
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  return dateStr === today;
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function isToday(dateStr: string): boolean {
+  return dateStr === localToday();
+}
+
+function isWeekday(dateStr: string): boolean {
+  const d = new Date(dateStr + "T12:00:00").getDay();
+  return d >= 1 && d <= 5;
+}
+
+function offsetWeek(weekStart: string, delta: number): string {
+  const d = new Date(weekStart + "T12:00:00");
+  d.setDate(d.getDate() + 7 * delta);
+  return d.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +124,25 @@ function PreReadCard({ preRead }: { preRead: PreReadRow }) {
         )}
       </div>
     </div>
+  );
+}
+
+function CompactPreReadLink({ preRead }: { preRead: PreReadRow }) {
+  const links = extractLinks(preRead.content ?? "");
+  const mainLink = links[0];
+  if (!mainLink) return null;
+
+  return (
+    <a
+      href={mainLink.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className="flex items-center gap-1 text-[10px] text-primary hover:underline"
+    >
+      <FileText className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">{mainLink.label}</span>
+    </a>
   );
 }
 
@@ -228,25 +261,38 @@ function DayColumn({
     day.meetings.reduce((sum, m) => sum + m.preReads.length, 0) +
     day.unlinkedPreReads.length;
 
+  const today = isToday(day.date);
+
   if (!isExpanded) {
     // Compact week view column
     return (
-      <div className="flex-1">
+      <div
+        className={cn(
+          "flex-1 rounded-xl border px-2 pb-3 pt-1",
+          today
+            ? "border-primary/30 bg-primary/[0.03]"
+            : "border-transparent"
+        )}
+      >
         <button
           onClick={onSelectDay}
           className={cn(
-            "mb-2 flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/50",
-            isToday(day.date) && "bg-primary/5"
+            "mb-2 flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-muted/50",
           )}
         >
-          <span
-            className={cn(
-              "text-xs font-semibold",
-              isToday(day.date) ? "text-primary" : "text-foreground"
+          <div className="flex items-center gap-1.5">
+            {today && (
+              <span className="h-1.5 w-1.5 rounded-full bg-primary" />
             )}
-          >
-            {formatDayLabel(day.date)}
-          </span>
+            <span
+              className={cn(
+                "text-xs font-semibold",
+                today ? "text-primary" : "text-foreground"
+              )}
+            >
+              {formatDayLabel(day.date)}
+            </span>
+          </div>
           <div className="flex items-center gap-1.5">
             {day.meetings.length > 0 && (
               <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
@@ -272,7 +318,7 @@ function DayColumn({
               <div
                 key={m.id}
                 className={cn(
-                  "rounded-lg border border-border/40 px-2.5 py-1.5",
+                  "rounded-lg border border-border/40 bg-card px-2.5 py-1.5",
                   m.preReads.length > 0 && "border-l-2 border-l-primary/40"
                 )}
               >
@@ -313,9 +359,20 @@ function DayColumn({
             );
           })}
           {day.meetings.length === 0 && (
-            <p className="px-2 py-3 text-center text-[10px] text-muted-foreground/50">
+            <p className="px-2 py-4 text-center text-[10px] text-muted-foreground/50">
               No meetings
             </p>
+          )}
+          {/* Unlinked pre-reads in week view */}
+          {day.unlinkedPreReads.length > 0 && (
+            <div className="mt-1 space-y-1 border-t border-dashed border-border/30 pt-1.5">
+              <span className="px-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/60">
+                Other pre-reads
+              </span>
+              {day.unlinkedPreReads.map((pr) => (
+                <CompactPreReadLink key={pr.id} preRead={pr} />
+              ))}
+            </div>
           )}
         </div>
       </div>
@@ -328,18 +385,23 @@ function DayColumn({
       <div
         className={cn(
           "mb-3 rounded-lg px-2 py-1.5",
-          isToday(day.date) && "bg-primary/5"
+          today && "bg-primary/5"
         )}
       >
-        <span
-          className={cn(
-            "text-sm font-semibold",
-            isToday(day.date) ? "text-primary" : "text-foreground"
+        <div className="flex items-center gap-1.5">
+          {today && (
+            <span className="h-2 w-2 rounded-full bg-primary" />
           )}
-        >
-          {formatDayLabel(day.date)}
-        </span>
-        <span className="ml-2 text-xs text-muted-foreground">
+          <span
+            className={cn(
+              "text-sm font-semibold",
+              today ? "text-primary" : "text-foreground"
+            )}
+          >
+            {formatDayLabel(day.date)}
+          </span>
+        </div>
+        <span className="ml-3.5 text-xs text-muted-foreground">
           {day.meetings.length} meeting{day.meetings.length !== 1 && "s"}
           {totalPreReads > 0 && ` · ${totalPreReads} pre-read${totalPreReads !== 1 ? "s" : ""}`}
         </span>
@@ -386,18 +448,21 @@ interface MeetingsViewProps {
 }
 
 export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProps) {
-  const [days] = useState(initialDays);
+  const router = useRouter();
   const [viewMode, setViewMode] = useState<ViewMode>("week");
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(() => {
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const todayStr = localToday();
     const idx = initialDays.findIndex((d) => d.date === todayStr);
     return idx >= 0 ? idx : 0;
   });
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
 
-  const weekStart = initialDays[0]?.date ?? initialWeekStart;
-  const weekEnd = initialDays[initialDays.length - 1]?.date ?? initialWeekStart;
+  // Only show Mon-Fri
+  const weekdays = initialDays.filter((d) => isWeekday(d.date));
+  const days = weekdays.length > 0 ? weekdays : initialDays;
+
+  const weekStart = days[0]?.date ?? initialWeekStart;
+  const weekEnd = days[days.length - 1]?.date ?? initialWeekStart;
 
   const totalMeetings = days.reduce((sum, d) => sum + d.meetings.length, 0);
   const totalPreReads = days.reduce(
@@ -411,6 +476,18 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
     (sum, d) => sum + d.meetings.filter((m) => m.preReads.length > 0).length,
     0
   );
+
+  const navigateWeek = (delta: number) => {
+    const newWeek = offsetWeek(initialWeekStart, delta);
+    router.push(`/dashboard/meetings?week=${newWeek}`);
+  };
+
+  const goToThisWeek = () => {
+    router.push("/dashboard/meetings");
+  };
+
+  const todayStr = localToday();
+  const isCurrentWeek = days.some((d) => d.date === todayStr);
 
   return (
     <div className="space-y-5">
@@ -443,11 +520,36 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
               Day
             </button>
           </div>
-          <span className="text-sm font-semibold text-foreground">
-            {viewMode === "week"
-              ? formatWeekLabel(weekStart, weekEnd)
-              : formatDayLabel(days[selectedDayIndex]?.date ?? weekStart)}
-          </span>
+
+          {/* Week navigation */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => navigateWeek(-1)}
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="min-w-[160px] text-center text-sm font-semibold text-foreground">
+              {viewMode === "week"
+                ? formatWeekLabel(weekStart, weekEnd)
+                : formatDayLabel(days[selectedDayIndex]?.date ?? weekStart)}
+            </span>
+            <button
+              onClick={() => navigateWeek(1)}
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+
+          {!isCurrentWeek && (
+            <button
+              onClick={goToThisWeek}
+              className="rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+            >
+              Today
+            </button>
+          )}
         </div>
 
         {viewMode === "day" && (
@@ -487,7 +589,7 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
 
       {/* Content */}
       {viewMode === "week" ? (
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {days.map((day, i) => (
             <DayColumn
               key={day.date}
