@@ -26,6 +26,14 @@ import * as Sentry from "@sentry/nextjs";
 
 const SLACK_THREAD_REPLY_CONCURRENCY = 5;
 
+type SyncChannelResult = {
+  krCount: number;
+  parsedMessageCount: number;
+  skippedByFilterCount: number;
+  llmNullCount: number;
+  emptyAfterValidationCount: number;
+};
+
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
 async function buildUserNameFallback(): Promise<Map<string, string>> {
   const rows = await db
@@ -141,7 +149,7 @@ async function syncChannel(
   systemPrompt: string,
   userNameFallback: Map<string, string>,
   opts: SyncControl = {}
-): Promise<number> {
+): Promise<SyncChannelResult> {
   throwIfSyncShouldStop(opts, {
     cancelled: "Slack sync cancelled before channel fetch started",
     deadlineExceeded:
@@ -202,7 +210,11 @@ async function syncChannel(
     }
   }
 
-  let count = 0;
+  let krCount = 0;
+  let parsedMessageCount = 0;
+  let skippedByFilterCount = 0;
+  let llmNullCount = 0;
+  let emptyAfterValidationCount = 0;
   const authorNameCache = new Map<string, string>();
 
   for (const msg of messages) {
@@ -212,7 +224,10 @@ async function syncChannel(
         "Slack sync exceeded its execution budget while parsing messages",
     });
 
-    if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
+    if (!isLikelyUpdate(msg.text, msg.subtype)) {
+      skippedByFilterCount += 1;
+      continue;
+    }
 
     const authorName = msg.user
       ? await resolveAuthorName(msg.user, userNameFallback, authorNameCache, opts)
@@ -224,7 +239,16 @@ async function syncChannel(
       systemPrompt,
       { signal: opts.signal }
     );
-    if (!parsed || parsed.krs.length === 0) continue;
+    parsedMessageCount += 1;
+    if (!parsed) {
+      llmNullCount += 1;
+      continue;
+    }
+    if (parsed.krs.length === 0) {
+      emptyAfterValidationCount += 1;
+      continue;
+    }
+
     const postedAt = new Date(parseFloat(msg.ts) * 1000);
 
     for (const kr of parsed.krs) {
@@ -271,11 +295,43 @@ async function syncChannel(
           },
         });
 
-      count++;
+      krCount++;
     }
   }
 
-  return count;
+  Sentry.addBreadcrumb({
+    category: "sync.slack",
+    level: "info",
+    message: "Completed Slack channel OKR parsing",
+    data: {
+      channelId,
+      channelName,
+      krCount,
+      parsedMessageCount,
+      skippedByFilterCount,
+      llmNullCount,
+      emptyAfterValidationCount,
+    },
+  });
+
+  return {
+    krCount,
+    parsedMessageCount,
+    skippedByFilterCount,
+    llmNullCount,
+    emptyAfterValidationCount,
+  };
+}
+
+function formatChannelPhaseDetail(
+  channelName: string,
+  result: SyncChannelResult
+): string {
+  const base = `#${channelName}: Parsed ${result.krCount} KRs from ${result.parsedMessageCount} messages (${result.skippedByFilterCount} filtered, ${result.llmNullCount} LLM null`;
+
+  return result.emptyAfterValidationCount > 0
+    ? `${base}, ${result.emptyAfterValidationCount} empty after validation)`
+    : `${base})`;
 }
 
 async function validateSlackChannels(
@@ -518,18 +574,18 @@ export async function runSlackSync(
       );
 
       try {
-        const count = await syncChannel(
+        const result = await syncChannel(
           channel,
           lastSyncTs,
           systemPrompt,
           userNameFallback,
           opts
         );
-        totalRecords += count;
+        totalRecords += result.krCount;
         succeededChannels += 1;
         await tracker.endPhase(channelPhaseId, {
-          itemsProcessed: count,
-          detail: `Parsed ${count} key results`,
+          itemsProcessed: result.krCount,
+          detail: formatChannelPhaseDetail(channel.name, result),
         });
       } catch (error) {
         if (error instanceof SyncCancelledError) {
