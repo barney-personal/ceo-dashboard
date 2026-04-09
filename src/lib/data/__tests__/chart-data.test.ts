@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData } = vi.hoisted(() => ({
+const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
+  mockValidateModeColumns: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
+  validateModeColumns: mockValidateModeColumns,
   rowStr: (row: Record<string, unknown>, key: string) =>
     typeof row[key] === "string"
       ? row[key]
@@ -20,13 +22,26 @@ vi.mock("../mode", () => ({
 
 import {
   aggregateCohortRows,
+  getActiveUsersSeries,
   getEngagementSeries,
+  getHeadcountByDepartment,
   getLatestLtvCacRatio,
+  getLtvTimeSeries,
   getLtvCacRatioSeries,
   getMauRetentionCohorts,
   getQuery3Series,
   groupByWeek,
 } from "../chart-data";
+
+beforeEach(() => {
+  mockValidateModeColumns.mockReset();
+  mockValidateModeColumns.mockReturnValue({
+    expectedColumns: [],
+    presentColumns: [],
+    missingColumns: [],
+    isValid: true,
+  });
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -88,6 +103,9 @@ describe("getQuery3Series", () => {
 
     const series = await getQuery3Series();
 
+    expect(mockGetReportData).toHaveBeenCalledWith("unit-economics", "kpis", [
+      "Query 3",
+    ]);
     expect(series.spend.find((item) => item.label === "actual")?.data).toEqual([
       { date: "2023-01-02", value: 40 },
     ]);
@@ -130,6 +148,32 @@ describe("getQuery3Series", () => {
     expect(series.cpa.find((item) => item.label === "actual")?.data).toEqual([
       { date: "2026-03-30", value: 10 },
     ]);
+  });
+});
+
+describe("getLtvTimeSeries", () => {
+  it("returns an empty series when Query 4 columns drift", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Strategic Finance KPIs",
+        queryName: "Query 4",
+        rows: [{ month: "2023-01-01" }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["month", "user_ltv_36m_actual"],
+      presentColumns: ["month"],
+      missingColumns: ["user_ltv_36m_actual"],
+      isValid: false,
+    });
+
+    const series = await getLtvTimeSeries();
+
+    expect(series).toEqual([]);
+    expect(mockGetReportData).toHaveBeenCalledWith("unit-economics", "kpis", [
+      "Query 4",
+    ]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -283,6 +327,47 @@ describe("getEngagementSeries", () => {
       },
     ]);
   });
+
+  it("returns an empty fallback when active-user columns drift without warning spam", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "App Active Users",
+        queryName: "dau-wau-mau query all time",
+        rows: [
+          { date: "2026-03-01", daus: 10, waus: 50 },
+          { date: "2026-03-15", daus: 20, waus: 70 },
+        ],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["date", "daus", "waus", "maus"],
+      presentColumns: ["date", "daus", "waus"],
+      missingColumns: ["maus"],
+      isValid: false,
+    });
+
+    const series = await getEngagementSeries();
+
+    expect(series).toEqual([]);
+    expect(mockGetReportData).toHaveBeenCalledWith("product", "active-users", [
+      "dau-wau-mau query all time",
+    ]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getActiveUsersSeries", () => {
+  it("returns empty DAU/WAU/MAU series when the active-users query is missing", async () => {
+    mockGetReportData.mockResolvedValue([]);
+
+    const series = await getActiveUsersSeries();
+
+    expect(series).toEqual({ dau: [], wau: [], mau: [] });
+    expect(mockGetReportData).toHaveBeenCalledWith("product", "active-users", [
+      "dau-wau-mau query all time",
+    ]);
+    expect(mockValidateModeColumns).not.toHaveBeenCalled();
+  });
 });
 
 describe("aggregateCohortRows", () => {
@@ -322,5 +407,52 @@ describe("getMauRetentionCohorts", () => {
         periods: [1, 0.8],
       },
     ]);
+  });
+
+  it("returns an empty fallback when retention columns drift", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "App Retention",
+        queryName: "Query 1",
+        rows: [{ cohort_month: "2026-01-01", activity_month: 0 }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["cohort_month", "activity_month", "maus"],
+      presentColumns: ["cohort_month", "activity_month"],
+      missingColumns: ["maus"],
+      isValid: false,
+    });
+
+    const cohorts = await getMauRetentionCohorts();
+
+    expect(cohorts).toEqual([]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getHeadcountByDepartment", () => {
+  it("returns an empty fallback when headcount columns drift", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        rows: [{ lifecycle_status: "employed", is_cleo_headcount: 1 }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["lifecycle_status", "is_cleo_headcount", "hb_function"],
+      presentColumns: ["lifecycle_status", "is_cleo_headcount"],
+      missingColumns: ["hb_function"],
+      isValid: false,
+    });
+
+    const departments = await getHeadcountByDepartment();
+
+    expect(departments).toEqual([]);
+    expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
+      "headcount",
+    ]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 });

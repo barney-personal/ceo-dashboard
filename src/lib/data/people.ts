@@ -1,4 +1,4 @@
-import { getReportData, rowStr, rowNum } from "./mode";
+import { getReportData, rowStr, rowNum, validateModeColumns } from "./mode";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import {
   DAYS_PER_MONTH,
@@ -27,6 +27,21 @@ export interface PeopleMetrics {
   averageTenureMonths: number;
   attritionLast90Days: number;
 }
+
+const HEADCOUNT_QUERY_COLUMNS = [
+  "preferred_name",
+  "email",
+  "job_title",
+  "hb_level",
+  "hb_squad",
+  "hb_function",
+  "manager",
+  "start_date",
+  "work_location",
+  "lifecycle_status",
+  "is_cleo_headcount",
+  "termination_date",
+] as const;
 
 /**
  * Transform raw Mode headcount rows into typed Person objects.
@@ -237,9 +252,22 @@ export async function getActiveEmployees(): Promise<{
   allRows: Record<string, unknown>[];
   lastSync: Date | null;
 }> {
-  const data = await getReportData("people", "headcount");
+  const data = await getReportData("people", "headcount", ["headcount"]);
   const query = data.find((d) => d.queryName === "headcount");
-  if (!query) return { employees: [], allRows: [], lastSync: null };
+  if (!query || query.rows.length === 0) {
+    return { employees: [], allRows: [], lastSync: null };
+  }
+
+  const validation = validateModeColumns({
+    row: query.rows[0],
+    expectedColumns: HEADCOUNT_QUERY_COLUMNS,
+    reportName: query.reportName,
+    queryName: query.queryName,
+  });
+
+  if (!validation.isValid) {
+    return { employees: [], allRows: [], lastSync: null };
+  }
 
   const allRows = query.rows;
   const activeRows = allRows.filter(
