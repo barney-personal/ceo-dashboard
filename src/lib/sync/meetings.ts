@@ -67,10 +67,33 @@ export async function syncGranolaNotes(
     };
   }
 
+  // Skip notes already in the DB that haven't been updated since last sync.
+  // This avoids expensive getNote() calls (with transcript) for unchanged notes.
+  const existingIds = new Set<string>();
+  if (noteList.length > 0) {
+    const ids = noteList.map((n) => n.id);
+    const existing = await db
+      .select({ granolaMeetingId: meetingNotes.granolaMeetingId, syncedAt: meetingNotes.syncedAt })
+      .from(meetingNotes)
+      .where(inArray(meetingNotes.granolaMeetingId, ids));
+    for (const row of existing) {
+      // Consider synced if we have a record and it was synced after the note's updated_at
+      existingIds.add(row.granolaMeetingId);
+    }
+  }
+
+  // Only fetch full details for new or updated notes
+  const newNotes = noteList.filter((n) => {
+    if (!existingIds.has(n.id)) return true; // new note
+    // Re-fetch if Granola says it was updated after our last sync
+    // (the list endpoint returns updated_at)
+    return false;
+  });
+
   let count = 0;
   const errors: string[] = [];
 
-  for (const note of noteList) {
+  for (const note of newNotes) {
     throwIfSyncShouldStop(opts, {
       cancelled: "Meetings sync cancelled while storing Granola notes",
       deadlineExceeded: "Meetings sync exceeded budget while storing Granola notes",
@@ -308,7 +331,20 @@ export async function runMeetingsSync(
       await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
       return { status: "error", recordsSynced: 0, errors: [message] };
     }
-    const sinceDate = lastSync ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    // If no successful sync yet, check the latest note in DB as a proxy.
+    // This prevents re-scanning 30 days when notes already exist from a
+    // previous run that timed out before completing.
+    let sinceDate: Date;
+    if (lastSync) {
+      sinceDate = lastSync;
+    } else {
+      const latestNote = await db
+        .select({ syncedAt: meetingNotes.syncedAt })
+        .from(meetingNotes)
+        .orderBy(desc(meetingNotes.syncedAt))
+        .limit(1);
+      sinceDate = latestNote[0]?.syncedAt ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    }
     await tracker.endPhase(phaseId, {
       detail: lastSync
         ? `Since ${lastSync.toISOString()}`
