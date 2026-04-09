@@ -35,11 +35,13 @@ function makePerson(overrides: Partial<Person> = {}): Person {
     jobTitle: "Engineer",
     level: "L3",
     squad: "Growth Marketing",
+    pillar: "Growth",
     function: "Growth",
     manager: "Manager",
     startDate: "2025-01-01T00:00:00Z",
     location: "London",
     tenureMonths: 12,
+    employmentType: "",
     ...overrides,
   };
 }
@@ -184,27 +186,27 @@ describe("getPeopleMetrics", () => {
 });
 
 describe("groupByPillarAndSquad", () => {
-  it("groups squads into pillars, including comma-separated fallbacks", () => {
+  it("groups people by their pillar field directly", () => {
     const grouped = groupByPillarAndSquad([
-      makePerson({ name: "A", squad: "Growth Marketing" }),
-      makePerson({ name: "B", squad: "Growth Marketing" }),
-      makePerson({ name: "C", squad: "Growth Conversion" }),
-      makePerson({ name: "D", squad: "Unknown Squad, Finance" }),
-      makePerson({ name: "E", squad: "Mystery Squad" }),
+      makePerson({ name: "A", squad: "Growth Marketing", pillar: "Growth Pillar" }),
+      makePerson({ name: "B", squad: "Growth Marketing", pillar: "Growth Pillar" }),
+      makePerson({ name: "C", squad: "Growth Conversion", pillar: "Growth Pillar" }),
+      makePerson({ name: "D", squad: "Finance Squad", pillar: "Commercial & Finance" }),
+      makePerson({ name: "E", squad: "Mystery Squad", pillar: "Other" }),
     ]);
 
     expect(grouped.map((pillar) => pillar.name)).toEqual([
-      "Finance",
-      "Growth",
+      "Commercial & Finance",
+      "Growth Pillar",
       "Other",
     ]);
     expect(grouped[0]).toMatchObject({
-      name: "Finance",
+      name: "Commercial & Finance",
       count: 1,
       isProduct: false,
     });
     expect(grouped[1]).toMatchObject({
-      name: "Growth",
+      name: "Growth Pillar",
       count: 3,
       isProduct: true,
     });
@@ -305,55 +307,139 @@ describe("getMonthlyJoinersAndDepartures", () => {
 });
 
 describe("getActiveEmployees", () => {
-  it("returns empty people data when the headcount query is missing", async () => {
+  it("returns empty people data when both reports are missing", async () => {
     mockGetReportData.mockResolvedValue([]);
 
     const result = await getActiveEmployees();
 
     expect(result).toEqual({ employees: [], allRows: [], lastSync: null });
+    expect(mockGetReportData).toHaveBeenCalledWith("people", "org", [
+      "current_employees",
+    ]);
     expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
       "headcount",
     ]);
-    expect(mockValidateModeColumns).not.toHaveBeenCalled();
   });
 
-  it("returns an empty fallback when headcount columns drift without warning spam", async () => {
-    mockGetReportData.mockResolvedValue([
-      {
-        reportName: "Headcount SSoT",
-        queryName: "headcount",
-        syncedAt: new Date("2026-04-08T12:00:00Z"),
-        rows: [
+  it("uses Current FTEs as primary and merges with Headcount SSoT", async () => {
+    mockGetReportData.mockImplementation(
+      (section: string, category: string) => {
+        if (category === "org") {
+          return Promise.resolve([
+            {
+              reportName: "Current FTEs",
+              queryName: "current_employees",
+              syncedAt: new Date("2026-04-08T12:00:00Z"),
+              columns: [
+                { name: "employee_email", type: "text" },
+                { name: "preferred_name", type: "text" },
+                { name: "employment_type", type: "text" },
+                { name: "start_date", type: "timestamp" },
+                { name: "line_manager_email", type: "text" },
+                { name: "pillar_name", type: "text" },
+                { name: "squad_name", type: "text" },
+                { name: "function_name", type: "text" },
+              ],
+              rows: [
+                {
+                  employee_email: "amy@example.com",
+                  preferred_name: "Amy",
+                  employment_type: "Permanent (UK)",
+                  start_date: "2025-10-01T00:00:00Z",
+                  line_manager_email: "lead@example.com",
+                  pillar_name: "Growth Pillar",
+                  squad_name: "Growth Marketing",
+                  function_name: "Product",
+                },
+              ],
+            },
+          ]);
+        }
+        return Promise.resolve([
           {
-            preferred_name: "Amy",
-            email: "amy@example.com",
-            job_title: "PM",
-            hb_level: "L5",
-            hb_squad: "Product",
-            hb_function: "Product",
-            manager: "Lead",
-            start_date: "2025-10-01T00:00:00Z",
-            lifecycle_status: "employed",
-            is_cleo_headcount: 1,
+            reportName: "Headcount SSoT",
+            queryName: "headcount",
+            rows: [
+              {
+                email: "amy@example.com",
+                preferred_name: "Amy",
+                job_title: "PM",
+                hb_level: "L5",
+                work_location: "London",
+                lifecycle_status: "employed",
+                is_cleo_headcount: 1,
+                manager: "Lead",
+              },
+            ],
           },
-          {
-            preferred_name: "Zed",
-            lifecycle_status: "employed",
-            is_cleo_headcount: 1,
-          },
-        ],
+        ]);
       },
-    ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["work_location"],
-      presentColumns: [],
-      missingColumns: ["work_location"],
-      isValid: false,
-    });
+    );
 
     const result = await getActiveEmployees();
 
-    expect(result).toEqual({ employees: [], allRows: [], lastSync: null });
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(result.employees).toHaveLength(1);
+    expect(result.employees[0]).toMatchObject({
+      name: "Amy",
+      email: "amy@example.com",
+      squad: "Growth Marketing",
+      pillar: "Growth Pillar",
+      function: "Product",
+      jobTitle: "PM",
+      level: "L5",
+      location: "London",
+      employmentType: "Permanent (UK)",
+    });
+  });
+
+  it("falls back to Headcount SSoT when Current FTEs columns drift", async () => {
+    mockGetReportData.mockImplementation(
+      (section: string, category: string) => {
+        if (category === "org") {
+          return Promise.resolve([
+            {
+              reportName: "Current FTEs",
+              queryName: "current_employees",
+              syncedAt: new Date("2026-04-08T12:00:00Z"),
+              columns: [],
+              rows: [{ employee_email: "amy@example.com" }],
+            },
+          ]);
+        }
+        return Promise.resolve([
+          {
+            reportName: "Headcount SSoT",
+            queryName: "headcount",
+            syncedAt: new Date("2026-04-08T12:00:00Z"),
+            rows: [
+              {
+                preferred_name: "Amy",
+                email: "amy@example.com",
+                job_title: "PM",
+                hb_level: "L5",
+                hb_squad: "Product",
+                hb_function: "Product",
+                manager: "Lead",
+                start_date: "2025-10-01T00:00:00Z",
+                work_location: "London",
+                lifecycle_status: "employed",
+                is_cleo_headcount: 1,
+                termination_date: null,
+              },
+            ],
+          },
+        ]);
+      },
+    );
+    // First call (headcount validation) succeeds, second call (FTE validation) fails
+    mockValidateModeColumns
+      .mockReturnValueOnce({ isValid: true, expectedColumns: [], presentColumns: [], missingColumns: [] })
+      .mockReturnValueOnce({ isValid: false, expectedColumns: [], presentColumns: [], missingColumns: ["squad_name"] });
+
+    const result = await getActiveEmployees();
+
+    expect(result.employees).toHaveLength(1);
+    expect(result.employees[0].name).toBe("Amy");
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(2);
   });
 });

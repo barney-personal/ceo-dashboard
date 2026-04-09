@@ -34,6 +34,9 @@ const RETENTION_QUERY_COLUMNS = [
   "activity_month",
   "maus",
 ] as const;
+const CURRENT_FTES_QUERY_COLUMNS = [
+  "function_name",
+] as const;
 const HEADCOUNT_QUERY_COLUMNS = [
   "lifecycle_status",
   "is_cleo_headcount",
@@ -620,8 +623,29 @@ export async function getMauRetentionCohorts(): Promise<
 
 /**
  * Headcount by department for bar chart.
+ * Primary: Current FTEs report (function_name). Fallback: Headcount SSoT (hb_function).
  */
 export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
+  // Try Current FTEs first
+  const fteData = await getReportData("people", "org", ["current_employees"]);
+  const fteQuery = getValidatedQuery(
+    fteData,
+    "current_employees",
+    CURRENT_FTES_QUERY_COLUMNS,
+  );
+
+  if (fteQuery) {
+    const byDept = new Map<string, number>();
+    for (const emp of fteQuery.rows) {
+      const dept = rowStr(emp, "function_name") || "Unknown";
+      byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
+    }
+    return [...byDept.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, value]) => ({ label, value, color: "#3b3bba" }));
+  }
+
+  // Fallback to old report
   const data = await getReportData("people", "headcount", ["headcount"]);
   const query = getValidatedQuery(data, "headcount", HEADCOUNT_QUERY_COLUMNS);
   if (!query) return [];
