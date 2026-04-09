@@ -39,7 +39,7 @@ export function BarChart({
     const container = containerRef.current;
     const width = container.clientWidth;
     const barHeight = 34;
-    const margin = { top: 12, right: 56, bottom: 32, left: 150 };
+    const margin = { top: 12, right: 72, bottom: 32, left: 150 };
     const height = data.length * barHeight + margin.top + margin.bottom;
     const innerWidth = width - margin.left - margin.right;
 
