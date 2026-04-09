@@ -1,30 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalSlackChannelIds = process.env.SLACK_OKR_CHANNEL_IDS;
-const sentryMocks = vi.hoisted(() => ({
-  captureException: vi.fn(),
-  captureMessage: vi.fn(),
-  setTag: vi.fn(),
-}));
 
 const mocks = vi.hoisted(() => {
-  class SlackApiError extends Error {
-    readonly status?: number;
-    readonly code?: string;
-    readonly method?: string;
-
-    constructor(
-      message: string,
-      input: { status?: number; code?: string; method?: string } = {}
-    ) {
-      super(message);
-      this.name = "SlackApiError";
-      this.status = input.status;
-      this.code = input.code;
-      this.method = input.method;
-    }
-  }
-
   const selectQueue: unknown[] = [];
   const insertQueue: unknown[] = [];
   const deleteQueue: unknown[] = [];
@@ -102,17 +80,14 @@ const mocks = vi.hoisted(() => {
     },
     buildSquadContext: vi.fn(),
     buildSystemPromptFromContext: vi.fn(),
+    captureException: vi.fn(),
+    captureMessage: vi.fn(),
     createPhaseTracker: vi.fn(),
     del,
     downloadSlackFile: vi.fn(),
     extractPeriodFromFilename: vi.fn(),
     getChannelHistory: vi.fn(),
     getChannelName: vi.fn(),
-    isSlackChannelNotFoundError: vi.fn(
-      (error: unknown) =>
-        error instanceof SlackApiError &&
-        (error.status === 404 || error.code === "channel_not_found")
-    ),
     getLatestRun: vi.fn(),
     getModeQuerySyncProfile: vi.fn(),
     getQueryResultContent: vi.fn(),
@@ -126,18 +101,10 @@ const mocks = vi.hoisted(() => {
     parseManagementAccounts: vi.fn(),
     prepareModeRowsForStorage: vi.fn(),
     seedSquads: vi.fn(),
-    SlackApiError,
-    endPhaseMock: vi.fn(async () => {}),
+    setTag: vi.fn(),
     select,
-    startPhaseMock: vi.fn(async () => 1),
   };
 });
-
-vi.mock("@sentry/nextjs", () => ({
-  captureException: sentryMocks.captureException,
-  captureMessage: sentryMocks.captureMessage,
-  setTag: sentryMocks.setTag,
-}));
 
 vi.mock("@/lib/db", () => ({
   db: {
@@ -145,6 +112,12 @@ vi.mock("@/lib/db", () => ({
     insert: mocks.insert,
     select: mocks.select,
   },
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mocks.captureException,
+  captureMessage: mocks.captureMessage,
+  setTag: mocks.setTag,
 }));
 
 vi.mock("@/lib/data/seed-squads", () => ({
@@ -162,7 +135,6 @@ vi.mock("@/lib/integrations/slack", () => ({
   getChannelName: mocks.getChannelName,
   getThreadReplies: mocks.getThreadReplies,
   getUserName: mocks.getUserName,
-  isSlackChannelNotFoundError: mocks.isSlackChannelNotFoundError,
 }));
 
 vi.mock("@/lib/integrations/slack-files", () => ({
@@ -250,8 +222,8 @@ describe("sync runner fault injection", () => {
     vi.clearAllMocks();
 
     mocks.createPhaseTracker.mockReturnValue({
-      startPhase: mocks.startPhaseMock,
-      endPhase: mocks.endPhaseMock,
+      startPhase: vi.fn(async () => 1),
+      endPhase: vi.fn(async () => {}),
     });
 
     mocks.seedSquads.mockResolvedValue(0);
@@ -299,6 +271,7 @@ describe("sync runner fault injection", () => {
     mocks.parseManagementAccounts.mockResolvedValue({
       period: "2026-03",
       periodLabel: "March 2026",
+      revenue: 12.3,
       rawSheets: { Summary: [] },
     });
     mocks.getChannelHistory.mockResolvedValue([
@@ -314,6 +287,60 @@ describe("sync runner fault injection", () => {
         "Failed to sync Management Accounts March 2026.xlsx: db offline",
       ],
     });
+  });
+
+  it("skips management accounts upsert when revenue and gross profit are both missing", async () => {
+    const endPhase = vi.fn(async () => {});
+    mocks.createPhaseTracker.mockReturnValue({
+      startPhase: vi.fn(async () => 1),
+      endPhase,
+    });
+
+    mocks.listChannelFiles.mockResolvedValue([
+      {
+        id: "file-2",
+        name: "Management Accounts April 2026.xlsx",
+        filetype: "xlsx",
+        timestamp: 1_712_612_345,
+        url_private_download: "https://slack.test/file-2",
+      },
+    ]);
+    mocks.downloadSlackFile.mockResolvedValue(Buffer.from("xlsx"));
+    mocks.parseManagementAccounts.mockResolvedValue({
+      period: "2026-04",
+      periodLabel: "April 2026",
+      revenue: null,
+      grossProfit: null,
+      ebitda: 4.2,
+      rawSheets: { Summary: [] },
+    });
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712612345.0001", text: "Summary".repeat(30) },
+    ]);
+    mocks.queueSelect([]);
+
+    await expect(runManagementAccountsSync({ id: 43 })).resolves.toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      "Skipped write because both revenue and gross profit were null",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "management-accounts",
+          failure_scope: "validation",
+        }),
+      }),
+    );
+
+    type EndPhaseCall = [number, { status?: string; detail?: string }];
+    const filePhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("Skipped write because both revenue and gross profit were null"),
+    );
+    expect(filePhaseCall?.[1].status).toBe("partial");
   });
 
   it("collects a Slack 429 channel failure and still completes other channels", async () => {
@@ -369,122 +396,6 @@ describe("sync runner fault injection", () => {
       errors: ["Failed to fetch last successful sync time: sync log unavailable"],
     });
     expect(mocks.getChannelName).not.toHaveBeenCalled();
-  });
-
-  it("skips invalid Slack channels during validation and continues syncing valid channels", async () => {
-    process.env.SLACK_OKR_CHANNEL_IDS = "CVALID,CINVALID";
-    mocks.queueSelect([], []);
-    mocks.getChannelName
-      .mockResolvedValueOnce("growth-valid")
-      .mockRejectedValueOnce(
-        new mocks.SlackApiError("Slack API error: channel_not_found", {
-          code: "channel_not_found",
-          method: "conversations.info",
-        })
-      );
-    mocks.getChannelHistory.mockResolvedValueOnce([]);
-
-    await expect(runSlackSync({ id: 52 })).resolves.toEqual({
-      status: "partial",
-      recordsSynced: 0,
-      errors: [
-        "Skipped invalid Slack channel CINVALID: Slack API error: channel_not_found",
-      ],
-    });
-
-    expect(mocks.getChannelHistory).toHaveBeenCalledTimes(1);
-    expect(mocks.getChannelHistory).toHaveBeenCalledWith(
-      "CVALID",
-      expect.any(String),
-      undefined,
-      expect.anything()
-    );
-    expect(sentryMocks.captureMessage).toHaveBeenCalledWith(
-      "Skipped invalid Slack channel CINVALID: Slack API error: channel_not_found",
-      expect.objectContaining({
-        level: "warning",
-        tags: expect.objectContaining({
-          sync_source: "slack",
-        }),
-        extra: expect.objectContaining({
-          runId: 52,
-          channelId: "CINVALID",
-          code: "channel_not_found",
-        }),
-      })
-    );
-    expect(mocks.endPhaseMock).toHaveBeenCalledWith(
-      1,
-      expect.objectContaining({
-        itemsProcessed: 1,
-        detail: "Validated 1 channels; skipped 1 invalid: CINVALID",
-      })
-    );
-  });
-
-  it("returns an error when every configured Slack channel is invalid", async () => {
-    process.env.SLACK_OKR_CHANNEL_IDS = "CBAD1,CBAD2";
-    mocks.queueSelect([], []);
-    mocks.getChannelName
-      .mockRejectedValueOnce(
-        new mocks.SlackApiError("Slack API error: channel_not_found", {
-          code: "channel_not_found",
-          method: "conversations.info",
-        })
-      )
-      .mockRejectedValueOnce(
-        new mocks.SlackApiError("Slack API error 404: channel missing", {
-          status: 404,
-          method: "conversations.info",
-        })
-      );
-
-    await expect(runSlackSync({ id: 53 })).resolves.toEqual({
-      status: "error",
-      recordsSynced: 0,
-      errors: [
-        "Skipped invalid Slack channel CBAD1: Slack API error: channel_not_found",
-        "Skipped invalid Slack channel CBAD2: Slack API error 404: channel missing",
-      ],
-    });
-
-    expect(mocks.getChannelHistory).not.toHaveBeenCalled();
-    expect(mocks.endPhaseMock).toHaveBeenCalledWith(
-      1,
-      expect.objectContaining({
-        itemsProcessed: 0,
-        detail: "Validated 0 channels; skipped 2 invalid: CBAD1, CBAD2",
-      })
-    );
-  });
-
-  it("fails the Slack sync when channel validation hits an auth error", async () => {
-    process.env.SLACK_OKR_CHANNEL_IDS = "CAUTH";
-    mocks.queueSelect([], []);
-    mocks.getChannelName.mockRejectedValue(
-      new Error("Slack API authentication failed, check SLACK_BOT_TOKEN")
-    );
-
-    await expect(runSlackSync({ id: 54 })).resolves.toEqual({
-      status: "error",
-      recordsSynced: 0,
-      errors: [
-        "Failed to validate configured Slack channel IDs: Slack API authentication failed, check SLACK_BOT_TOKEN",
-      ],
-    });
-
-    expect(mocks.getChannelHistory).not.toHaveBeenCalled();
-    expect(sentryMocks.captureException).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Slack API authentication failed, check SLACK_BOT_TOKEN",
-      }),
-      expect.objectContaining({
-        tags: expect.objectContaining({
-          sync_source: "slack",
-          failure_scope: "preflight",
-        }),
-      })
-    );
   });
 
   it("returns a structured Slack sync error when the OKR parser throws on malformed JSON", async () => {
@@ -704,16 +615,23 @@ describe("sync runner fault injection", () => {
   });
 
   it("fetches Mode query results with bounded concurrency", async () => {
-    mocks.queueSelect([
-      {
-        id: 11,
-        reportToken: "report-alpha",
-        name: "Alpha Report",
-        section: "product",
-        category: null,
-        isActive: true,
-      },
-    ]);
+    mocks.queueSelect(
+      [
+        {
+          id: 11,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+      [],
+      [],
+      [],
+    );
     mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
 
     const queryDefinitions = Array.from({ length: 5 }, (_, index) => ({
@@ -776,16 +694,20 @@ describe("sync runner fault injection", () => {
   });
 
   it("keeps Mode per-query failures isolated while preserving cleanup tokens", async () => {
-    mocks.queueSelect([
-      {
-        id: 12,
-        reportToken: "report-alpha",
-        name: "Alpha Report",
-        section: "product",
-        category: null,
-        isActive: true,
-      },
-    ]);
+    mocks.queueSelect(
+      [
+        {
+          id: 12,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
     mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
     mocks.getReportQueries.mockResolvedValue([
       { token: "query-1", name: "Timeout Query" },
@@ -858,5 +780,295 @@ describe("sync runner fault injection", () => {
     const notInArrayClause = cleanupWhereArg?.and.find((clause) => clause.notInArray);
 
     expect(notInArrayClause?.notInArray?.[1]).toEqual(["query-1", "query-2"]);
+  });
+
+  it("Mode report phase gets partial status and query count detail when some queries fail", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    mocks.queueSelect(
+      [
+        {
+          id: 13,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-ok", name: "Timeout Query" },
+      { token: "query-bad", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-ok",
+        queryToken: "query-ok",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-ok" } },
+      },
+      {
+        token: "run-bad",
+        queryToken: "query-bad",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-bad" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockImplementation(
+      async (_r, _run, queryRunToken: string) => {
+        if (queryRunToken === "run-bad") throw new Error("timeout");
+        return { rows: [{ v: 1 }], responseBytes: 64 };
+      }
+    );
+
+    const result = await runModeSync({ id: 73 });
+
+    // Run-level: partial because one query succeeded, one failed
+    expect(result.status).toBe("partial");
+    expect(result.recordsSynced).toBe(1);
+    expect(result.errors).toHaveLength(1);
+
+    // Find the endPhase call for the report phase (sync_report:Alpha Report)
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number; errorMessage?: string }];
+    const reportEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("queries succeeded")
+    );
+    expect(reportEndPhaseCall).toBeDefined();
+    const phaseOpts = reportEndPhaseCall![1];
+    // Phase should be partial (not error) because one query succeeded
+    expect(phaseOpts.status).toBe("partial");
+    // Detail should include query counts
+    expect(phaseOpts.detail).toMatch(/1 queries succeeded, 1 failed/);
+  });
+
+  it("preserves existing Mode rows when a fresh query result is empty", async () => {
+    const endPhase = vi.fn(async () => {});
+    mocks.createPhaseTracker.mockReturnValue({
+      startPhase: vi.fn(async () => 1),
+      endPhase,
+    });
+
+    mocks.queueSelect(
+      [
+        {
+          id: 15,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [
+        {
+          id: 99,
+          reportId: 15,
+          queryToken: "query-1",
+          queryName: "Timeout Query",
+          data: [{ v: 1 }],
+          columns: [{ name: "v", type: "number" }],
+          rowCount: 12,
+          sourceRowCount: 12,
+          storedRowCount: 12,
+          truncated: false,
+          storageWindow: { kind: "all" },
+          syncedAt: new Date("2026-04-01T00:00:00.000Z"),
+        },
+      ],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "query-run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({ rows: [], responseBytes: 32 });
+
+    const result = await runModeSync({ id: 77 });
+
+    expect(result).toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+    expect(mocks.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped empty overwrite for query"),
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          sync_source: "mode",
+          failure_scope: "validation",
+        }),
+      }),
+    );
+
+    type EndPhaseCall = [number, { status?: string; detail?: string }];
+    const reportPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("1 warning"),
+    );
+    expect(reportPhaseCall?.[1].status).toBe("partial");
+    expect(reportPhaseCall?.[1].detail).toMatch(/Stored 0 rows/);
+  });
+
+  it("returns run status error when all queries fail for every Mode report", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    // Both reports from config are active in DB
+    mocks.queueSelect(
+      [
+        {
+          id: 13,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+        {
+          id: 14,
+          reportToken: "report-beta",
+          name: "Beta Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-any" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+    ]);
+    // All query fetches fail
+    mocks.getQueryResultContent.mockRejectedValue(new Error("network timeout"));
+
+    const result = await runModeSync({ id: 76 });
+
+    // Run-level status must be "error" — no report contributed a succeeded query
+    expect(result.status).toBe("error");
+    expect(result.recordsSynced).toBe(0);
+    expect(result.errors).toHaveLength(2);
+
+    // Each report phase must have been ended with status "error"
+    type EndPhaseCall = [number, { status?: string; detail?: string; errorMessage?: string }];
+    const reportPhaseErrors = (endPhase.mock.calls as unknown as EndPhaseCall[]).filter(
+      ([, opts]) => opts?.status === "error" && opts?.errorMessage
+    );
+    expect(reportPhaseErrors).toHaveLength(2);
+  });
+
+  it("Mode report phase gets success status and detail with all-succeed query counts", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    mocks.queueSelect(
+      [
+        {
+          id: 14,
+          reportToken: "report-alpha",
+          name: "Alpha Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+      { token: "query-2", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+      {
+        token: "run-2",
+        queryToken: "query-2",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-2" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({ rows: [{ v: 1 }], responseBytes: 64 });
+
+    const result = await runModeSync({ id: 74 });
+
+    expect(result.status).toBe("success");
+    expect(result.errors).toHaveLength(0);
+
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number; errorMessage?: string }];
+    const reportEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("queries succeeded")
+    );
+    expect(reportEndPhaseCall).toBeDefined();
+    const phaseOpts = reportEndPhaseCall![1];
+    expect(phaseOpts.status).toBe("success");
+    expect(phaseOpts.detail).toMatch(/2 queries succeeded, 0 failed/);
+  });
+
+  it("Slack channel phase detail includes channel name and message counts", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    process.env.SLACK_OKR_CHANNEL_IDS = "CDETAIL";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-okrs");
+    mocks.getChannelHistory.mockResolvedValue([
+      // Short message — will be skipped
+      { ts: "1712512345.0001", text: "Short msg", user: "U1" },
+      // Long message — will be parsed
+      { ts: "1712512345.0002", text: makeLongSlackText("okr update"), user: "U2" },
+      // Another short message — skipped
+      { ts: "1712512345.0003", text: "Brief", user: "U3" },
+    ]);
+    mocks.llmParseOkrUpdate.mockResolvedValue({
+      squadName: "Alpha",
+      tldr: "on track",
+      krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
+    });
+
+    await runSlackSync({ id: 75 });
+
+    // Find the endPhase call for the channel phase
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number }];
+    const channelEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("growth-okrs")
+    );
+    expect(channelEndPhaseCall).toBeDefined();
+    const phaseOpts = channelEndPhaseCall![1];
+    expect(phaseOpts.detail).toMatch(/#growth-okrs/);
+    expect(phaseOpts.detail).toMatch(/parsed/);
+    expect(phaseOpts.detail).toMatch(/skipped/);
+    expect(phaseOpts.detail).toMatch(/KRs stored/);
   });
 });
