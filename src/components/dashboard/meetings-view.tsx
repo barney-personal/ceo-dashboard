@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useTransition } from "react";
 import { cn } from "@/lib/utils";
 import type { DayData, LinkedMeeting, PreReadRow } from "@/lib/data/meetings";
 import {
@@ -14,6 +13,7 @@ import {
   MapPin,
   CalendarDays,
   LayoutList,
+  Loader2,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -74,15 +74,19 @@ function isToday(dateStr: string): boolean {
   return dateStr === localToday();
 }
 
-function isWeekday(dateStr: string): boolean {
-  const d = new Date(dateStr + "T12:00:00").getDay();
-  return d >= 1 && d <= 5;
-}
-
 function offsetWeek(weekStart: string, delta: number): string {
   const d = new Date(weekStart + "T12:00:00");
   d.setDate(d.getDate() + 7 * delta);
   return d.toISOString().slice(0, 10);
+}
+
+/** Get the Monday of the current week */
+function currentWeekMonday(): string {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +268,6 @@ function DayColumn({
   const today = isToday(day.date);
 
   if (!isExpanded) {
-    // Compact week view column
     return (
       <div
         className={cn(
@@ -276,9 +279,7 @@ function DayColumn({
       >
         <button
           onClick={onSelectDay}
-          className={cn(
-            "mb-2 flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-muted/50",
-          )}
+          className="mb-2 flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-muted/50"
         >
           <div className="flex items-center gap-1.5">
             {today && (
@@ -363,7 +364,6 @@ function DayColumn({
               No meetings
             </p>
           )}
-          {/* Unlinked pre-reads in week view */}
           {day.unlinkedPreReads.length > 0 && (
             <div className="mt-1 space-y-1 border-t border-dashed border-border/30 pt-1.5">
               <span className="px-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/60">
@@ -448,8 +448,10 @@ interface MeetingsViewProps {
 }
 
 export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProps) {
-  const router = useRouter();
+  const [days, setDays] = useState(initialDays);
+  const [weekStart, setWeekStart] = useState(initialWeekStart);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
+  const [isPending, startTransition] = useTransition();
   const [selectedDayIndex, setSelectedDayIndex] = useState<number>(() => {
     const todayStr = localToday();
     const idx = initialDays.findIndex((d) => d.date === todayStr);
@@ -457,10 +459,7 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
   });
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
 
-  const days = initialDays;
-
-  const weekStart = days[0]?.date ?? initialWeekStart;
-  const weekEnd = days[days.length - 1]?.date ?? initialWeekStart;
+  const weekEnd = days[days.length - 1]?.date ?? weekStart;
 
   const totalMeetings = days.reduce((sum, d) => sum + d.meetings.length, 0);
   const totalPreReads = days.reduce(
@@ -475,17 +474,34 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
     0
   );
 
+  const isCurrentWeek = weekStart === currentWeekMonday();
+
+  const fetchWeek = useCallback(async (newWeekStart: string) => {
+    const res = await fetch(`/api/meetings?week=${newWeekStart}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { days: DayData[]; weekStart: string };
+    setDays(data.days);
+    setWeekStart(data.weekStart);
+    setExpandedMeetingId(null);
+    // Reset day index to today if visible, otherwise first day
+    const todayStr = localToday();
+    const idx = data.days.findIndex((d) => d.date === todayStr);
+    setSelectedDayIndex(idx >= 0 ? idx : 0);
+  }, []);
+
   const navigateWeek = (delta: number) => {
-    const newWeek = offsetWeek(initialWeekStart, delta);
-    router.push(`/dashboard/meetings?week=${newWeek}`);
+    const newWeek = offsetWeek(weekStart, delta);
+    startTransition(() => {
+      void fetchWeek(newWeek);
+    });
   };
 
   const goToThisWeek = () => {
-    router.push("/dashboard/meetings");
+    const thisMonday = currentWeekMonday();
+    startTransition(() => {
+      void fetchWeek(thisMonday);
+    });
   };
-
-  const todayStr = localToday();
-  const isCurrentWeek = days.some((d) => d.date === todayStr);
 
   return (
     <div className="space-y-5">
@@ -519,35 +535,43 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
             </button>
           </div>
 
+          {/* Today button — always visible, disabled on current week */}
+          <button
+            onClick={goToThisWeek}
+            disabled={isCurrentWeek}
+            className={cn(
+              "rounded-lg border border-border/60 px-2.5 py-1 text-xs font-medium transition-colors",
+              isCurrentWeek
+                ? "cursor-default border-transparent text-muted-foreground/40"
+                : "bg-card text-foreground shadow-warm hover:bg-muted/50"
+            )}
+          >
+            Today
+          </button>
+
           {/* Week navigation */}
           <div className="flex items-center gap-1">
             <button
               onClick={() => navigateWeek(-1)}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+              disabled={isPending}
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="min-w-[160px] text-center text-sm font-semibold text-foreground">
+            <span className="flex min-w-[160px] items-center justify-center gap-2 text-center text-sm font-semibold text-foreground">
+              {isPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               {viewMode === "week"
                 ? formatWeekLabel(weekStart, weekEnd)
                 : formatDayLabel(days[selectedDayIndex]?.date ?? weekStart)}
             </span>
             <button
               onClick={() => navigateWeek(1)}
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+              disabled={isPending}
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
-
-          {!isCurrentWeek && (
-            <button
-              onClick={goToThisWeek}
-              className="rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
-            >
-              Today
-            </button>
-          )}
         </div>
 
         {viewMode === "day" && (
@@ -586,32 +610,34 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
       </div>
 
       {/* Content */}
-      {viewMode === "week" ? (
-        <div className="flex gap-2">
-          {days.map((day, i) => (
-            <DayColumn
-              key={day.date}
-              day={day}
-              isExpanded={false}
-              expandedMeetingId={null}
-              onToggleMeeting={() => {}}
-              onSelectDay={() => {
-                setSelectedDayIndex(i);
-                setViewMode("day");
-              }}
-            />
-          ))}
-        </div>
-      ) : (
-        <DayColumn
-          day={days[selectedDayIndex] ?? days[0]}
-          isExpanded={true}
-          expandedMeetingId={expandedMeetingId}
-          onToggleMeeting={(id) =>
-            setExpandedMeetingId((prev) => (prev === id ? null : id))
-          }
-        />
-      )}
+      <div className={cn(isPending && "opacity-60 transition-opacity")}>
+        {viewMode === "week" ? (
+          <div className="flex gap-2">
+            {days.map((day, i) => (
+              <DayColumn
+                key={day.date}
+                day={day}
+                isExpanded={false}
+                expandedMeetingId={null}
+                onToggleMeeting={() => {}}
+                onSelectDay={() => {
+                  setSelectedDayIndex(i);
+                  setViewMode("day");
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <DayColumn
+            day={days[selectedDayIndex] ?? days[0]}
+            isExpanded={true}
+            expandedMeetingId={expandedMeetingId}
+            onToggleMeeting={(id) =>
+              setExpandedMeetingId((prev) => (prev === id ? null : id))
+            }
+          />
+        )}
+      </div>
     </div>
   );
 }
