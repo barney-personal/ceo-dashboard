@@ -12,11 +12,13 @@ export interface Person {
   jobTitle: string;
   level: string;
   squad: string;
+  pillar: string;
   function: string;
   manager: string;
   startDate: string;
   location: string;
   tenureMonths: number;
+  employmentType: string;
 }
 
 export interface PeopleMetrics {
@@ -27,6 +29,17 @@ export interface PeopleMetrics {
   averageTenureMonths: number;
   attritionLast90Days: number;
 }
+
+const CURRENT_FTES_QUERY_COLUMNS = [
+  "employee_email",
+  "preferred_name",
+  "employment_type",
+  "start_date",
+  "line_manager_email",
+  "pillar_name",
+  "squad_name",
+  "function_name",
+] as const;
 
 const HEADCOUNT_QUERY_COLUMNS = [
   "preferred_name",
@@ -44,7 +57,8 @@ const HEADCOUNT_QUERY_COLUMNS = [
 ] as const;
 
 /**
- * Transform raw Mode headcount rows into typed Person objects.
+ * Transform raw Mode headcount rows (old report) into typed Person objects.
+ * Used as fallback when Current FTEs data is unavailable.
  */
 export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
   const now = Date.now();
@@ -63,11 +77,65 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
         jobTitle: rowStr(r, "job_title"),
         level: rowStr(r, "hb_level"),
         squad: rowStr(r, "hb_squad") || rowStr(r, "hb_function") || "Unassigned",
+        pillar: getPillarForSquad(rowStr(r, "hb_squad") || rowStr(r, "hb_function") || "Unassigned"),
         function: rowStr(r, "hb_function") || "Unassigned",
         manager: rowStr(r, "manager"),
         startDate,
         location: rowStr(r, "work_location"),
         tenureMonths,
+        employmentType: "",
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function computeTenureMonths(startDate: string): number {
+  const now = Date.now();
+  const startTs = startDate ? new Date(startDate).getTime() : NaN;
+  const startMs = Number.isFinite(startTs) ? startTs : now;
+  return Math.max(
+    0,
+    Math.floor((now - startMs) / (DAYS_PER_MONTH * 24 * 60 * 60 * 1000)),
+  );
+}
+
+/**
+ * Merge Current FTEs (primary) with old Headcount SSoT (augmentation).
+ * New report provides: name, email, squad, pillar, function, start_date, employment_type.
+ * Old report augments with: job_title, level, location.
+ */
+export function mergeEmployeeData(
+  fteRows: Record<string, unknown>[],
+  headcountRows: Record<string, unknown>[],
+): Person[] {
+  // Build email → old-report row lookup for augmentation
+  const oldByEmail = new Map<string, Record<string, unknown>>();
+  for (const r of headcountRows) {
+    const email = rowStr(r, "email").toLowerCase();
+    if (email) oldByEmail.set(email, r);
+  }
+
+  return fteRows
+    .map((r) => {
+      const email = rowStr(r, "employee_email");
+      const old = oldByEmail.get(email.toLowerCase());
+      const startDate = rowStr(r, "start_date");
+      const squadName = rowStr(r, "squad_name");
+      const functionName = rowStr(r, "function_name");
+
+      return {
+        name: rowStr(r, "preferred_name") || "Unknown",
+        email,
+        jobTitle: old ? rowStr(old, "job_title") : "",
+        level: old ? rowStr(old, "hb_level") : "",
+        squad: squadName || functionName || "Unassigned",
+        pillar: rowStr(r, "pillar_name") || "Other",
+        function: functionName || "Unassigned",
+        manager: old ? rowStr(old, "manager") : rowStr(r, "line_manager_email"),
+        startDate,
+        location: old ? rowStr(old, "work_location") : "",
+        tenureMonths: computeTenureMonths(startDate),
+        employmentType: rowStr(r, "employment_type"),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -130,12 +198,13 @@ export interface PillarGroup {
 
 /**
  * Group employees by pillar → squad for drill-down navigation.
+ * Uses the pillar field directly from each person (from Rev data or derived).
  */
 export function groupByPillarAndSquad(employees: Person[]): PillarGroup[] {
   const byPillar = new Map<string, Map<string, Person[]>>();
 
   for (const person of employees) {
-    const pillar = getPillarForSquad(person.squad);
+    const pillar = person.pillar;
     if (!byPillar.has(pillar)) {
       byPillar.set(pillar, new Map());
     }
@@ -246,35 +315,69 @@ export function getMonthlyJoinersAndDepartures(
 }
 
 /**
- * Fetch and transform active employees from Mode headcount data.
+ * Fetch and transform active employees from Mode data.
+ *
+ * Primary source: Current FTEs report (Rev — canonical org structure).
+ * Augmentation: Headcount SSoT report (job title, level, location, termination history).
+ *
+ * Falls back to Headcount SSoT alone when Current FTEs is unavailable.
  */
 export async function getActiveEmployees(): Promise<{
   employees: Person[];
   allRows: Record<string, unknown>[];
   lastSync: Date | null;
 }> {
-  const data = await getReportData("people", "headcount", ["headcount"]);
-  const query = data.find((d) => d.queryName === "headcount");
-  if (!query || query.rows.length === 0) {
+  const [fteData, headcountData] = await Promise.all([
+    getReportData("people", "org", ["current_employees"]),
+    getReportData("people", "headcount", ["headcount"]),
+  ]);
+
+  const fteQuery = fteData.find((d) => d.queryName === "current_employees");
+  const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
+
+  // allRows from old report — used for attrition/departures metrics
+  const allRows = headcountQuery?.rows ?? [];
+
+  // Primary path: Current FTEs available
+  if (fteQuery && fteQuery.rows.length > 0) {
+    const fteColumnSource = fteQuery.columns?.length
+      ? Object.fromEntries(fteQuery.columns.map((c) => [c.name, true]))
+      : fteQuery.rows[0] ?? {};
+    const fteValidation = validateModeColumns({
+      row: fteColumnSource as Record<string, unknown>,
+      expectedColumns: CURRENT_FTES_QUERY_COLUMNS,
+      reportName: fteQuery.reportName,
+      queryName: fteQuery.queryName,
+    });
+
+    if (fteValidation.isValid) {
+      return {
+        employees: mergeEmployeeData(fteQuery.rows, allRows),
+        allRows,
+        lastSync: fteQuery.syncedAt,
+      };
+    }
+  }
+
+  // Fallback: use Headcount SSoT alone
+  if (!headcountQuery || headcountQuery.rows.length === 0) {
     return { employees: [], allRows: [], lastSync: null };
   }
 
-  // Validate against column metadata (not first row, which may be sparse)
-  const columnSource = query.columns?.length
-    ? Object.fromEntries(query.columns.map((c) => [c.name, true]))
-    : query.rows[0] ?? {};
+  const columnSource = headcountQuery.columns?.length
+    ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
+    : headcountQuery.rows[0] ?? {};
   const validation = validateModeColumns({
     row: columnSource as Record<string, unknown>,
     expectedColumns: HEADCOUNT_QUERY_COLUMNS,
-    reportName: query.reportName,
-    queryName: query.queryName,
+    reportName: headcountQuery.reportName,
+    queryName: headcountQuery.queryName,
   });
 
   if (!validation.isValid) {
     return { employees: [], allRows: [], lastSync: null };
   }
 
-  const allRows = query.rows;
   const activeRows = allRows.filter(
     (r) =>
       String(r.lifecycle_status).toLowerCase() === "employed" &&
@@ -284,6 +387,6 @@ export async function getActiveEmployees(): Promise<{
   return {
     employees: transformToPersons(activeRows),
     allRows,
-    lastSync: query.syncedAt,
+    lastSync: headcountQuery.syncedAt,
   };
 }
