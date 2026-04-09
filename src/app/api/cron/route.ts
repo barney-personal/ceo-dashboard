@@ -6,11 +6,19 @@ import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
 } from "@/lib/sync/response";
+import { cleanupDebugLogs } from "@/lib/debug-logger";
 
 export async function GET(request: NextRequest) {
   try {
     if (!(await isCronRequest(request))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Clean up debug logs older than 24 hours to prevent unbounded growth
+    try {
+      await cleanupDebugLogs();
+    } catch (error) {
+      console.error("Failed to clean up debug logs", error);
     }
 
     const [mode, slack, managementAccounts] = await Promise.all([

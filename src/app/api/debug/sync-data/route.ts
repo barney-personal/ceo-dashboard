@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { modeReports, modeReportData } from "@/lib/db/schema";
+import { modeReports, modeReportData, debugLogs } from "@/lib/db/schema";
 import {
   authorizeSyncRequest,
   syncRequestAccessErrorResponse,
@@ -62,6 +62,12 @@ export async function GET(request: NextRequest) {
     (q) => q.queryName === "LTV:Paid CAC"
   );
 
+  const recentLogs = await db
+    .select()
+    .from(debugLogs)
+    .orderBy(desc(debugLogs.createdAt))
+    .limit(100);
+
   return NextResponse.json({
     summary: {
       totalReports: reports.length,
@@ -98,5 +104,6 @@ export async function GET(request: NextRequest) {
         'getReportData("unit-economics", "cac") -> query.queryName === "LTV:Paid CAC"',
     },
     reports: reportSummaries,
+    debugLogs: recentLogs,
   });
 }
