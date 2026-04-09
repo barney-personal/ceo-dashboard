@@ -12,6 +12,8 @@ interface User {
   imageUrl: string | null;
   role: string;
   lastSignInAt: string | null;
+  lastActiveAt: string | null;
+  sessionCount: number;
 }
 
 interface UserAdminProps {
@@ -82,7 +84,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
     <div className="space-y-6">
       <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
         {/* Table header */}
-        <div className="grid grid-cols-[auto_1fr_1fr_140px_120px] items-center gap-4 border-b border-border/50 bg-muted/30 px-5 py-3">
+        <div className="grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px] items-center gap-4 border-b border-border/50 bg-muted/30 px-5 py-3">
           <span className="w-8" />
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Name
@@ -92,6 +94,12 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
           </span>
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Role
+          </span>
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Sessions
+          </span>
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Last active
           </span>
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Last sign-in
@@ -109,7 +117,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
               <div
                 key={user.id}
                 className={cn(
-                  "grid grid-cols-[auto_1fr_1fr_140px_120px] items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/20",
+                  "grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px] items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/20",
                   isSuccess && "bg-positive/[0.03]",
                   isError && "bg-destructive/[0.03]"
                 )}
@@ -165,6 +173,16 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
                     </div>
                   )}
                 </div>
+
+                {/* Sessions */}
+                <span className="text-xs font-mono tabular-nums text-muted-foreground">
+                  {user.sessionCount}
+                </span>
+
+                {/* Last active */}
+                <span className="text-xs text-muted-foreground">
+                  {formatDate(user.lastActiveAt)}
+                </span>
 
                 {/* Last sign-in */}
                 <span className="text-xs text-muted-foreground">
