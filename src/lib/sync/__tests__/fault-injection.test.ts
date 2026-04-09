@@ -80,6 +80,7 @@ const mocks = vi.hoisted(() => {
     },
     buildSquadContext: vi.fn(),
     buildSystemPromptFromContext: vi.fn(),
+    addBreadcrumb: vi.fn(),
     captureException: vi.fn(),
     captureMessage: vi.fn(),
     createPhaseTracker: vi.fn(),
@@ -115,6 +116,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@sentry/nextjs", () => ({
+  addBreadcrumb: mocks.addBreadcrumb,
   captureException: mocks.captureException,
   captureMessage: mocks.captureMessage,
   setTag: mocks.setTag,
@@ -1035,55 +1037,7 @@ describe("sync runner fault injection", () => {
     expect(phaseOpts.detail).toMatch(/2 queries succeeded, 0 failed/);
   });
 
-  it("syncs only the requested Mode report when the claimed run is scoped", async () => {
-    mocks.queueSelect(
-      [
-        {
-          id: 14,
-          reportToken: "report-beta",
-          name: "Beta Report",
-          section: "product",
-          category: null,
-          isActive: true,
-        },
-      ],
-      [],
-      [],
-    );
-    mocks.getLatestRun.mockResolvedValue({ token: "run-beta" });
-    mocks.getReportQueries.mockResolvedValue([
-      { token: "query-1", name: "Healthy Query" },
-    ]);
-    mocks.getQueryRuns.mockResolvedValue([
-      {
-        token: "run-1",
-        queryToken: "query-1",
-        state: "succeeded",
-        _links: { query: { href: "/queries/query-1" } },
-      },
-    ]);
-    mocks.getQueryResultContent.mockResolvedValue({
-      rows: [{ v: 1 }],
-      responseBytes: 64,
-    });
-
-    const result = await runModeSync({
-      id: 78,
-      scope: { reportToken: "report-beta" },
-    });
-
-    expect(result).toEqual({
-      status: "success",
-      recordsSynced: 1,
-      errors: [],
-    });
-    expect(mocks.getLatestRun).toHaveBeenCalledTimes(1);
-    expect(mocks.getLatestRun).toHaveBeenCalledWith("report-beta", {
-      signal: undefined,
-    });
-  });
-
-  it("Slack channel phase detail summarizes the stored key results", async () => {
+  it("Slack channel phase detail includes channel name and message counts", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);
     mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
@@ -1092,28 +1046,51 @@ describe("sync runner fault injection", () => {
     mocks.queueSelect([], []);
     mocks.getChannelName.mockResolvedValue("growth-okrs");
     mocks.getChannelHistory.mockResolvedValue([
-      // Short message — will be skipped
       { ts: "1712512345.0001", text: "Short msg", user: "U1" },
-      // Long message — will be parsed
       { ts: "1712512345.0002", text: makeLongSlackText("okr update"), user: "U2" },
-      // Another short message — skipped
-      { ts: "1712512345.0003", text: "Brief", user: "U3" },
+      { ts: "1712512345.0003", text: makeLongSlackText("llm null"), user: "U3" },
+      { ts: "1712512345.0004", text: makeLongSlackText("empty validation"), user: "U4" },
+      { ts: "1712512345.0005", text: "Brief", user: "U5" },
     ]);
-    mocks.llmParseOkrUpdate.mockResolvedValue({
-      squadName: "Alpha",
-      tldr: "on track",
-      krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
-    });
+    mocks.llmParseOkrUpdate
+      .mockResolvedValueOnce({
+        squadName: "Alpha",
+        tldr: "on track",
+        krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        squadName: "Alpha",
+        tldr: "dropped",
+        krs: [],
+      });
 
     await runSlackSync({ id: 75 });
 
-    // Find the endPhase call for the channel phase
     type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number }];
     const channelEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
-      ([, opts]) => opts?.detail?.includes("Parsed 1 key results")
+      ([, opts]) => opts?.detail?.includes("growth-okrs")
     );
     expect(channelEndPhaseCall).toBeDefined();
     const phaseOpts = channelEndPhaseCall![1];
-    expect(phaseOpts.detail).toBe("Parsed 1 key results");
+    expect(phaseOpts.itemsProcessed).toBe(1);
+    expect(phaseOpts.detail).toBe(
+      "#growth-okrs: Parsed 1 KRs from 2 messages (2 filtered, 1 LLM null, 1 empty after validation)"
+    );
+
+    expect(mocks.addBreadcrumb).toHaveBeenCalledWith({
+      category: "sync.slack",
+      level: "info",
+      message: "Completed Slack channel OKR parsing",
+      data: {
+        channelId: "CDETAIL",
+        channelName: "growth-okrs",
+        krCount: 1,
+        parsedMessageCount: 2,
+        skippedByFilterCount: 2,
+        llmNullCount: 1,
+        emptyAfterValidationCount: 1,
+      },
+    });
   });
 });

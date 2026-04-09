@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockMessages = vi.hoisted(() => ({ create: vi.fn() }));
 const mockSentry = vi.hoisted(() => ({
   addBreadcrumb: vi.fn(),
+  captureMessage: vi.fn(),
   captureException: vi.fn(),
 }));
 
@@ -55,6 +56,7 @@ describe("llmParseOkrUpdate timeout", () => {
     vi.useFakeTimers();
     mockMessages.create.mockReset();
     mockSentry.addBreadcrumb.mockReset();
+    mockSentry.captureMessage.mockReset();
     mockSentry.captureException.mockReset();
   });
 
@@ -228,5 +230,118 @@ describe("llmParseOkrUpdate timeout", () => {
 
     // Advance well past the timeout — no unhandled rejection should fire.
     await vi.advanceTimersByTimeAsync(120_000);
+  });
+
+  it("returns null when the parsed envelope is missing a non-empty squad name", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ squadName: "   ", tldr: "summary", krs: [] }),
+        },
+      ],
+    });
+
+    await expect(
+      llmParseOkrUpdate("message", "#channel", "system prompt")
+    ).resolves.toBeNull();
+    expect(mockSentry.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it("drops invalid KRs, warns with failing fields, and preserves valid rows", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            squadName: "Growth",
+            tldr: "summary",
+            krs: [
+              {
+                objective: "Objective 1",
+                name: "KR1",
+                rag: "green",
+                metric: "100%",
+              },
+              {
+                objective: "",
+                name: "KR2",
+                rag: "amber",
+                metric: "80%",
+              },
+              {
+                objective: "Objective 3",
+                name: "KR3",
+                rag: "blue",
+                metric: 42,
+              },
+            ],
+          }),
+        },
+      ],
+    });
+
+    await expect(
+      llmParseOkrUpdate("message", "#channel", "system prompt")
+    ).resolves.toEqual({
+      squadName: "Growth",
+      tldr: "summary",
+      krs: [
+        {
+          objective: "Objective 1",
+          name: "KR1",
+          rag: "green",
+          metric: "100%",
+        },
+      ],
+    });
+
+    expect(mockSentry.captureMessage).toHaveBeenCalledTimes(2);
+    expect(mockSentry.captureMessage).toHaveBeenNthCalledWith(
+      1,
+      "Dropped invalid OKR key result from Claude response",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          invalidFields: ["objective"],
+          rawPayloadPreview: expect.any(String),
+        }),
+      })
+    );
+    expect(mockSentry.captureMessage).toHaveBeenNthCalledWith(
+      2,
+      "Dropped invalid OKR key result from Claude response",
+      expect.objectContaining({
+        level: "warning",
+        extra: expect.objectContaining({
+          invalidFields: ["rag", "metric"],
+          rawPayloadPreview: expect.any(String),
+        }),
+      })
+    );
+  });
+
+  it("returns an empty KR list when the envelope is valid but every KR fails validation", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            squadName: "Growth",
+            tldr: "summary",
+            krs: [{ objective: "", name: "", rag: "green", metric: null }],
+          }),
+        },
+      ],
+    });
+
+    await expect(
+      llmParseOkrUpdate("message", "#channel", "system prompt")
+    ).resolves.toEqual({
+      squadName: "Growth",
+      tldr: "summary",
+      krs: [],
+    });
+    expect(mockSentry.captureMessage).toHaveBeenCalledTimes(1);
   });
 });

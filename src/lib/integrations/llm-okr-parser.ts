@@ -44,6 +44,25 @@ interface AnthropicFailureShape {
   };
 }
 
+interface ParsedEnvelopeShape {
+  squadName?: unknown;
+  tldr?: unknown;
+  krs?: unknown;
+}
+
+interface ValidParsedEnvelope {
+  squadName: string;
+  tldr?: unknown;
+  krs: unknown[];
+}
+
+const VALID_RAGS: ParsedKr["rag"][] = [
+  "green",
+  "amber",
+  "red",
+  "not_started",
+];
+
 function composeAbortSignal(
   timeoutMs: number,
   parentSignal?: AbortSignal,
@@ -201,6 +220,90 @@ async function createMessageWithRetry(
   throw new Error("LLM OKR parse exhausted all retry attempts");
 }
 
+function toShortPreview(value: unknown): string {
+  try {
+    return JSON.stringify(value).slice(0, 200);
+  } catch {
+    return String(value).slice(0, 200);
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validateParsedKr(
+  kr: unknown,
+  index: number
+): ParsedKr | null {
+  const invalidFields: string[] = [];
+
+  if (!kr || typeof kr !== "object") {
+    invalidFields.push("kr");
+  }
+
+  const candidate = (kr ?? {}) as Record<string, unknown>;
+
+  if (!isNonEmptyString(candidate.objective)) {
+    invalidFields.push("objective");
+  }
+
+  if (!isNonEmptyString(candidate.name)) {
+    invalidFields.push("name");
+  }
+
+  if (!VALID_RAGS.includes(candidate.rag as ParsedKr["rag"])) {
+    invalidFields.push("rag");
+  }
+
+  if (
+    !(
+      candidate.metric == null ||
+      typeof candidate.metric === "string"
+    )
+  ) {
+    invalidFields.push("metric");
+  }
+
+  if (invalidFields.length > 0) {
+    Sentry.captureMessage("Dropped invalid OKR key result from Claude response", {
+      level: "warning",
+      tags: { integration: "llm-okr-parser" },
+      extra: {
+        operation: "validateParsedKr",
+        krIndex: index,
+        invalidFields,
+        rawPayloadPreview: toShortPreview(kr),
+      },
+    });
+    return null;
+  }
+
+  return {
+    objective: candidate.objective as string,
+    name: (candidate.name as string).slice(0, 200),
+    rag: candidate.rag as ParsedKr["rag"],
+    metric: (candidate.metric as string | null | undefined) ?? null,
+  };
+}
+
+function validateParsedEnvelope(parsed: unknown): ValidParsedEnvelope | null {
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+
+  const envelope = parsed as ParsedEnvelopeShape;
+  if (!isNonEmptyString(envelope.squadName) || !Array.isArray(envelope.krs)) {
+    return null;
+  }
+
+  return {
+    squadName: envelope.squadName,
+    tldr: envelope.tldr,
+    krs: envelope.krs,
+  };
+}
+
 /**
  * Build squad context for the LLM prompt from the database.
  * This way adding a squad is just a DB insert — no code changes.
@@ -354,27 +457,16 @@ export async function llmParseOkrUpdate(
 
   try {
     const parsed = JSON.parse(trimmed);
-    if (!parsed || !parsed.squadName || !Array.isArray(parsed.krs))
+    const envelope = validateParsedEnvelope(parsed);
+    if (!envelope)
       return null;
 
     return {
-      squadName: parsed.squadName,
-      tldr: parsed.tldr || "",
-      krs: parsed.krs
-        .filter(
-          (kr: Record<string, unknown>) =>
-            kr.name && typeof kr.name === "string"
-        )
-        .map((kr: Record<string, unknown>) => ({
-          objective: (kr.objective as string) || "",
-          name: (kr.name as string).slice(0, 200),
-          rag: ["green", "amber", "red", "not_started"].includes(
-            kr.rag as string
-          )
-            ? (kr.rag as ParsedKr["rag"])
-            : "not_started",
-          metric: (kr.metric as string) || null,
-        })),
+      squadName: envelope.squadName,
+      tldr: typeof envelope.tldr === "string" ? envelope.tldr : "",
+      krs: envelope.krs
+        .map((kr, index) => validateParsedKr(kr, index))
+        .filter((kr): kr is ParsedKr => kr !== null),
     };
   } catch (error) {
     Sentry.captureException(error, {
