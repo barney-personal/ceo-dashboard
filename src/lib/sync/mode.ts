@@ -139,7 +139,7 @@ async function cleanupReportData(
     );
 }
 
-function getStoredRowCount(row: ExistingModeQueryData | undefined): number {
+function getStoredRowCount(row: { storedRowCount?: number; rowCount?: number } | undefined): number {
   if (!row) {
     return 0;
   }
@@ -376,7 +376,11 @@ async function syncReport(
           type: typeof sampleRow[name],
         }));
         const existingRows = await db
-          .select()
+          .select({
+            rowCount: modeReportData.rowCount,
+            storedRowCount: modeReportData.storedRowCount,
+            columns: modeReportData.columns,
+          })
           .from(modeReportData)
           .where(
             and(
