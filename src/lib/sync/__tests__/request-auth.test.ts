@@ -1,10 +1,11 @@
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 vi.mock("@clerk/nextjs/server", () => ({
   currentUser: vi.fn(),
 }));
 
 import { currentUser } from "@clerk/nextjs/server";
+import { CURRENT_USER_TIMEOUT_MS } from "@/lib/auth/current-user.server";
 import {
   authorizeSyncRequest,
   isCronRequest,
@@ -30,6 +31,10 @@ function makeRequest(authHeader?: string) {
 describe("requireRole", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("returns 401 when not authenticated", async () => {
@@ -78,12 +83,33 @@ describe("requireRole", () => {
     const result = await requireRole("leadership");
     expect(result.ok).toBe(true);
   });
+
+  it("returns 401 when Clerk lookup times out", async () => {
+    vi.useFakeTimers();
+    mockCurrentUser.mockImplementation(
+      () => new Promise<Awaited<ReturnType<typeof currentUser>>>(() => {})
+    );
+
+    const resultPromise = requireRole("ceo");
+
+    await vi.advanceTimersByTimeAsync(CURRENT_USER_TIMEOUT_MS);
+
+    await expect(resultPromise).resolves.toEqual({
+      ok: false,
+      status: 401,
+      error: "Unauthorized",
+    });
+  });
 });
 
 describe("authorizeSyncRequest", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     delete process.env.CRON_SECRET;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("returns 'cron' when bearer token matches CRON_SECRET", async () => {
@@ -120,6 +146,19 @@ describe("authorizeSyncRequest", () => {
     const req = makeRequest("Bearer wrong-secret");
     const result = await authorizeSyncRequest(req);
     expect(result).toBe("unauthenticated");
+  });
+
+  it("returns 'unauthenticated' when Clerk lookup times out", async () => {
+    vi.useFakeTimers();
+    mockCurrentUser.mockImplementation(
+      () => new Promise<Awaited<ReturnType<typeof currentUser>>>(() => {})
+    );
+
+    const resultPromise = authorizeSyncRequest(makeRequest());
+
+    await vi.advanceTimersByTimeAsync(CURRENT_USER_TIMEOUT_MS);
+
+    await expect(resultPromise).resolves.toBe("unauthenticated");
   });
 });
 

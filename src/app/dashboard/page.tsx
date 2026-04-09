@@ -58,11 +58,11 @@ export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
   const [headcount, ltvCacRatio, latestARR, latestMAU, recentSyncs] =
     await Promise.all([
-      getHeadcountMetrics().catch(() => null),
-      getLatestLtvCacRatio().catch(() => null),
-      getLatestARR().catch(() => null),
-      getLatestMAU().catch(() => null),
-      getRecentSyncRuns(10).catch(() => []),
+      getHeadcountMetrics(),
+      getLatestLtvCacRatio(),
+      getLatestARR(),
+      getLatestMAU(),
+      getRecentSyncRuns(10),
     ]);
 
   const syncEntries = recentSyncs.map((sync) => {

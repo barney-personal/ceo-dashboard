@@ -25,12 +25,12 @@ export default async function ProductPage() {
     latestWauMau,
     latestM11,
   ] = await Promise.all([
-    getActiveUsersSeries().catch(() => ({ dau: [], wau: [], mau: [] })),
-    getEngagementSeries().catch(() => []),
-    getMauRetentionCohorts().catch(() => []),
-    getLatestMAU().catch(() => null),
-    getLatestWauMau().catch(() => null),
-    getLatestM11Retention().catch(() => null),
+    getActiveUsersSeries(),
+    getEngagementSeries(),
+    getMauRetentionCohorts(),
+    getLatestMAU(),
+    getLatestWauMau(),
+    getLatestM11Retention(),
   ]);
 
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");

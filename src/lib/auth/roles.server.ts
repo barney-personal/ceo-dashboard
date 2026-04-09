@@ -1,4 +1,5 @@
-import { currentUser } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
 
 /**
@@ -10,9 +11,17 @@ import { getUserRole, type Role } from "./roles";
  * Server-only: cannot be imported from client components.
  */
 export async function getCurrentUserRole(): Promise<Role> {
-  const user = await currentUser();
-  if (!user) return "everyone";
+  const result = await getCurrentUserWithTimeout();
+
+  if (result.status === "timeout") {
+    redirect("/sign-in");
+  }
+
+  if (result.status === "unauthenticated") {
+    return "everyone";
+  }
+
   return getUserRole(
-    (user.publicMetadata as Record<string, unknown>) ?? {}
+    (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
 }
