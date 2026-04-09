@@ -859,4 +859,153 @@ describe("sync runner fault injection", () => {
 
     expect(notInArrayClause?.notInArray?.[1]).toEqual(["query-1", "query-2"]);
   });
+
+  it("Mode report phase gets partial status and query count detail when some queries fail", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    mocks.queueSelect([
+      {
+        id: 13,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-ok", name: "Timeout Query" },
+      { token: "query-bad", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-ok",
+        queryToken: "query-ok",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-ok" } },
+      },
+      {
+        token: "run-bad",
+        queryToken: "query-bad",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-bad" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockImplementation(
+      async (_r, _run, queryRunToken: string) => {
+        if (queryRunToken === "run-bad") throw new Error("timeout");
+        return { rows: [{ v: 1 }], responseBytes: 64 };
+      }
+    );
+
+    const result = await runModeSync({ id: 73 });
+
+    // Run-level: partial because one query succeeded, one failed
+    expect(result.status).toBe("partial");
+    expect(result.recordsSynced).toBe(1);
+    expect(result.errors).toHaveLength(1);
+
+    // Find the endPhase call for the report phase (sync_report:Alpha Report)
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number; errorMessage?: string }];
+    const reportEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("queries succeeded")
+    );
+    expect(reportEndPhaseCall).toBeDefined();
+    const phaseOpts = reportEndPhaseCall![1];
+    // Phase should be partial (not error) because one query succeeded
+    expect(phaseOpts.status).toBe("partial");
+    // Detail should include query counts
+    expect(phaseOpts.detail).toMatch(/1 queries succeeded, 1 failed/);
+  });
+
+  it("Mode report phase gets success status and detail with all-succeed query counts", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    mocks.queueSelect([
+      {
+        id: 14,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+      { token: "query-2", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+      {
+        token: "run-2",
+        queryToken: "query-2",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-2" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({ rows: [{ v: 1 }], responseBytes: 64 });
+
+    const result = await runModeSync({ id: 74 });
+
+    expect(result.status).toBe("success");
+    expect(result.errors).toHaveLength(0);
+
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number; errorMessage?: string }];
+    const reportEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("queries succeeded")
+    );
+    expect(reportEndPhaseCall).toBeDefined();
+    const phaseOpts = reportEndPhaseCall![1];
+    expect(phaseOpts.status).toBe("success");
+    expect(phaseOpts.detail).toMatch(/2 queries succeeded, 0 failed/);
+  });
+
+  it("Slack channel phase detail includes channel name and message counts", async () => {
+    const endPhase = vi.fn(async () => {});
+    const startPhase = vi.fn(async () => 1);
+    mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
+
+    process.env.SLACK_OKR_CHANNEL_IDS = "CDETAIL";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-okrs");
+    mocks.getChannelHistory.mockResolvedValue([
+      // Short message — will be skipped
+      { ts: "1712512345.0001", text: "Short msg", user: "U1" },
+      // Long message — will be parsed
+      { ts: "1712512345.0002", text: makeLongSlackText("okr update"), user: "U2" },
+      // Another short message — skipped
+      { ts: "1712512345.0003", text: "Brief", user: "U3" },
+    ]);
+    mocks.llmParseOkrUpdate.mockResolvedValue({
+      squadName: "Alpha",
+      tldr: "on track",
+      krs: [{ objective: "O1", name: "KR1", rag: "green", metric: "100%" }],
+    });
+
+    await runSlackSync({ id: 75 });
+
+    // Find the endPhase call for the channel phase
+    type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number }];
+    const channelEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
+      ([, opts]) => opts?.detail?.includes("growth-okrs")
+    );
+    expect(channelEndPhaseCall).toBeDefined();
+    const phaseOpts = channelEndPhaseCall![1];
+    expect(phaseOpts.detail).toMatch(/#growth-okrs/);
+    expect(phaseOpts.detail).toMatch(/parsed/);
+    expect(phaseOpts.detail).toMatch(/skipped/);
+    expect(phaseOpts.detail).toMatch(/KRs stored/);
+  });
 });

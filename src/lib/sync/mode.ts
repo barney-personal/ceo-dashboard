@@ -137,13 +137,20 @@ async function cleanupReportData(
     );
 }
 
+type SyncReportResult = {
+  recordsSynced: number;
+  errors: string[];
+  queriesSucceeded: number;
+  queriesFailed: number;
+};
+
 /**
  * Sync a single Mode report and return the stored row count plus any per-query errors.
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect,
   opts: SyncControl & { syncRunId?: number } = {},
-): Promise<{ recordsSynced: number; errors: string[] }> {
+): Promise<SyncReportResult> {
   throwIfSyncShouldStop(opts, {
     cancelled: "Mode sync cancelled before report fetch started",
     deadlineExceeded:
@@ -153,7 +160,7 @@ async function syncReport(
   const profile = getModeSyncProfile(report.reportToken);
   if (!profile?.syncEnabled) {
     await cleanupReportData(report.id, []);
-    return { recordsSynced: 0, errors: [] };
+    return { recordsSynced: 0, errors: [], queriesSucceeded: 0, queriesFailed: 0 };
   }
 
   const run = await getLatestRun(report.reportToken, { signal: opts.signal });
@@ -174,6 +181,8 @@ async function syncReport(
   const allowedQueryTokens: string[] = [];
   const errors: string[] = [];
   let storedRecords = 0;
+  let queriesSucceeded = 0;
+  let queriesFailed = 0;
   const queryJobs: ModeQueryJob[] = [];
 
   const isGrowthMarketing = report.name
@@ -429,10 +438,12 @@ async function syncReport(
 
     if (result.value.status === "error") {
       errors.push(result.value.message);
+      queriesFailed++;
       continue;
     }
 
     storedRecords += result.value.storedRecords;
+    queriesSucceeded++;
   }
 
   await cleanupReportData(report.id, allowedQueryTokens);
@@ -440,6 +451,8 @@ async function syncReport(
   return {
     recordsSynced: storedRecords,
     errors,
+    queriesSucceeded,
+    queriesFailed,
   };
 }
 
@@ -572,12 +585,24 @@ export async function runModeSync(
         errors.push(...result.errors);
         succeededReports += 1;
 
+        const phaseStatus =
+          result.queriesFailed === 0
+            ? "success"
+            : result.queriesSucceeded > 0
+              ? "partial"
+              : "error";
+
+        const queryCountDetail =
+          result.queriesSucceeded + result.queriesFailed > 0
+            ? ` — ${result.queriesSucceeded} queries succeeded, ${result.queriesFailed} failed`
+            : "";
+
         await tracker.endPhase(reportPhaseId, {
-          status: result.errors.length > 0 ? "error" : "success",
+          status: phaseStatus,
           itemsProcessed: result.recordsSynced,
           errorMessage:
             result.errors.length > 0 ? result.errors.join("\n") : undefined,
-          detail: `Stored ${result.recordsSynced} rows`,
+          detail: `Stored ${result.recordsSynced} rows${queryCountDetail}`,
         });
 
         logModeEvent("report_finished", {
