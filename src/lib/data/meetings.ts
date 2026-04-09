@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { meetingNotes, preReads } from "@/lib/db/schema";
-import { and, gte, lte, desc } from "drizzle-orm";
+import { and, gte, lte, desc, like, or, inArray } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,8 @@ export interface MeetingNoteRow {
   transcript: string | null;
   participants: { name?: string; email: string }[] | null;
   meetingDate: string; // ISO string
+  calendarEventId: string | null;
+  isHistorical: boolean;
 }
 
 export interface LinkedMeeting extends MeetingRow {
@@ -254,51 +256,123 @@ export async function getMeetingsForRange(
   }
 
   // Serialize and match Granola notes to meetings
-  const serializedNotes: MeetingNoteRow[] = noteRows.map((n) => ({
-    id: n.id,
-    granolaMeetingId: n.granolaMeetingId,
-    title: n.title,
-    summary: n.summary,
-    transcript: n.transcript,
-    participants: n.participants as MeetingNoteRow["participants"],
-    meetingDate: n.meetingDate.toISOString(),
-  }));
+  function serializeNote(n: typeof noteRows[number], isHistorical: boolean): MeetingNoteRow {
+    return {
+      id: n.id,
+      granolaMeetingId: n.granolaMeetingId,
+      title: n.title,
+      summary: n.summary,
+      transcript: n.transcript,
+      participants: n.participants as MeetingNoteRow["participants"],
+      meetingDate: n.meetingDate.toISOString(),
+      calendarEventId: n.calendarEventId,
+      isHistorical,
+    };
+  }
 
+  const serializedNotes = noteRows.map((n) => serializeNote(n, false));
+
+  // Build a calendar event ID index for meetings
+  const meetingByEventId = new Map<string, MeetingRow>();
+  for (const m of serializedMeetings) {
+    meetingByEventId.set(m.calendarEventId, m);
+  }
+
+  // Build a recurring base ID index for meetings
+  const meetingsByRecurringBase = new Map<string, MeetingRow[]>();
+  for (const m of serializedMeetings) {
+    if (m.recurringEventId) {
+      const list = meetingsByRecurringBase.get(m.recurringEventId) ?? [];
+      list.push(m);
+      meetingsByRecurringBase.set(m.recurringEventId, list);
+    }
+  }
+
+  // Match notes to meetings: calendar event ID (primary), then attendee overlap (fallback)
   const meetingNotesMap = new Map<number, MeetingNoteRow[]>();
+  const matchedNoteIds = new Set<number>();
+
   for (const note of serializedNotes) {
+    // Tier 1: exact calendar event ID match
+    if (note.calendarEventId) {
+      const meeting = meetingByEventId.get(note.calendarEventId);
+      if (meeting) {
+        const list = meetingNotesMap.get(meeting.id) ?? [];
+        list.push(note);
+        meetingNotesMap.set(meeting.id, list);
+        matchedNoteIds.add(note.id);
+        continue;
+      }
+    }
+
+    // Tier 2: attendee overlap + same day fallback
     const noteDate = note.meetingDate.slice(0, 10);
-    const noteKeywords = extractKeywords(note.title);
     const noteEmails = new Set(
       (note.participants ?? []).map((p) => p.email?.toLowerCase()).filter(Boolean)
     );
-
-    let bestMatch: { meetingId: number; score: number } | null = null;
-    const dayMeetings = meetingsByDay.get(noteDate) ?? [];
-
-    for (const m of dayMeetings) {
-      // Score by title keyword overlap
-      let score = 0;
-      const mKeywords = meetingKeywords.get(m.id) ?? [];
-      for (const kw of noteKeywords) {
-        if (mKeywords.includes(kw)) score++;
-      }
-      // Boost for attendee email overlap
-      if (noteEmails.size > 0 && m.attendees) {
+    if (noteEmails.size > 0) {
+      let bestMatch: { meetingId: number; overlap: number } | null = null;
+      const dayMeetings = meetingsByDay.get(noteDate) ?? [];
+      for (const m of dayMeetings) {
+        if (!m.attendees) continue;
         const overlap = m.attendees.filter(
           (a) => a.email && noteEmails.has(a.email.toLowerCase())
         ).length;
-        score += overlap * 0.5;
+        if (overlap >= 2 && (!bestMatch || overlap > bestMatch.overlap)) {
+          bestMatch = { meetingId: m.id, overlap };
+        }
       }
-      if (score > 0 && (!bestMatch || score > bestMatch.score)) {
-        bestMatch = { meetingId: m.id, score };
+      if (bestMatch) {
+        const list = meetingNotesMap.get(bestMatch.meetingId) ?? [];
+        list.push(note);
+        meetingNotesMap.set(bestMatch.meetingId, list);
+        matchedNoteIds.add(note.id);
       }
     }
+  }
 
-    if (bestMatch) {
-      const list = meetingNotesMap.get(bestMatch.meetingId) ?? [];
-      list.push(note);
-      meetingNotesMap.set(bestMatch.meetingId, list);
+  // Fetch historical notes for recurring meetings
+  const recurringBaseIds = [...meetingsByRecurringBase.keys()];
+  if (recurringBaseIds.length > 0) {
+    const likeConditions = recurringBaseIds.map((baseId) =>
+      like(meetingNotes.calendarEventId, `${baseId}%`)
+    );
+    const historicalRows = await db
+      .select()
+      .from(meetingNotes)
+      .where(
+        and(
+          or(...likeConditions),
+          lte(meetingNotes.meetingDate, startDate) // only past notes
+        )
+      )
+      .orderBy(desc(meetingNotes.meetingDate));
+
+    for (const row of historicalRows) {
+      if (!row.calendarEventId) continue;
+      // Find which recurring base this note belongs to
+      const baseId = recurringBaseIds.find((id) =>
+        row.calendarEventId!.startsWith(id)
+      );
+      if (!baseId) continue;
+      const recurringMeetings = meetingsByRecurringBase.get(baseId) ?? [];
+      for (const m of recurringMeetings) {
+        const list = meetingNotesMap.get(m.id) ?? [];
+        // Avoid duplicates
+        if (list.some((n) => n.id === row.id)) continue;
+        list.push(serializeNote(row, true));
+        meetingNotesMap.set(m.id, list);
+      }
     }
+  }
+
+  // Sort notes per meeting: current first, then historical by date desc
+  for (const [id, notes] of meetingNotesMap) {
+    notes.sort((a, b) => {
+      if (a.isHistorical !== b.isHistorical) return a.isHistorical ? 1 : -1;
+      return b.meetingDate.localeCompare(a.meetingDate);
+    });
+    meetingNotesMap.set(id, notes);
   }
 
   // Build day data for each day in the range (always Mon-Fri)
