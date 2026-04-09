@@ -60,8 +60,9 @@ function getSlackRateLimitDelay(input: { headers: Headers; attempt: number }): {
     return { waitMs: retryAfterDelayMs, source: "retry-after" };
   }
 
-  const resetAtSeconds = Number(input.headers.get("x-ratelimit-reset"));
-  if (Number.isFinite(resetAtSeconds)) {
+  const resetHeader = input.headers.get("x-ratelimit-reset");
+  const resetAtSeconds = resetHeader != null ? Number(resetHeader) : NaN;
+  if (Number.isFinite(resetAtSeconds) && resetAtSeconds > 0) {
     return {
       waitMs: Math.max(0, resetAtSeconds * 1000 - Date.now()),
       source: "x-ratelimit-reset",
