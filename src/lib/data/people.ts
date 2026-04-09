@@ -218,10 +218,10 @@ export function groupByPillarAndSquad(employees: Person[]): PillarGroup[] {
   }
 
   return [...byPillar.entries()]
-    .sort(([, a], [, b]) => {
+    .sort(([nameA, a], [nameB, b]) => {
       const countA = [...a.values()].reduce((s, p) => s + p.length, 0);
       const countB = [...b.values()].reduce((s, p) => s + p.length, 0);
-      return countB - countA;
+      return countB - countA || nameA.localeCompare(nameB);
     })
     .map(([pillarName, squads]) => {
       const squadList = [...squads.entries()]
