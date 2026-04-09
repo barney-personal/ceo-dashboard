@@ -317,15 +317,25 @@ export function getMonthlyJoinersAndDepartures(
 }
 
 /**
+ * Part-time Customer Champions appear as "no pillar" / "no squad" in the
+ * Current FTEs report. They are excluded from all metrics and shown separately.
+ */
+export function isPartTimeChampion(person: Person): boolean {
+  return person.pillar === "no pillar" || person.squad === "no squad";
+}
+
+/**
  * Fetch and transform active employees from Mode data.
  *
  * Primary source: Current FTEs report (Rev — canonical org structure).
  * Augmentation: Headcount SSoT report (job title, level, location, termination history).
  *
  * Falls back to Headcount SSoT alone when Current FTEs is unavailable.
+ * Part-time Customer Champions ("no pillar"/"no squad") are returned separately.
  */
 export async function getActiveEmployees(): Promise<{
   employees: Person[];
+  partTimeChampions: Person[];
   allRows: Record<string, unknown>[];
   lastSync: Date | null;
 }> {
@@ -368,8 +378,10 @@ export async function getActiveEmployees(): Promise<{
     });
 
     if (fteValidation.isValid) {
+      const all = mergeEmployeeData(fteQuery.rows, allRows);
       return {
-        employees: mergeEmployeeData(fteQuery.rows, allRows),
+        employees: all.filter((p) => !isPartTimeChampion(p)),
+        partTimeChampions: all.filter(isPartTimeChampion),
         allRows,
         lastSync: fteQuery.syncedAt,
       };
@@ -378,7 +390,7 @@ export async function getActiveEmployees(): Promise<{
 
   // Fallback: use Headcount SSoT alone (allRows already validated above)
   if (allRows.length === 0) {
-    return { employees: [], allRows: [], lastSync: null };
+    return { employees: [], partTimeChampions: [], allRows: [], lastSync: null };
   }
 
   const activeRows = allRows.filter(
@@ -387,8 +399,10 @@ export async function getActiveEmployees(): Promise<{
       rowNum(r, "is_cleo_headcount") === 1,
   );
 
+  const all = transformToPersons(activeRows);
   return {
-    employees: transformToPersons(activeRows),
+    employees: all.filter((p) => !isPartTimeChampion(p)),
+    partTimeChampions: all.filter(isPartTimeChampion),
     allRows,
     lastSync: headcountQuery?.syncedAt ?? null,
   };

@@ -34,7 +34,7 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, allRows }, deptData, latestSyncRun] = await Promise.all([
+  const [{ employees, partTimeChampions, allRows }, deptData, latestSyncRun] = await Promise.all([
     getActiveEmployees(),
     getHeadcountByDepartment(),
     getLatestTerminalSyncRun("mode"),
@@ -172,6 +172,42 @@ export default async function PeopleOrgPage() {
 
       {/* Team directory */}
       {employees.length > 0 && <PeopleDirectory pillars={serializedPillars} />}
+
+      {/* Part-time Customer Champions — shown separately, excluded from metrics */}
+      {partTimeChampions.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="h-px flex-1 bg-border/50" />
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground/60">
+              Part-Time Customer Champions
+            </span>
+            <div className="h-px flex-1 bg-border/50" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {partTimeChampions.length} part-time workers — excluded from headcount metrics above
+          </p>
+          <div className="rounded-xl border border-border/60 bg-card shadow-warm">
+            <div className="divide-y divide-border/30">
+              {partTimeChampions.map((p) => (
+                <div
+                  key={p.email}
+                  className="flex items-center gap-3 px-5 py-2.5"
+                >
+                  <span className="flex-1 min-w-0 text-sm text-foreground truncate">
+                    {p.name}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground/60">
+                    {p.function}
+                  </span>
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                    {p.employmentType || "Part-time"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Source links */}
       <div className="space-y-3">
