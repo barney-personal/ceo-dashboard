@@ -113,10 +113,15 @@ async function granolaRequest<T>(
 // Types — matches Granola public API (https://docs.granola.ai)
 // ---------------------------------------------------------------------------
 
-export interface GranolaParticipant {
-  name: string;
-  email?: string;
-  company?: string;
+export interface GranolaAttendee {
+  name?: string;
+  email: string;
+}
+
+export interface GranolaCalendarEvent {
+  event_title?: string;
+  organiser?: string;
+  invitees?: { email: string }[];
 }
 
 export interface GranolaTranscriptEntry {
@@ -127,11 +132,13 @@ export interface GranolaTranscriptEntry {
 export interface GranolaNote {
   id: string;
   title: string;
-  summary?: string;
-  participants?: GranolaParticipant[];
+  owner?: { name: string; email: string };
+  summary_text?: string;
+  summary_markdown?: string;
+  attendees?: GranolaAttendee[];
+  calendar_event?: GranolaCalendarEvent;
   created_at: string;
   updated_at?: string;
-  calendar_event_id?: string;
   transcript?: GranolaTranscriptEntry[];
 }
 
