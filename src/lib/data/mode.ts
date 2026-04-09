@@ -414,6 +414,27 @@ function formatFailedSyncTimestamp(timestamp: Date | null): string {
   return `${STALE_EMPTY_STATE_DATE_FORMATTER.format(timestamp)} UTC`;
 }
 
+/**
+ * Pure synchronous helper — resolves the empty-state copy based on whether
+ * the specific chart/loader result is empty and the latest sync status.
+ *
+ * Use this (with a pre-fetched latestSyncRun) so the check is keyed off the
+ * actual rendered data, not the raw report/category row presence. This means
+ * partial Mode payloads (e.g. Query 3 missing while other queries exist) still
+ * surface the stale-failure message for the affected chart.
+ */
+export function resolveModeStaleReason(
+  isDataEmpty: boolean,
+  latestSyncRun: LatestTerminalSyncRun | null,
+  emptyReason: string
+): string {
+  if (isDataEmpty && latestSyncRun?.status === "error") {
+    return `Data temporarily unavailable — last sync failed at ${formatFailedSyncTimestamp(latestSyncRun.completedAt)}`;
+  }
+
+  return emptyReason;
+}
+
 export async function getModeEmptyStateReason({
   section,
   category,
@@ -430,9 +451,5 @@ export async function getModeEmptyStateReason({
     getLatestTerminalSyncRun(source),
   ]);
 
-  if (reportData.length === 0 && latestSyncRun?.status === "error") {
-    return `Data temporarily unavailable — last sync failed at ${formatFailedSyncTimestamp(latestSyncRun.completedAt)}`;
-  }
-
-  return emptyReason;
+  return resolveModeStaleReason(reportData.length === 0, latestSyncRun, emptyReason);
 }

@@ -24,7 +24,10 @@ import {
   getLatestWauMau,
   getLatestM11Retention,
 } from "@/lib/data/chart-data";
-import { getModeEmptyStateReason } from "@/lib/data/mode";
+import {
+  getLatestTerminalSyncRun,
+  resolveModeStaleReason,
+} from "@/lib/data/mode";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
@@ -35,9 +38,7 @@ export default async function ProductPage() {
     latestMAU,
     latestWauMau,
     latestM11,
-    activeUsersChartsEmptyReason,
-    activeUsersEngagementEmptyReason,
-    retentionEmptyReason,
+    latestSyncRun,
   ] = await Promise.all([
     getActiveUsersSeries(),
     getEngagementSeries(),
@@ -45,22 +46,24 @@ export default async function ProductPage() {
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
-    getModeEmptyStateReason({
-      section: "product",
-      category: "active-users",
-      emptyReason: "Sync the App Active Users report to view charts",
-    }),
-    getModeEmptyStateReason({
-      section: "product",
-      category: "active-users",
-      emptyReason: "Sync the App Active Users report to view engagement",
-    }),
-    getModeEmptyStateReason({
-      section: "product",
-      category: "retention",
-      emptyReason: "Sync the App Retention report to view MAU retention cohorts",
-    }),
+    getLatestTerminalSyncRun("mode"),
   ]);
+
+  const activeUsersChartsEmptyReason = resolveModeStaleReason(
+    activeUsers.mau.length === 0,
+    latestSyncRun,
+    "Sync the App Active Users report to view charts"
+  );
+  const activeUsersEngagementEmptyReason = resolveModeStaleReason(
+    engagement.length === 0,
+    latestSyncRun,
+    "Sync the App Active Users report to view engagement"
+  );
+  const retentionEmptyReason = resolveModeStaleReason(
+    retentionCohorts.length === 0,
+    latestSyncRun,
+    "Sync the App Retention report to view MAU retention cohorts"
+  );
 
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
   const modeUrlActiveUsers = getModeReportLink("product", "active-users");

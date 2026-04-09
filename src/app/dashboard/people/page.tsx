@@ -17,7 +17,10 @@ const DivergingBarChart = dynamic(
 );
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
-import { getModeEmptyStateReason } from "@/lib/data/mode";
+import {
+  getLatestTerminalSyncRun,
+  resolveModeStaleReason,
+} from "@/lib/data/mode";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -31,14 +34,10 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, allRows }, deptData, headcountEmptyReason] = await Promise.all([
+  const [{ employees, allRows }, deptData, latestSyncRun] = await Promise.all([
     getActiveEmployees(),
     getHeadcountByDepartment(),
-    getModeEmptyStateReason({
-      section: "people",
-      category: "headcount",
-      emptyReason: "Sync the Headcount SSoT Dashboard report to view org charts",
-    }),
+    getLatestTerminalSyncRun("mode"),
   ]);
 
   const metrics = getPeopleMetrics(employees, allRows);
@@ -50,6 +49,12 @@ export default async function PeopleOrgPage() {
   const hasMonthlyMovement = monthlyMovement.joiners.some((d) => d.value > 0);
   const hasAnyVisualData =
     deptData.length > 0 || hasTenureData || hasMonthlyMovement;
+
+  const headcountEmptyReason = resolveModeStaleReason(
+    !hasAnyVisualData,
+    latestSyncRun,
+    "Sync the Headcount SSoT Dashboard report to view org charts"
+  );
 
   // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({

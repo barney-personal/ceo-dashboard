@@ -8,7 +8,10 @@ import {
   getLtvCacRatioSeries,
   getQuery3Series,
 } from "@/lib/data/chart-data";
-import { getModeEmptyStateReason } from "@/lib/data/mode";
+import {
+  getLatestTerminalSyncRun,
+  resolveModeStaleReason,
+} from "@/lib/data/mode";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -29,16 +32,24 @@ function ChartPlaceholder({ title, reason }: { title: string; reason: string }) 
 }
 
 export default async function UnitEconomicsPage() {
-  const [ltvSeries, ltvCacRatio, q3, kpisEmptyReason] = await Promise.all([
+  const [ltvSeries, ltvCacRatio, q3, latestSyncRun] = await Promise.all([
     getLtvTimeSeries(),
     getLtvCacRatioSeries(),
     getQuery3Series(),
-    getModeEmptyStateReason({
-      section: "unit-economics",
-      category: "kpis",
-      emptyReason: "No data — sync Mode 'Strategic Finance KPIs' report",
-    }),
+    getLatestTerminalSyncRun("mode"),
   ]);
+
+  const anyKpisEmpty =
+    ltvCacRatio.length === 0 ||
+    ltvSeries.length === 0 ||
+    q3.cpa.length === 0 ||
+    q3.spend.length === 0 ||
+    q3.users.length === 0;
+  const kpisEmptyReason = resolveModeStaleReason(
+    anyKpisEmpty,
+    latestSyncRun,
+    "No data — sync Mode 'Strategic Finance KPIs' report"
+  );
 
   const modeUrl = getModeReportLink("unit-economics", "kpis");
 
