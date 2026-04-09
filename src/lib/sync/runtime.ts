@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import {
   claimQueuedSyncRun,
   expireAbandonedSyncRuns,
@@ -134,6 +135,7 @@ async function safeStopHeartbeat(
   try {
     await stopHeartbeat();
   } catch (error) {
+    Sentry.captureException(error, { extra: { runId } });
     console.error(
       `[sync-worker] failed to stop heartbeat for run ${runId}:`,
       error
@@ -165,6 +167,7 @@ async function flushPendingFinalizeRecoveries(): Promise<void> {
         );
       }
     } catch (error) {
+      Sentry.captureException(error, { extra: { runId } });
       console.error(
         `[sync-worker] background finalize sweep failed for run ${runId}:`,
         error
@@ -263,6 +266,7 @@ async function retryFinalizeSyncRun(
       `[sync-worker] recovered finalize for run ${runId} on attempt ${attempt}`
     );
   } catch (error) {
+    Sentry.captureException(error, { extra: { runId, attempt } });
     console.error(
       `[sync-worker] finalize recovery attempt ${attempt} failed for run ${runId}:`,
       error
@@ -286,6 +290,7 @@ async function safeFinalizeSyncRun(
     releaseLocalSyncRun(runId);
     return finalized;
   } catch (error) {
+    Sentry.captureException(error, { extra: { runId, status: input.status } });
     console.error(
       `[sync-worker] failed to finalize run ${runId} (status=${input.status}):`,
       error
@@ -356,6 +361,10 @@ export async function runClaimedSync(
     const message = isSyncDeadlineExceededError(error)
       ? error.message
       : formatSyncError(error);
+    Sentry.captureException(error, {
+      tags: { sync_source: run.source },
+      extra: { runId: run.id, errorMessage: message },
+    });
     await safeStopHeartbeat(stopHeartbeat, run.id);
     await safeFinalizeSyncRun(run.id, {
       status: "error",
@@ -406,6 +415,10 @@ export function startBackgroundSyncDrain(
       error
     )}`;
 
+    Sentry.captureException(error, {
+      tags: { sync_source: opts.source ?? "all" },
+      extra: { workerId, triggerLabel: opts.triggerLabel, runIds: opts.runIds ?? [] },
+    });
     console.error("[sync-worker] background drain failed", {
       workerId,
       source: opts.source ?? "all",
@@ -421,6 +434,10 @@ export function startBackgroundSyncDrain(
     try {
       await markSyncRunsFailed(opts.runIds, message);
     } catch (markError) {
+      Sentry.captureException(markError, {
+        tags: { sync_source: opts.source ?? "all" },
+        extra: { workerId, runIds: opts.runIds },
+      });
       console.error("[sync-worker] failed to mark background drain runs as error", {
         workerId,
         runIds: opts.runIds,
