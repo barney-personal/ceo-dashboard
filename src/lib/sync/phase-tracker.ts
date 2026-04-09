@@ -20,7 +20,7 @@ export class PhaseTracker {
   async endPhase(
     phaseId: number,
     opts: {
-      status?: "success" | "error" | "skipped";
+      status?: "success" | "error" | "skipped" | "partial";
       itemsProcessed?: number;
       errorMessage?: string;
       detail?: string;

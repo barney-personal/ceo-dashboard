@@ -37,8 +37,10 @@ type ModeQueryJob = {
 };
 
 type ModeQueryJobResult =
-  | { status: "success"; storedRecords: number }
+  | { status: "success"; storedRecords: number; warnings: string[] }
   | { status: "error"; message: string };
+
+type ExistingModeQueryData = typeof modeReportData.$inferSelect;
 
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
@@ -137,13 +139,57 @@ async function cleanupReportData(
     );
 }
 
+function getStoredRowCount(row: { storedRowCount?: number; rowCount?: number } | undefined): number {
+  if (!row) {
+    return 0;
+  }
+
+  return row.storedRowCount ?? row.rowCount ?? 0;
+}
+
+function getColumnCount(columns: unknown): number {
+  return Array.isArray(columns) ? columns.length : 0;
+}
+
+function captureModeValidationWarning(
+  warning: string,
+  context: {
+    syncRunId?: number;
+    reportToken: string;
+    reportName: string;
+    queryToken: string;
+    queryName: string;
+    previousRowCount?: number;
+    nextRowCount?: number;
+    previousColumnCount?: number;
+    nextColumnCount?: number;
+  },
+): void {
+  Sentry.captureMessage(warning, {
+    level: "warning",
+    tags: {
+      sync_source: "mode",
+      failure_scope: "validation",
+    },
+    extra: context,
+  });
+}
+
+type SyncReportResult = {
+  recordsSynced: number;
+  errors: string[];
+  queriesSucceeded: number;
+  queriesFailed: number;
+  warnings: string[];
+};
+
 /**
  * Sync a single Mode report and return the stored row count plus any per-query errors.
  */
 async function syncReport(
   report: typeof modeReports.$inferSelect,
   opts: SyncControl & { syncRunId?: number } = {},
-): Promise<{ recordsSynced: number; errors: string[] }> {
+): Promise<SyncReportResult> {
   throwIfSyncShouldStop(opts, {
     cancelled: "Mode sync cancelled before report fetch started",
     deadlineExceeded:
@@ -153,7 +199,13 @@ async function syncReport(
   const profile = getModeSyncProfile(report.reportToken);
   if (!profile?.syncEnabled) {
     await cleanupReportData(report.id, []);
-    return { recordsSynced: 0, errors: [] };
+    return {
+      recordsSynced: 0,
+      errors: [],
+      queriesSucceeded: 0,
+      queriesFailed: 0,
+      warnings: [],
+    };
   }
 
   const run = await getLatestRun(report.reportToken, { signal: opts.signal });
@@ -173,7 +225,10 @@ async function syncReport(
   );
   const allowedQueryTokens: string[] = [];
   const errors: string[] = [];
+  const warnings: string[] = [];
   let storedRecords = 0;
+  let queriesSucceeded = 0;
+  let queriesFailed = 0;
   const queryJobs: ModeQueryJob[] = [];
 
   const isGrowthMarketing = report.name
@@ -320,6 +375,111 @@ async function syncReport(
           name,
           type: typeof sampleRow[name],
         }));
+        const existingRows = await db
+          .select({
+            rowCount: modeReportData.rowCount,
+            storedRowCount: modeReportData.storedRowCount,
+            columns: modeReportData.columns,
+          })
+          .from(modeReportData)
+          .where(
+            and(
+              eq(modeReportData.reportId, report.id),
+              eq(modeReportData.queryToken, queryToken),
+            ),
+          )
+          .limit(1);
+        const existing = existingRows[0];
+        const queryWarnings: string[] = [];
+        const previousRowCount = getStoredRowCount(existing);
+        const previousColumnCount = getColumnCount(existing?.columns);
+        const nextRowCount = prepared.storedRowCount;
+        const nextColumnCount = columns.length;
+
+        if (nextRowCount === 0 && previousRowCount > 0) {
+          const warning = `Skipped empty overwrite for query "${queryName}" in report "${report.name}" because ${previousRowCount} existing rows are already stored`;
+          queryWarnings.push(warning);
+          captureModeValidationWarning(warning, {
+            syncRunId: opts.syncRunId,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            queryToken,
+            queryName,
+            previousRowCount,
+            nextRowCount,
+            previousColumnCount,
+            nextColumnCount,
+          });
+
+          logModeEvent("query_validation_warning", {
+            reportToken: report.reportToken,
+            reportName: report.name,
+            queryToken,
+            queryName,
+            warning,
+            previousRowCount,
+            nextRowCount,
+            previousColumnCount,
+            nextColumnCount,
+          });
+
+          await debugLog(
+            "mode",
+            "query_validation_warning",
+            {
+              reportName: report.name,
+              queryName,
+              queryToken,
+              warning,
+              previousRowCount,
+              nextRowCount,
+              previousColumnCount,
+              nextColumnCount,
+            },
+            { level: "warn", syncRunId: opts.syncRunId },
+          );
+
+          return {
+            status: "success",
+            storedRecords: 0,
+            warnings: queryWarnings,
+          };
+        }
+
+        if (
+          previousColumnCount > 0 &&
+          Math.abs(nextColumnCount - previousColumnCount) / previousColumnCount > 0.5
+        ) {
+          const warning = `Column count shifted from ${previousColumnCount} to ${nextColumnCount} for query "${queryName}" in report "${report.name}"`;
+          queryWarnings.push(warning);
+          captureModeValidationWarning(warning, {
+            syncRunId: opts.syncRunId,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            queryToken,
+            queryName,
+            previousRowCount,
+            nextRowCount,
+            previousColumnCount,
+            nextColumnCount,
+          });
+        }
+
+        if (previousRowCount > 0 && nextRowCount < previousRowCount * 0.1) {
+          const warning = `Row count dropped from ${previousRowCount} to ${nextRowCount} for query "${queryName}" in report "${report.name}"`;
+          queryWarnings.push(warning);
+          captureModeValidationWarning(warning, {
+            syncRunId: opts.syncRunId,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            queryToken,
+            queryName,
+            previousRowCount,
+            nextRowCount,
+            previousColumnCount,
+            nextColumnCount,
+          });
+        }
 
         await db
           .insert(modeReportData)
@@ -376,6 +536,7 @@ async function syncReport(
         return {
           status: "success",
           storedRecords: prepared.storedRowCount,
+          warnings: queryWarnings,
         };
       } catch (error) {
         const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
@@ -429,10 +590,13 @@ async function syncReport(
 
     if (result.value.status === "error") {
       errors.push(result.value.message);
+      queriesFailed++;
       continue;
     }
 
     storedRecords += result.value.storedRecords;
+    queriesSucceeded++;
+    warnings.push(...result.value.warnings);
   }
 
   await cleanupReportData(report.id, allowedQueryTokens);
@@ -440,6 +604,9 @@ async function syncReport(
   return {
     recordsSynced: storedRecords,
     errors,
+    queriesSucceeded,
+    queriesFailed,
+    warnings,
   };
 }
 
@@ -570,14 +737,33 @@ export async function runModeSync(
         const result = await syncReport(report, { ...opts, syncRunId: run.id });
         totalRecords += result.recordsSynced;
         errors.push(...result.errors);
-        succeededReports += 1;
+
+        const phaseStatus =
+          result.queriesFailed === 0 && result.warnings.length === 0
+            ? "success"
+            : result.queriesSucceeded > 0 || result.warnings.length > 0
+              ? "partial"
+              : "error";
+
+        if (phaseStatus !== "error") {
+          succeededReports += 1;
+        }
+
+        const queryCountDetail =
+          result.queriesSucceeded + result.queriesFailed > 0
+            ? ` — ${result.queriesSucceeded} queries succeeded, ${result.queriesFailed} failed`
+            : "";
+        const warningDetail =
+          result.warnings.length > 0
+            ? `${queryCountDetail ? "," : " — "} ${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}`
+            : "";
 
         await tracker.endPhase(reportPhaseId, {
-          status: result.errors.length > 0 ? "error" : "success",
+          status: phaseStatus,
           itemsProcessed: result.recordsSynced,
           errorMessage:
             result.errors.length > 0 ? result.errors.join("\n") : undefined,
-          detail: `Stored ${result.recordsSynced} rows`,
+          detail: `Stored ${result.recordsSynced} rows${queryCountDetail}${warningDetail}`,
         });
 
         logModeEvent("report_finished", {

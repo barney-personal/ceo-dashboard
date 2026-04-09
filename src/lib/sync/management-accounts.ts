@@ -22,6 +22,39 @@ import * as Sentry from "@sentry/nextjs";
 
 const MGMT_ACCOUNTS_CHANNEL = "C036J68MTJ5"; // #fyi-management_accounts
 
+const MANAGEMENT_ACCOUNT_NUMERIC_FIELDS = [
+  "revenue",
+  "grossProfit",
+  "grossMargin",
+  "contributionProfit",
+  "contributionMargin",
+  "ebitda",
+  "ebitdaMargin",
+  "netIncome",
+  "cashPosition",
+  "cashBurn",
+  "opex",
+  "headcountCost",
+  "marketingCost",
+] as const;
+
+function getManagementAccountsValidationWarning(
+  data: Awaited<ReturnType<typeof parseManagementAccounts>>,
+): string | null {
+  const allNumericFieldsNull = MANAGEMENT_ACCOUNT_NUMERIC_FIELDS.every(
+    (field) => data[field] == null,
+  );
+  if (allNumericFieldsNull) {
+    return "Skipped write because all extracted numeric fields were null";
+  }
+
+  if (data.revenue == null && data.grossProfit == null) {
+    return "Skipped write because both revenue and gross profit were null";
+  }
+
+  return null;
+}
+
 /**
  * Find the Slack message associated with a file upload.
  * The message contains the summary commentary.
@@ -153,6 +186,26 @@ export async function runManagementAccountsSync(
           file.timestamp,
           opts
         );
+        const validationWarning = getManagementAccountsValidationWarning(data);
+        if (validationWarning) {
+          Sentry.captureMessage(validationWarning, {
+            level: "warning",
+            tags: {
+              sync_source: "management-accounts",
+              failure_scope: "validation",
+            },
+            extra: {
+              runId: run.id,
+              filename: file.name,
+              period,
+            },
+          });
+          await tracker.endPhase(filePhaseId, {
+            status: "partial",
+            detail: `${validationWarning} — ${period}`,
+          });
+          continue;
+        }
 
         await db
           .insert(financialPeriods)
