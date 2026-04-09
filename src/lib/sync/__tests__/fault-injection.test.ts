@@ -205,6 +205,10 @@ import { runManagementAccountsSync } from "../management-accounts";
 import { runModeSync } from "../mode";
 import { runSlackSync } from "../slack";
 
+function makeLongSlackText(label: string): string {
+  return `${label} ${"Objective update ".repeat(20)}`;
+}
+
 describe("sync runner fault injection", () => {
   beforeEach(() => {
     mocks.resetQueues();
@@ -350,6 +354,151 @@ describe("sync runner fault injection", () => {
         "Failed to sync channel CJSON: Failed to parse LLM response: unexpected token",
       ],
     });
+  });
+
+  it("fetches Slack thread replies with bounded concurrency and preserves parent-reply ordering", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CBATCH";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-alpha");
+
+    const topLevelMessages = [
+      {
+        ts: "1712512345.0001",
+        text: makeLongSlackText("parent-1"),
+        user: "U1",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0002",
+        text: makeLongSlackText("parent-2"),
+        user: "U2",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0003",
+        text: makeLongSlackText("parent-3"),
+        user: "U3",
+      },
+      {
+        ts: "1712512345.0004",
+        text: makeLongSlackText("parent-4"),
+        user: "U4",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0005",
+        text: makeLongSlackText("parent-5"),
+        user: "U5",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0006",
+        text: makeLongSlackText("parent-6"),
+        user: "U6",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.0007",
+        text: makeLongSlackText("parent-7"),
+        user: "U7",
+        reply_count: 1,
+      },
+    ];
+
+    let activeReplyFetches = 0;
+    let maxConcurrentReplyFetches = 0;
+    mocks.getChannelHistory.mockResolvedValue(topLevelMessages);
+    mocks.getThreadReplies.mockImplementation(async (_channelId, threadTs: string) => {
+      activeReplyFetches += 1;
+      maxConcurrentReplyFetches = Math.max(
+        maxConcurrentReplyFetches,
+        activeReplyFetches
+      );
+
+      const suffix = Number(threadTs.split(".")[1] ?? "0");
+      await new Promise((resolve) => setTimeout(resolve, (suffix % 3) * 10));
+
+      activeReplyFetches -= 1;
+      return [
+        {
+          ts: `${threadTs}-reply`,
+          text: makeLongSlackText(`reply-for-${threadTs}`),
+          user: `U-${threadTs}`,
+          thread_ts: threadTs,
+        },
+      ];
+    });
+
+    const parsedMessages: string[] = [];
+    mocks.llmParseOkrUpdate.mockImplementation(async (text: string) => {
+      parsedMessages.push(text);
+      return null;
+    });
+
+    await expect(runSlackSync({ id: 48 })).resolves.toEqual({
+      status: "success",
+      recordsSynced: 0,
+      errors: [],
+    });
+
+    expect(maxConcurrentReplyFetches).toBe(5);
+    expect(parsedMessages).toEqual([
+      makeLongSlackText("parent-1"),
+      makeLongSlackText("reply-for-1712512345.0001"),
+      makeLongSlackText("parent-2"),
+      makeLongSlackText("reply-for-1712512345.0002"),
+      makeLongSlackText("parent-3"),
+      makeLongSlackText("parent-4"),
+      makeLongSlackText("reply-for-1712512345.0004"),
+      makeLongSlackText("parent-5"),
+      makeLongSlackText("reply-for-1712512345.0005"),
+      makeLongSlackText("parent-6"),
+      makeLongSlackText("reply-for-1712512345.0006"),
+      makeLongSlackText("parent-7"),
+      makeLongSlackText("reply-for-1712512345.0007"),
+    ]);
+  });
+
+  it("surfaces a failed thread reply fetch as a channel sync error", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CTHREAD";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-alpha");
+    mocks.getChannelHistory.mockResolvedValue([
+      {
+        ts: "1712512345.1001",
+        text: makeLongSlackText("parent-1"),
+        user: "U1",
+        reply_count: 1,
+      },
+      {
+        ts: "1712512345.1002",
+        text: makeLongSlackText("parent-2"),
+        user: "U2",
+        reply_count: 1,
+      },
+    ]);
+
+    mocks.getThreadReplies.mockImplementation(async (_channelId, threadTs: string) => {
+      if (threadTs.endsWith("1002")) {
+        throw new Error("reply fetch exploded");
+      }
+
+      return [
+        {
+          ts: `${threadTs}-reply`,
+          text: makeLongSlackText(`reply-for-${threadTs}`),
+          user: `U-${threadTs}`,
+          thread_ts: threadTs,
+        },
+      ];
+    });
+
+    await expect(runSlackSync({ id: 49 })).resolves.toEqual({
+      status: "error",
+      recordsSynced: 0,
+      errors: ["Failed to sync channel CTHREAD: reply fetch exploded"],
+    });
+    expect(mocks.llmParseOkrUpdate).not.toHaveBeenCalled();
   });
 
   // TODO: Mode sync fault injection tests need updating to match
