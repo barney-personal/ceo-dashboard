@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import type { EnqueueSyncResult } from "@/lib/sync/coordinator";
 
 export interface SerializedEnqueueSyncResult {
@@ -20,6 +21,7 @@ export function serializeEnqueueSyncResult(
 }
 
 export function unexpectedSyncRouteErrorResponse(route: string, error: unknown) {
+  Sentry.captureException(error, { extra: { route } });
   console.error(`[sync-api] unexpected ${route} route error`, error);
 
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });

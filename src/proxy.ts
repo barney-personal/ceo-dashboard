@@ -1,5 +1,7 @@
 import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
+import { getUserRole } from "@/lib/auth/roles";
 
 const ALLOWED_DOMAIN = "meetcleo.com";
 
@@ -23,6 +25,10 @@ export default clerkMiddleware(async (auth, request) => {
     if (!email || !email.toLowerCase().endsWith(`@${ALLOWED_DOMAIN}`)) {
       return NextResponse.redirect(new URL("/access-denied", request.url));
     }
+
+    // Auth and domain validation passed — attach user context to Sentry scope.
+    const role = getUserRole(user.publicMetadata as Record<string, unknown>);
+    Sentry.setUser({ id: userId, email, role });
   }
 });
 

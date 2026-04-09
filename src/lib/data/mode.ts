@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/nextjs";
 import { db } from "@/lib/db";
 import {
   DatabaseUnavailableError,
@@ -64,6 +65,10 @@ async function withDatabaseReadFallback<T>(
       normalized instanceof DatabaseUnavailableError ||
       isSchemaCompatibilityError(error)
     ) {
+      Sentry.captureException(normalized, {
+        tags: { data_loader: "mode" },
+        extra: { context, fallbackUsed: true },
+      });
       console.error(`[data] ${context} degraded to fallback`, normalized);
       return fallback;
     }

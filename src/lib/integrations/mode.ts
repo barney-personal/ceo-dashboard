@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/nextjs";
+
 const MODE_BASE_URL = "https://app.mode.com/api";
 const MODE_METADATA_TIMEOUT_MS = 30_000;
 const MODE_RESULTS_TIMEOUT_MS = 120_000;
@@ -16,9 +18,14 @@ function getConfig(): ModeConfig {
   const workspace = process.env.MODE_WORKSPACE;
 
   if (!token || !secret || !workspace) {
-    throw new Error(
+    const error = new Error(
       "Missing Mode config: MODE_API_TOKEN, MODE_API_SECRET, and MODE_WORKSPACE are required"
     );
+    Sentry.captureException(error, {
+      tags: { integration: "mode" },
+      extra: { operation: "getConfig" },
+    });
+    throw error;
   }
 
   return { token, secret, workspace };
@@ -131,13 +138,22 @@ async function modeRequest<T>(
         await sleep(getRetryDelayMs(attempt));
         continue;
       }
+      Sentry.captureException(error, {
+        tags: { integration: "mode" },
+        extra: { path, attempt, requestType: "metadata" },
+      });
       throw error;
     } finally {
       cleanup();
     }
   }
 
-  throw lastError ?? new Error("Mode request failed");
+  const terminalError = lastError ?? new Error("Mode request failed");
+  Sentry.captureException(terminalError, {
+    tags: { integration: "mode" },
+    extra: { path, requestType: "metadata" },
+  });
+  throw terminalError;
 }
 
 function isRetryableModeError(message: string): boolean {
@@ -264,13 +280,22 @@ async function modeRequestJson<T>(
         await sleep(getRetryDelayMs(attempt));
         continue;
       }
+      Sentry.captureException(error, {
+        tags: { integration: "mode" },
+        extra: { path, attempt, requestType: "query-result" },
+      });
       throw error;
     } finally {
       cleanup();
     }
   }
 
-  throw lastError ?? new Error("Mode JSON request failed");
+  const terminalError = lastError ?? new Error("Mode JSON request failed");
+  Sentry.captureException(terminalError, {
+    tags: { integration: "mode" },
+    extra: { path, requestType: "query-result" },
+  });
+  throw terminalError;
 }
 
 // --- Types ---

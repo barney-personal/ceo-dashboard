@@ -25,6 +25,7 @@ import {
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 import { debugLog } from "@/lib/debug-logger";
+import * as Sentry from "@sentry/nextjs";
 
 const MODE_QUERY_FETCH_CONCURRENCY = 3;
 
@@ -381,6 +382,20 @@ async function syncReport(
           error instanceof Error ? error.message : String(error)
         }`;
         console.error(message);
+        Sentry.captureException(error, {
+          tags: {
+            sync_source: "mode",
+            failure_scope: "query",
+          },
+          extra: {
+            runId: opts.syncRunId,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            queryToken,
+            queryName,
+            message,
+          },
+        });
         logModeEvent("query_failed", {
           reportToken: report.reportToken,
           reportName: report.name,
@@ -436,11 +451,23 @@ type ModeSyncResult = {
 
 async function failModePreflightPhase(
   tracker: ReturnType<typeof createPhaseTracker>,
+  runId: number,
   phaseId: number,
   phaseLabel: string,
   error: unknown
 ): Promise<ModeSyncResult> {
   const message = `Failed to ${phaseLabel}: ${formatSyncError(error)}`;
+  Sentry.captureException(error, {
+    tags: {
+      sync_source: "mode",
+      failure_scope: "preflight",
+    },
+    extra: {
+      runId,
+      phaseLabel,
+      message,
+    },
+  });
   await tracker.endPhase(phaseId, {
     status: "error",
     errorMessage: message,
@@ -457,6 +484,7 @@ export async function runModeSync(
   run: { id: number },
   opts: SyncControl = {}
 ): Promise<ModeSyncResult> {
+  Sentry.setTag("sync_source", "mode");
   const tracker = createPhaseTracker(run.id);
   let totalRecords = 0;
   const errors: string[] = [];
@@ -469,7 +497,13 @@ export async function runModeSync(
     try {
       await seedReports();
     } catch (error) {
-      return failModePreflightPhase(tracker, phaseId, "seed report definitions", error);
+      return failModePreflightPhase(
+        tracker,
+        run.id,
+        phaseId,
+        "seed report definitions",
+        error
+      );
     }
     await tracker.endPhase(phaseId, {
       detail: `Checked ${MODE_SYNC_PROFILES.length} report definitions`,
@@ -497,7 +531,13 @@ export async function runModeSync(
             )
         : [];
     } catch (error) {
-      return failModePreflightPhase(tracker, phaseId, "load active reports", error);
+      return failModePreflightPhase(
+        tracker,
+        run.id,
+        phaseId,
+        "load active reports",
+        error
+      );
     }
     await tracker.endPhase(phaseId, {
       itemsProcessed: reports.length,
@@ -573,6 +613,18 @@ export async function runModeSync(
 
         errors.push(message);
         console.error(message);
+        Sentry.captureException(error, {
+          tags: {
+            sync_source: "mode",
+            failure_scope: "report",
+          },
+          extra: {
+            runId: run.id,
+            reportToken: report.reportToken,
+            reportName: report.name,
+            message,
+          },
+        });
         await tracker.endPhase(reportPhaseId, {
           status: "error",
           errorMessage: message,
@@ -604,6 +656,20 @@ export async function runModeSync(
       errors: errors.length,
       heapMb: getHeapMb(),
     });
+
+    if (status === "success" || status === "partial") {
+      Sentry.captureMessage("Mode sync completed", {
+        level: "info",
+        tags: {
+          sync_source: "mode",
+          status,
+        },
+        extra: {
+          runId: run.id,
+          recordsSynced: totalRecords,
+        },
+      });
+    }
 
     return {
       status,

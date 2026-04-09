@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/nextjs";
+
 export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
@@ -12,7 +14,14 @@ const RETRYABLE_SLACK_ERRORS = new Set([
 
 function getToken(): string {
   const token = process.env.SLACK_BOT_TOKEN;
-  if (!token) throw new Error("Missing SLACK_BOT_TOKEN");
+  if (!token) {
+    const error = new Error("Missing SLACK_BOT_TOKEN");
+    Sentry.captureException(error, {
+      tags: { integration: "slack" },
+      extra: { operation: "getToken" },
+    });
+    throw error;
+  }
   return token;
 }
 
@@ -135,13 +144,22 @@ async function slackFetch(
         continue;
       }
 
+      Sentry.captureException(error, {
+        tags: { integration: "slack" },
+        extra: { input, attempt, operation: "slackFetch" },
+      });
       throw error;
     } finally {
       cleanup();
     }
   }
 
-  throw lastError ?? new Error("Slack request failed");
+  const terminalError = lastError ?? new Error("Slack request failed");
+  Sentry.captureException(terminalError, {
+    tags: { integration: "slack" },
+    extra: { input, operation: "slackFetch" },
+  });
+  throw terminalError;
 }
 
 export async function slackApiRequest<T>(
@@ -199,13 +217,23 @@ export async function slackApiRequest<T>(
         await sleep(getRetryDelayMs(attempt));
         continue;
       }
+      Sentry.captureException(error, {
+        tags: { integration: "slack" },
+        extra: { method, attempt, operation: "slackApiRequest" },
+      });
       throw error;
     }
 
     return data;
   }
 
-  throw lastEnvelopeError ?? new Error(`Slack ${method} request failed`);
+  const terminalError =
+    lastEnvelopeError ?? new Error(`Slack ${method} request failed`);
+  Sentry.captureException(terminalError, {
+    tags: { integration: "slack" },
+    extra: { method, operation: "slackApiRequest" },
+  });
+  throw terminalError;
 }
 
 export async function slackDownloadRequest(
