@@ -5,6 +5,7 @@ import {
   getModeSyncProfile,
 } from "@/lib/integrations/mode-config";
 import {
+  checkModeHealth,
   extractQueryToken,
   getLatestRun,
   getQueryResultContent,
@@ -728,6 +729,37 @@ async function failModePreflightPhase(
   };
 }
 
+async function failModeHealthCheck(
+  tracker: ReturnType<typeof createPhaseTracker>,
+  runId: number,
+  phaseId: number,
+  error: unknown,
+): Promise<ModeSyncResult> {
+  const message = `Mode API unreachable, skipping sync: ${formatSyncError(error)}`;
+  Sentry.captureMessage("Mode API unreachable, skipping sync", {
+    level: "warning",
+    tags: {
+      sync_source: "mode",
+      failure_scope: "health_check",
+    },
+    extra: {
+      runId,
+      message,
+    },
+  });
+  await tracker.endPhase(phaseId, {
+    status: "error",
+    detail: "Mode API unreachable, sync skipped",
+    errorMessage: message,
+  });
+
+  return {
+    status: "error",
+    recordsSynced: 0,
+    errors: [message],
+  };
+}
+
 export async function runModeSync(
   run: { id: number; scope?: unknown },
   opts: SyncControl = {}
@@ -740,6 +772,19 @@ export async function runModeSync(
 
   try {
     let phaseId = await tracker.startPhase(
+      "health_check",
+      "Checking Mode API connectivity",
+    );
+    try {
+      await checkModeHealth({ signal: opts.signal });
+    } catch (error) {
+      return failModeHealthCheck(tracker, run.id, phaseId, error);
+    }
+    await tracker.endPhase(phaseId, {
+      detail: "Mode API reachable",
+    });
+
+    phaseId = await tracker.startPhase(
       "seed_reports",
       "Ensuring config reports exist in DB",
     );

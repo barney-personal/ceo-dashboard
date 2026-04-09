@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { okrUpdates, squads, syncLog } from "@/lib/db/schema";
 import {
+  checkSlackHealth,
   getChannelHistory,
   getChannelName,
   getThreadReplies,
@@ -480,6 +481,37 @@ async function failSlackPreflightPhase(
   };
 }
 
+async function failSlackHealthCheck(
+  tracker: ReturnType<typeof createPhaseTracker>,
+  runId: number,
+  phaseId: number,
+  error: unknown,
+): Promise<SlackSyncResult> {
+  const message = `Slack API unreachable, skipping sync: ${formatSyncError(error)}`;
+  Sentry.captureMessage("Slack API unreachable, skipping sync", {
+    level: "warning",
+    tags: {
+      sync_source: "slack",
+      failure_scope: "health_check",
+    },
+    extra: {
+      runId,
+      message,
+    },
+  });
+  await tracker.endPhase(phaseId, {
+    status: "error",
+    detail: "Slack API unreachable, sync skipped",
+    errorMessage: message,
+  });
+
+  return {
+    status: "error",
+    recordsSynced: 0,
+    errors: [message],
+  };
+}
+
 /**
  * Sync all configured OKR channels.
  */
@@ -514,7 +546,20 @@ export async function runSlackSync(
   const errors: string[] = [];
 
   try {
-    let phaseId = await tracker.startPhase("seed_squads", "Seeding squad definitions");
+    let phaseId = await tracker.startPhase(
+      "health_check",
+      "Checking Slack API connectivity"
+    );
+    try {
+      await checkSlackHealth({ signal: opts.signal });
+    } catch (error) {
+      return failSlackHealthCheck(tracker, run.id, phaseId, error);
+    }
+    await tracker.endPhase(phaseId, {
+      detail: "Slack API reachable",
+    });
+
+    phaseId = await tracker.startPhase("seed_squads", "Seeding squad definitions");
     try {
       await seedSquads();
     } catch (error) {

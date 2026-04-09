@@ -3,10 +3,11 @@ import * as Sentry from "@sentry/nextjs";
 const MODE_BASE_URL = "https://app.mode.com/api";
 const MODE_METADATA_TIMEOUT_MS = 30_000;
 const MODE_RESULTS_TIMEOUT_MS = 120_000;
+const MODE_HEALTH_TIMEOUT_MS = 5_000;
 const MODE_MAX_RESULT_BYTES = 25 * 1024 * 1024;
 const MODE_MAX_RETRIES = 3;
 const MODE_AUTH_ERROR_MESSAGE =
-  "Mode API authentication failed, check MODE_API_TOKEN";
+  "Mode API returned 401 — check MODE_API_TOKEN and MODE_API_SECRET in Doppler";
 
 interface ModeConfig {
   token: string;
@@ -21,7 +22,7 @@ function getConfig(): ModeConfig {
 
   if (!token || !secret || !workspace) {
     const error = new Error(
-      "Missing Mode config: MODE_API_TOKEN, MODE_API_SECRET, and MODE_WORKSPACE are required"
+      "Missing Mode config: MODE_API_TOKEN, MODE_API_SECRET, and MODE_WORKSPACE are required",
     );
     Sentry.captureException(error, {
       tags: { integration: "mode" },
@@ -35,7 +36,7 @@ function getConfig(): ModeConfig {
 
 function authHeaders(config: ModeConfig): HeadersInit {
   const encoded = Buffer.from(`${config.token}:${config.secret}`).toString(
-    "base64"
+    "base64",
   );
   return {
     Authorization: `Basic ${encoded}`,
@@ -76,7 +77,7 @@ function captureModeAuthError(input: {
 function composeSignal(
   timeoutMs: number,
   parentSignal?: AbortSignal,
-  timeoutMessage?: string
+  timeoutMessage?: string,
 ): {
   signal: AbortSignal;
   cleanup: () => void;
@@ -111,7 +112,7 @@ function composeSignal(
 
 async function modeRequest<T>(
   path: string,
-  options: RequestInit & { signal?: AbortSignal; timeoutMs?: number } = {}
+  options: RequestInit & { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
   const config = getConfig();
   const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
@@ -122,7 +123,7 @@ async function modeRequest<T>(
     const { signal, cleanup, timedOut } = composeSignal(
       timeoutMs ?? MODE_METADATA_TIMEOUT_MS,
       parentSignal,
-      "Mode request timed out"
+      "Mode request timed out",
     );
 
     try {
@@ -151,7 +152,16 @@ async function modeRequest<T>(
           (res.status === 429 || res.status >= 500)
         ) {
           lastError = error;
-          await sleep(getRetryDelayMs(attempt));
+          if (res.status === 429) {
+            const { waitMs } = getModeRateLimitDelay({
+              headers: res.headers,
+              attempt,
+              path,
+            });
+            await sleep(waitMs);
+          } else {
+            await sleep(getRetryDelayMs(attempt));
+          }
           continue;
         }
         throw error;
@@ -216,13 +226,48 @@ function getRetryDelayMs(attempt: number): number {
   return baseMs + Math.floor(Math.random() * 250);
 }
 
+function parseRetryAfterDelayMs(headerValue: string | null): number | null {
+  const retryAfterSeconds = Number(headerValue);
+  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return null;
+  }
+
+  return retryAfterSeconds * 1000;
+}
+
+function getModeRateLimitDelay(input: {
+  headers: Headers;
+  attempt: number;
+  path: string;
+}): { waitMs: number; source: "retry-after" | "backoff" } {
+  const retryAfterDelayMs = parseRetryAfterDelayMs(
+    input.headers.get("retry-after"),
+  );
+  const waitMs = retryAfterDelayMs ?? getRetryDelayMs(input.attempt);
+  const source = retryAfterDelayMs === null ? "backoff" : "retry-after";
+
+  Sentry.addBreadcrumb({
+    category: "rate_limit.mode",
+    message: "Retrying Mode request after rate limit",
+    level: "info",
+    data: {
+      waitMs,
+      path: input.path,
+      attempt: input.attempt,
+      source,
+    },
+  });
+
+  return { waitMs, source };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function readJsonBodyWithLimit<T>(
   res: Response,
-  maxBytes: number
+  maxBytes: number,
 ): Promise<{ data: T; bytesRead: number }> {
   if (!res.body) {
     throw new Error("Mode response body is empty");
@@ -241,7 +286,7 @@ async function readJsonBodyWithLimit<T>(
     bytesRead += value.byteLength;
     if (bytesRead > maxBytes) {
       throw new Error(
-        `Mode result exceeded ${Math.round(maxBytes / 1024 / 1024)}MB response limit`
+        `Mode result exceeded ${Math.round(maxBytes / 1024 / 1024)}MB response limit`,
       );
     }
 
@@ -265,7 +310,7 @@ async function modeRequestJson<T>(
     timeoutMs?: number;
     maxBytes?: number;
     signal?: AbortSignal;
-  } = {}
+  } = {},
 ): Promise<{ data: T; bytesRead: number }> {
   const config = getConfig();
   const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
@@ -277,7 +322,7 @@ async function modeRequestJson<T>(
     const { signal, cleanup, timedOut } = composeSignal(
       timeoutMs,
       opts.signal,
-      "Mode query result request timed out"
+      "Mode query result request timed out",
     );
 
     try {
@@ -305,7 +350,16 @@ async function modeRequestJson<T>(
           (res.status === 429 || res.status >= 500)
         ) {
           lastError = error;
-          await sleep(getRetryDelayMs(attempt));
+          if (res.status === 429) {
+            const { waitMs } = getModeRateLimitDelay({
+              headers: res.headers,
+              attempt,
+              path,
+            });
+            await sleep(waitMs);
+          } else {
+            await sleep(getRetryDelayMs(attempt));
+          }
           continue;
         }
         throw error;
@@ -386,7 +440,7 @@ export interface ModeQuery {
 
 export async function getReport(
   reportToken: string,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal },
 ): Promise<ModeReport> {
   return modeRequest<ModeReport>(`/reports/${reportToken}`, opts);
 }
@@ -396,7 +450,7 @@ export async function getReport(
  */
 export async function getLatestRun(
   reportToken: string,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal },
 ): Promise<ModeRun | null> {
   const result = await modeRequest<{
     _embedded: { report_runs: ModeRun[] };
@@ -413,7 +467,7 @@ export async function getLatestRun(
 export async function getQueryRuns(
   reportToken: string,
   runToken: string,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal },
 ): Promise<ModeQueryRun[]> {
   const result = await modeRequest<{
     _embedded: { query_runs: ModeQueryRun[] };
@@ -426,7 +480,7 @@ export async function getQueryRuns(
  */
 export async function getReportQueries(
   reportToken: string,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal },
 ): Promise<ModeQuery[]> {
   const result = await modeRequest<{
     _embedded: { queries: ModeQuery[] };
@@ -443,11 +497,11 @@ export async function getQueryResultContent(
   runToken: string,
   queryRunToken: string,
   maxRows: number = 1000,
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal },
 ): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
   const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
     `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`,
-    opts
+    opts,
   );
 
   return {
@@ -458,9 +512,58 @@ export async function getQueryResultContent(
 
 export async function getModeJsonWithLimit<T>(
   path: string,
-  opts?: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal }
+  opts?: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
 ): Promise<{ data: T; bytesRead: number }> {
   return modeRequestJson<T>(path, opts);
+}
+
+export async function checkModeHealth(opts: {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+} = {}): Promise<void> {
+  const config = getConfig();
+  const { signal, cleanup, timedOut } = composeSignal(
+    opts.timeoutMs ?? MODE_HEALTH_TIMEOUT_MS,
+    opts.signal,
+    "Mode health check timed out",
+  );
+
+  try {
+    const res = await fetch(`${MODE_BASE_URL}/${config.workspace}`, {
+      signal,
+      headers: authHeaders(config),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      if (res.status === 401 || res.status === 403) {
+        captureModeAuthError({
+          path: "",
+          requestType: "metadata",
+          status: res.status,
+          body,
+        });
+      }
+
+      throw new Error(`Mode health check failed with status ${res.status}: ${body}`);
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      if (timedOut()) {
+        throw new Error("Mode health check timed out");
+      }
+
+      if (signal.reason instanceof Error) {
+        throw signal.reason;
+      }
+
+      throw new Error("Mode health check was aborted");
+    }
+
+    throw error;
+  } finally {
+    cleanup();
+  }
 }
 
 /**
