@@ -37,17 +37,25 @@ async function buildUserNameFallback(): Promise<Map<string, string>> {
   return map;
 }
 
-/** Resolve a Slack user ID to a display name, falling back to seed data. */
+/** Resolve a Slack user ID to a display name, falling back to seed data.
+ *
+ * `localCache` is a sync-local Map<userId, resolvedName> that persists across
+ * all calls within a single syncChannel() run. It caches every outcome —
+ * successful Slack display names, fallback PM names, and raw user IDs returned
+ * when the Slack API lookup fails — so repeated authors within a run perform at
+ * most one resolution attempt per userId.
+ */
 async function resolveAuthorName(
   userId: string,
   fallback: Map<string, string>,
+  localCache: Map<string, string>,
   opts: SyncControl = {}
 ): Promise<string> {
+  if (localCache.has(userId)) return localCache.get(userId)!;
   const name = await getUserName(userId, { signal: opts.signal });
-  if (name === userId && fallback.has(userId)) {
-    return fallback.get(userId)!;
-  }
-  return name;
+  const resolved = name === userId && fallback.has(userId) ? fallback.get(userId)! : name;
+  localCache.set(userId, resolved);
+  return resolved;
 }
 
 async function mapWithConcurrencyLimit<T, TResult>(
@@ -192,6 +200,7 @@ async function syncChannel(
   }
 
   let count = 0;
+  const authorNameCache = new Map<string, string>();
 
   for (const msg of messages) {
     throwIfSyncShouldStop(opts, {
@@ -203,7 +212,7 @@ async function syncChannel(
     if (!isLikelyUpdate(msg.text, msg.subtype)) continue;
 
     const authorName = msg.user
-      ? await resolveAuthorName(msg.user, userNameFallback, opts)
+      ? await resolveAuthorName(msg.user, userNameFallback, authorNameCache, opts)
       : "unknown";
 
     const parsed = await llmParseOkrUpdate(

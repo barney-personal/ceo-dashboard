@@ -501,6 +501,53 @@ describe("sync runner fault injection", () => {
     expect(mocks.llmParseOkrUpdate).not.toHaveBeenCalled();
   });
 
+  it("resolves repeated authors from the success path only once per syncChannel run", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CCACHE";
+    mocks.queueSelect([], []);
+    mocks.getChannelName.mockResolvedValue("growth-cache");
+
+    // Three messages from the same user U123
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712512345.0001", text: makeLongSlackText("msg-1"), user: "U123" },
+      { ts: "1712512345.0002", text: makeLongSlackText("msg-2"), user: "U123" },
+      { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U123" },
+    ]);
+    mocks.getUserName.mockResolvedValue("Alice PM");
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+
+    await runSlackSync({ id: 50 });
+
+    // getUserName should be called at most once for U123 across all three messages
+    expect(mocks.getUserName).toHaveBeenCalledTimes(1);
+    expect(mocks.getUserName).toHaveBeenCalledWith("U123", expect.anything());
+  });
+
+  it("resolves repeated authors from the fallback and raw-id paths only once per syncChannel run", async () => {
+    process.env.SLACK_OKR_CHANNEL_IDS = "CCACHEFALLBACK";
+    // First select: userNameFallback (squads query) returns U456 -> "Bob PM"
+    // Second select: syncLog timestamp query returns []
+    mocks.queueSelect([{ pmSlackId: "U456", pmName: "Bob PM" }], []);
+    mocks.getChannelName.mockResolvedValue("growth-fallback");
+
+    // Two messages from U456 (fallback path) and two from U789 (raw-id path)
+    mocks.getChannelHistory.mockResolvedValue([
+      { ts: "1712512345.0001", text: makeLongSlackText("msg-1"), user: "U456" },
+      { ts: "1712512345.0002", text: makeLongSlackText("msg-2"), user: "U456" },
+      { ts: "1712512345.0003", text: makeLongSlackText("msg-3"), user: "U789" },
+      { ts: "1712512345.0004", text: makeLongSlackText("msg-4"), user: "U789" },
+    ]);
+    // getUserName returns the raw userId (simulates API failure path — no caching at process level)
+    mocks.getUserName.mockImplementation(async (userId: string) => userId);
+    mocks.llmParseOkrUpdate.mockResolvedValue(null);
+
+    await runSlackSync({ id: 51 });
+
+    // getUserName should be called once per unique userId, not once per message
+    expect(mocks.getUserName).toHaveBeenCalledTimes(2);
+    expect(mocks.getUserName).toHaveBeenCalledWith("U456", expect.anything());
+    expect(mocks.getUserName).toHaveBeenCalledWith("U789", expect.anything());
+  });
+
   // TODO: Mode sync fault injection tests need updating to match
   // the current runModeSync error handling contract after resilience PR merge.
 });
