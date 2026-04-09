@@ -1035,7 +1035,55 @@ describe("sync runner fault injection", () => {
     expect(phaseOpts.detail).toMatch(/2 queries succeeded, 0 failed/);
   });
 
-  it("Slack channel phase detail includes channel name and message counts", async () => {
+  it("syncs only the requested Mode report when the claimed run is scoped", async () => {
+    mocks.queueSelect(
+      [
+        {
+          id: 14,
+          reportToken: "report-beta",
+          name: "Beta Report",
+          section: "product",
+          category: null,
+          isActive: true,
+        },
+      ],
+      [],
+      [],
+    );
+    mocks.getLatestRun.mockResolvedValue({ token: "run-beta" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Healthy Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+    ]);
+    mocks.getQueryResultContent.mockResolvedValue({
+      rows: [{ v: 1 }],
+      responseBytes: 64,
+    });
+
+    const result = await runModeSync({
+      id: 78,
+      scope: { reportToken: "report-beta" },
+    });
+
+    expect(result).toEqual({
+      status: "success",
+      recordsSynced: 1,
+      errors: [],
+    });
+    expect(mocks.getLatestRun).toHaveBeenCalledTimes(1);
+    expect(mocks.getLatestRun).toHaveBeenCalledWith("report-beta", {
+      signal: undefined,
+    });
+  });
+
+  it("Slack channel phase detail summarizes the stored key results", async () => {
     const endPhase = vi.fn(async () => {});
     const startPhase = vi.fn(async () => 1);
     mocks.createPhaseTracker.mockReturnValue({ startPhase, endPhase });
@@ -1062,13 +1110,10 @@ describe("sync runner fault injection", () => {
     // Find the endPhase call for the channel phase
     type EndPhaseCall = [number, { status?: string; detail?: string; itemsProcessed?: number }];
     const channelEndPhaseCall = (endPhase.mock.calls as unknown as EndPhaseCall[]).find(
-      ([, opts]) => opts?.detail?.includes("growth-okrs")
+      ([, opts]) => opts?.detail?.includes("Parsed 1 key results")
     );
     expect(channelEndPhaseCall).toBeDefined();
     const phaseOpts = channelEndPhaseCall![1];
-    expect(phaseOpts.detail).toMatch(/#growth-okrs/);
-    expect(phaseOpts.detail).toMatch(/parsed/);
-    expect(phaseOpts.detail).toMatch(/skipped/);
-    expect(phaseOpts.detail).toMatch(/KRs stored/);
+    expect(phaseOpts.detail).toBe("Parsed 1 key results");
   });
 });

@@ -7,17 +7,24 @@ export interface SerializedEnqueueSyncResult {
   runId: number | null;
   reason: string | null;
   nextEligibleAt: string | null;
+  activeScopeDescription?: string;
 }
 
 export function serializeEnqueueSyncResult(
   result: EnqueueSyncResult
 ): SerializedEnqueueSyncResult {
-  return {
+  const serialized: SerializedEnqueueSyncResult = {
     outcome: result.outcome,
     runId: result.runId,
     reason: result.reason,
     nextEligibleAt: result.nextEligibleAt?.toISOString() ?? null,
   };
+
+  if (result.activeScopeDescription) {
+    serialized.activeScopeDescription = result.activeScopeDescription;
+  }
+
+  return serialized;
 }
 
 export function unexpectedSyncRouteErrorResponse(route: string, error: unknown) {

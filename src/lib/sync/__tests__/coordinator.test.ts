@@ -4,16 +4,55 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 // vi.hoisted ensures these fns are created before vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockReturning, mockLimit, mockWhere, mockSet, mockFrom, mockUpdate, mockSelect } =
+const {
+  mockInsertReturning,
+  mockInsertValues,
+  mockInsert,
+  mockOrderBy,
+  mockReturning,
+  mockLimit,
+  mockWhere,
+  mockSet,
+  mockFrom,
+  mockUpdate,
+  mockSelect,
+} =
   vi.hoisted(() => {
+    const mockInsertReturning = vi.fn();
+    const mockInsertValues = vi.fn(() => ({ returning: mockInsertReturning }));
+    const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
+    const mockOrderBy = vi.fn(() => ({
+      limit: mockLimit,
+      then: (onFulfilled?: ((value: unknown[]) => unknown) | null, onRejected?: ((reason: unknown) => unknown) | null) =>
+        Promise.resolve([]).then(onFulfilled, onRejected),
+      catch: (onRejected?: ((reason: unknown) => unknown) | null) =>
+        Promise.resolve([]).catch(onRejected),
+      finally: (onFinally?: () => void) => Promise.resolve([]).finally(onFinally),
+    }));
     const mockReturning = vi.fn();
     const mockLimit = vi.fn();
-    const mockWhere = vi.fn(() => ({ returning: mockReturning, limit: mockLimit }));
+    const mockWhere = vi.fn(() => ({
+      returning: mockReturning,
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+    }));
     const mockSet = vi.fn(() => ({ where: mockWhere }));
     const mockFrom = vi.fn(() => ({ where: mockWhere }));
     const mockUpdate = vi.fn(() => ({ set: mockSet }));
     const mockSelect = vi.fn(() => ({ from: mockFrom }));
-    return { mockReturning, mockLimit, mockWhere, mockSet, mockFrom, mockUpdate, mockSelect };
+    return {
+      mockInsertReturning,
+      mockInsertValues,
+      mockInsert,
+      mockOrderBy,
+      mockReturning,
+      mockLimit,
+      mockWhere,
+      mockSet,
+      mockFrom,
+      mockUpdate,
+      mockSelect,
+    };
   });
 
 // ---------------------------------------------------------------------------
@@ -24,12 +63,27 @@ vi.mock("@/lib/db", () => ({
   db: {
     update: mockUpdate,
     select: mockSelect,
-    insert: vi.fn(),
+    insert: mockInsert,
   },
 }));
 
 vi.mock("@/lib/db/schema", () => ({
-  syncLog: { id: "id", status: "status", source: "source" },
+  syncLog: {
+    id: "id",
+    status: "status",
+    source: "source",
+    startedAt: "startedAt",
+    leaseExpiresAt: "leaseExpiresAt",
+    heartbeatAt: "heartbeatAt",
+    workerId: "workerId",
+    completedAt: "completedAt",
+    errorMessage: "errorMessage",
+    skipReason: "skipReason",
+    scope: "scope",
+    trigger: "trigger",
+    attempt: "attempt",
+    maxAttempts: "maxAttempts",
+  },
   syncPhases: { syncLogId: "syncLogId", status: "status" },
 }));
 
@@ -50,6 +104,7 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("@/lib/sync/config", () => ({
   getSyncSourceConfig: vi.fn(() => ({
     leaseMs: 60_000,
+    staleTimeoutMs: 15 * 60_000,
     maxAttempts: 3,
     intervalMs: 14_400_000,
     retryAfterErrorMs: 600_000,
@@ -57,32 +112,176 @@ vi.mock("@/lib/sync/config", () => ({
   evaluateQueueDecision: vi.fn(),
 }));
 
+vi.mock("@/lib/sync/worker-state", () => ({
+  isLocalSyncRunProtected: vi.fn(() => false),
+}));
+
 // ---------------------------------------------------------------------------
 // Import under test AFTER mocks are registered
 // ---------------------------------------------------------------------------
 
 import {
+  expireStaleSyncRuns,
+  enqueueSyncRun,
   cancelSyncRun,
   finalizeSyncRun,
   isSyncRunCancelled,
 } from "@/lib/sync/coordinator";
+import { isLocalSyncRunProtected } from "@/lib/sync/worker-state";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function makeRow(overrides: Record<string, unknown> = {}) {
-  return { id: 1, status: "running", source: "mode", ...overrides };
+  return {
+    id: 1,
+    status: "running",
+    source: "mode",
+    startedAt: new Date("2026-04-08T11:00:00Z"),
+    leaseExpiresAt: new Date("2026-04-08T11:30:00Z"),
+    workerId: "worker-1",
+    errorMessage: null,
+    ...overrides,
+  };
 }
 
 // Reset all mock state before each test so calls don't bleed across.
 beforeEach(() => {
   vi.resetAllMocks();
+  mockInsert.mockReturnValue({ values: mockInsertValues });
+  mockInsertValues.mockReturnValue({ returning: mockInsertReturning });
   mockUpdate.mockReturnValue({ set: mockSet });
   mockSet.mockReturnValue({ where: mockWhere });
-  mockWhere.mockReturnValue({ returning: mockReturning, limit: mockLimit });
+  mockWhere.mockReturnValue({
+    returning: mockReturning,
+    limit: mockLimit,
+    orderBy: mockOrderBy,
+  });
   mockSelect.mockReturnValue({ from: mockFrom });
   mockFrom.mockReturnValue({ where: mockWhere });
+  vi.mocked(isLocalSyncRunProtected).mockReturnValue(false);
+});
+
+describe("expireStaleSyncRuns", () => {
+  it("marks overdue running syncs as stale_timeout and closes open phases", async () => {
+    const now = Date.now();
+    mockLimit.mockResolvedValueOnce([
+      makeRow({
+        id: 55,
+        source: "mode",
+        startedAt: new Date(now - 20 * 60_000),
+        leaseExpiresAt: new Date(now + 60_000),
+        workerId: "worker-55",
+      }),
+    ]);
+    mockReturning
+      .mockResolvedValueOnce([makeRow({ id: 55, status: "error" })])
+      .mockResolvedValueOnce([]);
+
+    const result = await expireStaleSyncRuns("mode");
+
+    expect(result).toEqual([55]);
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        skipReason: "stale_timeout",
+        leaseExpiresAt: null,
+        errorMessage: expect.stringContaining("stale timeout"),
+      })
+    );
+    expect(mockUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves locally protected runs untouched", async () => {
+    vi.mocked(isLocalSyncRunProtected).mockReturnValue(true);
+    const now = Date.now();
+    mockLimit.mockResolvedValueOnce([
+      makeRow({
+        id: 56,
+        startedAt: new Date(now - 20 * 60_000),
+        leaseExpiresAt: new Date(now + 60_000),
+      }),
+    ]);
+
+    const result = await expireStaleSyncRuns("mode");
+
+    expect(result).toEqual([]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not reclassify lease-expired runs as stale", async () => {
+    const now = Date.now();
+    mockLimit.mockResolvedValueOnce([
+      makeRow({
+        id: 57,
+        startedAt: new Date(now - 20 * 60_000),
+        leaseExpiresAt: new Date(now - 60_000),
+      }),
+    ]);
+
+    const result = await expireStaleSyncRuns("mode");
+
+    expect(result).toEqual([]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("enqueueSyncRun", () => {
+  it("persists the requested Mode report token on queued scoped runs", async () => {
+    const { evaluateQueueDecision } = await import("@/lib/sync/config");
+    vi.mocked(evaluateQueueDecision).mockReturnValue({
+      shouldQueue: true,
+      outcome: "queued",
+      reason: null,
+      nextEligibleAt: null,
+    });
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    mockInsertReturning.mockResolvedValueOnce([{ id: 41 }]);
+
+    const result = await enqueueSyncRun("mode", {
+      trigger: "manual",
+      scope: { reportToken: "report-alpha" },
+    });
+
+    expect(result).toEqual({
+      outcome: "queued",
+      runId: 41,
+      reason: null,
+      nextEligibleAt: null,
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "mode",
+        trigger: "manual",
+        scope: { reportToken: "report-alpha" },
+      })
+    );
+  });
+
+  it("reports whether the conflicting Mode run is full-source or scoped", async () => {
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+      { id: 99, status: "running", source: "mode", scope: null },
+      ]);
+
+    const result = await enqueueSyncRun("mode", {
+      trigger: "manual",
+      scope: { reportToken: "report-alpha" },
+    });
+
+    expect(result).toEqual({
+      outcome: "already-running",
+      runId: 99,
+      reason: "running",
+      nextEligibleAt: null,
+      activeScopeDescription: "all Mode reports",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,7 +345,11 @@ describe("cancelSyncRun", () => {
     vi.resetAllMocks();
     mockUpdate.mockReturnValue({ set: mockSet });
     mockSet.mockReturnValue({ where: mockWhere });
-    mockWhere.mockReturnValue({ returning: mockReturning, limit: mockLimit });
+    mockWhere.mockReturnValue({
+      returning: mockReturning,
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+    });
     mockSelect.mockReturnValue({ from: mockFrom });
     mockFrom.mockReturnValue({ where: mockWhere });
 

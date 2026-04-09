@@ -71,6 +71,16 @@ describe("getEffectiveSyncState", () => {
     ).toBe("abandoned");
   });
 
+  it("marks stale-timeout runs as stale", () => {
+    expect(
+      getEffectiveSyncState({
+        status: "error",
+        leaseExpiresAt: null,
+        skipReason: "stale_timeout",
+      })
+    ).toBe("stale");
+  });
+
   it("marks expired running leases as abandoned", () => {
     expect(
       getEffectiveSyncState(

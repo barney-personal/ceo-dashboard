@@ -22,11 +22,16 @@ import { isLocalSyncRunProtected } from "./worker-state";
 const ACTIVE_STATUSES = ["queued", "running"] as const;
 const TERMINAL_STATUSES = ["success", "partial", "error", "cancelled"] as const;
 
+export interface SyncRunScope {
+  reportToken?: string;
+}
+
 export interface EnqueueSyncResult {
   outcome: "queued" | "already-running" | "skipped" | "forced";
   runId: number | null;
   reason: string | null;
   nextEligibleAt: Date | null;
+  activeScopeDescription?: string | null;
 }
 
 export interface FinalizeSyncRunInput {
@@ -37,6 +42,21 @@ export interface FinalizeSyncRunInput {
 }
 
 export type SyncLogRow = typeof syncLog.$inferSelect;
+
+function getSyncRunScopeDescription(
+  source: SyncSource,
+  scope: SyncRunScope | null | undefined
+): string | null {
+  if (source !== "mode") {
+    return null;
+  }
+
+  if (scope?.reportToken) {
+    return `Mode report ${scope.reportToken}`;
+  }
+
+  return "all Mode reports";
+}
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -178,18 +198,102 @@ export async function expireAbandonedSyncRuns(
   return expiredIds;
 }
 
+export async function expireStaleSyncRuns(
+  source?: SyncSource
+): Promise<number[]> {
+  const now = new Date();
+  const rows = await db
+    .select()
+    .from(syncLog)
+    .where(
+      and(
+        eq(syncLog.status, "running"),
+        source ? eq(syncLog.source, source) : undefined
+      )
+    )
+    .orderBy(asc(syncLog.startedAt))
+    .limit(100);
+
+  const expiredIds: number[] = [];
+
+  for (const row of rows) {
+    const config = getSyncSourceConfig(row.source as SyncSource);
+    const staleCutoff = new Date(now.getTime() - config.staleTimeoutMs);
+    const startedAt =
+      row.startedAt instanceof Date ? row.startedAt : new Date(row.startedAt);
+    const leaseExpiresAt =
+      row.leaseExpiresAt instanceof Date
+        ? row.leaseExpiresAt
+        : row.leaseExpiresAt
+          ? new Date(row.leaseExpiresAt)
+          : null;
+    const leaseExpired =
+      leaseExpiresAt != null && leaseExpiresAt.getTime() < now.getTime();
+
+    if (Number.isNaN(startedAt.getTime())) {
+      continue;
+    }
+
+    if (leaseExpired || startedAt.getTime() > staleCutoff.getTime()) {
+      continue;
+    }
+
+    if (
+      isLocalSyncRunProtected({
+        runId: row.id,
+        workerId: row.workerId,
+      })
+    ) {
+      continue;
+    }
+
+    const [updated] = await db
+      .update(syncLog)
+      .set({
+        completedAt: now,
+        status: "error",
+        skipReason: "stale_timeout",
+        errorMessage: [
+          row.errorMessage,
+          `Sync exceeded the ${Math.round(
+            config.staleTimeoutMs / 60_000
+          )} minute stale timeout before completion.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        heartbeatAt: now,
+        leaseExpiresAt: null,
+      })
+      .where(and(eq(syncLog.id, row.id), eq(syncLog.status, "running")))
+      .returning();
+
+    if (updated) {
+      expiredIds.push(updated.id);
+      await closeOpenPhases(
+        updated.id,
+        "error",
+        "Phase interrupted — sync exceeded the stale-timeout threshold"
+      );
+    }
+  }
+
+  return expiredIds;
+}
+
 export async function enqueueSyncRun(
   source: SyncSource,
   opts: {
     trigger: SyncTrigger;
     force?: boolean;
     now?: Date;
+    scope?: SyncRunScope | null;
   }
 ): Promise<EnqueueSyncResult> {
   const now = opts.now ?? new Date();
   const config = getSyncSourceConfig(source);
 
   await expireAbandonedSyncRuns(source);
+  await expireStaleSyncRuns(source);
 
   const active = await findActiveSyncRun(source);
   if (active) {
@@ -198,6 +302,10 @@ export async function enqueueSyncRun(
       runId: active.id,
       reason: active.status,
       nextEligibleAt: null,
+      activeScopeDescription: getSyncRunScopeDescription(
+        source,
+        active.scope as SyncRunScope | null | undefined
+      ),
     };
   }
 
@@ -228,6 +336,7 @@ export async function enqueueSyncRun(
         attempt: 1,
         maxAttempts: config.maxAttempts,
         startedAt: now,
+        scope: opts.scope ?? null,
       })
       .returning();
 
@@ -248,6 +357,10 @@ export async function enqueueSyncRun(
       runId: lockedRun?.id ?? null,
       reason: "active_run_exists",
       nextEligibleAt: null,
+      activeScopeDescription: getSyncRunScopeDescription(
+        source,
+        lockedRun?.scope as SyncRunScope | null | undefined
+      ),
     };
   }
 }
@@ -257,6 +370,7 @@ export async function claimQueuedSyncRun(
   source?: SyncSource
 ): Promise<SyncLogRow | null> {
   await expireAbandonedSyncRuns(source);
+  await expireStaleSyncRuns(source);
 
   const candidates = await db
     .select()

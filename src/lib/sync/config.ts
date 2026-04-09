@@ -30,6 +30,7 @@ export interface SyncSourceConfig {
   normalIntervalMs: number;
   retryAfterMs: number;
   leaseMs: number;
+  staleTimeoutMs: number;
   executionBudgetMs: number;
   maxAttempts: number;
 }
@@ -51,8 +52,11 @@ export interface QueueDecision {
 export interface SyncRunStateLike {
   status: string;
   leaseExpiresAt: Date | string | null;
+  startedAt?: Date | string | null;
   skipReason: string | null;
 }
+
+export type EffectiveSyncState = SyncStatus | "abandoned" | "stale";
 
 export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
   mode: {
@@ -60,6 +64,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 4 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    staleTimeoutMs: 15 * 60 * 1000,
     executionBudgetMs: 15 * 60 * 1000,
     maxAttempts: 1,
   },
@@ -68,6 +73,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 2 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    staleTimeoutMs: 15 * 60 * 1000,
     executionBudgetMs: 10 * 60 * 1000,
     maxAttempts: 1,
   },
@@ -76,6 +82,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 24 * 60 * 60 * 1000,
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    staleTimeoutMs: 15 * 60 * 1000,
     executionBudgetMs: 10 * 60 * 1000,
     maxAttempts: 1,
   },
@@ -84,6 +91,7 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 2 * 60 * 60 * 1000, // every 2 hours
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
+    staleTimeoutMs: 15 * 60 * 1000,
     executionBudgetMs: 10 * 60 * 1000,
     maxAttempts: 1,
   },
@@ -152,7 +160,11 @@ export function evaluateQueueDecision(
 export function getEffectiveSyncState(
   run: SyncRunStateLike,
   now: Date = new Date()
-): string {
+): EffectiveSyncState {
+  if (run.skipReason === "stale_timeout") {
+    return "stale";
+  }
+
   if (run.skipReason === "abandoned") {
     return "abandoned";
   }
@@ -165,5 +177,7 @@ export function getEffectiveSyncState(
     return "abandoned";
   }
 
-  return run.status;
+  return SYNC_STATUSES.includes(run.status as SyncStatus)
+    ? (run.status as SyncStatus)
+    : "error";
 }

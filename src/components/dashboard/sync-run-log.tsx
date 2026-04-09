@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getEffectiveSyncState } from "@/lib/sync/config";
+import { getEffectiveSyncState, type EffectiveSyncState } from "@/lib/sync/config";
 import {
   CheckCircle2,
   XCircle,
@@ -39,6 +39,7 @@ interface SyncRun {
   recordsSynced: number;
   skipReason: string | null;
   errorMessage: string | null;
+  scopeDescription?: string | null;
   phases: Phase[];
 }
 
@@ -90,7 +91,16 @@ function formatPhaseName(phase: string): string {
   return rest.length > 0 ? `${label} — ${rest.join(":")}` : label;
 }
 
-type PhaseDisplayStatus = "success" | "partial" | "error" | "skipped" | "running" | "queued" | "cancelled" | "abandoned";
+type PhaseDisplayStatus =
+  | "success"
+  | "partial"
+  | "error"
+  | "skipped"
+  | "running"
+  | "queued"
+  | "cancelled"
+  | "abandoned"
+  | "stale";
 
 type PhaseBadge = {
   label: string;
@@ -99,7 +109,7 @@ type PhaseBadge = {
 
 function getDisplayPhaseStatus(
   phase: Phase,
-  runEffectiveStatus: string,
+  runEffectiveStatus: EffectiveSyncState,
 ): PhaseDisplayStatus {
   const isInterrupted =
     phase.status === "running" &&
@@ -120,6 +130,14 @@ function getPhaseTone(status: PhaseDisplayStatus) {
   }
 
   if (status === "partial" || status === "running" || status === "queued") {
+    return {
+      container: "border-warning/20 bg-warning/[0.05]",
+      bar: "var(--warning)",
+      badge: "border-warning/20 bg-warning/10 text-warning",
+    };
+  }
+
+  if (status === "stale") {
     return {
       container: "border-warning/20 bg-warning/[0.05]",
       bar: "var(--warning)",
@@ -190,7 +208,7 @@ function PhaseSummary({
   runEffectiveStatus,
 }: {
   phases: Phase[];
-  runEffectiveStatus: string;
+  runEffectiveStatus: EffectiveSyncState;
 }) {
   const statuses = phases.map((phase) => getDisplayPhaseStatus(phase, runEffectiveStatus));
   const warningCount = statuses.filter((status) => status === "partial").length;
@@ -231,6 +249,7 @@ function StatusIcon({ status, className = "" }: { status: string; className?: st
   if (status === "partial") return <AlertTriangle className={`text-warning ${className}`} />;
   if (status === "error") return <XCircle className={`text-destructive ${className}`} />;
   if (status === "abandoned") return <AlertTriangle className={`text-destructive ${className}`} />;
+  if (status === "stale") return <Clock className={`text-warning ${className}`} />;
   if (status === "running") return <RefreshCw className={`text-warning animate-spin ${className}`} />;
   if (status === "queued") return <Clock className={`text-warning ${className}`} />;
   if (status === "skipped") return <SkipForward className={`text-muted-foreground/40 ${className}`} />;
@@ -247,7 +266,7 @@ function PhaseTimeline({
   phases: Phase[];
   totalDurationMs: number;
   now: number;
-  runEffectiveStatus: string;
+  runEffectiveStatus: EffectiveSyncState;
 }) {
   if (phases.length === 0) {
     return (
@@ -357,7 +376,8 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
     return () => clearInterval(id);
   }, [isActive]);
 
-  const isStale = effectiveStatus === "abandoned";
+  const isStale = effectiveStatus === "stale";
+  const isAbandoned = effectiveStatus === "abandoned";
 
   const durationMs = run.completedAt
     ? new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()
@@ -411,9 +431,12 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
           </span>
         )}
 
-        {/* Stale warning */}
+        {/* Stale / abandoned warning */}
         {isStale && (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+          <Clock className="h-3.5 w-3.5 shrink-0 text-warning" />
+        )}
+        {isAbandoned && (
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
         )}
 
         {/* Chevron */}
@@ -436,6 +459,7 @@ function RunRow({ run, avgDuration }: { run: SyncRun; avgDuration: number }) {
             <span>State: {effectiveStatus}</span>
             <span>Trigger: {run.trigger}</span>
             <span>Attempt: {run.attempt}</span>
+            {run.scopeDescription && <span>Scope: {run.scopeDescription}</span>}
             {run.skipReason && <span>Reason: {run.skipReason}</span>}
           </div>
           <PhaseTimeline
