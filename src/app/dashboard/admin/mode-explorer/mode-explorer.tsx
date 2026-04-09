@@ -14,29 +14,7 @@ import {
   Clock,
   AlertTriangle,
 } from "lucide-react";
-
-interface QuerySummary {
-  id: number;
-  reportId: number;
-  queryToken: string;
-  queryName: string;
-  rowCount: number;
-  sourceRowCount: number;
-  storedRowCount: number;
-  truncated: boolean;
-  storageWindow: unknown;
-  columns: Array<{ name: string; type: string }>;
-  syncedAt: string;
-}
-
-interface ReportSummary {
-  id: number;
-  reportToken: string;
-  name: string;
-  section: string;
-  category: string | null;
-  isActive: boolean;
-}
+import type { QuerySummary, ReportSummary } from "./types";
 
 interface QueryData {
   queryName: string;
@@ -113,7 +91,7 @@ export function ModeExplorer({
 
     try {
       const res = await fetch(
-        `/api/admin/mode-explorer?reportId=${query.reportId}&queryId=${queryId}`
+        `/api/admin/mode-explorer?queryId=${queryId}`
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
