@@ -172,17 +172,25 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
       return { date, value: paidCpa > 0 ? ltv / paidCpa : 0 };
     });
 
+  // Exclude current incomplete week
+  const now = new Date();
+  const currentMonday = new Date(
+    now.getTime() - ((now.getDay() === 0 ? 6 : now.getDay() - 1) * 86400000),
+  );
+  const currentWeekKey = currentMonday.toISOString().slice(0, 10);
+  const completeWeeks = ratioData.filter((d) => d.date < currentWeekKey);
+
   return [
     {
       label: "LTV:CAC",
       color: "#3b3bba",
-      data: ratioData,
+      data: completeWeeks,
     },
     {
       label: "3x guardrail",
       color: "#c44",
       dashed: true,
-      data: ratioData.map((d) => ({ date: d.date, value: 3 })),
+      data: completeWeeks.map((d) => ({ date: d.date, value: 3 })),
     },
   ];
 }
