@@ -262,33 +262,56 @@ function DayColumn({
             )}
           </div>
         </button>
-        <div className="space-y-1 px-0.5">
-          {day.meetings.map((m) => (
-            <div
-              key={m.id}
-              className={cn(
-                "rounded-lg border border-border/40 px-2.5 py-1.5",
-                m.preReads.length > 0 && "border-l-2 border-l-primary/40"
-              )}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
-                  {formatTime(m.startTime)}
-                </span>
-                {m.preReads.length > 0 && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+        <div className="space-y-1.5 px-0.5">
+          {day.meetings.map((m) => {
+            const preReadLinks = m.preReads.flatMap((pr) =>
+              extractLinks(pr.content ?? "")
+            );
+
+            return (
+              <div
+                key={m.id}
+                className={cn(
+                  "rounded-lg border border-border/40 px-2.5 py-1.5",
+                  m.preReads.length > 0 && "border-l-2 border-l-primary/40"
+                )}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
+                    {formatTime(m.startTime)}
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-xs font-medium text-foreground">
+                  {m.title}
+                </p>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                  {Array.isArray(m.attendees) && m.attendees.length > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      <Users className="h-2.5 w-2.5" />
+                      {m.attendees.length}
+                    </span>
+                  )}
+                </div>
+                {preReadLinks.length > 0 && (
+                  <div className="mt-1.5 space-y-1 border-t border-border/30 pt-1.5">
+                    {preReadLinks.map((link, i) => (
+                      <a
+                        key={i}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-1 text-[10px] text-primary hover:underline"
+                      >
+                        <FileText className="h-2.5 w-2.5 shrink-0" />
+                        <span className="truncate">{link.label}</span>
+                      </a>
+                    ))}
+                  </div>
                 )}
               </div>
-              <p className="mt-0.5 truncate text-xs font-medium text-foreground">
-                {m.title}
-              </p>
-              {Array.isArray(m.attendees) && m.attendees.length > 0 && (
-                <span className="text-[10px] text-muted-foreground">
-                  {m.attendees.length} attendees
-                </span>
-              )}
-            </div>
-          ))}
+            );
+          })}
           {day.meetings.length === 0 && (
             <p className="px-2 py-3 text-center text-[10px] text-muted-foreground/50">
               No meetings
