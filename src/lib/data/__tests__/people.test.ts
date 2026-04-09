@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData } = vi.hoisted(() => ({
+const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
+  mockValidateModeColumns: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
+  validateModeColumns: mockValidateModeColumns,
   rowStr: (row: Record<string, unknown>, key: string) =>
     typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
   rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
@@ -13,6 +15,7 @@ vi.mock("../mode", () => ({
 }));
 
 import {
+  getActiveEmployees,
   getMonthlyJoinersAndDepartures,
   getPeopleMetrics,
   getTenureDistribution,
@@ -44,6 +47,13 @@ function makePerson(overrides: Partial<Person> = {}): Person {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+  mockValidateModeColumns.mockReset();
+  mockValidateModeColumns.mockReturnValue({
+    expectedColumns: [],
+    presentColumns: [],
+    missingColumns: [],
+    isValid: true,
+  });
 });
 
 afterEach(() => {
@@ -248,5 +258,59 @@ describe("getMonthlyJoinersAndDepartures", () => {
         { date: monthDate(2026, 3), value: 1 },
       ],
     });
+  });
+});
+
+describe("getActiveEmployees", () => {
+  it("returns empty people data when the headcount query is missing", async () => {
+    mockGetReportData.mockResolvedValue([]);
+
+    const result = await getActiveEmployees();
+
+    expect(result).toEqual({ employees: [], allRows: [], lastSync: null });
+    expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
+      "headcount",
+    ]);
+    expect(mockValidateModeColumns).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty fallback when headcount columns drift without warning spam", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        syncedAt: new Date("2026-04-08T12:00:00Z"),
+        rows: [
+          {
+            preferred_name: "Amy",
+            email: "amy@example.com",
+            job_title: "PM",
+            hb_level: "L5",
+            hb_squad: "Product",
+            hb_function: "Product",
+            manager: "Lead",
+            start_date: "2025-10-01T00:00:00Z",
+            lifecycle_status: "employed",
+            is_cleo_headcount: 1,
+          },
+          {
+            preferred_name: "Zed",
+            lifecycle_status: "employed",
+            is_cleo_headcount: 1,
+          },
+        ],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["work_location"],
+      presentColumns: [],
+      missingColumns: ["work_location"],
+      isValid: false,
+    });
+
+    const result = await getActiveEmployees();
+
+    expect(result).toEqual({ employees: [], allRows: [], lastSync: null });
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 });

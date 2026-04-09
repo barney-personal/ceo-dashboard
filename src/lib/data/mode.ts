@@ -20,6 +20,13 @@ export interface ReportData {
   syncedAt: Date;
 }
 
+export interface ColumnValidationResult<TColumn extends string = string> {
+  expectedColumns: TColumn[];
+  presentColumns: TColumn[];
+  missingColumns: TColumn[];
+  isValid: boolean;
+}
+
 const REPORT_DATA_CACHE_TTL_MS = 60_000;
 export const REPORT_DATA_CACHE_MAX_ENTRIES = 20;
 
@@ -180,18 +187,117 @@ async function getCachedReportData(
   return pending;
 }
 
+export function validateModeColumns<TColumn extends string>({
+  row,
+  expectedColumns,
+  reportName,
+  queryName,
+}: {
+  row: Record<string, unknown> | null | undefined;
+  expectedColumns: readonly TColumn[];
+  reportName: string;
+  queryName: string;
+}): ColumnValidationResult<TColumn> {
+  const uniqueExpectedColumns = [...new Set(expectedColumns)] as TColumn[];
+  const sourceRow = row ?? {};
+  const presentColumns = uniqueExpectedColumns.filter((column) =>
+    Object.prototype.hasOwnProperty.call(sourceRow, column)
+  );
+  const missingColumns = uniqueExpectedColumns.filter(
+    (column) => !Object.prototype.hasOwnProperty.call(sourceRow, column)
+  );
+  const result: ColumnValidationResult<TColumn> = {
+    expectedColumns: uniqueExpectedColumns,
+    presentColumns,
+    missingColumns,
+    isValid: missingColumns.length === 0,
+  };
+
+  if (!result.isValid) {
+    Sentry.captureMessage("Mode schema drift: missing expected columns", {
+      level: "warning",
+      tags: {
+        data_loader: "mode",
+        validation_scope: "columns",
+      },
+      extra: {
+        reportName,
+        queryName,
+        expectedColumns: result.expectedColumns,
+        presentColumns: result.presentColumns,
+        missingColumns: result.missingColumns,
+      },
+    });
+  }
+
+  return result;
+}
+
+function validateExpectedQueries({
+  reportData,
+  expectedQueries,
+  section,
+  category,
+}: {
+  reportData: ReportData[];
+  expectedQueries: readonly string[];
+  section: DashboardSection;
+  category?: string;
+}): void {
+  const uniqueExpectedQueries = [...new Set(expectedQueries)];
+  if (uniqueExpectedQueries.length === 0) {
+    return;
+  }
+
+  const availableQueryNames = new Set(reportData.map((entry) => entry.queryName));
+  const missingQueries = uniqueExpectedQueries.filter(
+    (queryName) => !availableQueryNames.has(queryName)
+  );
+
+  if (missingQueries.length === 0) {
+    return;
+  }
+
+  Sentry.captureMessage("Mode schema drift: missing expected queries", {
+    level: "warning",
+    tags: {
+      data_loader: "mode",
+      validation_scope: "queries",
+      section,
+      ...(category ? { category } : {}),
+    },
+    extra: {
+      section,
+      category: category ?? null,
+      missingQueries,
+      availableQueryNames: [...availableQueryNames],
+      reportNames: [...new Set(reportData.map((entry) => entry.reportName))],
+    },
+  });
+}
+
 /**
  * Get all synced report data for a dashboard section.
  * Optionally filter by category (e.g. 'ltv', 'cac').
  */
 export async function getReportData(
   section: DashboardSection,
-  category?: string
+  category?: string,
+  expectedQueries: readonly string[] = []
 ): Promise<ReportData[]> {
   return withDatabaseReadFallback(
     `load report data for ${section}${category ? `/${category}` : ""}`,
     [],
-    () => getCachedReportData(section, category)
+    async () => {
+      const reportData = await getCachedReportData(section, category);
+      validateExpectedQueries({
+        reportData,
+        expectedQueries,
+        section,
+        category,
+      });
+      return reportData;
+    }
   );
 }
 
