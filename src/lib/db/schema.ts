@@ -135,6 +135,16 @@ export const syncLog = pgTable(
   ]
 );
 
+export const debugLogs = pgTable("debug_logs", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull(), // "mode", "slack", "management-accounts", "system"
+  event: text("event").notNull(), // "query_run_check", "sync_started", etc.
+  level: text("level").notNull().default("info"), // "info", "warn", "error", "debug"
+  data: jsonb("data"), // arbitrary structured data
+  syncRunId: integer("sync_run_id"), // optional FK to sync_log
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")
