@@ -87,6 +87,7 @@ const mocks = vi.hoisted(() => {
     getChannelHistory: vi.fn(),
     getChannelName: vi.fn(),
     getLatestRun: vi.fn(),
+    getModeQuerySyncProfile: vi.fn(),
     getQueryResultContent: vi.fn(),
     getQueryRuns: vi.fn(),
     getReportQueries: vi.fn(),
@@ -185,10 +186,7 @@ vi.mock("../coordinator", () => ({
 }));
 
 vi.mock("../mode-storage", () => ({
-  getModeQuerySyncProfile: vi.fn((_: string, queryName: string) => ({
-    name: queryName,
-    storageWindow: { kind: "all" },
-  })),
+  getModeQuerySyncProfile: mocks.getModeQuerySyncProfile,
   prepareModeRowsForStorage: mocks.prepareModeRowsForStorage,
 }));
 
@@ -230,6 +228,10 @@ describe("sync runner fault injection", () => {
       sourceRowCount: rows.length,
       storedRowCount: rows.length,
       truncated: false,
+      storageWindow: { kind: "all" },
+    }));
+    mocks.getModeQuerySyncProfile.mockImplementation((_: string, queryName: string) => ({
+      name: queryName,
       storageWindow: { kind: "all" },
     }));
 
@@ -548,6 +550,160 @@ describe("sync runner fault injection", () => {
     expect(mocks.getUserName).toHaveBeenCalledWith("U789", expect.anything());
   });
 
-  // TODO: Mode sync fault injection tests need updating to match
-  // the current runModeSync error handling contract after resilience PR merge.
+  it("fetches Mode query results with bounded concurrency", async () => {
+    mocks.queueSelect([
+      {
+        id: 11,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+
+    const queryDefinitions = Array.from({ length: 5 }, (_, index) => ({
+      token: `query-${index + 1}`,
+      name: `Query ${index + 1}`,
+    }));
+    mocks.getReportQueries.mockResolvedValue(queryDefinitions);
+    mocks.getQueryRuns.mockResolvedValue(
+      queryDefinitions.map((query, index) => ({
+        token: `query-run-${index + 1}`,
+        queryToken: query.token,
+        state: "succeeded",
+        _links: { query: { href: `/queries/${query.token}` } },
+      }))
+    );
+
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+    const releaseFetches: Array<() => void> = [];
+    mocks.getQueryResultContent.mockImplementation(async (_reportToken, _runToken, queryRunToken: string) => {
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+
+      await new Promise<void>((resolve) => {
+        releaseFetches.push(() => {
+          activeFetches -= 1;
+          resolve();
+        });
+      });
+
+      return {
+        rows: [{ queryRunToken }],
+        responseBytes: 128,
+      };
+    });
+
+    const runPromise = runModeSync({ id: 71 });
+
+    await vi.waitFor(() => {
+      expect(maxActiveFetches).toBe(3);
+      expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(3);
+    });
+
+    releaseFetches.splice(0).forEach((release) => release());
+
+    await vi.waitFor(() => {
+      expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(5);
+    });
+
+    releaseFetches.splice(0).forEach((release) => release());
+
+    const result = await runPromise;
+
+    expect(result).toEqual({
+      status: "success",
+      recordsSynced: 5,
+      errors: [],
+    });
+    expect(maxActiveFetches).toBe(3);
+  });
+
+  it("keeps Mode per-query failures isolated while preserving cleanup tokens", async () => {
+    mocks.queueSelect([
+      {
+        id: 12,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+      },
+    ]);
+    mocks.getLatestRun.mockResolvedValue({ token: "run-alpha" });
+    mocks.getReportQueries.mockResolvedValue([
+      { token: "query-1", name: "Timeout Query" },
+      { token: "query-2", name: "Healthy Query" },
+      { token: "query-3", name: "Skipped Query" },
+      { token: "query-4", name: "Unconfigured Query" },
+    ]);
+    mocks.getQueryRuns.mockResolvedValue([
+      {
+        token: "query-run-1",
+        queryToken: "query-1",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-1" } },
+      },
+      {
+        token: "query-run-2",
+        queryToken: "query-2",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-2" } },
+      },
+      {
+        token: "query-run-3",
+        queryToken: "query-3",
+        state: "running",
+        _links: { query: { href: "/queries/query-3" } },
+      },
+      {
+        token: "query-run-4",
+        queryToken: "query-4",
+        state: "succeeded",
+        _links: { query: { href: "/queries/query-4" } },
+      },
+    ]);
+    mocks.getModeQuerySyncProfile.mockImplementation((_: string, queryName: string) => {
+      if (queryName === "Unconfigured Query") {
+        return null;
+      }
+
+      return {
+        name: queryName,
+        storageWindow: { kind: "all" },
+      };
+    });
+    mocks.getQueryResultContent.mockImplementation(async (_reportToken, _runToken, queryRunToken: string) => {
+      if (queryRunToken === "query-run-2") {
+        throw new Error("query fetch exploded");
+      }
+
+      return {
+        rows: [{ queryRunToken }],
+        responseBytes: 64,
+      };
+    });
+
+    const result = await runModeSync({ id: 72 });
+
+    expect(result.status).toBe("partial");
+    expect(result.recordsSynced).toBe(1);
+    expect(result.errors).toEqual([
+      'Failed to sync query "Healthy Query" in report "Alpha Report": query fetch exploded',
+    ]);
+    expect(mocks.getQueryResultContent).toHaveBeenCalledTimes(2);
+
+    const cleanupDelete = mocks.del.mock.results.at(-1)?.value as
+      | { where: ReturnType<typeof vi.fn> }
+      | undefined;
+    const cleanupWhereArg = cleanupDelete?.where.mock.calls[0]?.[0] as
+      | { and: Array<{ notInArray?: [unknown, string[]] }> }
+      | undefined;
+    const notInArrayClause = cleanupWhereArg?.and.find((clause) => clause.notInArray);
+
+    expect(notInArrayClause?.notInArray?.[1]).toEqual(["query-1", "query-2"]);
+  });
 });

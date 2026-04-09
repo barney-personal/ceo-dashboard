@@ -26,6 +26,19 @@ import {
 import { determineSyncStatus, formatSyncError } from "./coordinator";
 import { debugLog } from "@/lib/debug-logger";
 
+const MODE_QUERY_FETCH_CONCURRENCY = 3;
+
+type ModeQueryJob = {
+  queryRunToken: string;
+  queryToken: string;
+  queryName: string;
+  queryProfile: NonNullable<ReturnType<typeof getModeQuerySyncProfile>>;
+};
+
+type ModeQueryJobResult =
+  | { status: "success"; storedRecords: number }
+  | { status: "error"; message: string };
+
 function logModeEvent(event: string, payload: Record<string, unknown>) {
   console.log(
     JSON.stringify({
@@ -42,6 +55,40 @@ function getHeapMb(): number {
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function mapWithConcurrencyLimit<T, TResult>(
+  items: readonly T[],
+  concurrencyLimit: number,
+  mapper: (item: T, index: number) => Promise<TResult>
+): Promise<PromiseSettledResult<TResult>[]> {
+  const settledResults: PromiseSettledResult<TResult>[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workerCount = Math.min(concurrencyLimit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      try {
+        const value = await mapper(items[currentIndex], currentIndex);
+        settledResults[currentIndex] = { status: "fulfilled", value };
+      } catch (reason) {
+        settledResults[currentIndex] = { status: "rejected", reason };
+      }
+    }
+  });
+
+  const workerResults = await Promise.allSettled(workers);
+  const rejectedWorker = workerResults.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected"
+  );
+  if (rejectedWorker) {
+    throw rejectedWorker.reason;
+  }
+
+  return settledResults;
 }
 
 /**
@@ -126,6 +173,7 @@ async function syncReport(
   const allowedQueryTokens: string[] = [];
   const errors: string[] = [];
   let storedRecords = 0;
+  const queryJobs: ModeQueryJob[] = [];
 
   const isGrowthMarketing = report.name
     .toLowerCase()
@@ -231,42 +279,52 @@ async function syncReport(
     }
 
     allowedQueryTokens.push(queryToken);
-    const queryStartedAt = Date.now();
+    queryJobs.push({
+      queryRunToken: queryRun.token,
+      queryToken,
+      queryName,
+      queryProfile,
+    });
+  }
 
-    try {
-      const { rows: sourceRows, responseBytes } = await getQueryResultContent(
-        report.reportToken,
-        run.token,
-        queryRun.token,
-        1000,
-        { signal: opts.signal },
-      );
-      const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
+  const queryResults = await mapWithConcurrencyLimit(
+    queryJobs,
+    MODE_QUERY_FETCH_CONCURRENCY,
+    async ({
+      queryRunToken,
+      queryToken,
+      queryName,
+      queryProfile,
+    }): Promise<ModeQueryJobResult> => {
+      throwIfSyncShouldStop(opts, {
+        cancelled: "Mode sync cancelled between query runs",
+        deadlineExceeded:
+          "Mode sync exceeded its execution budget between query runs",
+      });
 
-      const sampleRow = prepared.rows[0] ?? sourceRows[0] ?? {};
-      const columns = Object.keys(sampleRow).map((name) => ({
-        name,
-        type: typeof sampleRow[name],
-      }));
+      const queryStartedAt = Date.now();
 
-      await db
-        .insert(modeReportData)
-        .values({
-          reportId: report.id,
-          queryToken,
-          queryName,
-          data: prepared.rows,
-          columns,
-          rowCount: prepared.storedRowCount,
-          sourceRowCount: prepared.sourceRowCount,
-          storedRowCount: prepared.storedRowCount,
-          truncated: prepared.truncated,
-          storageWindow: prepared.storageWindow,
-          syncedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: [modeReportData.reportId, modeReportData.queryToken],
-          set: {
+      try {
+        const { rows: sourceRows, responseBytes } = await getQueryResultContent(
+          report.reportToken,
+          run.token,
+          queryRunToken,
+          1000,
+          { signal: opts.signal },
+        );
+        const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
+
+        const sampleRow = prepared.rows[0] ?? sourceRows[0] ?? {};
+        const columns = Object.keys(sampleRow).map((name) => ({
+          name,
+          type: typeof sampleRow[name],
+        }));
+
+        await db
+          .insert(modeReportData)
+          .values({
+            reportId: report.id,
+            queryToken,
             queryName,
             data: prepared.rows,
             columns,
@@ -276,56 +334,90 @@ async function syncReport(
             truncated: prepared.truncated,
             storageWindow: prepared.storageWindow,
             syncedAt: new Date(),
-          },
+          })
+          .onConflictDoUpdate({
+            target: [modeReportData.reportId, modeReportData.queryToken],
+            set: {
+              queryName,
+              data: prepared.rows,
+              columns,
+              rowCount: prepared.storedRowCount,
+              sourceRowCount: prepared.sourceRowCount,
+              storedRowCount: prepared.storedRowCount,
+              truncated: prepared.truncated,
+              storageWindow: prepared.storageWindow,
+              syncedAt: new Date(),
+            },
+          });
+
+        logModeEvent("query_synced", {
+          reportToken: report.reportToken,
+          reportName: report.name,
+          queryToken,
+          queryName,
+          durationMs: Date.now() - queryStartedAt,
+          responseBytes,
+          sourceRows: prepared.sourceRowCount,
+          storedRows: prepared.storedRowCount,
+          truncated: prepared.truncated,
+          heapMb: getHeapMb(),
         });
 
-      storedRecords += prepared.storedRowCount;
+        await debugLog("mode", "query_synced", {
+          reportName: report.name,
+          queryName,
+          queryToken,
+          sourceRows: prepared.sourceRowCount,
+          storedRows: prepared.storedRowCount,
+          durationMs: Date.now() - queryStartedAt,
+        }, { syncRunId: opts.syncRunId });
 
-      logModeEvent("query_synced", {
-        reportToken: report.reportToken,
-        reportName: report.name,
-        queryToken,
-        queryName,
-        durationMs: Date.now() - queryStartedAt,
-        responseBytes,
-        sourceRows: prepared.sourceRowCount,
-        storedRows: prepared.storedRowCount,
-        truncated: prepared.truncated,
-        heapMb: getHeapMb(),
-      });
+        return {
+          status: "success",
+          storedRecords: prepared.storedRowCount,
+        };
+      } catch (error) {
+        const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        console.error(message);
+        logModeEvent("query_failed", {
+          reportToken: report.reportToken,
+          reportName: report.name,
+          queryToken,
+          queryName,
+          durationMs: Date.now() - queryStartedAt,
+          error: message,
+          heapMb: getHeapMb(),
+        });
 
-      await debugLog("mode", "query_synced", {
-        reportName: report.name,
-        queryName,
-        queryToken,
-        sourceRows: prepared.sourceRowCount,
-        storedRows: prepared.storedRowCount,
-        durationMs: Date.now() - queryStartedAt,
-      }, { syncRunId: opts.syncRunId });
-    } catch (error) {
-      const message = `Failed to sync query "${queryName}" in report "${report.name}": ${
-        error instanceof Error ? error.message : String(error)
-      }`;
-      errors.push(message);
-      console.error(message);
-      logModeEvent("query_failed", {
-        reportToken: report.reportToken,
-        reportName: report.name,
-        queryToken,
-        queryName,
-        durationMs: Date.now() - queryStartedAt,
-        error: message,
-        heapMb: getHeapMb(),
-      });
+        await debugLog("mode", "query_failed", {
+          reportName: report.name,
+          queryName,
+          queryToken,
+          error: message,
+          durationMs: Date.now() - queryStartedAt,
+        }, { level: "error", syncRunId: opts.syncRunId });
 
-      await debugLog("mode", "query_failed", {
-        reportName: report.name,
-        queryName,
-        queryToken,
-        error: message,
-        durationMs: Date.now() - queryStartedAt,
-      }, { level: "error", syncRunId: opts.syncRunId });
+        return {
+          status: "error",
+          message,
+        };
+      }
     }
+  );
+
+  for (const result of queryResults) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+
+    if (result.value.status === "error") {
+      errors.push(result.value.message);
+      continue;
+    }
+
+    storedRecords += result.value.storedRecords;
   }
 
   await cleanupReportData(report.id, allowedQueryTokens);
