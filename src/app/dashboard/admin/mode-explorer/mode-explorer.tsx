@@ -228,7 +228,7 @@ export function ModeExplorer({
                               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                 <span className="flex items-center gap-1">
                                   <Rows3 className="h-3 w-3" />
-                                  {query.storedRowCount.toLocaleString()} rows
+                                  {(query.storedRowCount || query.rowCount).toLocaleString()} rows
                                 </span>
                                 <span className="flex items-center gap-1">
                                   <Clock className="h-3 w-3" />
@@ -275,7 +275,7 @@ export function ModeExplorer({
       {queryData && !loading && selectedQuery && selectedReport && (
         <SectionCard
           title={selectedQuery.queryName}
-          description={`${selectedReport.name} — ${processedRows.length.toLocaleString()} rows${queryData.truncated ? " (truncated from " + queryData.sourceRowCount.toLocaleString() + ")" : ""}`}
+          description={`${selectedReport.name} — ${processedRows.length.toLocaleString()} rows${queryData.truncated && queryData.sourceRowCount ? " (truncated from " + queryData.sourceRowCount.toLocaleString() + ")" : queryData.truncated ? " (truncated)" : ""}`}
           action={
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
