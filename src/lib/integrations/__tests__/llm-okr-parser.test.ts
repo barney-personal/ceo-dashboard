@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // and before module-level `new Anthropic()` instantiates the class.
 // ---------------------------------------------------------------------------
 const mockMessages = vi.hoisted(() => ({ create: vi.fn() }));
+const mockSentry = vi.hoisted(() => ({
+  addBreadcrumb: vi.fn(),
+  captureException: vi.fn(),
+}));
 
 vi.mock("@anthropic-ai/sdk", () => {
   return {
@@ -22,6 +26,8 @@ vi.mock("@anthropic-ai/sdk", () => {
     },
   };
 });
+
+vi.mock("@sentry/nextjs", () => mockSentry);
 
 import { llmParseOkrUpdate } from "../llm-okr-parser";
 
@@ -48,6 +54,8 @@ describe("llmParseOkrUpdate timeout", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockMessages.create.mockReset();
+    mockSentry.addBreadcrumb.mockReset();
+    mockSentry.captureException.mockReset();
   });
 
   afterEach(() => {
@@ -113,6 +121,95 @@ describe("llmParseOkrUpdate timeout", () => {
     await expect(parsePromise).rejects.toThrow(
       /Slack sync exceeded its execution budget/
     );
+  });
+
+  it("retries once after a 429 response and succeeds on the next attempt", async () => {
+    const retryableError = Object.assign(new Error("rate limited"), {
+      status: 429,
+      type: "rate_limit_error",
+    });
+
+    mockMessages.create
+      .mockRejectedValueOnce(retryableError)
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "null" }],
+      });
+
+    const parsePromise = llmParseOkrUpdate(
+      "short message",
+      "#channel",
+      "system prompt"
+    );
+
+    await Promise.resolve();
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+    expect(mockSentry.addBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "llm-okr-parser",
+        message: "Retrying Claude OKR parse after retryable failure",
+        data: expect.objectContaining({
+          attempt: 1,
+          nextAttempt: 2,
+          backoffMs: 1_000,
+          reason: "status_429",
+        }),
+      })
+    );
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(parsePromise).resolves.toBeNull();
+    expect(mockMessages.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-retryable failures", async () => {
+    const nonRetryableError = Object.assign(new Error("upstream failed"), {
+      status: 500,
+      type: "api_error",
+    });
+    mockMessages.create.mockRejectedValueOnce(nonRetryableError);
+
+    await expect(
+      llmParseOkrUpdate("short message", "#channel", "system prompt")
+    ).rejects.toBe(nonRetryableError);
+
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+    expect(mockSentry.addBreadcrumb).not.toHaveBeenCalled();
+    expect(mockSentry.captureException).toHaveBeenCalledWith(
+      nonRetryableError,
+      expect.objectContaining({
+        tags: { integration: "llm-okr-parser" },
+        extra: { operation: "messages.create" },
+      })
+    );
+  });
+
+  it("stops retry backoff immediately when the sync signal aborts", async () => {
+    const retryableError = Object.assign(new Error("overloaded"), {
+      status: 529,
+      error: { type: "overloaded_error" },
+    });
+    mockMessages.create.mockRejectedValueOnce(retryableError);
+
+    const controller = new AbortController();
+    const parsePromise = llmParseOkrUpdate(
+      "short message",
+      "#channel",
+      "system prompt",
+      { signal: controller.signal }
+    );
+
+    await Promise.resolve();
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+
+    controller.abort(new Error("Slack sync exceeded its execution budget"));
+
+    await expect(parsePromise).rejects.toThrow(
+      /Slack sync exceeded its execution budget/
+    );
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
   });
 
   it("clears the abort timer when the LLM call succeeds normally", async () => {

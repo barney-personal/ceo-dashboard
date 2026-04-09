@@ -1,5 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
+import type {
+  Message as AnthropicMessage,
+  MessageCreateParamsNonStreaming,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import { db } from "@/lib/db";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { squads } from "@/lib/db/schema";
@@ -12,6 +16,8 @@ const client = new Anthropic();
  * Prevents a stuck Anthropic request from keeping a sync worker alive past its budget.
  */
 const LLM_CALL_TIMEOUT_MS = 90_000;
+const LLM_MAX_ATTEMPTS = 3;
+const LLM_INITIAL_BACKOFF_MS = 1_000;
 
 export interface ParsedKr {
   objective: string;
@@ -28,6 +34,14 @@ export interface ParsedOkrUpdate {
 
 interface ParseOkrOptions {
   signal?: AbortSignal;
+}
+
+interface AnthropicFailureShape {
+  status?: unknown;
+  type?: unknown;
+  error?: {
+    type?: unknown;
+  };
 }
 
 function composeAbortSignal(
@@ -64,6 +78,127 @@ function composeAbortSignal(
     },
     timedOut: () => didTimeout,
   };
+}
+
+function abortReasonToError(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new Error("LLM OKR parse was aborted");
+}
+
+function getAnthropicFailureDetails(error: unknown): {
+  status?: number;
+  type?: string;
+} {
+  if (!error || typeof error !== "object") {
+    return {};
+  }
+
+  const anthropicError = error as AnthropicFailureShape;
+  const status =
+    typeof anthropicError.status === "number" ? anthropicError.status : undefined;
+  const type =
+    typeof anthropicError.type === "string"
+      ? anthropicError.type
+      : typeof anthropicError.error?.type === "string"
+        ? anthropicError.error.type
+        : undefined;
+
+  return { status, type };
+}
+
+function isRetryableAnthropicError(error: unknown): boolean {
+  const { status, type } = getAnthropicFailureDetails(error);
+  return status === 429 || status === 529 || type === "overloaded_error";
+}
+
+function getRetryFailureReason(error: unknown): string {
+  const { status, type } = getAnthropicFailureDetails(error);
+
+  if (type === "overloaded_error") {
+    return "overloaded_error";
+  }
+
+  if (status === 429 || status === 529) {
+    return `status_${status}`;
+  }
+
+  return "unknown";
+}
+
+function waitForRetryBackoff(
+  delayMs: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(abortReasonToError(signal.reason));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReasonToError(signal.reason));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function createMessageWithRetry(
+  prompt: string,
+  messageText: string,
+  channelContext: string,
+  signal: AbortSignal
+): Promise<AnthropicMessage> {
+  const request: MessageCreateParamsNonStreaming = {
+    model: "claude-sonnet-4-6",
+    max_tokens: 2000,
+    system: prompt,
+    messages: [
+      {
+        role: "user",
+        content: `Channel: ${channelContext}\n\nSlack message:\n${messageText}`,
+      },
+    ],
+  };
+
+  for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await client.messages.create(request, { signal });
+    } catch (error) {
+      if (
+        signal.aborted ||
+        !isRetryableAnthropicError(error) ||
+        attempt === LLM_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+
+      const backoffMs = LLM_INITIAL_BACKOFF_MS * 2 ** (attempt - 1);
+      Sentry.addBreadcrumb({
+        category: "llm-okr-parser",
+        level: "warning",
+        message: "Retrying Claude OKR parse after retryable failure",
+        data: {
+          attempt,
+          nextAttempt: attempt + 1,
+          maxAttempts: LLM_MAX_ATTEMPTS,
+          backoffMs,
+          reason: getRetryFailureReason(error),
+        },
+      });
+
+      await waitForRetryBackoff(backoffMs, signal);
+    }
+  }
+
+  throw new Error("LLM OKR parse exhausted all retry attempts");
 }
 
 /**
@@ -172,21 +307,13 @@ export async function llmParseOkrUpdate(
     `LLM OKR parse timed out after ${LLM_CALL_TIMEOUT_MS / 1000}s`
   );
 
-  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  let response: AnthropicMessage;
   try {
-    response = await client.messages.create(
-      {
-        model: "claude-sonnet-4-6",
-        max_tokens: 2000,
-        system: prompt,
-        messages: [
-          {
-            role: "user",
-            content: `Channel: ${channelContext}\n\nSlack message:\n${messageText}`,
-          },
-        ],
-      },
-      { signal }
+    response = await createMessageWithRetry(
+      prompt,
+      messageText,
+      channelContext,
+      signal
     );
   } catch (error) {
     if (signal.aborted) {
@@ -201,11 +328,7 @@ export async function llmParseOkrUpdate(
         throw timeoutError;
       }
 
-      if (signal.reason instanceof Error) {
-        throw signal.reason;
-      }
-
-      throw new Error("LLM OKR parse was aborted");
+      throw abortReasonToError(signal.reason);
     }
     Sentry.captureException(error, {
       tags: { integration: "llm-okr-parser" },
