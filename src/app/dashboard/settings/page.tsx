@@ -7,8 +7,6 @@ import {
 import { db } from "@/lib/db";
 import { userIntegrations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { BookOpen } from "lucide-react";
-
 export default async function SettingsPage() {
   const { userId } = await auth();
 
@@ -29,7 +27,6 @@ export default async function SettingsPage() {
       label: "Granola",
       description: "AI meeting notes — summaries, transcripts, and action items",
       placeholder: "grn_...",
-      icon: BookOpen,
       connected: connectedProviders.has("granola"),
       updatedAt: connectedProviders.get("granola") ?? null,
     },
