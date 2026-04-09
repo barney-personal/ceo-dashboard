@@ -94,7 +94,7 @@ async function syncGranolaNotes(
           participants: full.attendees ?? null,
           meetingDate: new Date(full.created_at),
           durationMinutes: null,
-          calendarEventId: full.calendar_event?.organiser ?? null,
+          calendarEventId: full.calendar_event?.calendar_event_id ?? null,
         })
         .onConflictDoUpdate({
           target: meetingNotes.granolaMeetingId,

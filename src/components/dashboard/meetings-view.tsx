@@ -234,30 +234,7 @@ function MeetingCard({
           )}
 
           {meeting.notes.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                Meeting notes
-              </span>
-              {meeting.notes.map((note) => (
-                <div
-                  key={note.id}
-                  className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground/60" />
-                    <span className="text-xs font-medium text-foreground">
-                      {note.title}
-                    </span>
-                  </div>
-                  {note.summary && (
-                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                      {note.summary.slice(0, 200)}
-                      {note.summary.length > 200 && "..."}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
+            <InlineMeetingNotes notes={meeting.notes} />
           )}
 
           {meeting.htmlLink && (
@@ -270,6 +247,81 @@ function MeetingCard({
               Open in Google Calendar
               <ExternalLink className="h-2.5 w-2.5" />
             </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InlineMeetingNotes({ notes }: { notes: MeetingNoteRow[] }) {
+  const [showHistorical, setShowHistorical] = useState(false);
+  const currentNotes = notes.filter((n) => !n.isHistorical);
+  const historicalNotes = notes.filter((n) => n.isHistorical);
+
+  return (
+    <div className="mt-3 space-y-1.5">
+      <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        Meeting notes
+      </span>
+      {currentNotes.map((note) => (
+        <div
+          key={note.id}
+          className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2"
+        >
+          <div className="flex items-center gap-1.5">
+            <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+            <span className="text-xs font-medium text-foreground">
+              {note.title}
+            </span>
+          </div>
+          {note.summary && (
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              {note.summary.replace(/^###?\s+/gm, "").slice(0, 200)}
+              {note.summary.length > 200 && "..."}
+            </p>
+          )}
+        </div>
+      ))}
+      {historicalNotes.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowHistorical(!showHistorical)}
+            className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 transition-transform",
+                showHistorical && "rotate-90"
+              )}
+            />
+            Previous notes ({historicalNotes.length})
+          </button>
+          {showHistorical && (
+            <div className="mt-1.5 space-y-1.5 border-l-2 border-border/30 pl-3">
+              {historicalNotes.map((note) => (
+                <div
+                  key={note.id}
+                  className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground/40" />
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {note.title}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/50">
+                      {formatDayLabel(note.meetingDate.slice(0, 10))}
+                    </span>
+                  </div>
+                  {note.summary && (
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground/70">
+                      {note.summary.replace(/^###?\s+/gm, "").slice(0, 150)}
+                      {note.summary.length > 150 && "..."}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

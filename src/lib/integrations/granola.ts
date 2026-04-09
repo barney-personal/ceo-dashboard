@@ -122,6 +122,9 @@ export interface GranolaCalendarEvent {
   event_title?: string;
   organiser?: string;
   invitees?: { email: string }[];
+  calendar_event_id?: string;
+  scheduled_start_time?: string;
+  scheduled_end_time?: string;
 }
 
 export interface GranolaTranscriptEntry {
