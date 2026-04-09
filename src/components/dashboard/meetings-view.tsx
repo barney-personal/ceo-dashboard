@@ -445,9 +445,10 @@ type ViewMode = "week" | "day";
 interface MeetingsViewProps {
   initialDays: DayData[];
   initialWeekStart: string; // YYYY-MM-DD
+  calendarConnected?: boolean;
 }
 
-export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProps) {
+export function MeetingsView({ initialDays, initialWeekStart, calendarConnected = true }: MeetingsViewProps) {
   const [days, setDays] = useState(initialDays);
   const [weekStart, setWeekStart] = useState(initialWeekStart);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
@@ -595,6 +596,21 @@ export function MeetingsView({ initialDays, initialWeekStart }: MeetingsViewProp
           </div>
         )}
       </div>
+
+      {/* Connect calendar prompt */}
+      {!calendarConnected && (
+        <div className="flex items-center gap-3 rounded-xl border border-amber-200/60 bg-amber-50/50 px-4 py-3">
+          <CalendarDays className="h-5 w-5 shrink-0 text-amber-600" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-amber-900">
+              Connect your Google Calendar
+            </p>
+            <p className="text-xs text-amber-700/80">
+              Sign out and back in to grant calendar access, then your personal meetings will appear here.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Summary stats */}
       <div className="flex gap-4 text-xs text-muted-foreground">

@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { meetings, preReads } from "@/lib/db/schema";
 import { and, gte, lte, desc, asc } from "drizzle-orm";
+import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,45 +87,24 @@ function isWorkMeeting(
 // Data fetching
 // ---------------------------------------------------------------------------
 
-/**
- * Get meetings and pre-reads for a date range, with linking.
- * Pre-reads posted on day D are matched to meetings on day D or D+1.
- */
-export async function getMeetingsForRange(
+/** Fetch meetings from DB (synced data, for cron/service mode). */
+async function fetchDbMeetings(
   startDate: Date,
   endDate: Date,
-  opts: { minAttendees?: number } = {}
-): Promise<DayData[]> {
-  const minAttendees = opts.minAttendees ?? 2;
-
-  // Fetch pre-reads from 1 day before the range start (they may link to day 1 meetings)
-  const preReadStart = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
-
-  const [meetingRows, preReadRows] = await Promise.all([
-    db
-      .select()
-      .from(meetings)
-      .where(
-        and(
-          gte(meetings.startTime, startDate),
-          lte(meetings.startTime, endDate)
-        )
+  minAttendees: number
+): Promise<MeetingRow[]> {
+  const meetingRows = await db
+    .select()
+    .from(meetings)
+    .where(
+      and(
+        gte(meetings.startTime, startDate),
+        lte(meetings.startTime, endDate)
       )
-      .orderBy(asc(meetings.startTime)),
-    db
-      .select()
-      .from(preReads)
-      .where(
-        and(
-          gte(preReads.postedAt, preReadStart),
-          lte(preReads.postedAt, endDate)
-        )
-      )
-      .orderBy(desc(preReads.postedAt)),
-  ]);
+    )
+    .orderBy(asc(meetings.startTime));
 
-  // Serialize dates and filter to work meetings
-  const serializedMeetings: MeetingRow[] = meetingRows
+  return meetingRows
     .filter((m) => isWorkMeeting(m, minAttendees))
     .map((m) => ({
       id: m.id,
@@ -139,6 +119,92 @@ export async function getMeetingsForRange(
       recurringEventId: m.recurringEventId,
       htmlLink: m.htmlLink,
     }));
+}
+
+/** Fetch meetings live from Google Calendar API (per-user mode). */
+async function fetchLiveCalendarMeetings(
+  startDate: Date,
+  endDate: Date,
+  accessToken: string,
+  minAttendees: number
+): Promise<MeetingRow[]> {
+  const events = await getAllEvents(
+    startDate.toISOString(),
+    endDate.toISOString(),
+    { accessToken }
+  );
+
+  return events
+    .map((e, i) => calendarEventToMeetingRow(e, i))
+    .filter((m): m is MeetingRow => m !== null)
+    .filter((m) => isWorkMeeting(m, minAttendees));
+}
+
+/** Convert a CalendarEvent from the Google API to a MeetingRow. */
+function calendarEventToMeetingRow(
+  event: CalendarEvent,
+  index: number
+): MeetingRow | null {
+  const startTime = event.start.dateTime ?? event.start.date;
+  const endTime = event.end.dateTime ?? event.end.date;
+  if (!startTime || !endTime) return null;
+
+  const attendees = event.attendees
+    ? event.attendees.map((a) => ({
+        email: a.email,
+        name: a.displayName ?? null,
+        responseStatus: a.responseStatus ?? null,
+      }))
+    : null;
+
+  return {
+    id: index,
+    calendarEventId: event.id,
+    title: event.summary ?? "(No title)",
+    description: event.description ?? null,
+    startTime: new Date(startTime).toISOString(),
+    endTime: new Date(endTime).toISOString(),
+    location: event.location ?? null,
+    organizer: event.organizer?.displayName ?? event.organizer?.email ?? null,
+    attendees,
+    recurringEventId: event.recurringEventId ?? null,
+    htmlLink: event.htmlLink ?? null,
+  };
+}
+
+/**
+ * Get meetings and pre-reads for a date range, with linking.
+ * Pre-reads posted on day D are matched to meetings on day D or D+1.
+ *
+ * When `accessToken` is provided, fetches live from Google Calendar API (per-user).
+ * Otherwise reads from the synced meetings DB table (service/cron mode).
+ */
+export async function getMeetingsForRange(
+  startDate: Date,
+  endDate: Date,
+  opts: { minAttendees?: number; accessToken?: string } = {}
+): Promise<DayData[]> {
+  const minAttendees = opts.minAttendees ?? 2;
+
+  // Fetch pre-reads from 1 day before the range start (they may link to day 1 meetings)
+  const preReadStart = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
+
+  // Fetch meetings: live from Google API or from DB
+  const [serializedMeetings, preReadRows] = await Promise.all([
+    opts.accessToken
+      ? fetchLiveCalendarMeetings(startDate, endDate, opts.accessToken, minAttendees)
+      : fetchDbMeetings(startDate, endDate, minAttendees),
+    db
+      .select()
+      .from(preReads)
+      .where(
+        and(
+          gte(preReads.postedAt, preReadStart),
+          lte(preReads.postedAt, endDate)
+        )
+      )
+      .orderBy(desc(preReads.postedAt)),
+  ]);
 
   const serializedPreReads: PreReadRow[] = preReadRows.map((p) => ({
     id: p.id,
