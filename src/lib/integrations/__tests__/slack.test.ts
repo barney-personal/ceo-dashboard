@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockCaptureException } = vi.hoisted(() => ({
+const { mockCaptureException, mockCaptureMessage } = vi.hoisted(() => ({
   mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
 }));
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
 }));
 
 import { downloadSlackFile } from "../slack-files";
@@ -25,6 +27,7 @@ describe("Slack transport resilience", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     mockCaptureException.mockClear();
+    mockCaptureMessage.mockClear();
   });
 
   it("retries Slack API calls after rate limiting", async () => {
@@ -185,5 +188,45 @@ describe("Slack transport resilience", () => {
         }),
       })
     );
+  });
+
+  it("getChannelName does not capture to Sentry on HTTP 404 (invalid channel config)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response("channel not found", { status: 404 })
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await getChannelName("CBAD").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/404/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Invalid channel config must not produce an exception-level Sentry event —
+    // validateSlackChannels() emits the warning-level signal instead.
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it("getChannelName does not capture to Sentry on channel_not_found envelope (invalid channel config)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: false, error: "channel_not_found" }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      )
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await getChannelName("CBAD").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/channel_not_found/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Invalid channel config must not produce an exception-level Sentry event —
+    // validateSlackChannels() emits the warning-level signal instead.
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 });

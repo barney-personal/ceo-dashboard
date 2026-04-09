@@ -254,6 +254,10 @@ export async function slackApiRequest<T>(
     signal?: AbortSignal;
     timeoutMs?: number;
     maxRetries?: number;
+    /** HTTP status codes to throw without capturing to Sentry (caller handles observability). */
+    suppressedStatuses?: number[];
+    /** Slack envelope error codes to throw without capturing to Sentry (caller handles observability). */
+    suppressedCodes?: string[];
   } = {}
 ): Promise<T> {
   const url = new URL(`${SLACK_API}/${method}`);
@@ -262,6 +266,9 @@ export async function slackApiRequest<T>(
       url.searchParams.set(k, v);
     }
   }
+
+  const suppressedStatuses = new Set(opts.suppressedStatuses ?? []);
+  const suppressedCodes = new Set(opts.suppressedCodes ?? []);
 
   let lastEnvelopeError: Error | null = null;
   const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
@@ -295,10 +302,12 @@ export async function slackApiRequest<T>(
         status: res.status,
         method,
       });
-      Sentry.captureException(error, {
-        tags: { integration: "slack" },
-        extra: { method, attempt, operation: "slackApiRequest" },
-      });
+      if (!suppressedStatuses.has(res.status)) {
+        Sentry.captureException(error, {
+          tags: { integration: "slack" },
+          extra: { method, attempt, operation: "slackApiRequest" },
+        });
+      }
       throw error;
     }
 
@@ -321,10 +330,12 @@ export async function slackApiRequest<T>(
         await sleep(getRetryDelayMs(attempt));
         continue;
       }
-      Sentry.captureException(error, {
-        tags: { integration: "slack" },
-        extra: { method, attempt, operation: "slackApiRequest" },
-      });
+      if (!suppressedCodes.has(data.error ?? "")) {
+        Sentry.captureException(error, {
+          tags: { integration: "slack" },
+          extra: { method, attempt, operation: "slackApiRequest" },
+        });
+      }
       throw error;
     }
 
@@ -466,6 +477,10 @@ export async function getThreadReplies(
 
 /**
  * Get channel name by ID.
+ *
+ * HTTP 404 and `channel_not_found` envelope errors are thrown without Sentry
+ * capture — they indicate invalid configuration, and callers such as
+ * `validateSlackChannels()` emit the appropriate warning-level observability.
  */
 export async function getChannelName(
   channelId: string,
@@ -474,7 +489,11 @@ export async function getChannelName(
   const data = await slackApiRequest<ConversationsInfoResponse>(
     "conversations.info",
     { channel: channelId },
-    { signal: opts.signal }
+    {
+      signal: opts.signal,
+      suppressedStatuses: [404],
+      suppressedCodes: ["channel_not_found"],
+    }
   );
   return data.channel.name;
 }
