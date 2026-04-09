@@ -239,12 +239,11 @@ async function syncChannel(
       systemPrompt,
       { signal: opts.signal }
     );
+    parsedMessageCount += 1;
     if (!parsed) {
       llmNullCount += 1;
       continue;
     }
-
-    parsedMessageCount += 1;
     if (parsed.krs.length === 0) {
       emptyAfterValidationCount += 1;
       continue;
