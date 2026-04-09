@@ -196,24 +196,24 @@ describe("groupByPillarAndSquad", () => {
     ]);
 
     expect(grouped.map((pillar) => pillar.name)).toEqual([
-      "Commercial & Finance",
       "Growth Pillar",
+      "Commercial & Finance",
       "Other",
     ]);
     expect(grouped[0]).toMatchObject({
-      name: "Commercial & Finance",
-      count: 1,
-      isProduct: false,
-    });
-    expect(grouped[1]).toMatchObject({
       name: "Growth Pillar",
       count: 3,
       isProduct: true,
     });
-    expect(grouped[1].squads.map((squad) => squad.name)).toEqual([
+    expect(grouped[0].squads.map((squad) => squad.name)).toEqual([
       "Growth Marketing",
       "Growth Conversion",
     ]);
+    expect(grouped[1]).toMatchObject({
+      name: "Commercial & Finance",
+      count: 1,
+      isProduct: false,
+    });
     expect(grouped[2]).toMatchObject({
       name: "Other",
       count: 1,
