@@ -11,6 +11,7 @@ interface PersonData {
   function: string;
   location: string;
   tenureMonths: number;
+  employmentType: string;
 }
 
 interface SquadGroup {

@@ -83,6 +83,17 @@ const SQUAD_PILLAR_MAP: Record<string, string> = {
 };
 
 const PRODUCT_PILLARS = new Set([
+  // Rev canonical names
+  "Growth Pillar",
+  "EWA & Credit Products Pillar",
+  "Chat Pillar",
+  "New Bets Pillar",
+  "Access, Trust & Money",
+  "Risk & Payments Decisioning",
+  "Enablement",
+  "Wealth Pillar",
+  "Win On Data",
+  // Legacy names (old Headcount SSoT fallback)
   "Growth",
   "EWA & Credit Products",
   "Chat",

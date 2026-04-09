@@ -56,6 +56,7 @@ export default async function PeopleOrgPage() {
         function: p.function,
         location: p.location,
         tenureMonths: p.tenureMonths,
+        employmentType: p.employmentType,
       })),
     })),
   }));

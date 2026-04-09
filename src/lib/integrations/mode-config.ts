@@ -201,6 +201,16 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
 
   // --- People ---
   {
+    reportToken: "25a607aa5c6c",
+    name: "Current FTEs",
+    section: "people",
+    category: "org",
+    syncEnabled: true,
+    queries: [
+      { name: "current_employees", storageWindow: { kind: "snapshot" } },
+    ],
+  },
+  {
     reportToken: "c458b52ceb68",
     name: "Headcount SSoT Dashboard",
     section: "people",
