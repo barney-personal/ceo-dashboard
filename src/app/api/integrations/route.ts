@@ -93,17 +93,14 @@ export async function PUT(request: NextRequest) {
       },
     });
 
-  // Trigger an immediate sync of the user's Granola notes
-  let notesSynced = 0;
-  try {
-    const sinceDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // last 90 days
-    const result = await syncGranolaNotes(sinceDate, { token: body.apiKey });
-    notesSynced = result.count;
-  } catch {
-    // Sync failure shouldn't fail the key save
-  }
+  // Fire off a background sync — don't await, so the response returns immediately.
+  // The sync can take minutes for 90 days of notes and would timeout on production.
+  const sinceDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  syncGranolaNotes(sinceDate, { token: body.apiKey }).catch(() => {
+    // Sync failure shouldn't surface — cron will retry
+  });
 
-  return NextResponse.json({ status: "connected", notesSynced });
+  return NextResponse.json({ status: "connected" });
 }
 
 /**
