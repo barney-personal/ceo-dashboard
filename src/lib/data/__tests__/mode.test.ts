@@ -62,7 +62,7 @@ vi.mock("@/lib/db/schema", () => ({
   },
 }));
 
-import { getReportData, resetReportDataCacheForTests } from "../mode";
+import { getReportData, resetReportDataCacheForTests, REPORT_DATA_CACHE_MAX_ENTRIES } from "../mode";
 
 function createReportRows(rowValue: number) {
   return [
@@ -226,5 +226,89 @@ describe("getReportData cache", () => {
     ]);
 
     expect(mockSelect).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("getReportData LRU eviction", () => {
+  it("evicts the least-recently-used entry when the cache reaches the size limit", async () => {
+    // Fill the cache to the max with distinct category keys.
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES; i++) {
+      mockOrderBy.mockResolvedValueOnce(createReportRows(i));
+    }
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES; i++) {
+      await getReportData("unit-economics", `evict-cat-${i}`);
+    }
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES);
+
+    // Adding one more key should evict evict-cat-0 (oldest = LRU).
+    mockOrderBy.mockResolvedValueOnce(createReportRows(REPORT_DATA_CACHE_MAX_ENTRIES));
+    await getReportData("unit-economics", `evict-cat-${REPORT_DATA_CACHE_MAX_ENTRIES}`);
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 1);
+
+    // Re-requesting evict-cat-0 should be a cache miss (it was evicted).
+    mockOrderBy.mockResolvedValueOnce(createReportRows(0));
+    await getReportData("unit-economics", "evict-cat-0");
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 2);
+  });
+
+  it("refreshes position of a cache hit, protecting it from eviction", async () => {
+    // Fill the cache to the max.
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES; i++) {
+      mockOrderBy.mockResolvedValueOnce(createReportRows(i));
+    }
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES; i++) {
+      await getReportData("unit-economics", `lru-cat-${i}`);
+    }
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES);
+
+    // Access lru-cat-0 (a cache hit) to move it to MRU position.
+    // Now lru-cat-1 is the new LRU.
+    await getReportData("unit-economics", "lru-cat-0");
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES); // no DB call
+
+    // Adding a new key should evict lru-cat-1 (now LRU), not lru-cat-0.
+    mockOrderBy.mockResolvedValueOnce(createReportRows(REPORT_DATA_CACHE_MAX_ENTRIES));
+    await getReportData("unit-economics", `lru-cat-${REPORT_DATA_CACHE_MAX_ENTRIES}`);
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 1);
+
+    // lru-cat-0 should still be cached (was refreshed to MRU).
+    await getReportData("unit-economics", "lru-cat-0");
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 1); // no DB call
+
+    // lru-cat-1 should be evicted (cache miss).
+    mockOrderBy.mockResolvedValueOnce(createReportRows(1));
+    await getReportData("unit-economics", "lru-cat-1");
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 2);
+  });
+
+  it("prefers evicting resolved entries over pending entries", async () => {
+    // Fill cache with (max - 1) resolved entries.
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES - 1; i++) {
+      mockOrderBy.mockResolvedValueOnce(createReportRows(i));
+    }
+    for (let i = 0; i < REPORT_DATA_CACHE_MAX_ENTRIES - 1; i++) {
+      await getReportData("unit-economics", `pend-cat-${i}`);
+    }
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES - 1);
+
+    // Add a pending entry (one slot left, cache now full).
+    const deferred = createDeferred<ReturnType<typeof createReportRows>>();
+    mockOrderBy.mockReturnValueOnce(deferred.promise);
+    const pendingRequest = getReportData("unit-economics", `pend-cat-${REPORT_DATA_CACHE_MAX_ENTRIES - 1}`);
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES);
+
+    // Adding one more key should evict the oldest resolved entry (pend-cat-0), NOT the pending entry.
+    mockOrderBy.mockResolvedValueOnce(createReportRows(REPORT_DATA_CACHE_MAX_ENTRIES));
+    await getReportData("unit-economics", `pend-cat-${REPORT_DATA_CACHE_MAX_ENTRIES}`);
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 1);
+
+    // The pending entry should still be in the cache and deduplicate correctly.
+    const secondPendingRequest = getReportData("unit-economics", `pend-cat-${REPORT_DATA_CACHE_MAX_ENTRIES - 1}`);
+    expect(mockSelect).toHaveBeenCalledTimes(REPORT_DATA_CACHE_MAX_ENTRIES + 1); // no new DB call
+
+    deferred.resolve(createReportRows(REPORT_DATA_CACHE_MAX_ENTRIES - 1));
+    const [result1, result2] = await Promise.all([pendingRequest, secondPendingRequest]);
+    expect(result1).toEqual(result2);
+    expect(result1).toEqual([expect.objectContaining({ rows: [{ value: REPORT_DATA_CACHE_MAX_ENTRIES - 1 }] })]);
   });
 });
