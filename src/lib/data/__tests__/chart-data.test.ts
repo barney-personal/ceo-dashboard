@@ -134,28 +134,47 @@ describe("getQuery3Series", () => {
 });
 
 describe("getLtvCacRatioSeries", () => {
-  it("computes weekly LTV:CAC values and latest point from the newest bucket", async () => {
+  it("computes weekly LTV:CAC from Query 4 LTV and Query 3 spend/users", async () => {
     mockGetReportData.mockResolvedValue([
       {
-        queryName: "LTV:Paid CAC",
+        queryName: "Query 4",
         rows: [
+          { month: "2023-01-01", user_ltv_36m_actual: 120 },
+        ],
+      },
+      {
+        queryName: "Query 3",
+        rows: [
+          // Week of 2023-01-02 (Mon): two actual days
           {
-            period: "2023-01-02",
-            ltv_36m: 100,
-            paid_spend_excl_test: 20,
-            paid_users_excl_test: 2,
+            day: "2023-01-02",
+            actual_or_target: "actual",
+            spend: 20,
+            new_bank_connected_users: 2,
+            cpa: 10,
           },
           {
-            period: "2023-01-08",
-            ltv_36m: 140,
-            paid_spend_excl_test: 10,
-            paid_users_excl_test: 1,
+            day: "2023-01-03",
+            actual_or_target: "actual",
+            spend: 30,
+            new_bank_connected_users: 3,
+            cpa: 10,
           },
+          // Target row should be ignored
           {
-            period: "2023-01-09",
-            ltv_36m: 80,
-            paid_spend_excl_test: 20,
-            paid_users_excl_test: 4,
+            day: "2023-01-04",
+            actual_or_target: "target_base",
+            spend: 100,
+            new_bank_connected_users: 10,
+            cpa: 10,
+          },
+          // Week of 2023-01-09 (Mon): one actual day
+          {
+            day: "2023-01-09",
+            actual_or_target: "actual",
+            spend: 10,
+            new_bank_connected_users: 2,
+            cpa: 5,
           },
         ],
       },
@@ -164,35 +183,36 @@ describe("getLtvCacRatioSeries", () => {
     const series = await getLtvCacRatioSeries();
     const latest = await getLatestLtvCacRatio();
 
+    // Week 2023-01-02: spend=50, users=5, CPA=10, LTV=120 → ratio=12
+    // Week 2023-01-09: spend=10, users=2, CPA=5, LTV=120 → ratio=24
     expect(series[0]).toMatchObject({
       label: "LTV:CAC",
       data: [
         { date: "2023-01-02", value: 12 },
-        { date: "2023-01-09", value: 16 },
+        { date: "2023-01-09", value: 24 },
       ],
     });
-    expect(latest).toBe(16);
+    expect(latest).toBe(24);
   });
 
-  it("excludes the current incomplete week from the ratio series", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
-
+  it("falls back to previous month LTV when current month has no data", async () => {
     mockGetReportData.mockResolvedValue([
       {
-        queryName: "LTV:Paid CAC",
+        queryName: "Query 4",
+        rows: [
+          { month: "2023-01-01", user_ltv_36m_actual: 100 },
+          // No February data
+        ],
+      },
+      {
+        queryName: "Query 3",
         rows: [
           {
-            period: "2026-03-31",
-            ltv_36m: 120,
-            paid_spend_excl_test: 60,
-            paid_users_excl_test: 6,
-          },
-          {
-            period: "2026-04-07",
-            ltv_36m: 200,
-            paid_spend_excl_test: 150,
-            paid_users_excl_test: 2,
+            day: "2023-02-06",
+            actual_or_target: "actual",
+            spend: 50,
+            new_bank_connected_users: 5,
+            cpa: 10,
           },
         ],
       },
@@ -200,9 +220,40 @@ describe("getLtvCacRatioSeries", () => {
 
     const series = await getLtvCacRatioSeries();
 
+    // February has no LTV, falls back to January (100). CPA=10 → ratio=10
     expect(series[0]).toMatchObject({
       label: "LTV:CAC",
-      data: [{ date: "2026-03-30", value: 12 }],
+      data: [{ date: "2023-02-06", value: 10 }],
+    });
+  });
+
+  it("returns guardrail series alongside LTV:CAC", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 4",
+        rows: [{ month: "2023-01-01", user_ltv_36m_actual: 60 }],
+      },
+      {
+        queryName: "Query 3",
+        rows: [
+          {
+            day: "2023-01-02",
+            actual_or_target: "actual",
+            spend: 20,
+            new_bank_connected_users: 1,
+            cpa: 20,
+          },
+        ],
+      },
+    ]);
+
+    const series = await getLtvCacRatioSeries();
+
+    expect(series).toHaveLength(2);
+    expect(series[1]).toMatchObject({
+      label: "3x guardrail",
+      dashed: true,
+      data: [{ date: "2023-01-02", value: 3 }],
     });
   });
 });

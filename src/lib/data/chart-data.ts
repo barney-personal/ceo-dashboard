@@ -93,59 +93,84 @@ export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
 
 /**
  * LTV:Paid CAC ratio over time (weekly).
- * Computed as avg_ltv / (paid_spend_excl_test / paid_users_excl_test).
+ * Computed from two queries in the Strategic Finance KPIs report:
+ *   - Query 4: monthly LTV (user_ltv_36m_actual)
+ *   - Query 3: daily spend / new_bank_connected_users (actuals only)
+ * Weekly CAC = weekly spend / weekly new users; ratio = LTV / CAC.
  */
 export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
-  const data = await getReportData("unit-economics", "cac");
-  const query = data.find((d) => d.queryName === "LTV:Paid CAC");
-  if (!query || query.rows.length === 0) return [];
+  const data = await getReportData("unit-economics", "kpis");
 
-  const rows = query.rows
-    .filter(
-      (r) =>
-        r.period &&
-        new Date(rowStr(r, "period")).getTime() >= CHART_HISTORY_START_TS,
-    )
-    .map((r) => ({
-      date: rowStr(r, "period"),
-      ltv: rowNum(r, "ltv_36m"),
-      paidSpend: rowNum(r, "paid_spend_excl_test"),
-      paidUsers: rowNum(r, "paid_users_excl_test"),
-    }))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  // 1. Build monthly LTV lookup from Query 4
+  const ltvQuery = data.find((d) => d.queryName === "Query 4");
+  if (!ltvQuery || ltvQuery.rows.length === 0) return [];
 
-  const currentWeekStart = getCurrentWeekStart();
-  const weeks = [...groupByWeek(rows, "date").entries()]
-    .filter(
-      ([date]) =>
-        date >= CHART_HISTORY_FIRST_FULL_WEEK && date < currentWeekStart,
-    )
+  const ltvByMonth = new Map<string, number>();
+  for (const row of ltvQuery.rows) {
+    if (row.month && row.user_ltv_36m_actual != null) {
+      const d = new Date(row.month as string);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      ltvByMonth.set(key, row.user_ltv_36m_actual as number);
+    }
+  }
+
+  // Sort months to find the latest available LTV
+  const sortedMonths = [...ltvByMonth.keys()].sort();
+  const latestLtvMonth = sortedMonths[sortedMonths.length - 1];
+  const latestLtv = latestLtvMonth ? ltvByMonth.get(latestLtvMonth)! : 0;
+
+  // Helper: get LTV for a month, falling back to previous month if not available
+  function getLtvForMonth(monthKey: string): number {
+    if (ltvByMonth.has(monthKey)) return ltvByMonth.get(monthKey)!;
+    // Find the closest previous month that has data
+    const prev = sortedMonths.filter((m) => m < monthKey);
+    if (prev.length > 0) return ltvByMonth.get(prev[prev.length - 1])!;
+    return latestLtv;
+  }
+
+  // 2. Aggregate Query 3 "actual" rows into weekly buckets
+  const q3 = data.find((d) => d.queryName === "Query 3");
+  if (!q3 || q3.rows.length === 0) return [];
+
+  const CHARTS_START = new Date("2023-01-01").getTime();
+
+  const weekMap = new Map<
+    string,
+    { spend: number; users: number; days: number }
+  >();
+  for (const r of q3.rows) {
+    if (!r.day) continue;
+    if ((r.actual_or_target as string) !== "actual") continue;
+    if (new Date(r.day as string).getTime() < CHARTS_START) continue;
+
+    const d = new Date(r.day as string);
+    const day = d.getDay();
+    const monday = new Date(
+      d.getTime() - (day === 0 ? 6 : day - 1) * 86400000,
+    );
+    const key = monday.toISOString().slice(0, 10);
+
+    const b = weekMap.get(key) ?? { spend: 0, users: 0, days: 0 };
+    b.spend += ((r.spend as number) ?? 0);
+    b.users += ((r.new_bank_connected_users as number) ?? 0);
+    b.days += 1;
+    weekMap.set(key, b);
+  }
+
+  // 3. Compute weekly LTV:CAC ratio
+  const weeks = [...weekMap.entries()]
+    .filter(([date]) => date >= "2023-01-02")
     .sort((a, b) => a[0].localeCompare(b[0]));
 
   const ratioData = weeks
-    .map(([date, weekRows]) => {
-      const totals = weekRows.reduce(
-        (acc, row) => {
-          acc.ltv += row.ltv;
-          acc.paidSpend += row.paidSpend;
-          acc.paidUsers += row.paidUsers;
-          acc.days += 1;
-          return acc;
-        },
-        { ltv: 0, paidSpend: 0, paidUsers: 0, days: 0 },
-      );
-
-      if (totals.paidUsers <= 0) {
-        return null;
-      }
-
-      const avgLtv = totals.ltv / totals.days;
-      const paidCpa = totals.paidSpend / totals.paidUsers;
-      return { date, value: paidCpa > 0 ? avgLtv / paidCpa : 0 };
-    })
-    .filter(
-      (point): point is { date: string; value: number } => point !== null,
-    );
+    .filter(([, v]) => v.users > 0)
+    .map(([date, v]) => {
+      const d = new Date(date);
+      const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const ltv = getLtvForMonth(monthKey);
+      const paidCpa = v.spend / v.users;
+      return { date, value: paidCpa > 0 ? ltv / paidCpa : 0 };
+    });
 
   return [
     {
