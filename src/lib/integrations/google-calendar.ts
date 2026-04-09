@@ -1,73 +1,6 @@
 const GCAL_API = "https://www.googleapis.com/calendar/v3";
-const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GCAL_REQUEST_TIMEOUT_MS = 30_000;
 const GCAL_MAX_RETRIES = 3;
-const TOKEN_EXPIRY_BUFFER_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Service-mode OAuth token management (env var refresh token for cron sync)
-// ---------------------------------------------------------------------------
-
-let cachedServiceToken: string | null = null;
-let serviceTokenExpiresAt = 0;
-
-function getServiceOAuthConfig() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      "Missing Google OAuth config: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN are required"
-    );
-  }
-  return { clientId, clientSecret, refreshToken };
-}
-
-async function getServiceAccessToken(): Promise<string> {
-  if (cachedServiceToken && Date.now() < serviceTokenExpiresAt - TOKEN_EXPIRY_BUFFER_MS) {
-    return cachedServiceToken;
-  }
-
-  const { clientId, clientSecret, refreshToken } = getServiceOAuthConfig();
-
-  const res = await fetch(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Google token refresh failed (${res.status}): ${text}`);
-  }
-
-  const data = (await res.json()) as {
-    access_token: string;
-    expires_in: number;
-  };
-
-  cachedServiceToken = data.access_token;
-  serviceTokenExpiresAt = Date.now() + data.expires_in * 1000;
-  return cachedServiceToken;
-}
-
-function getCalendarId(): string {
-  return process.env.GOOGLE_CALENDAR_ID ?? "primary";
-}
-
-// ---------------------------------------------------------------------------
-// Token resolution: user token (from Clerk) or service token (from env vars)
-// ---------------------------------------------------------------------------
-
-async function resolveAccessToken(userAccessToken?: string): Promise<string> {
-  if (userAccessToken) return userAccessToken;
-  return getServiceAccessToken();
-}
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -89,12 +22,12 @@ async function sleep(ms: number): Promise<void> {
 async function gcalRequest<T>(
   path: string,
   opts: {
-    accessToken?: string;
+    accessToken: string;
     signal?: AbortSignal;
     timeoutMs?: number;
     maxRetries?: number;
     params?: Record<string, string>;
-  } = {}
+  }
 ): Promise<T> {
   const url = new URL(`${GCAL_API}${path}`);
   if (opts.params) {
@@ -105,7 +38,6 @@ async function gcalRequest<T>(
 
   const maxRetries = opts.maxRetries ?? GCAL_MAX_RETRIES;
   const timeoutMs = opts.timeoutMs ?? GCAL_REQUEST_TIMEOUT_MS;
-  const isUserToken = !!opts.accessToken;
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -114,8 +46,6 @@ async function gcalRequest<T>(
         ? opts.signal.reason
         : new Error("Google Calendar request was aborted");
     }
-
-    const accessToken = await resolveAccessToken(opts.accessToken);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(
@@ -129,22 +59,13 @@ async function gcalRequest<T>(
     try {
       const res = await fetch(url.toString(), {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${opts.accessToken}`,
           "Content-Type": "application/json",
         },
         signal: controller.signal,
       });
 
-      // For service tokens, clear cache and retry on 401.
-      // For user tokens, don't retry 401 — the token from Clerk is already fresh.
       if (res.status === 401) {
-        if (!isUserToken && attempt < maxRetries) {
-          cachedServiceToken = null;
-          serviceTokenExpiresAt = 0;
-          lastError = new Error("Google Calendar token expired, refreshing");
-          await sleep(getRetryDelayMs(attempt));
-          continue;
-        }
         throw new Error(`Google Calendar API error 401: ${await res.text()}`);
       }
 
@@ -224,16 +145,12 @@ interface CalendarEventListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API — all require a per-user access token from Clerk
 // ---------------------------------------------------------------------------
 
-/**
- * List events from a calendar within a time range.
- * Pass accessToken for per-user mode (Clerk token), omit for service mode (env var).
- */
 export async function listEvents(
   opts: {
-    accessToken?: string;
+    accessToken: string;
     timeMin?: string;
     timeMax?: string;
     calendarId?: string;
@@ -241,9 +158,9 @@ export async function listEvents(
     maxResults?: number;
     singleEvents?: boolean;
     signal?: AbortSignal;
-  } = {}
+  }
 ): Promise<CalendarEventListResponse> {
-  const calendarId = opts.calendarId ?? getCalendarId();
+  const calendarId = opts.calendarId ?? "primary";
   const params: Record<string, string> = {
     singleEvents: String(opts.singleEvents ?? true),
     orderBy: "startTime",
@@ -259,28 +176,21 @@ export async function listEvents(
   );
 }
 
-/**
- * Get a single event by ID.
- */
 export async function getEvent(
   eventId: string,
-  opts: { accessToken?: string; calendarId?: string; signal?: AbortSignal } = {}
+  opts: { accessToken: string; calendarId?: string; signal?: AbortSignal }
 ): Promise<CalendarEvent> {
-  const calendarId = opts.calendarId ?? getCalendarId();
+  const calendarId = opts.calendarId ?? "primary";
   return gcalRequest<CalendarEvent>(
     `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
     { accessToken: opts.accessToken, signal: opts.signal }
   );
 }
 
-/**
- * Fetch all events in a time range, paginating through all pages.
- * Excludes cancelled events.
- */
 export async function getAllEvents(
   timeMin: string,
   timeMax: string,
-  opts: { accessToken?: string; calendarId?: string; signal?: AbortSignal } = {}
+  opts: { accessToken: string; calendarId?: string; signal?: AbortSignal }
 ): Promise<CalendarEvent[]> {
   const all: CalendarEvent[] = [];
   let pageToken: string | undefined;
