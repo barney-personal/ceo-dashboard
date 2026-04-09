@@ -23,7 +23,11 @@ import {
   type SyncControl,
   throwIfSyncShouldStop,
 } from "./errors";
-import { determineSyncStatus, formatSyncError } from "./coordinator";
+import {
+  determineSyncStatus,
+  formatSyncError,
+  type SyncRunScope,
+} from "./coordinator";
 import { debugLog } from "@/lib/debug-logger";
 import * as Sentry from "@sentry/nextjs";
 
@@ -97,7 +101,7 @@ async function mapWithConcurrencyLimit<T, TResult>(
 /**
  * Ensure all reports from config exist in the database.
  */
-async function seedReports() {
+export async function ensureModeReportsSeeded() {
   for (const config of MODE_SYNC_PROFILES) {
     await db
       .insert(modeReports)
@@ -116,6 +120,70 @@ async function seedReports() {
         },
       });
   }
+}
+
+export type ModeSyncTargetValidationResult =
+  | { ok: true; report: typeof modeReports.$inferSelect }
+  | { ok: false; status: 400 | 404 | 409; error: string };
+
+export async function validateModeReportSyncTarget(
+  reportToken: unknown
+): Promise<ModeSyncTargetValidationResult> {
+  if (typeof reportToken !== "string" || reportToken.trim().length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: "reportToken is required",
+    };
+  }
+
+  const normalizedToken = reportToken.trim();
+  const profile = getModeSyncProfile(normalizedToken);
+
+  if (!profile) {
+    return {
+      ok: false,
+      status: 404,
+      error: `Unknown Mode report token "${normalizedToken}"`,
+    };
+  }
+
+  if (!profile.syncEnabled) {
+    return {
+      ok: false,
+      status: 409,
+      error: `Mode report "${profile.name}" is disabled for sync`,
+    };
+  }
+
+  await ensureModeReportsSeeded();
+
+  const [report] = await db
+    .select()
+    .from(modeReports)
+    .where(eq(modeReports.reportToken, normalizedToken))
+    .limit(1);
+
+  if (!report) {
+    return {
+      ok: false,
+      status: 404,
+      error: `Mode report "${normalizedToken}" is not available in the database`,
+    };
+  }
+
+  if (!report.isActive) {
+    return {
+      ok: false,
+      status: 409,
+      error: `Mode report "${report.name}" is inactive`,
+    };
+  }
+
+  return {
+    ok: true,
+    report,
+  };
 }
 
 async function cleanupReportData(
@@ -616,6 +684,19 @@ type ModeSyncResult = {
   errors: string[];
 };
 
+function getModeRunScope(run: { scope?: unknown }): SyncRunScope | null {
+  if (!run.scope || typeof run.scope !== "object") {
+    return null;
+  }
+
+  const reportToken = (run.scope as Record<string, unknown>).reportToken;
+  if (typeof reportToken !== "string" || reportToken.length === 0) {
+    return null;
+  }
+
+  return { reportToken };
+}
+
 async function failModePreflightPhase(
   tracker: ReturnType<typeof createPhaseTracker>,
   runId: number,
@@ -648,13 +729,14 @@ async function failModePreflightPhase(
 }
 
 export async function runModeSync(
-  run: { id: number },
+  run: { id: number; scope?: unknown },
   opts: SyncControl = {}
 ): Promise<ModeSyncResult> {
   Sentry.setTag("sync_source", "mode");
   const tracker = createPhaseTracker(run.id);
   let totalRecords = 0;
   const errors: string[] = [];
+  const scope = getModeRunScope(run);
 
   try {
     let phaseId = await tracker.startPhase(
@@ -662,7 +744,7 @@ export async function runModeSync(
       "Ensuring config reports exist in DB",
     );
     try {
-      await seedReports();
+      await ensureModeReportsSeeded();
     } catch (error) {
       return failModePreflightPhase(
         tracker,
@@ -686,16 +768,20 @@ export async function runModeSync(
     );
     let reports: typeof modeReports.$inferSelect[] = [];
     try {
+      const reportFilters = [
+        eq(modeReports.isActive, true),
+        inArray(modeReports.reportToken, enabledTokens),
+      ];
+
+      if (scope?.reportToken) {
+        reportFilters.push(eq(modeReports.reportToken, scope.reportToken));
+      }
+
       reports = enabledTokens.length
         ? await db
             .select()
             .from(modeReports)
-            .where(
-              and(
-                eq(modeReports.isActive, true),
-                inArray(modeReports.reportToken, enabledTokens)
-              )
-            )
+            .where(and(...reportFilters))
         : [];
     } catch (error) {
       return failModePreflightPhase(
@@ -708,7 +794,9 @@ export async function runModeSync(
     }
     await tracker.endPhase(phaseId, {
       itemsProcessed: reports.length,
-      detail: `Found ${reports.length} active sync-enabled reports`,
+      detail: scope?.reportToken
+        ? `Found ${reports.length} active sync-enabled report matching ${scope.reportToken}`
+        : `Found ${reports.length} active sync-enabled reports`,
     });
 
     let succeededReports = 0;

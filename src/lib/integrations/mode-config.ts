@@ -346,6 +346,51 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
   },
 ];
 
+export type ModeReportSyncControl = {
+  name: string;
+  reportToken: string;
+  section: string;
+  modeUrl: string;
+};
+
+/**
+ * Build the list of Mode report controls for the admin sync UI.
+ *
+ * Sources from the canonical MODE_SYNC_PROFILES config (not DB rows), so the
+ * list is always populated even on a fresh database before any sync has run.
+ *
+ * @param inactiveTokens - Set of report tokens that are marked inactive in the
+ *   DB. Any token in this set is excluded. Pass an empty Set (the default) when
+ *   the DB has no rows yet — all sync-enabled profiles are then visible.
+ */
+export function getSyncEnabledModeReportControls(
+  inactiveTokens: ReadonlySet<string> = new Set()
+): ModeReportSyncControl[] {
+  return MODE_SYNC_PROFILES.filter(
+    (profile) => profile.syncEnabled && !inactiveTokens.has(profile.reportToken)
+  )
+    .sort((a, b) => {
+      const sectionOrder = a.section.localeCompare(b.section);
+      return sectionOrder !== 0 ? sectionOrder : a.name.localeCompare(b.name);
+    })
+    .map((profile) => ({
+      name: profile.name,
+      reportToken: profile.reportToken,
+      section: profile.section,
+      modeUrl: buildModeReportUrl(profile.reportToken),
+    }));
+}
+
+/**
+ * Build a token → name lookup map for all Mode reports from config.
+ *
+ * Use this instead of building the map from DB rows so that report names are
+ * available even before a sync has seeded the mode_reports table.
+ */
+export function getModeReportNamesByToken(): Map<string, string> {
+  return new Map(MODE_SYNC_PROFILES.map((p) => [p.reportToken, p.name]));
+}
+
 /**
  * Get chart embeds for a dashboard section, optionally filtered by category.
  */

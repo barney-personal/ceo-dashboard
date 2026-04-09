@@ -15,14 +15,20 @@ vi.mock("@/lib/sync/runtime", () => ({
   startBackgroundSyncDrain: vi.fn(),
 }));
 
+vi.mock("@/lib/sync/mode", () => ({
+  validateModeReportSyncTarget: vi.fn(),
+}));
+
 import {
   authorizeSyncRequest,
   syncRequestAccessErrorResponse,
 } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
+import { validateModeReportSyncTarget } from "@/lib/sync/mode";
 import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
 import { POST as postManagementAccounts } from "@/app/api/sync/management-accounts/route";
 import { POST as postMode } from "@/app/api/sync/mode/route";
+import { POST as postModeReport } from "@/app/api/sync/mode/report/route";
 import { POST as postSlack } from "@/app/api/sync/slack/route";
 
 const mockAuthorizeSyncRequest = vi.mocked(authorizeSyncRequest);
@@ -30,6 +36,7 @@ const mockSyncRequestAccessErrorResponse = vi.mocked(
   syncRequestAccessErrorResponse
 );
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
+const mockValidateModeReportSyncTarget = vi.mocked(validateModeReportSyncTarget);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -58,8 +65,12 @@ const routes = [
   },
 ] as const;
 
-function makeRequest(url: string) {
-  const request = new Request(url, { method: "POST" }) as import("next/server").NextRequest;
+function makeRequest(url: string, body?: unknown) {
+  const request = new Request(url, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }) as import("next/server").NextRequest;
   Object.defineProperty(request, "nextUrl", {
     configurable: true,
     value: new URL(url),
@@ -71,6 +82,18 @@ describe("manual sync routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    mockValidateModeReportSyncTarget.mockResolvedValue({
+      ok: true,
+      report: {
+        id: 1,
+        reportToken: "report-alpha",
+        name: "Alpha Report",
+        section: "product",
+        category: null,
+        isActive: true,
+        createdAt: new Date("2026-04-01T00:00:00.000Z"),
+      },
+    });
     consoleErrorSpy.mockImplementation(() => {});
     mockSyncRequestAccessErrorResponse.mockImplementation((access) => {
       if (access === "unauthenticated") {
@@ -136,6 +159,126 @@ describe("manual sync routes", () => {
       });
     }
   );
+
+  it("returns 400 when the scoped Mode route is missing reportToken", async () => {
+    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockValidateModeReportSyncTarget.mockResolvedValue({
+      ok: false,
+      status: 400,
+      error: "reportToken is required",
+    });
+
+    const response = await postModeReport(makeRequest("http://localhost/api/sync/mode/report", {}));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "reportToken is required" });
+    expect(mockEnqueueSyncRun).not.toHaveBeenCalled();
+    expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the scoped Mode route gets an unknown token", async () => {
+    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockValidateModeReportSyncTarget.mockResolvedValue({
+      ok: false,
+      status: 404,
+      error: 'Unknown Mode report token "missing-token"',
+    });
+
+    const response = await postModeReport(
+      makeRequest("http://localhost/api/sync/mode/report", {
+        reportToken: "missing-token",
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      error: 'Unknown Mode report token "missing-token"',
+    });
+    expect(mockEnqueueSyncRun).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the scoped Mode route gets an inactive or disabled token", async () => {
+    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockValidateModeReportSyncTarget.mockResolvedValue({
+      ok: false,
+      status: 409,
+      error: 'Mode report "Alpha Report" is inactive',
+    });
+
+    const response = await postModeReport(
+      makeRequest("http://localhost/api/sync/mode/report", {
+        reportToken: "report-alpha",
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Mode report "Alpha Report" is inactive',
+    });
+    expect(mockEnqueueSyncRun).not.toHaveBeenCalled();
+  });
+
+  it("queues a scoped Mode report sync and starts the worker", async () => {
+    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 44,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-08T09:00:00.000Z"),
+    });
+
+    const response = await postModeReport(
+      makeRequest("http://localhost/api/sync/mode/report", {
+        reportToken: "report-alpha",
+      })
+    );
+
+    expect(mockValidateModeReportSyncTarget).toHaveBeenCalledWith(
+      "report-alpha"
+    );
+    expect(mockEnqueueSyncRun).toHaveBeenCalledWith("mode", {
+      trigger: "manual",
+      force: false,
+      scope: { reportToken: "report-alpha" },
+    });
+    expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith("web-mode", {
+      source: "mode",
+      runIds: [44],
+      triggerLabel: "manual mode report sync request (report-alpha)",
+    });
+    expect(await response.json()).toEqual({
+      outcome: "queued",
+      runId: 44,
+      reason: null,
+      nextEligibleAt: "2026-04-08T09:00:00.000Z",
+    });
+  });
+
+  it("returns active scope details when a scoped Mode report conflicts with an active full sync", async () => {
+    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "already-running",
+      runId: 52,
+      reason: "active_run_exists",
+      nextEligibleAt: null,
+      activeScopeDescription: "all Mode reports",
+    });
+
+    const response = await postModeReport(
+      makeRequest("http://localhost/api/sync/mode/report", {
+        reportToken: "report-alpha",
+      })
+    );
+
+    expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({
+      outcome: "already-running",
+      runId: 52,
+      reason: "active_run_exists",
+      nextEligibleAt: null,
+      activeScopeDescription: "all Mode reports",
+    });
+  });
 
   it.each(routes)(
     "serializes skipped $name responses without starting the worker",

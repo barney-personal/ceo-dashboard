@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { SyncRunLog } from "@/components/dashboard/sync-run-log";
 import { AutoRefresh } from "@/components/dashboard/auto-refresh";
+import { ModeReportSyncControls } from "@/components/dashboard/mode-report-sync-controls";
 import { db } from "@/lib/db";
 import {
   syncLog,
@@ -17,6 +18,10 @@ import {
 } from "@/lib/db/schema";
 import { desc, count, inArray } from "drizzle-orm";
 import { getEffectiveSyncState } from "@/lib/sync/config";
+import {
+  getSyncEnabledModeReportControls,
+  getModeReportNamesByToken,
+} from "@/lib/integrations/mode-config";
 import {
   getSchemaCompatibilityMessage,
   isSchemaCompatibilityError,
@@ -39,6 +44,7 @@ export default async function DataStatusPage() {
 
   let recentRuns: (typeof syncLog.$inferSelect)[] = [];
   let phases: (typeof syncPhases.$inferSelect)[] = [];
+  let modeSyncReports: (typeof modeReports.$inferSelect)[] = [];
 
   try {
     recentRuns = await db
@@ -46,6 +52,8 @@ export default async function DataStatusPage() {
       .from(syncLog)
       .orderBy(desc(syncLog.startedAt))
       .limit(20);
+
+    modeSyncReports = await db.select().from(modeReports);
 
     const runIds = recentRuns.map((r) => r.id);
     if (runIds.length > 0) {
@@ -76,6 +84,24 @@ export default async function DataStatusPage() {
     arr.push(phase);
     phasesByRun.set(phase.syncLogId, arr);
   }
+  // Source report names from config so they're available before any sync seeds
+  // the mode_reports table (fresh-DB environments).
+  const modeReportNamesByToken = getModeReportNamesByToken();
+  const describeModeScope = (scope: unknown): string | null => {
+    if (!scope || typeof scope !== "object") {
+      return null;
+    }
+
+    const reportToken = (scope as { reportToken?: unknown }).reportToken;
+    if (typeof reportToken !== "string") {
+      return null;
+    }
+
+    const reportName = modeReportNamesByToken.get(reportToken);
+    return reportName
+      ? `Mode report ${reportName} (${reportToken})`
+      : `Mode report ${reportToken}`;
+  };
 
   // Build enriched runs for the client component
   const enrichedRuns = recentRuns.map((run) => ({
@@ -91,6 +117,7 @@ export default async function DataStatusPage() {
     recordsSynced: run.recordsSynced,
     skipReason: run.skipReason,
     errorMessage: run.errorMessage,
+    scopeDescription: run.source === "mode" ? describeModeScope(run.scope) : null,
     phases: (phasesByRun.get(run.id) ?? []).map((p) => ({
       id: p.id,
       phase: p.phase,
@@ -127,6 +154,24 @@ export default async function DataStatusPage() {
     const effectiveState = getEffectiveSyncState(run, now);
     return effectiveState === "queued" || effectiveState === "running";
   });
+  const activeModeRun = recentRuns.find((run) => {
+    if (run.source !== "mode") {
+      return false;
+    }
+
+    const effectiveState = getEffectiveSyncState(run, now);
+    return effectiveState === "queued" || effectiveState === "running";
+  });
+  const activeModeScopeDescription =
+    activeModeRun != null
+      ? describeModeScope(activeModeRun.scope) ?? "all Mode reports"
+      : null;
+  // Build controls from config so they appear even on a fresh DB with no
+  // mode_reports rows. Any DB row explicitly marked inactive is still excluded.
+  const inactiveTokens = new Set(
+    modeSyncReports.filter((r) => !r.isActive).map((r) => r.reportToken)
+  );
+  const syncEnabledModeReports = getSyncEnabledModeReportControls(inactiveTokens);
 
   let tables = [
     { name: "mode_reports", label: "Mode Reports", count: 0, description: "Report definitions synced from Mode" },
@@ -214,6 +259,21 @@ export default async function DataStatusPage() {
 
       {/* Sync Run Log — the main feature */}
       <SyncRunLog runs={enrichedRuns} avgDurations={avgDurations} />
+
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+          Mode Re-Sync
+        </h3>
+        <SectionCard
+          title="Active Mode Reports"
+          description="Trigger a targeted Mode re-sync for one active report"
+        >
+          <ModeReportSyncControls
+            activeModeScopeDescription={activeModeScopeDescription}
+            reports={syncEnabledModeReports}
+          />
+        </SectionCard>
+      </div>
 
       {/* Database Tables */}
       <div className="space-y-4">

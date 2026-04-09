@@ -123,6 +123,7 @@ export const syncLog = pgTable(
     leaseExpiresAt: timestamp("lease_expires_at"),
     workerId: text("worker_id"),
     recordsSynced: integer("records_synced").default(0).notNull(),
+    scope: jsonb("scope"),
     skipReason: text("skip_reason"),
     errorMessage: text("error_message"),
   },
