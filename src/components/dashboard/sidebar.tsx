@@ -95,7 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Org",
         href: "/dashboard/people",
-        requiredRole: "leadership",
+        requiredRole: "everyone",
         icon: Users,
       },
       {
