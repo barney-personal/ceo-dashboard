@@ -55,6 +55,18 @@ services:
         value: "cleo-bf"
       - key: SENTRY_PROJECT
         value: "ceo-dashboard"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_CALENDAR_ID
+        value: "primary"
+      - key: GRANOLA_API_TOKEN
+        sync: false
+      - key: SLACK_PRE_READS_CHANNEL_ID
+        value: "C04EU4DEX5E"
       - key: CRON_SECRET
         generateValue: true
 
@@ -84,6 +96,18 @@ services:
         value: "C05LACCBKPU,C09E6L6336G,C09E30B8PD0,C09DMP0UBGX,C09EG0TTJQ1"
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_CALENDAR_ID
+        value: "primary"
+      - key: GRANOLA_API_TOKEN
+        sync: false
+      - key: SLACK_PRE_READS_CHANNEL_ID
+        value: "C04EU4DEX5E"
 
   - type: cron
     name: ceo-dashboard-cron

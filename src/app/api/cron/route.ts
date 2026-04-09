@@ -21,15 +21,16 @@ export async function GET(request: NextRequest) {
       console.error("Failed to clean up debug logs", error);
     }
 
-    const [mode, slack, managementAccounts] = await Promise.all([
+    const [mode, slack, managementAccounts, meetings] = await Promise.all([
       enqueueSyncRun("mode", { trigger: "cron" }),
       enqueueSyncRun("slack", { trigger: "cron" }),
       enqueueSyncRun("management-accounts", { trigger: "cron" }),
+      enqueueSyncRun("meetings", { trigger: "cron" }),
     ]);
 
-    if ([mode, slack, managementAccounts].some((result) => result.outcome !== "skipped")) {
+    if ([mode, slack, managementAccounts, meetings].some((result) => result.outcome !== "skipped")) {
       const workerId = createWorkerId("web-cron");
-      const runIds = [mode.runId, slack.runId, managementAccounts.runId].filter(
+      const runIds = [mode.runId, slack.runId, managementAccounts.runId, meetings.runId].filter(
         (runId): runId is number => runId != null
       );
       startBackgroundSyncDrain(workerId, {
@@ -44,6 +45,7 @@ export async function GET(request: NextRequest) {
         mode: serializeEnqueueSyncResult(mode),
         slack: serializeEnqueueSyncResult(slack),
         managementAccounts: serializeEnqueueSyncResult(managementAccounts),
+        meetings: serializeEnqueueSyncResult(meetings),
       },
     });
   } catch (error) {

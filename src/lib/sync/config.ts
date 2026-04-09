@@ -2,6 +2,7 @@ export const SYNC_SOURCES = [
   "mode",
   "slack",
   "management-accounts",
+  "meetings",
 ] as const;
 
 export type SyncSource = (typeof SYNC_SOURCES)[number];
@@ -73,6 +74,14 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
   "management-accounts": {
     source: "management-accounts",
     normalIntervalMs: 24 * 60 * 60 * 1000,
+    retryAfterMs: 30 * 60 * 1000,
+    leaseMs: 2 * 60 * 1000,
+    executionBudgetMs: 10 * 60 * 1000,
+    maxAttempts: 1,
+  },
+  meetings: {
+    source: "meetings",
+    normalIntervalMs: 2 * 60 * 60 * 1000, // every 2 hours
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
     executionBudgetMs: 10 * 60 * 1000,
