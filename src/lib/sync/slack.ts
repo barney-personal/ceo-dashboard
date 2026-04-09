@@ -29,12 +29,17 @@ import * as Sentry from "@sentry/nextjs";
 const SLACK_THREAD_REPLY_CONCURRENCY = 5;
 const SLACK_OKR_PARSE_BATCH_SIZE = 4;
 
+type SlackSyncScope = {
+  slackChannelCheckpoints?: Record<string, string>; // channelId -> latestMessageTs
+};
+
 type SyncChannelResult = {
   krCount: number;
   parsedMessageCount: number;
   skippedByFilterCount: number;
   llmNullCount: number;
   emptyAfterValidationCount: number;
+  latestMessageTs: string | undefined;
 };
 
 /** Build a local userId → pmName lookup from the squads table (fallback when Slack API lacks users:read). */
@@ -228,6 +233,7 @@ async function syncChannel(
   let skippedByFilterCount = 0;
   let llmNullCount = 0;
   let emptyAfterValidationCount = 0;
+  let latestMessageTs: string | undefined;
   const authorNameCache = new Map<string, string>();
   const parseCandidates: Array<{
     authorName: string;
@@ -241,6 +247,14 @@ async function syncChannel(
       deadlineExceeded:
         "Slack sync exceeded its execution budget while parsing messages",
     });
+
+    // Only track top-level message timestamps for checkpointing —
+    // thread replies have later ts values that would cause the next
+    // sync to skip top-level messages posted before the reply.
+    const isTopLevel = !msg.thread_ts || msg.thread_ts === msg.ts;
+    if (isTopLevel && (!latestMessageTs || msg.ts > latestMessageTs)) {
+      latestMessageTs = msg.ts;
+    }
 
     if (!isLikelyUpdate(msg.text, msg.subtype)) {
       skippedByFilterCount += 1;
@@ -363,6 +377,7 @@ async function syncChannel(
     skippedByFilterCount,
     llmNullCount,
     emptyAfterValidationCount,
+    latestMessageTs,
   };
 }
 
@@ -442,6 +457,56 @@ async function fetchLastSlackSuccessTimestamp(): Promise<string | undefined> {
   return rows[0]?.completedAt
     ? String(rows[0].completedAt.getTime() / 1000)
     : undefined;
+}
+
+function getSlackChannelCheckpoints(scope: unknown): Record<string, string> {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    return {};
+  }
+  const checkpoints = (scope as SlackSyncScope).slackChannelCheckpoints;
+  if (!checkpoints || typeof checkpoints !== "object" || Array.isArray(checkpoints)) {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  for (const [channelId, ts] of Object.entries(checkpoints)) {
+    if (typeof ts === "string") {
+      result[channelId] = ts;
+    }
+  }
+  return result;
+}
+
+async function fetchResumableSlackCheckpoints(): Promise<Record<string, string>> {
+  const rows = await db
+    .select({ scope: syncLog.scope })
+    .from(syncLog)
+    .where(
+      and(
+        eq(syncLog.source, "slack"),
+        inArray(syncLog.status, ["partial", "error", "cancelled"])
+      )
+    )
+    .orderBy(desc(syncLog.startedAt))
+    .limit(1);
+
+  return getSlackChannelCheckpoints(rows[0]?.scope);
+}
+
+async function checkpointSlackSyncProgress(
+  runId: number,
+  recordsSynced: number,
+  channelCheckpoints: Record<string, string>,
+): Promise<void> {
+  const now = new Date();
+  await db
+    .update(syncLog)
+    .set({
+      status: "running",
+      recordsSynced,
+      heartbeatAt: now,
+      scope: { slackChannelCheckpoints: channelCheckpoints },
+    })
+    .where(and(eq(syncLog.id, runId), eq(syncLog.status, "running")));
 }
 
 type SlackSyncResult = {
@@ -618,6 +683,13 @@ export async function runSlackSync(
         : "Full scan (no prior sync)",
     });
 
+    let channelCheckpoints: Record<string, string> = {};
+    try {
+      channelCheckpoints = await fetchResumableSlackCheckpoints();
+    } catch {
+      // Non-fatal: fall back to global lastSyncTs for all channels
+    }
+
     phaseId = await tracker.startPhase(
       "validate_channels",
       "Validating configured Slack channel IDs"
@@ -660,16 +732,22 @@ export async function runSlackSync(
         "Fetching messages and parsing OKRs"
       );
 
+      const channelCursor = channelCheckpoints[channel.id] ?? lastSyncTs;
+
       try {
         const result = await syncChannel(
           channel,
-          lastSyncTs,
+          channelCursor,
           systemPrompt,
           userNameFallback,
           opts
         );
         totalRecords += result.krCount;
         succeededChannels += 1;
+        if (result.latestMessageTs) {
+          channelCheckpoints[channel.id] = result.latestMessageTs;
+        }
+        await checkpointSlackSyncProgress(run.id, totalRecords, channelCheckpoints);
         await tracker.endPhase(channelPhaseId, {
           itemsProcessed: result.krCount,
           detail: formatChannelPhaseDetail(channel.name, result),
