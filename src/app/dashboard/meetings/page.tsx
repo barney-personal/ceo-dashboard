@@ -9,13 +9,19 @@ import {
   getWeekEnd,
 } from "@/lib/data/meetings";
 
-export default async function MeetingsPage() {
+export default async function MeetingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ week?: string }>;
+}) {
   const role = await getCurrentUserRole();
   if (!hasAccess(role, "leadership")) {
     redirect("/dashboard");
   }
 
-  const weekStart = getWeekStart();
+  const params = await searchParams;
+  const baseDate = params.week ? new Date(params.week + "T12:00:00") : new Date();
+  const weekStart = getWeekStart(baseDate);
   const weekEnd = getWeekEnd(weekStart);
   const days = await getMeetingsForRange(weekStart, weekEnd);
 
