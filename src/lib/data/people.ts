@@ -108,9 +108,11 @@ export function mergeEmployeeData(
   fteRows: Record<string, unknown>[],
   headcountRows: Record<string, unknown>[],
 ): Person[] {
-  // Build email → old-report row lookup for augmentation
+  // Build email → old-report row lookup for augmentation (active employees only,
+  // so we don't merge stale data from terminated records sharing an email).
   const oldByEmail = new Map<string, Record<string, unknown>>();
   for (const r of headcountRows) {
+    if (String(r.lifecycle_status).toLowerCase() !== "employed") continue;
     const email = rowStr(r, "email").toLowerCase();
     if (email) oldByEmail.set(email, r);
   }
@@ -335,7 +337,9 @@ export async function getActiveEmployees(): Promise<{
   const fteQuery = fteData.find((d) => d.queryName === "current_employees");
   const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
 
-  // allRows from old report — used for attrition/departures metrics
+  // allRows from old report — used for attrition/departures metrics.
+  // If headcount data is unavailable, these metrics degrade to zero rather than
+  // erroring, which is acceptable since both reports sync on the same schedule.
   const allRows = headcountQuery?.rows ?? [];
 
   // Primary path: Current FTEs available
