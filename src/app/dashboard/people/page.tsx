@@ -19,12 +19,8 @@ import {
 
 export default async function PeopleOrgPage() {
   const [{ employees, allRows }, deptData] = await Promise.all([
-    getActiveEmployees().catch(() => ({
-      employees: [],
-      allRows: [] as Record<string, unknown>[],
-      lastSync: null as Date | null,
-    })),
-    getHeadcountByDepartment().catch(() => []),
+    getActiveEmployees(),
+    getHeadcountByDepartment(),
   ]);
 
   const metrics = getPeopleMetrics(employees, allRows);
