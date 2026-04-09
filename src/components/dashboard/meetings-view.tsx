@@ -2,7 +2,8 @@
 
 import { useState, useCallback, useTransition } from "react";
 import { cn } from "@/lib/utils";
-import type { DayData, LinkedMeeting, PreReadRow } from "@/lib/data/meetings";
+import type { DayData, LinkedMeeting, MeetingNoteRow, PreReadRow } from "@/lib/data/meetings";
+import Link from "next/link";
 import {
   ChevronLeft,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   CalendarDays,
   LayoutList,
   Loader2,
+  BookOpen,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -231,6 +233,33 @@ function MeetingCard({
             </div>
           )}
 
+          {meeting.notes.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                Meeting notes
+              </span>
+              {meeting.notes.map((note) => (
+                <div
+                  key={note.id}
+                  className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <BookOpen className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                    <span className="text-xs font-medium text-foreground">
+                      {note.title}
+                    </span>
+                  </div>
+                  {note.summary && (
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {note.summary.slice(0, 200)}
+                      {note.summary.length > 200 && "..."}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {meeting.htmlLink && (
             <a
               href={meeting.htmlLink}
@@ -440,7 +469,92 @@ function DayColumn({
 // Main component
 // ---------------------------------------------------------------------------
 
-type ViewMode = "week" | "day";
+function NoteCard({ note, defaultExpanded = false }: { note: MeetingNoteRow; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-card shadow-warm">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-start gap-3 px-4 py-3 text-left"
+      >
+        <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium text-foreground">
+              {note.title}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-3 text-xs text-muted-foreground">
+            <span>{formatDayLabel(note.meetingDate.slice(0, 10))}</span>
+            {note.participants && note.participants.length > 0 && (
+              <span className="flex items-center gap-1">
+                <Users className="h-3 w-3" />
+                {note.participants.length}
+              </span>
+            )}
+          </div>
+          {!expanded && note.summary && (
+            <p className="mt-1 truncate text-xs text-muted-foreground/70">
+              {note.summary.replace(/^###?\s+/gm, "").slice(0, 120)}...
+            </p>
+          )}
+        </div>
+      </button>
+      {expanded && note.summary && (
+        <div className="border-t border-border/40 px-4 py-3">
+          <div className="prose prose-xs max-w-none text-xs leading-relaxed text-muted-foreground [&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-foreground [&_li]:my-0 [&_ul]:my-1">
+            <pre className="whitespace-pre-wrap font-sans">{note.summary}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotesView({ days }: { days: DayData[] }) {
+  // Collect all notes from meetings + unlinked, sorted by date desc
+  const allNotes: MeetingNoteRow[] = [];
+  for (const day of days) {
+    for (const m of day.meetings) {
+      allNotes.push(...m.notes);
+    }
+    allNotes.push(...day.unlinkedNotes);
+  }
+  // Deduplicate by id
+  const seen = new Set<number>();
+  const uniqueNotes = allNotes.filter((n) => {
+    if (seen.has(n.id)) return false;
+    seen.add(n.id);
+    return true;
+  });
+  // Sort by date desc
+  uniqueNotes.sort((a, b) => b.meetingDate.localeCompare(a.meetingDate));
+
+  if (uniqueNotes.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border/40 p-8 text-center">
+        <BookOpen className="mx-auto h-6 w-6 text-muted-foreground/30" />
+        <p className="mt-2 text-sm text-muted-foreground/60">
+          No meeting notes this week
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground/40">
+          Notes from Granola will appear here after your meetings
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {uniqueNotes.map((note) => (
+        <NoteCard key={note.id} note={note} />
+      ))}
+    </div>
+  );
+}
+
+type ViewMode = "week" | "day" | "notes";
 
 interface MeetingsViewProps {
   initialDays: DayData[];
@@ -472,6 +586,13 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
   );
   const linkedCount = days.reduce(
     (sum, d) => sum + d.meetings.filter((m) => m.preReads.length > 0).length,
+    0
+  );
+  const totalNotes = days.reduce(
+    (sum, d) =>
+      sum +
+      d.meetings.reduce((s, m) => s + m.notes.length, 0) +
+      d.unlinkedNotes.length,
     0
   );
 
@@ -533,6 +654,18 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
             >
               <LayoutList className="h-3.5 w-3.5" />
               Day
+            </button>
+            <button
+              onClick={() => setViewMode("notes")}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all",
+                viewMode === "notes"
+                  ? "bg-primary/10 text-primary shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Notes
             </button>
           </div>
 
@@ -623,6 +756,11 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
         <span>
           <strong className="text-foreground">{linkedCount}</strong> with pre-reads
         </span>
+        {totalNotes > 0 && (
+          <span>
+            <strong className="text-foreground">{totalNotes}</strong> notes
+          </span>
+        )}
       </div>
 
       {/* Content */}
@@ -643,7 +781,7 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
               />
             ))}
           </div>
-        ) : (
+        ) : viewMode === "day" ? (
           <DayColumn
             day={days[selectedDayIndex] ?? days[0]}
             isExpanded={true}
@@ -652,6 +790,8 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
               setExpandedMeetingId((prev) => (prev === id ? null : id))
             }
           />
+        ) : (
+          <NotesView days={days} />
         )}
       </div>
     </div>

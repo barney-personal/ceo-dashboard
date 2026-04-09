@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { preReads } from "@/lib/db/schema";
+import { meetingNotes, preReads } from "@/lib/db/schema";
 import { and, gte, lte, desc } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
@@ -32,14 +32,26 @@ export interface PreReadRow {
   postedAt: string; // ISO string
 }
 
+export interface MeetingNoteRow {
+  id: number;
+  granolaMeetingId: string;
+  title: string;
+  summary: string | null;
+  transcript: string | null;
+  participants: { name?: string; email: string }[] | null;
+  meetingDate: string; // ISO string
+}
+
 export interface LinkedMeeting extends MeetingRow {
   preReads: PreReadRow[];
+  notes: MeetingNoteRow[];
 }
 
 export interface DayData {
   date: string; // YYYY-MM-DD
   meetings: LinkedMeeting[];
   unlinkedPreReads: PreReadRow[];
+  unlinkedNotes: MeetingNoteRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -155,8 +167,8 @@ export async function getMeetingsForRange(
   // Fetch pre-reads from 1 day before the range start (they may link to day 1 meetings)
   const preReadStart = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
 
-  // Fetch meetings live from Google Calendar (or empty if no token)
-  const [serializedMeetings, preReadRows] = await Promise.all([
+  // Fetch meetings, pre-reads, and Granola notes in parallel
+  const [serializedMeetings, preReadRows, noteRows] = await Promise.all([
     opts.accessToken
       ? fetchLiveCalendarMeetings(startDate, endDate, opts.accessToken, minAttendees)
       : Promise.resolve([] as MeetingRow[]),
@@ -170,6 +182,16 @@ export async function getMeetingsForRange(
         )
       )
       .orderBy(desc(preReads.postedAt)),
+    db
+      .select()
+      .from(meetingNotes)
+      .where(
+        and(
+          gte(meetingNotes.meetingDate, startDate),
+          lte(meetingNotes.meetingDate, endDate)
+        )
+      )
+      .orderBy(desc(meetingNotes.meetingDate)),
   ]);
 
   const serializedPreReads: PreReadRow[] = preReadRows.map((p) => ({
@@ -231,10 +253,57 @@ export async function getMeetingsForRange(
     }
   }
 
+  // Serialize and match Granola notes to meetings
+  const serializedNotes: MeetingNoteRow[] = noteRows.map((n) => ({
+    id: n.id,
+    granolaMeetingId: n.granolaMeetingId,
+    title: n.title,
+    summary: n.summary,
+    transcript: n.transcript,
+    participants: n.participants as MeetingNoteRow["participants"],
+    meetingDate: n.meetingDate.toISOString(),
+  }));
+
+  const meetingNotesMap = new Map<number, MeetingNoteRow[]>();
+  for (const note of serializedNotes) {
+    const noteDate = note.meetingDate.slice(0, 10);
+    const noteKeywords = extractKeywords(note.title);
+    const noteEmails = new Set(
+      (note.participants ?? []).map((p) => p.email?.toLowerCase()).filter(Boolean)
+    );
+
+    let bestMatch: { meetingId: number; score: number } | null = null;
+    const dayMeetings = meetingsByDay.get(noteDate) ?? [];
+
+    for (const m of dayMeetings) {
+      // Score by title keyword overlap
+      let score = 0;
+      const mKeywords = meetingKeywords.get(m.id) ?? [];
+      for (const kw of noteKeywords) {
+        if (mKeywords.includes(kw)) score++;
+      }
+      // Boost for attendee email overlap
+      if (noteEmails.size > 0 && m.attendees) {
+        const overlap = m.attendees.filter(
+          (a) => a.email && noteEmails.has(a.email.toLowerCase())
+        ).length;
+        score += overlap * 0.5;
+      }
+      if (score > 0 && (!bestMatch || score > bestMatch.score)) {
+        bestMatch = { meetingId: m.id, score };
+      }
+    }
+
+    if (bestMatch) {
+      const list = meetingNotesMap.get(bestMatch.meetingId) ?? [];
+      list.push(note);
+      meetingNotesMap.set(bestMatch.meetingId, list);
+    }
+  }
+
   // Build day data for each day in the range (always Mon-Fri)
   const days: DayData[] = [];
   const cursor = new Date(startDate);
-  // Generate exactly 5 weekdays from the Monday start
   for (let i = 0; i < 5; i++) {
     const dayStr = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
     const dayMeetings = meetingsByDay.get(dayStr) ?? [];
@@ -242,6 +311,7 @@ export async function getMeetingsForRange(
     const linkedMeetings: LinkedMeeting[] = dayMeetings.map((m) => ({
       ...m,
       preReads: meetingPreReads.get(m.id) ?? [],
+      notes: meetingNotesMap.get(m.id) ?? [],
     }));
 
     // Unlinked pre-reads posted on this day
@@ -249,10 +319,19 @@ export async function getMeetingsForRange(
       (pr) => pr.postedAt.slice(0, 10) === dayStr && !linkedPreReadIds.has(pr.id)
     );
 
+    // Notes for this day that didn't match any meeting
+    const linkedNoteIds = new Set(
+      [...meetingNotesMap.values()].flat().map((n) => n.id)
+    );
+    const unlinkedNotes = serializedNotes.filter(
+      (n) => n.meetingDate.slice(0, 10) === dayStr && !linkedNoteIds.has(n.id)
+    );
+
     days.push({
       date: dayStr,
       meetings: linkedMeetings,
       unlinkedPreReads: unlinked,
+      unlinkedNotes,
     });
 
     cursor.setDate(cursor.getDate() + 1);
