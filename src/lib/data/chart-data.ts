@@ -118,8 +118,9 @@ export function aggregateCohortRows(
     const cohort = `${cohortDate.getFullYear()}-${String(
       cohortDate.getMonth() + 1,
     ).padStart(2, "0")}`;
-    const period = rowNum(row, "activity_month");
-    const maus = rowNum(row, "maus");
+    const period = rowNumOrNull(row, "activity_month");
+    const maus = rowNumOrNull(row, "maus");
+    if (period == null || maus == null) continue;
 
     let periods = byCohort.get(cohort);
     if (!periods) {
@@ -216,9 +217,13 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     const key = getWeekStart(d);
     if (!key) continue;
 
+    const spend = rowNumOrNull(r, "spend");
+    const users = rowNumOrNull(r, "new_bank_connected_users");
+    if (spend == null || users == null) continue;
+
     const b = weekMap.get(key) ?? { spend: 0, users: 0, days: 0 };
-    b.spend += rowNum(r, "spend");
-    b.users += rowNum(r, "new_bank_connected_users");
+    b.spend += spend;
+    b.users += users;
     b.days += 1;
     weekMap.set(key, b);
   }
@@ -325,6 +330,9 @@ export async function getQuery3Series(): Promise<{
     const day = rowStr(r, "day");
     if (!day || !isValidDateStr(day)) continue;
     if (new Date(day).getTime() < CHART_HISTORY_START_TS) continue;
+    const spend = rowNumOrNull(r, "spend");
+    const users = rowNumOrNull(r, "new_bank_connected_users");
+    if (spend == null || users == null) continue;
     const type = rowStr(r, "actual_or_target");
     let arr = byType.get(type);
     if (!arr) {
@@ -333,8 +341,8 @@ export async function getQuery3Series(): Promise<{
     }
     arr.push({
       date: rowStr(r, "day"),
-      spend: rowNum(r, "spend"),
-      users: rowNum(r, "new_bank_connected_users"),
+      spend,
+      users,
     });
   }
 
@@ -544,9 +552,12 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
       bucket = { daus: [], waus: [], maus: [] };
       byMonth.set(key, bucket);
     }
-    if (row.daus != null) bucket.daus.push(rowNum(row, "daus"));
-    if (row.waus != null) bucket.waus.push(rowNum(row, "waus"));
-    if (row.maus != null) bucket.maus.push(rowNum(row, "maus"));
+    const daus = rowNumOrNull(row, "daus");
+    const waus = rowNumOrNull(row, "waus");
+    const maus = rowNumOrNull(row, "maus");
+    if (daus != null) bucket.daus.push(daus);
+    if (waus != null) bucket.waus.push(waus);
+    if (maus != null) bucket.maus.push(maus);
   }
 
   const avg = (arr: number[]) =>
@@ -661,10 +672,12 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
     series.push({
       label: "New Users",
       color: "#3b3bba",
-      data: rows.map((r) => ({
-        date: rowStr(r, "month"),
-        value: rowNum(r, "new_bank_connected_users"),
-      })),
+      data: rows
+        .map((r) => {
+          const value = rowNumOrNull(r, "new_bank_connected_users");
+          return value != null ? { date: rowStr(r, "month"), value } : null;
+        })
+        .filter((p): p is { date: string; value: number } => p !== null),
     });
   }
 
