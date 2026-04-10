@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { pageViews } from "@/lib/db/schema";
-import { sql, gte, countDistinct } from "drizzle-orm";
+import { sql, gte, count, countDistinct } from "drizzle-orm";
 
 /**
  * Dashboard DAU — distinct users per day, last 90 days.
@@ -136,4 +136,52 @@ export async function getDashboardRetention(): Promise<
         ),
       };
     });
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  "": "Overview",
+  "unit-economics": "Unit Economics",
+  financial: "Financial",
+  product: "Product",
+  okrs: "OKRs",
+  people: "People",
+  "people/performance": "Performance",
+  "people/engagement": "Engagement",
+  meetings: "Meetings",
+  "admin/status": "Data Status",
+  "admin/squads": "Squads",
+  "admin/users": "Users",
+  "admin/mode-explorer": "Mode Explorer",
+  "admin/analytics": "Analytics",
+  settings: "Settings",
+};
+
+/**
+ * Page views grouped by dashboard section, last 30 days.
+ * Returns { section, label, views } sorted by views descending.
+ */
+export async function getPageViewsBySection(): Promise<
+  { section: string; label: string; views: number }[]
+> {
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+
+  const rows = await db
+    .select({
+      path: pageViews.path,
+      views: count().as("views"),
+    })
+    .from(pageViews)
+    .where(gte(pageViews.viewedAt, since))
+    .groupBy(pageViews.path)
+    .orderBy(sql`count(*) desc`);
+
+  return rows.map((r) => {
+    const section = r.path.replace(/^\/dashboard\/?/, "");
+    return {
+      section: section || "overview",
+      label: SECTION_LABELS[section] ?? section,
+      views: Number(r.views),
+    };
+  });
 }
