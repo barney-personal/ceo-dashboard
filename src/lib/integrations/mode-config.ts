@@ -97,8 +97,21 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     name: "Premium Conversion Dashboard",
     section: "unit-economics",
     category: "conversion",
-    syncEnabled: false,
-    queries: [],
+    syncEnabled: true,
+    queries: [
+      {
+        name: "agg_cohort_conversion_rate_by_window",
+        storageWindow: { kind: "all" },
+      },
+      {
+        name: "indexed_conversion_rates_with_2022_baseline",
+        storageWindow: { kind: "all" },
+      },
+      {
+        name: "Query 2",
+        storageWindow: { kind: "all" },
+      },
+    ],
   },
   {
     reportToken: "774f14224dd9",
