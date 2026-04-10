@@ -30,16 +30,15 @@ interface SmallMultiplesCurveChartProps {
 }
 
 /**
- * Sequential lightness ramp — oldest cohort lightest, newest darkest.
- * Tufte: encode the ordinal variable (time) in a perceptual channel
- * that the eye reads naturally (dark = more recent / more important).
+ * Multi-hue sequential ramp — oldest cohort lightest/warmest, newest darkest/coolest.
+ * Hue + lightness both vary so cohorts are distinguishable even with many lines.
  */
 const SEQUENTIAL_COLORS = [
-  "#c4c8d4",
-  "#8b92a8",
-  "#5c6280",
-  "#3b3bba",
-  "#1e1e6e",
+  "#c4a882", // warm sand — oldest
+  "#6aba8a", // sage green
+  "#4596c4", // steel blue
+  "#7c5cbf", // violet
+  "#1e1b4b", // deep indigo — newest
 ];
 
 const SEQUENTIAL_WIDTHS = [1.2, 1.4, 1.6, 2, 2.4];
