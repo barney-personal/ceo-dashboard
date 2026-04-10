@@ -27,6 +27,20 @@ interface ConversionCurveChartProps {
   className?: string;
 }
 
+/**
+ * Sequential lightness ramp: oldest cohort is lightest, newest is darkest.
+ * This encodes temporal order perceptually — the eye reads dark = recent.
+ */
+const SEQUENTIAL_COLORS = [
+  "#c4c8d4", // lightest — oldest cohort
+  "#8b92a8",
+  "#5c6280",
+  "#3b3bba",
+  "#1e1e6e", // darkest — newest cohort
+];
+
+const SEQUENTIAL_WIDTHS = [1.2, 1.4, 1.6, 2, 2.4];
+
 export function ConversionCurveChart({
   series,
   steps,
@@ -47,7 +61,8 @@ export function ConversionCurveChart({
     const container = containerRef.current;
     const width = container.clientWidth;
     const height = 360;
-    const margin = { top: 24, right: 24, bottom: 56, left: 72 };
+    // Extra right margin for direct end-labels
+    const margin = { top: 24, right: 72, bottom: 56, left: 72 };
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 
@@ -61,10 +76,12 @@ export function ConversionCurveChart({
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    // Build lookup: series → step → value
-    const seriesData = series.map((s) => {
+    // Assign sequential colors by index (oldest first)
+    const seriesData = series.map((s, i) => {
       const byStep = new Map(s.data.map((d) => [d.step, d.value]));
-      return { ...s, byStep };
+      const color = SEQUENTIAL_COLORS[i % SEQUENTIAL_COLORS.length];
+      const strokeWidth = SEQUENTIAL_WIDTHS[i % SEQUENTIAL_WIDTHS.length];
+      return { ...s, byStep, color, strokeWidth };
     });
 
     const allValues = series.flatMap((s) => s.data.map((d) => d.value));
@@ -152,7 +169,7 @@ export function ConversionCurveChart({
         .text(yLabel);
     }
 
-    // Draw lines
+    // Draw lines + direct end-labels (Tufte: label the data, not the legend)
     for (const s of seriesData) {
       const points = steps
         .filter((step) => s.byStep.has(step))
@@ -167,21 +184,30 @@ export function ConversionCurveChart({
         .datum(points)
         .attr("fill", "none")
         .attr("stroke", s.color)
-        .attr("stroke-width", 2)
+        .attr("stroke-width", s.strokeWidth)
         .attr("stroke-linejoin", "round")
         .attr("stroke-linecap", "round")
         .attr("d", linePath);
 
-      // End dot
+      // Direct end-label — placed to the right of the last data point
       const last = points[points.length - 1];
       if (last) {
         g.append("circle")
           .attr("cx", x(last.step)!)
           .attr("cy", y(last.value))
-          .attr("r", 3.5)
+          .attr("r", 3)
           .attr("fill", "white")
           .attr("stroke", s.color)
-          .attr("stroke-width", 2);
+          .attr("stroke-width", s.strokeWidth);
+
+        g.append("text")
+          .attr("x", x(last.step)! + 10)
+          .attr("y", y(last.value))
+          .attr("dy", "0.35em")
+          .attr("font-size", "11px")
+          .attr("font-weight", 500)
+          .attr("fill", s.color)
+          .text(`${s.label}  ${last.value.toFixed(1)}%`);
       }
     }
 
@@ -207,7 +233,6 @@ export function ConversionCurveChart({
 
     const tooltip = select(tooltipRef.current);
 
-    // Build a sorted array of step x-positions for snapping
     const stepPositions = steps.map((step) => ({
       step,
       cx: x(step)!,
@@ -226,8 +251,7 @@ export function ConversionCurveChart({
         const d0 = stepPositions[idx - 1];
         const d1 = stepPositions[idx];
         if (!d0) return;
-        const closest =
-          d1 && mx - d0.cx > d1.cx - mx ? d1 : d0;
+        const closest = d1 && mx - d0.cx > d1.cx - mx ? d1 : d0;
 
         crosshairLine
           .attr("x1", closest.cx)
@@ -290,20 +314,10 @@ export function ConversionCurveChart({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-4">
-            {series.map((s) => (
-              <div key={s.label} className="flex items-center gap-1.5">
-                <div
-                  className="h-0.5 w-4 rounded-full"
-                  style={{ backgroundColor: s.color }}
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  {s.label}
-                </span>
-              </div>
-            ))}
-          </div>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-muted-foreground/50">
+            light = older · dark = newer
+          </span>
           {modeUrl && (
             <a
               href={modeUrl}
