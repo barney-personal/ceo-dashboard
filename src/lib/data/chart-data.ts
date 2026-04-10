@@ -35,11 +35,6 @@ const RETENTION_QUERY_COLUMNS = [
   "activity_month",
   "maus",
 ] as const;
-const WEEKLY_RETENTION_QUERY_COLUMNS = [
-  "cohort_week",
-  "activity_month",
-  "maus",
-] as const;
 const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
   "subscription_type",
   "subscriber_cohort",
@@ -158,36 +153,6 @@ export function aggregateCohortRows(
   return byCohort;
 }
 
-export function aggregateWeeklyCohortRows(
-  rows: Record<string, unknown>[],
-): Map<string, Map<number, number>> {
-  const byCohort = new Map<string, Map<number, number>>();
-
-  for (const row of rows) {
-    if (row.cohort_week == null || row.activity_month == null) continue;
-
-    const cohortStr = rowStr(row, "cohort_week");
-    if (!isValidDateStr(cohortStr)) continue;
-    // Keep as YYYY-MM-DD for weekly display in CohortHeatmap
-    const cohortDate = new Date(cohortStr);
-    const cohort = `${cohortDate.getFullYear()}-${String(
-      cohortDate.getMonth() + 1,
-    ).padStart(2, "0")}-${String(cohortDate.getDate()).padStart(2, "0")}`;
-    const period = rowNumOrNull(row, "activity_month");
-    const maus = rowNumOrNull(row, "maus");
-    if (period == null || maus == null) continue;
-
-    let periods = byCohort.get(cohort);
-    if (!periods) {
-      periods = new Map();
-      byCohort.set(cohort, periods);
-    }
-
-    periods.set(period, (periods.get(period) ?? 0) + maus);
-  }
-
-  return byCohort;
-}
 /**
  * 36-month LTV estimate over time — monthly bar chart.
  * Uses "Query 4" from Strategic Finance KPIs which has ~78 monthly rows
@@ -656,46 +621,6 @@ export async function getMauRetentionCohorts(): Promise<
   const cohorts = [...byCohort.keys()].sort();
 
   // Use M0 MAUs as the base for each cohort.
-  // Drop the last period (always incomplete) and M0 (always ~100%).
-  return cohorts
-    .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
-    .map((cohort) => {
-      const periods = byCohort.get(cohort)!;
-      const base = periods.get(0)!;
-      const maxPeriod = Math.max(...periods.keys()) - 1;
-      if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
-      return {
-        cohort,
-        // Start from period 1, skipping M0
-        periods: Array.from({ length: maxPeriod }, (_, i) =>
-          periods.has(i + 1) ? periods.get(i + 1)! / base : null,
-        ),
-      };
-    })
-    .filter((c) => c.periods.length > 0);
-}
-
-/**
- * Weekly app retention cohort triangle from the App Retention report (Query 1).
- * Same data source as getMauRetentionCohorts but aggregated by cohort_week
- * instead of cohort_month, giving week-level signup cohort granularity with
- * monthly retention periods (M0, M1, M2…).
- */
-export async function getWauRetentionCohorts(): Promise<
-  { cohort: string; periods: (number | null)[] }[]
-> {
-  const data = await getReportData("product", "retention", ["Query 1"]);
-  const query = getValidatedQuery(
-    data,
-    "Query 1",
-    WEEKLY_RETENTION_QUERY_COLUMNS,
-  );
-  if (!query) return [];
-
-  const byCohort = aggregateWeeklyCohortRows(query.rows);
-
-  const cohorts = [...byCohort.keys()].sort();
-
   // Drop the last period (always incomplete) and M0 (always ~100%).
   return cohorts
     .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)

@@ -20,7 +20,6 @@ import {
   getActiveUsersSeries,
   getEngagementSeries,
   getMauRetentionCohorts,
-  getWauRetentionCohorts,
   getLatestMAU,
   getLatestWauMau,
   getLatestM11Retention,
@@ -36,7 +35,6 @@ export default async function ProductPage() {
     activeUsers,
     engagement,
     retentionCohorts,
-    weeklyRetentionCohorts,
     latestMAU,
     latestWauMau,
     latestM11,
@@ -45,7 +43,6 @@ export default async function ProductPage() {
     getActiveUsersSeries(),
     getEngagementSeries(),
     getMauRetentionCohorts(),
-    getWauRetentionCohorts(),
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
@@ -225,22 +222,6 @@ export default async function ProductPage() {
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
               {retentionEmptyReason}
-            </p>
-          </div>
-        )}
-
-        {weeklyRetentionCohorts.length > 0 ? (
-          <CohortHeatmap
-            data={weeklyRetentionCohorts}
-            periodLabel="Month"
-            title="WAU Retention by Signup Week"
-            subtitle="Weekly signup cohorts · monthly retention periods"
-            modeUrl={modeUrlRetention}
-          />
-        ) : (
-          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
-            <p className="text-sm text-muted-foreground">
-              Sync the App Retention report to view weekly cohort retention
             </p>
           </div>
         )}
