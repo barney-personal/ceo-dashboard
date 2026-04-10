@@ -1,16 +1,21 @@
 import { redirect } from "next/navigation";
 import dynamic from "next/dynamic";
+import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ColumnChart } from "@/components/charts/column-chart";
+import { RecentPageViewsTable } from "@/components/dashboard/recent-page-views-table";
 import {
   getDashboardDAU,
   getDashboardRetention,
+  getDailyRetention,
   getPageViewsBySection,
+  getRecentPageViews,
+  SECTION_LABELS,
 } from "@/lib/data/dashboard-usage";
-import { BarChart3, Eye, TrendingUp } from "lucide-react";
+import { Activity, BarChart3, Eye, Table2, TrendingUp } from "lucide-react";
 
 const CohortHeatmap = dynamic(
   () =>
@@ -56,17 +61,59 @@ function EmptyState({
   );
 }
 
-export default async function AnalyticsPage() {
+const PAGE_SIZE = 50;
+
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
   const role = await getCurrentUserRole();
   if (!hasAccess(role, "ceo")) redirect("/dashboard");
 
-  const [dau, retention, sectionViews] = await Promise.all([
-    getDashboardDAU(),
-    getDashboardRetention(),
-    getPageViewsBySection(),
-  ]);
+  const params = await searchParams;
+  const currentPage = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
 
-  const hasAnyData = dau.length > 0 || retention.length > 0 || sectionViews.length > 0;
+  const [dau, retention, sectionViews, dailyRetention, recentViews, clerkUsers] =
+    await Promise.all([
+      getDashboardDAU(),
+      getDashboardRetention(),
+      getPageViewsBySection(),
+      getDailyRetention(),
+      getRecentPageViews(currentPage, PAGE_SIZE),
+      clerkClient().then((c) => c.users.getUserList({ limit: 100 })),
+    ]);
+
+  // Build user lookup: clerkUserId → display name
+  const userMap = new Map(
+    clerkUsers.data.map((u) => [
+      u.id,
+      [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+        u.emailAddresses[0]?.emailAddress ||
+        "Unknown",
+    ])
+  );
+
+  // Resolve page view rows with user names and section labels
+  const resolvedViews = recentViews.rows.map((r) => {
+    const section = r.path.replace(/^\/dashboard\/?/, "");
+    return {
+      id: r.id,
+      userName: userMap.get(r.clerkUserId) ?? r.clerkUserId,
+      section: SECTION_LABELS[section] ?? (section || "Overview"),
+      path: r.path,
+      viewedAt: r.viewedAt,
+    };
+  });
+
+  const totalPages = Math.ceil(recentViews.total / PAGE_SIZE);
+
+  const hasAnyData =
+    dau.length > 0 ||
+    retention.length > 0 ||
+    sectionViews.length > 0 ||
+    dailyRetention.length > 0 ||
+    recentViews.rows.length > 0;
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
@@ -109,7 +156,29 @@ export default async function AnalyticsPage() {
             )}
           </section>
 
-          {/* ── Retention ── */}
+          {/* ── Daily Retention ── */}
+          <section className="space-y-6">
+            <SectionDivider
+              title="Daily Retention"
+              subtitle="What percentage of users return in subsequent days after their first visit"
+            />
+            {dailyRetention.length > 0 ? (
+              <CohortHeatmap
+                data={dailyRetention}
+                periodLabel="Day"
+                title="Daily Retention Cohorts"
+                subtitle="By day of first visit (last 30 days)"
+              />
+            ) : (
+              <EmptyState
+                icon={Activity}
+                title="Not enough data for daily retention"
+                description="Daily retention cohorts need at least two days of usage data. Check back soon."
+              />
+            )}
+          </section>
+
+          {/* ── Weekly Retention ── */}
           <section className="space-y-6">
             <SectionDivider
               title="Weekly Retention"
@@ -151,6 +220,28 @@ export default async function AnalyticsPage() {
                 icon={Eye}
                 title="No section data yet"
                 description="Section view data will populate as users navigate through different areas of the dashboard."
+              />
+            )}
+          </section>
+
+          {/* ── Recent Page Views ── */}
+          <section className="space-y-6">
+            <SectionDivider
+              title="Recent Page Views"
+              subtitle="Individual page view activity across all dashboard users"
+            />
+            {resolvedViews.length > 0 ? (
+              <RecentPageViewsTable
+                rows={resolvedViews}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalCount={recentViews.total}
+              />
+            ) : (
+              <EmptyState
+                icon={Table2}
+                title="No page views yet"
+                description="Page view records will appear here as users browse the dashboard."
               />
             )}
           </section>
