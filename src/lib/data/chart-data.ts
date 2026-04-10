@@ -11,6 +11,7 @@ import {
 } from "@/lib/config/charts";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import type { ColumnChartData } from "@/components/charts/column-chart";
+import type { RetentionTier } from "@/components/charts/retention-triangle";
 
 type ChartSeries = {
   label: string;
@@ -33,6 +34,13 @@ const RETENTION_QUERY_COLUMNS = [
   "cohort_month",
   "activity_month",
   "maus",
+] as const;
+const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
+  "subscription_type",
+  "subscriber_cohort",
+  "relative_month",
+  "pct_retained",
+  "base",
 ] as const;
 const CURRENT_FTES_QUERY_COLUMNS = [
   "function_name",
@@ -619,6 +627,111 @@ export async function getMauRetentionCohorts(): Promise<
       };
     })
     .filter((c) => c.periods.length > 0);
+}
+
+/**
+ * Subscription retention cohort triangles from the Retention Dashboard.
+ *
+ * Sources from "Query 1" in Mode report 9c02ab407985 which has columns:
+ *   subscription_type, subscriber_cohort, relative_month, base, retained, pct_retained
+ *
+ * Subscription types: Any (overall), Plus, Ai, Grow, Nitro.
+ *
+ * Returns one RetentionTier per subscription type, with "Any" (overall) first.
+ */
+export async function getSubscriptionRetentionCohorts(): Promise<
+  RetentionTier[]
+> {
+  const data = await getReportData("unit-economics", "retention", ["Query 1"]);
+  const query = getValidatedQuery(
+    data,
+    "Query 1",
+    SUBSCRIPTION_RETENTION_QUERY_COLUMNS,
+  );
+  if (!query) return [];
+
+  // Group rows by subscription_type → cohort → period
+  const byType = new Map<
+    string,
+    Map<string, Map<number, { pctRetained: number; base: number }>>
+  >();
+
+  for (const row of query.rows) {
+    const type = rowStr(row, "subscription_type");
+    const cohortRaw = rowStr(row, "subscriber_cohort");
+    const period = rowNumOrNull(row, "relative_month");
+    const pctRetained = rowNumOrNull(row, "pct_retained");
+    const base = rowNumOrNull(row, "base");
+
+    if (!type || !cohortRaw || period == null || pctRetained == null) continue;
+    if (!isValidDateStr(cohortRaw)) continue;
+
+    const cohortDate = new Date(cohortRaw);
+    const cohort = `${cohortDate.getFullYear()}-${String(
+      cohortDate.getMonth() + 1,
+    ).padStart(2, "0")}`;
+
+    let typeCohorts = byType.get(type);
+    if (!typeCohorts) {
+      typeCohorts = new Map();
+      byType.set(type, typeCohorts);
+    }
+
+    let periods = typeCohorts.get(cohort);
+    if (!periods) {
+      periods = new Map();
+      typeCohorts.set(cohort, periods);
+    }
+
+    periods.set(period, { pctRetained, base: base ?? 0 });
+  }
+
+  // Convert to RetentionTier[], dropping the last period per cohort (incomplete)
+  const tierOrder: [string, string][] = [
+    ["Any", "All Subscribers"],
+    ["Plus", "Plus"],
+    ["Ai", "Ai"],
+    ["Grow", "Grow"],
+    ["Nitro", "Nitro"],
+  ];
+
+  const tiers: RetentionTier[] = [];
+
+  for (const [typeKey, label] of tierOrder) {
+    const typeCohorts = byType.get(typeKey);
+    if (!typeCohorts) continue;
+
+    const cohorts = [...typeCohorts.keys()].sort();
+    const cohortRows = cohorts
+      .map((cohort) => {
+        const periods = typeCohorts.get(cohort)!;
+        const maxPeriod = Math.max(...periods.keys()) - 1; // drop incomplete last
+        if (maxPeriod < 0) return null;
+        const baseEntry = periods.get(0);
+        return {
+          cohort,
+          cohortSize: baseEntry ? Math.round(baseEntry.base) : undefined,
+          periods: Array.from({ length: maxPeriod + 1 }, (_, i) => {
+            const entry = periods.get(i);
+            return entry != null ? entry.pctRetained : null;
+          }),
+        };
+      })
+      .filter(
+        (c): c is NonNullable<typeof c> =>
+          c != null && c.periods.length > 0,
+      );
+
+    if (cohortRows.length > 0) {
+      tiers.push({
+        key: typeKey.toLowerCase(),
+        label,
+        data: cohortRows,
+      });
+    }
+  }
+
+  return tiers;
 }
 
 /**
