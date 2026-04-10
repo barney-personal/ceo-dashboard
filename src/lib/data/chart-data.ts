@@ -869,6 +869,7 @@ export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
   const WINDOWS: { window: string; label: string; color: string }[] = [
     { window: "W1", label: "Week 1", color: "#94a3b8" },
     { window: "M1", label: "Month 1", color: "#6366f1" },
+    { window: "M2", label: "Month 2", color: "#4f8af7" },
     { window: "M3", label: "Month 3", color: "#3b3bba" },
     { window: "M6", label: "Month 6", color: "#7c3aed" },
     { window: "M11", label: "Month 11", color: "#c026d3" },
