@@ -2,6 +2,7 @@
 
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { domainColor } from "./chart-utils";
 
 export interface CohortRow {
   cohort: string; // e.g. "2025-01"
@@ -27,21 +28,6 @@ function retentionColor(rate: number): string {
   if (rate >= 0.6) return `hsl(142, 55%, ${85 - rate * 30}%)`;
   if (rate >= 0.3) return `hsl(${40 + (rate - 0.3) * 340}, 60%, 80%)`;
   return `hsl(0, 55%, ${90 - rate * 20}%)`;
-}
-
-/**
- * Diverging color scale normalised to a given [min, max] domain.
- * Red (low end) → Yellow (midpoint) → Green (high end).
- * t=0 maps to the domain min, t=1 to the domain max.
- */
-function domainColor(rate: number, min: number, max: number): string {
-  const range = max - min || 1;
-  const t = Math.max(0, Math.min(1, (rate - min) / range));
-  // hue: 0 (red) → 60 (yellow) → 142 (green)
-  const hue = t * 142;
-  const saturation = 50 + t * 10;
-  const lightness = 85 - t * 30;
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
 function formatCohortLabel(cohort: string): string {

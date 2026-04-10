@@ -13,3 +13,25 @@ export function getContentBoxWidth(container: HTMLElement): number {
   const paddingRight = parseFloat(style.paddingRight) || 0;
   return container.clientWidth - paddingLeft - paddingRight;
 }
+
+/**
+ * Domain-stretched heatmap color: Red (low) → Yellow (mid) → Green (high).
+ * Normalises `rate` into [min, max] so the full spectrum maps to the data range,
+ * making small differences clearly visible.
+ */
+export function domainColor(rate: number, min: number, max: number): string {
+  const range = max - min || 1;
+  const t = Math.max(0, Math.min(1, (rate - min) / range));
+  const hue = t * 142;
+  const saturation = 50 + t * 10;
+  const lightness = 85 - t * 30;
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+/** Text color with sufficient contrast against a `domainColor` background. */
+export function domainTextColor(rate: number, min: number, max: number): string {
+  const range = max - min || 1;
+  const t = Math.max(0, Math.min(1, (rate - min) / range));
+  const lightness = 85 - t * 30;
+  return lightness < 62 ? "rgba(255,255,255,0.95)" : "rgba(20,20,50,0.85)";
+}

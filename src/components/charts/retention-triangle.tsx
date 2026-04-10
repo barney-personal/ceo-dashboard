@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { domainColor, domainTextColor } from "./chart-utils";
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -30,59 +31,9 @@ interface RetentionTriangleProps {
 
 // ─── Color Scale ─────────────────────────────────────────
 //
-// Sequential scale: warm paper → deep indigo.
-//
-// Tufte: "Above all else show the data." Color is the primary
-// encoding — every cell's fill immediately communicates retention.
-//
-// Few: "Use a sequential palette for continuous quantitative data."
-// Bertin: Ordered visual variable (value/luminance) for ordered data.
-//
-// The scale runs from the Paper Folio warm off-white through
-// carefully spaced indigo stops to the brand's #3b3bba.
-
-type ColorStop = [stop: number, r: number, g: number, b: number];
-
-const PALETTE: ColorStop[] = [
-  [0.0, 248, 246, 243], // warm paper
-  [0.2, 221, 221, 242], // lightest indigo
-  [0.4, 183, 183, 226], // light indigo
-  [0.6, 140, 140, 210], // medium
-  [0.8, 94, 94, 195], // rich
-  [1.0, 59, 59, 186], // brand indigo
-];
-
-function interpolateRGB(rate: number): [number, number, number] {
-  const t = Math.max(0, Math.min(1, rate));
-  for (let i = 1; i < PALETTE.length; i++) {
-    if (t <= PALETTE[i][0]) {
-      const [s0, r0, g0, b0] = PALETTE[i - 1];
-      const [s1, r1, g1, b1] = PALETTE[i];
-      const f = (t - s0) / (s1 - s0);
-      return [
-        Math.round(r0 + f * (r1 - r0)),
-        Math.round(g0 + f * (g1 - g0)),
-        Math.round(b0 + f * (b1 - b0)),
-      ];
-    }
-  }
-  const last = PALETTE[PALETTE.length - 1];
-  return [last[1], last[2], last[3]];
-}
-
-function retentionBg(rate: number): string {
-  const [r, g, b] = interpolateRGB(rate);
-  return `rgb(${r}, ${g}, ${b})`;
-}
-
-function retentionTextColor(rate: number): string {
-  const [r, g, b] = interpolateRGB(rate);
-  // Perceived brightness (ITU-R BT.601)
-  const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-  return brightness < 140
-    ? "rgba(255,255,255,0.95)"
-    : "rgba(20,20,50,0.85)";
-}
+// Domain-stretched red → yellow → green, shared with the
+// conversion heatmap. The scale is normalised to each tier's
+// actual min/max so even small differences are clearly visible.
 
 // ─── Format helpers ──────────────────────────────────────
 
@@ -120,12 +71,14 @@ function TriangleTable({
   hoveredCell,
   onHover,
   skipM0,
+  colorRange,
 }: {
   data: RetentionCohort[];
   periodLabel: string;
   hoveredCell: [number, number] | null;
   onHover: (cell: [number, number] | null) => void;
   skipM0?: boolean;
+  colorRange: [number, number];
 }) {
   const rawMaxPeriods = Math.max(0, ...data.map((r) => r.periods.length));
   const startPeriod = skipM0 ? 1 : 0;
@@ -241,8 +194,8 @@ function TriangleTable({
                         isHovered && "ring-2 ring-foreground/25",
                       )}
                       style={{
-                        backgroundColor: retentionBg(val),
-                        color: retentionTextColor(val),
+                        backgroundColor: domainColor(val, colorRange[0], colorRange[1]),
+                        color: domainTextColor(val, colorRange[0], colorRange[1]),
                         minWidth: "42px",
                         height: "26px",
                       }}
@@ -281,8 +234,8 @@ function TriangleTable({
                     <div
                       className="mx-auto flex items-center justify-center rounded-[3px] font-mono text-[11px] font-semibold tabular-nums"
                       style={{
-                        backgroundColor: retentionBg(val),
-                        color: retentionTextColor(val),
+                        backgroundColor: domainColor(val, colorRange[0], colorRange[1]),
+                        color: domainTextColor(val, colorRange[0], colorRange[1]),
                         minWidth: "42px",
                         height: "26px",
                       }}
@@ -307,24 +260,27 @@ function TriangleTable({
 // A continuous bar communicates that the scale is sequential, not
 // categorical — reinforcing the quantitative reading.
 
-function ColorLegend() {
+function ColorLegend({ colorRange }: { colorRange: [number, number] }) {
   const stops = 24;
   return (
     <div className="flex items-center gap-2 border-t border-border/30 px-5 pt-3 pb-3">
       <span className="text-[10px] tabular-nums text-muted-foreground/50">
-        0%
+        {(colorRange[0] * 100).toFixed(0)}%
       </span>
       <div className="flex h-2 flex-1 overflow-hidden rounded-full">
-        {Array.from({ length: stops }, (_, i) => (
-          <div
-            key={i}
-            className="flex-1"
-            style={{ backgroundColor: retentionBg(i / (stops - 1)) }}
-          />
-        ))}
+        {Array.from({ length: stops }, (_, i) => {
+          const rate = colorRange[0] + (i / (stops - 1)) * (colorRange[1] - colorRange[0]);
+          return (
+            <div
+              key={i}
+              className="flex-1"
+              style={{ backgroundColor: domainColor(rate, colorRange[0], colorRange[1]) }}
+            />
+          );
+        })}
       </div>
       <span className="text-[10px] tabular-nums text-muted-foreground/50">
-        100%
+        {(colorRange[1] * 100).toFixed(0)}%
       </span>
     </div>
   );
@@ -345,6 +301,17 @@ export function RetentionTriangle({
   const [hoveredCell, setHoveredCell] = useState<[number, number] | null>(null);
 
   const activeTierData = tiers[activeTier];
+
+  const colorRange = useMemo<[number, number]>(() => {
+    if (!activeTierData) return [0, 1];
+    const startIdx = skipM0 ? 1 : 0;
+    const vals = activeTierData.data.flatMap((r) =>
+      r.periods.slice(startIdx).filter((v): v is number => v != null),
+    );
+    if (vals.length === 0) return [0, 1];
+    return [Math.min(...vals), Math.max(...vals)];
+  }, [activeTierData, skipM0]);
+
   if (!activeTierData || activeTierData.data.length === 0) return null;
 
   return (
@@ -419,11 +386,12 @@ export function RetentionTriangle({
           hoveredCell={hoveredCell}
           onHover={setHoveredCell}
           skipM0={skipM0}
+          colorRange={colorRange}
         />
       </div>
 
       {/* Legend */}
-      <ColorLegend />
+      <ColorLegend colorRange={colorRange} />
     </div>
   );
 }
