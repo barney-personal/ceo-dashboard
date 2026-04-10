@@ -9,6 +9,7 @@ import { max } from "d3-array";
 import { timeFormat } from "d3-time-format";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 export interface DivergingBarData {
   date: string;
@@ -49,7 +50,7 @@ export function DivergingBarChart({
     if (!svgRef.current || !containerRef.current || data.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const height = 400;
     const margin = { top: 20, right: 32, bottom: 52, left: 48 };
     const innerWidth = width - margin.left - margin.right;

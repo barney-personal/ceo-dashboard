@@ -8,6 +8,7 @@ import { min, max } from "d3-array";
 import { timeFormat } from "d3-time-format";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 export interface ColumnChartData {
   date: string;
@@ -57,7 +58,7 @@ export function ColumnChart({
     if (!svgRef.current || !containerRef.current || data.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const height = 420;
     const margin = { top: 16, right: 32, bottom: 56, left: 60 };
     const innerWidth = width - margin.left - margin.right;

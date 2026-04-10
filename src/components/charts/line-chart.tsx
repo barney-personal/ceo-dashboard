@@ -10,6 +10,7 @@ import { timeFormat } from "d3-time-format";
 import { timeMonth } from "d3-time";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 export interface LineChartSeries {
   label: string;
@@ -58,7 +59,7 @@ export function LineChart({
     if (!svgRef.current || !containerRef.current || series.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const height = 360;
     const margin = { top: 24, right: 24, bottom: 56, left: 72 };
     const innerWidth = width - margin.left - margin.right;
