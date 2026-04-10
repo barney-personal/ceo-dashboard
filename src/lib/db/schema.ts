@@ -186,6 +186,7 @@ export const meetingNotes = pgTable(
     meetingDate: timestamp("meeting_date").notNull(),
     durationMinutes: integer("duration_minutes"),
     calendarEventId: text("calendar_event_id"), // link to meetings table
+    syncedByUserId: text("synced_by_user_id"), // Clerk user ID — null = enterprise/shared
     syncedAt: timestamp("synced_at").defaultNow().notNull(),
   },
   (table) => [index("meeting_notes_date_idx").on(table.meetingDate)]
