@@ -20,7 +20,7 @@ export default async function DashboardLayout({
         <header className="flex h-14 items-center justify-between border-b border-border/50 px-6">
           <div className="flex items-center gap-3">
             <div className="h-px w-8 bg-border" />
-            <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
+            <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground" suppressHydrationWarning>
               {new Date().toLocaleDateString("en-GB", {
                 weekday: "long",
                 day: "numeric",
