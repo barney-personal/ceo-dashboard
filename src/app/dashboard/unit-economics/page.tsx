@@ -6,7 +6,7 @@ import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { AlertTriangle } from "lucide-react";
-import { CohortHeatmap } from "@/components/charts/cohort-heatmap";
+import { ConversionHeatmapToggle } from "@/components/charts/conversion-heatmap-toggle";
 import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
 import { SmallMultiplesCurveChart } from "@/components/charts/small-multiples-curve-chart";
 import {
@@ -93,7 +93,7 @@ export default async function UnitEconomicsPage() {
   const conversionModeUrl = getModeReportLink("unit-economics", "conversion");
 
   const hasConversionData =
-    conversionHeatmap.length > 0 ||
+    Object.keys(conversionHeatmap).length > 0 ||
     conversionCurves.length > 0 ||
     productCurves.length > 0;
   const conversionEmptyReason = resolveModeStaleReason(
@@ -260,12 +260,9 @@ export default async function UnitEconomicsPage() {
         </div>
       )}
 
-      {conversionHeatmap.length > 0 ? (
-        <CohortHeatmap
+      {Object.keys(conversionHeatmap).length > 0 ? (
+        <ConversionHeatmapToggle
           data={conversionHeatmap}
-          periodLabel="Month"
-          title="Conversion to Paid"
-          subtitle="Premium conversion rate by cohort month"
           modeUrl={conversionModeUrl}
         />
       ) : (

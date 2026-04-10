@@ -15,6 +15,8 @@ interface CohortHeatmapProps {
   subtitle?: string;
   modeUrl?: string;
   className?: string;
+  /** When true, render only the table without the card wrapper and header */
+  bare?: boolean;
 }
 
 function retentionColor(rate: number): string {
@@ -42,6 +44,7 @@ export function CohortHeatmap({
   subtitle,
   modeUrl,
   className,
+  bare = false,
 }: CohortHeatmapProps) {
   if (data.length === 0) return null;
 
@@ -50,6 +53,64 @@ export function CohortHeatmap({
     { length: maxPeriods },
     (_, i) => `${periodLabel.charAt(0)}${i}`
   );
+
+  const table = (
+    <div className="overflow-x-auto px-4 py-4">
+      <table className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr>
+            <th className="sticky left-0 bg-card px-2 py-1 text-left font-medium text-muted-foreground">
+              Cohort
+            </th>
+            {periodHeaders.map((h) => (
+              <th
+                key={h}
+                className="px-1 py-1 text-center font-medium text-muted-foreground"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row) => (
+            <tr key={row.cohort}>
+              <td className="sticky left-0 bg-card whitespace-nowrap px-2 py-0.5 font-mono text-muted-foreground">
+                {formatCohortLabel(row.cohort)}
+              </td>
+              {periodHeaders.map((_, i) => {
+                const val = row.periods[i];
+                if (val == null) {
+                  return (
+                    <td key={i} className="px-1 py-0.5" />
+                  );
+                }
+                return (
+                  <td
+                    key={i}
+                    className="px-1 py-0.5 text-center"
+                    title={`${formatCohortLabel(row.cohort)} ${periodLabel} ${i}: ${(val * 100).toFixed(1)}%`}
+                  >
+                    <div
+                      className="mx-auto rounded px-1 py-0.5 font-mono tabular-nums"
+                      style={{
+                        backgroundColor: retentionColor(val),
+                        minWidth: "36px",
+                      }}
+                    >
+                      {(val * 100).toFixed(0)}%
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  if (bare) return table;
 
   return (
     <div
@@ -79,59 +140,7 @@ export function CohortHeatmap({
           </a>
         )}
       </div>
-      <div className="overflow-x-auto px-4 py-4">
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
-            <tr>
-              <th className="sticky left-0 bg-card px-2 py-1 text-left font-medium text-muted-foreground">
-                Cohort
-              </th>
-              {periodHeaders.map((h) => (
-                <th
-                  key={h}
-                  className="px-1 py-1 text-center font-medium text-muted-foreground"
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row) => (
-              <tr key={row.cohort}>
-                <td className="sticky left-0 bg-card whitespace-nowrap px-2 py-0.5 font-mono text-muted-foreground">
-                  {formatCohortLabel(row.cohort)}
-                </td>
-                {periodHeaders.map((_, i) => {
-                  const val = row.periods[i];
-                  if (val == null) {
-                    return (
-                      <td key={i} className="px-1 py-0.5" />
-                    );
-                  }
-                  return (
-                    <td
-                      key={i}
-                      className="px-1 py-0.5 text-center"
-                      title={`${formatCohortLabel(row.cohort)} ${periodLabel} ${i}: ${(val * 100).toFixed(1)}%`}
-                    >
-                      <div
-                        className="mx-auto rounded px-1 py-0.5 font-mono tabular-nums"
-                        style={{
-                          backgroundColor: retentionColor(val),
-                          minWidth: "36px",
-                        }}
-                      >
-                        {(val * 100).toFixed(0)}%
-                      </div>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {table}
     </div>
   );
 }

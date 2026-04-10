@@ -897,43 +897,60 @@ export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
   })).filter((s) => s.data.length > 0);
 }
 
+export type ConversionHeatmapData = {
+  [product: string]: { cohort: string; periods: (number | null)[] }[];
+};
+
+const HEATMAP_PRODUCTS: { key: string; field: string }[] = [
+  { key: "All", field: "pct_premium" },
+  { key: "Plus", field: "pct_plus" },
+  { key: "AI Pro", field: "pct_ai" },
+  { key: "Builder", field: "pct_nitro" },
+];
+
 /**
  * Conversion cohort triangle for heatmap display.
+ * Returns one heatmap per product (All, Plus, AI Pro, Builder).
  * Each row is a monthly cohort, each period is a measurement window (M0–M23).
  * Values are conversion rates as decimals (0–1).
  */
-export async function getConversionCohortHeatmap(): Promise<
-  { cohort: string; periods: (number | null)[] }[]
-> {
+export async function getConversionCohortHeatmap(): Promise<ConversionHeatmapData> {
   const data = await getReportData("unit-economics", "conversion", [
     "agg_cohort_conversion_rate_by_window",
   ]);
   const rows = loadCohortConversionRows(data);
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return {};
 
-  // Group rows by cohort month
-  const byCohort = new Map<string, Map<string, number>>();
-  for (const r of rows) {
-    const cohort = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
-    const window = rowStr(r, "metric_window");
-    if (!MONTH_WINDOWS.includes(window)) continue;
-    const pct = rowNumOrNull(r, "pct_premium");
-    if (pct == null || !Number.isFinite(pct)) continue;
+  const result: ConversionHeatmapData = {};
 
-    if (!byCohort.has(cohort)) byCohort.set(cohort, new Map());
-    byCohort.get(cohort)!.set(window, pct);
+  for (const { key, field } of HEATMAP_PRODUCTS) {
+    const byCohort = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const cohort = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
+      const window = rowStr(r, "metric_window");
+      if (!MONTH_WINDOWS.includes(window)) continue;
+      const pct = rowNumOrNull(r, field);
+      if (pct == null || !Number.isFinite(pct)) continue;
+
+      if (!byCohort.has(cohort)) byCohort.set(cohort, new Map());
+      byCohort.get(cohort)!.set(window, pct);
+    }
+
+    const cohorts = [...byCohort.keys()].sort().slice(-24);
+    const heatmapRows = cohorts.map((cohort) => {
+      const windowMap = byCohort.get(cohort)!;
+      return {
+        cohort,
+        periods: MONTH_WINDOWS.map((w) => windowMap.get(w) ?? null),
+      };
+    });
+
+    if (heatmapRows.length > 0) {
+      result[key] = heatmapRows;
+    }
   }
 
-  // Sort cohorts chronologically, take the most recent 24
-  const cohorts = [...byCohort.keys()].sort().slice(-24);
-
-  return cohorts.map((cohort) => {
-    const windowMap = byCohort.get(cohort)!;
-    return {
-      cohort,
-      periods: MONTH_WINDOWS.map((w) => windowMap.get(w) ?? null),
-    };
-  });
+  return result;
 }
 
 export type ConversionCurveData = {
