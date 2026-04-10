@@ -249,6 +249,9 @@ export function validateModeColumns<TColumn extends string>({
   return result;
 }
 
+const SCHEMA_DRIFT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
+const schemaDriftLastWarned = new Map<string, number>();
+
 function validateExpectedQueries({
   reportData,
   expectedQueries,
@@ -273,6 +276,13 @@ function validateExpectedQueries({
   if (missingQueries.length === 0) {
     return;
   }
+
+  const cacheKey = `${section}:${category ?? ""}:${missingQueries.join(",")}`;
+  const lastWarned = schemaDriftLastWarned.get(cacheKey) ?? 0;
+  if (Date.now() - lastWarned < SCHEMA_DRIFT_COOLDOWN_MS) {
+    return;
+  }
+  schemaDriftLastWarned.set(cacheKey, Date.now());
 
   Sentry.captureMessage("Mode schema drift: missing expected queries", {
     level: "warning",
@@ -319,6 +329,7 @@ export async function getReportData(
 
 export function resetReportDataCacheForTests(): void {
   reportDataCache.clear();
+  schemaDriftLastWarned.clear();
 }
 
 /**
