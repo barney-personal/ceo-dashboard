@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup deps db-generate db-migrate db-studio
+.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio
 
 setup:
 	./scripts/setup.sh
@@ -6,7 +6,7 @@ setup:
 deps:
 	./scripts/ensure-node-modules.sh
 
-dev:
+dev: ensure-doppler
 	doppler run -- npm run dev
 
 build:
@@ -25,11 +25,14 @@ test:
 	./scripts/ensure-node-modules.sh
 	npx vitest run
 
-db-generate:
+ensure-doppler:
+	@doppler run -- true 2>/dev/null || doppler setup --project ceo-dashboard --config dev --no-interactive
+
+db-generate: ensure-doppler
 	doppler run -- npx drizzle-kit generate
 
-db-migrate:
+db-migrate: ensure-doppler
 	doppler run -- npx drizzle-kit migrate
 
-db-studio:
+db-studio: ensure-doppler
 	doppler run -- npx drizzle-kit studio
