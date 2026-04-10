@@ -99,7 +99,7 @@ export async function getDashboardRetention(): Promise<
     retention AS (
       SELECT
         f.cohort_week,
-        EXTRACT(DAYS FROM (a.active_week - f.cohort_week))::int / 7 AS week_number,
+        (a.active_week - f.cohort_week) / 7 AS week_number,
         COUNT(DISTINCT a.clerk_user_id) AS active_users
       FROM user_first_week f
       JOIN user_active_weeks a ON a.clerk_user_id = f.clerk_user_id
