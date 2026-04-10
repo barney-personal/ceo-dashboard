@@ -1,15 +1,21 @@
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
+import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { AlertTriangle } from "lucide-react";
+import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
 import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
   getQuery3Series,
   getSubscriptionRetentionCohorts,
+  getConversionByWindowSeries,
+  getConversionCurveSeries,
+  getConversionProductMixSeries,
+  getLatestM6ConversionRate,
 } from "@/lib/data/chart-data";
 import {
   getLatestTerminalSyncRun,
@@ -47,14 +53,27 @@ function ChartPlaceholder({ title, reason }: { title: string; reason: string }) 
 }
 
 export default async function UnitEconomicsPage() {
-  const [ltvSeries, ltvCacRatio, q3, retentionTiers, latestSyncRun] =
-    await Promise.all([
-      getLtvTimeSeries(),
-      getLtvCacRatioSeries(),
-      getQuery3Series(),
-      getSubscriptionRetentionCohorts(),
-      getLatestTerminalSyncRun("mode"),
-    ]);
+  const [
+    ltvSeries,
+    ltvCacRatio,
+    q3,
+    retentionTiers,
+    latestSyncRun,
+    conversionByWindow,
+    conversionCurves,
+    conversionProductMix,
+    latestM6,
+  ] = await Promise.all([
+    getLtvTimeSeries(),
+    getLtvCacRatioSeries(),
+    getQuery3Series(),
+    getSubscriptionRetentionCohorts(),
+    getLatestTerminalSyncRun("mode"),
+    getConversionByWindowSeries(),
+    getConversionCurveSeries(),
+    getConversionProductMixSeries(),
+    getLatestM6ConversionRate(),
+  ]);
 
   const anyKpisEmpty =
     ltvCacRatio.length === 0 ||
@@ -69,6 +88,17 @@ export default async function UnitEconomicsPage() {
   );
 
   const modeUrl = getModeReportLink("unit-economics", "kpis");
+  const conversionModeUrl = getModeReportLink("unit-economics", "conversion");
+
+  const hasConversionData =
+    conversionByWindow.length > 0 ||
+    conversionCurves.length > 0 ||
+    conversionProductMix.length > 0;
+  const conversionEmptyReason = resolveModeStaleReason(
+    !hasConversionData,
+    latestSyncRun,
+    "No data — sync Mode 'Premium Conversion Dashboard' report",
+  );
 
   const allEmbeds = [
     {
@@ -201,6 +231,82 @@ export default async function UnitEconomicsPage() {
           />
         )}
       </section>
+
+      {/* Premium Conversion */}
+      <SectionDivider
+        title="Premium Conversion"
+        subtitle="Conversion to paid subscription by cohort and measurement window"
+      />
+
+      {latestM6 && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <MetricCard
+            label="M6 Conversion Rate"
+            value={`${latestM6.current.toFixed(1)}%`}
+            subtitle="Latest cohort"
+            change={`${(latestM6.current - latestM6.previous >= 0 ? "+" : "")}${(latestM6.current - latestM6.previous).toFixed(1)}pp YoY`}
+            trend={
+              latestM6.current > latestM6.previous + 0.5
+                ? "up"
+                : latestM6.current < latestM6.previous - 0.5
+                  ? "down"
+                  : "flat"
+            }
+            modeUrl={conversionModeUrl}
+            delay={0}
+          />
+        </div>
+      )}
+
+      {conversionByWindow.length > 0 ? (
+        <LineChart
+          series={conversionByWindow}
+          title="Conversion to Paid"
+          subtitle="By measurement window, cohort month"
+          yLabel="%"
+          yFormatType="percent"
+          zoomY
+          modeUrl={conversionModeUrl}
+        />
+      ) : (
+        <ChartPlaceholder
+          title="Conversion to Paid"
+          reason={conversionEmptyReason}
+        />
+      )}
+
+      {conversionCurves.length > 0 ? (
+        <ConversionCurveChart
+          series={conversionCurves}
+          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]}
+          title="Conversion Curve"
+          subtitle="How premium conversion builds over months since signup"
+          yLabel="%"
+          modeUrl={conversionModeUrl}
+        />
+      ) : (
+        <ChartPlaceholder
+          title="Conversion Curve"
+          reason={conversionEmptyReason}
+        />
+      )}
+
+      {conversionProductMix.length > 0 ? (
+        <LineChart
+          series={conversionProductMix}
+          title="Product Mix at M6"
+          subtitle="Plus vs Nitro conversion rates by cohort"
+          yLabel="%"
+          yFormatType="percent"
+          zoomY
+          modeUrl={conversionModeUrl}
+        />
+      ) : (
+        <ChartPlaceholder
+          title="Product Mix at M6"
+          reason={conversionEmptyReason}
+        />
+      )}
 
       {/* Mode dashboard links */}
       {allEmbeds.length > 0 && (

@@ -50,6 +50,14 @@ const HEADCOUNT_QUERY_COLUMNS = [
   "is_cleo_headcount",
   "hb_function",
 ] as const;
+const CONVERSION_COHORT_COLUMNS = [
+  "cohort",
+  "metric_window",
+  "total_users",
+  "pct_premium",
+  "pct_plus",
+  "pct_nitro",
+] as const;
 
 /**
  * Returns true only if `str` is non-empty and parses to a finite timestamp.
@@ -821,4 +829,202 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
   }
 
   return series;
+}
+
+// --- Premium Conversion ---
+
+/**
+ * Parse cohort conversion data, filtering to cohorts with meaningful user volume.
+ * Returns rows grouped by metric_window for the given windows.
+ */
+function loadCohortConversionRows(
+  data: Awaited<ReturnType<typeof getReportData>>,
+) {
+  const query = getValidatedQuery(
+    data,
+    "agg_cohort_conversion_rate_by_window",
+    CONVERSION_COHORT_COLUMNS,
+  );
+  if (!query) return [];
+
+  return query.rows.filter((r) => {
+    const cohort = rowStr(r, "cohort");
+    const users = rowNumOrNull(r, "total_users");
+    return cohort && isValidDateStr(cohort) && users != null && users > 1000;
+  });
+}
+
+/**
+ * Premium conversion rates at key measurement windows over time.
+ * Returns series for W1, M1, M3, M6, M11 showing how the cohort-level
+ * conversion rate has changed month-by-month.
+ */
+export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return [];
+
+  const WINDOWS: { window: string; label: string; color: string }[] = [
+    { window: "W1", label: "Week 1", color: "#94a3b8" },
+    { window: "M1", label: "Month 1", color: "#6366f1" },
+    { window: "M3", label: "Month 3", color: "#3b3bba" },
+    { window: "M6", label: "Month 6", color: "#7c3aed" },
+    { window: "M11", label: "Month 11", color: "#c026d3" },
+  ];
+
+  const MIN_COHORT = "2020-01-01";
+
+  return WINDOWS.map(({ window, label, color }) => ({
+    label,
+    color,
+    data: rows
+      .filter(
+        (r) =>
+          rowStr(r, "metric_window") === window &&
+          rowStr(r, "cohort") >= MIN_COHORT,
+      )
+      .map((r) => {
+        const cohort = new Date(rowStr(r, "cohort"));
+        return {
+          date: cohort.toISOString().slice(0, 10),
+          value: rowNum(r, "pct_premium") * 100,
+        };
+      })
+      .filter((p) => Number.isFinite(p.value))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+  })).filter((s) => s.data.length > 0);
+}
+
+export type ConversionCurveData = {
+  label: string;
+  color: string;
+  data: { step: string; value: number }[];
+};
+
+/**
+ * Conversion curves for recent quarterly cohorts.
+ * Shows how premium conversion builds from M0 through M11 for each cohort,
+ * allowing comparison of newer vs older cohort performance.
+ */
+export async function getConversionCurveSeries(): Promise<ConversionCurveData[]> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return [];
+
+  // Pick quarterly cohorts from recent history
+  const COHORT_PICKS = [
+    "2023-01",
+    "2023-07",
+    "2024-01",
+    "2024-07",
+    "2025-01",
+  ];
+
+  const MONTH_WINDOWS = [
+    "M0", "M1", "M2", "M3", "M4", "M5", "M6",
+    "M7", "M8", "M9", "M10", "M11",
+  ];
+
+  const COLORS = ["#94a3b8", "#6366f1", "#3b3bba", "#7c3aed", "#c026d3"];
+
+  return COHORT_PICKS.map((cohortPrefix, idx) => {
+    const cohortRows = rows.filter((r) => {
+      const cohort = new Date(rowStr(r, "cohort"));
+      const key = `${cohort.getFullYear()}-${String(cohort.getMonth() + 1).padStart(2, "0")}`;
+      return key === cohortPrefix;
+    });
+
+    return {
+      label: cohortPrefix,
+      color: COLORS[idx % COLORS.length],
+      data: MONTH_WINDOWS.map((w) => {
+        const row = cohortRows.find((r) => rowStr(r, "metric_window") === w);
+        if (!row) return null;
+        const value = rowNum(row, "pct_premium") * 100;
+        if (!Number.isFinite(value)) return null;
+        return { step: w, value };
+      }).filter((p): p is { step: string; value: number } => p !== null),
+    };
+  }).filter((s) => s.data.length > 2);
+}
+
+/**
+ * Subscription product mix at M6 window over time.
+ * Returns series for Plus and Nitro conversion rates.
+ */
+export async function getConversionProductMixSeries(): Promise<ChartSeries[]> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return [];
+
+  const MIN_COHORT = "2020-01-01";
+  const m6Rows = rows
+    .filter(
+      (r) =>
+        rowStr(r, "metric_window") === "M6" &&
+        rowStr(r, "cohort") >= MIN_COHORT,
+    )
+    .map((r) => ({
+      date: new Date(rowStr(r, "cohort")).toISOString().slice(0, 10),
+      plus: rowNum(r, "pct_plus") * 100,
+      nitro: rowNum(r, "pct_nitro") * 100,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (m6Rows.length === 0) return [];
+
+  return [
+    {
+      label: "Plus",
+      color: "#3b3bba",
+      data: m6Rows.map((r) => ({ date: r.date, value: r.plus })),
+    },
+    {
+      label: "Nitro",
+      color: "#7c3aed",
+      data: m6Rows.map((r) => ({ date: r.date, value: r.nitro })),
+    },
+  ];
+}
+
+/**
+ * Latest M6 premium conversion rate for the metric card.
+ */
+export async function getLatestM6ConversionRate(): Promise<{
+  current: number;
+  previous: number;
+} | null> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return null;
+
+  const m6Rows = rows
+    .filter((r) => rowStr(r, "metric_window") === "M6")
+    .map((r) => ({
+      date: new Date(rowStr(r, "cohort")),
+      pct: rowNum(r, "pct_premium") * 100,
+    }))
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+  if (m6Rows.length < 2) return null;
+
+  const current = m6Rows[m6Rows.length - 1];
+  // Find same month from prior year, or fall back to 12 months earlier
+  const targetDate = new Date(current.date);
+  targetDate.setFullYear(targetDate.getFullYear() - 1);
+  const targetKey = targetDate.toISOString().slice(0, 7);
+
+  const previous = m6Rows.find(
+    (r) => r.date.toISOString().slice(0, 7) === targetKey,
+  ) ?? m6Rows[Math.max(0, m6Rows.length - 13)];
+
+  return { current: current.pct, previous: previous.pct };
 }
