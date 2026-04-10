@@ -347,11 +347,12 @@ export async function getLatestWauMau(): Promise<number | null> {
  */
 export async function getLatestM11Retention(): Promise<number | null> {
   const cohorts = await getMauRetentionCohorts();
-  // Walk backwards through cohorts to find one with an M11 value
+  // Walk backwards through cohorts to find one with an M11 value.
+  // periods[0] = M1 (M0 is dropped), so M11 is at index 10.
   for (let i = cohorts.length - 1; i >= 0; i--) {
     const periods = cohorts[i].periods;
-    if (periods.length > 11 && periods[11] != null) {
-      return periods[11];
+    if (periods.length > 10 && periods[10] != null) {
+      return periods[10];
     }
   }
   return null;
@@ -655,18 +656,19 @@ export async function getMauRetentionCohorts(): Promise<
   const cohorts = [...byCohort.keys()].sort();
 
   // Use M0 MAUs as the base for each cohort.
-  // Drop the last period per cohort — it's always the current incomplete month.
+  // Drop the last period (always incomplete) and M0 (always ~100%).
   return cohorts
     .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
     .map((cohort) => {
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
       const maxPeriod = Math.max(...periods.keys()) - 1;
-      if (maxPeriod < 0) return { cohort, periods: [] as (number | null)[] };
+      if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
       return {
         cohort,
-        periods: Array.from({ length: maxPeriod + 1 }, (_, i) =>
-          periods.has(i) ? periods.get(i)! / base : null,
+        // Start from period 1, skipping M0
+        periods: Array.from({ length: maxPeriod }, (_, i) =>
+          periods.has(i + 1) ? periods.get(i + 1)! / base : null,
         ),
       };
     })
@@ -694,17 +696,19 @@ export async function getWauRetentionCohorts(): Promise<
 
   const cohorts = [...byCohort.keys()].sort();
 
+  // Drop the last period (always incomplete) and M0 (always ~100%).
   return cohorts
     .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
     .map((cohort) => {
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
       const maxPeriod = Math.max(...periods.keys()) - 1;
-      if (maxPeriod < 0) return { cohort, periods: [] as (number | null)[] };
+      if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
       return {
         cohort,
-        periods: Array.from({ length: maxPeriod + 1 }, (_, i) =>
-          periods.has(i) ? periods.get(i)! / base : null,
+        // Start from period 1, skipping M0
+        periods: Array.from({ length: maxPeriod }, (_, i) =>
+          periods.has(i + 1) ? periods.get(i + 1)! / base : null,
         ),
       };
     })
