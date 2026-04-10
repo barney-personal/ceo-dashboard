@@ -20,6 +20,7 @@ import {
   getActiveUsersSeries,
   getEngagementSeries,
   getMauRetentionCohorts,
+  getWauRetentionCohorts,
   getLatestMAU,
   getLatestWauMau,
   getLatestM11Retention,
@@ -35,6 +36,7 @@ export default async function ProductPage() {
     activeUsers,
     engagement,
     retentionCohorts,
+    weeklyRetentionCohorts,
     latestMAU,
     latestWauMau,
     latestM11,
@@ -43,6 +45,7 @@ export default async function ProductPage() {
     getActiveUsersSeries(),
     getEngagementSeries(),
     getMauRetentionCohorts(),
+    getWauRetentionCohorts(),
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
@@ -224,6 +227,16 @@ export default async function ProductPage() {
               {retentionEmptyReason}
             </p>
           </div>
+        )}
+
+        {weeklyRetentionCohorts.length > 0 && (
+          <CohortHeatmap
+            data={weeklyRetentionCohorts}
+            periodLabel="Week"
+            title="WAU Retention"
+            subtitle="Weekly cohort triangle"
+            modeUrl={modeUrlRetention}
+          />
         )}
 
         <div className="grid gap-2 lg:grid-cols-2">

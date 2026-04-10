@@ -22,14 +22,23 @@ echo "Ensuring npm dependencies are available..."
 "$REPO_ROOT/scripts/ensure-node-modules.sh"
 echo "  Done"
 
-# 4. Optionally set up Doppler
+# 4. Set up Doppler
 if command -v doppler >/dev/null 2>&1; then
-  printf "Doppler CLI detected. Run 'doppler setup' now? [y/N] "
-  read -r answer
-  if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
-    (cd "$REPO_ROOT" && doppler setup)
+  if [ -t 0 ]; then
+    # Interactive terminal — ask
+    printf "Doppler CLI detected. Run 'doppler setup' now? [y/N] "
+    read -r answer
+    if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+      (cd "$REPO_ROOT" && doppler setup)
+    else
+      echo "  Skipped. Run 'doppler setup' later to configure secrets."
+    fi
   else
-    echo "  Skipped. Run 'doppler setup' later to configure secrets."
+    # Non-interactive (CI, Conductor, worktrees) — auto-configure
+    echo "Configuring Doppler (non-interactive)..."
+    doppler setup --project ceo-dashboard --config dev --no-interactive --scope "$REPO_ROOT" \
+      && echo "  Done: ceo-dashboard/dev" \
+      || echo "  Warning: doppler setup failed — run 'doppler setup' manually"
   fi
 else
   echo "Doppler CLI not found. Install with: brew install dopplerhq/cli/doppler"

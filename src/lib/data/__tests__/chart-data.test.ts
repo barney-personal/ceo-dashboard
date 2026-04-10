@@ -22,6 +22,7 @@ vi.mock("../mode", () => ({
 
 import {
   aggregateCohortRows,
+  aggregateWeeklyCohortRows,
   getActiveUsersSeries,
   getEngagementSeries,
   getHeadcountByDepartment,
@@ -29,6 +30,7 @@ import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
   getMauRetentionCohorts,
+  getWauRetentionCohorts,
   getQuery3Series,
   groupByWeek,
 } from "../chart-data";
@@ -560,6 +562,85 @@ describe("getMauRetentionCohorts", () => {
 
     expect(cohorts).toEqual([]);
     expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aggregateWeeklyCohortRows", () => {
+  it("aggregates weekly cohort rows across segments", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      { cohort_week: "2026-01-06", activity_week: 0, waus: 100 },
+      { cohort_week: "2026-01-06", activity_week: 0, waus: 50 },
+      { cohort_week: "2026-01-06", activity_week: 1, waus: 80 },
+    ]);
+
+    expect(aggregated.get("2026-01-06")?.get(0)).toBe(150);
+    expect(aggregated.get("2026-01-06")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with null activity_week or null waus", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      { cohort_week: "2026-01-06", activity_week: 0, waus: null },
+      { cohort_week: "2026-01-06", activity_week: null, waus: 100 },
+      { cohort_week: "2026-01-06", activity_week: 1, waus: 80 },
+    ]);
+
+    expect(aggregated.get("2026-01-06")?.has(0)).toBe(false);
+    expect(aggregated.get("2026-01-06")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with invalid cohort_week date strings", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      { cohort_week: "not-a-date", activity_week: 0, waus: 100 },
+      { cohort_week: "", activity_week: 0, waus: 50 },
+      { cohort_week: "2026-02-02", activity_week: 0, waus: 200 },
+    ]);
+
+    expect(aggregated.size).toBe(1);
+    expect(aggregated.get("2026-02-02")?.get(0)).toBe(200);
+  });
+});
+
+describe("getWauRetentionCohorts", () => {
+  it("normalises weekly cohorts to W0 and drops the incomplete latest week", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 2",
+        rows: [
+          { cohort_week: "2026-01-06", activity_week: 0, waus: 200 },
+          { cohort_week: "2026-01-06", activity_week: 1, waus: 160 },
+          { cohort_week: "2026-01-06", activity_week: 2, waus: 120 },
+        ],
+      },
+    ]);
+
+    const cohorts = await getWauRetentionCohorts();
+
+    expect(cohorts).toEqual([
+      {
+        cohort: "2026-01-06",
+        periods: [1, 0.8],
+      },
+    ]);
+  });
+
+  it("returns empty when weekly retention columns are missing", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "App Retention",
+        queryName: "Query 2",
+        rows: [{ cohort_week: "2026-01-06", activity_week: 0 }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["cohort_week", "activity_week", "waus"],
+      presentColumns: ["cohort_week", "activity_week"],
+      missingColumns: ["waus"],
+      isValid: false,
+    });
+
+    const cohorts = await getWauRetentionCohorts();
+
+    expect(cohorts).toEqual([]);
   });
 });
 

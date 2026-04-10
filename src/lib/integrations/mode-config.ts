@@ -189,6 +189,14 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
           count: 24,
         },
       },
+      {
+        name: "Query 2",
+        storageWindow: {
+          kind: "last-cohorts",
+          field: "cohort_week",
+          count: 52,
+        },
+      },
     ],
   },
 
