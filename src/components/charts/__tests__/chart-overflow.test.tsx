@@ -113,7 +113,7 @@ beforeEach(() => {
       get(target, prop) {
         if (prop === "paddingLeft") return `${MOCK_PADDING}px`;
         if (prop === "paddingRight") return `${MOCK_PADDING}px`;
-        return (target as Record<string | symbol, unknown>)[prop];
+        return (target as unknown as Record<string | symbol, unknown>)[prop];
       },
     });
   });
@@ -122,7 +122,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   // Restore clientWidth
-  delete (HTMLDivElement.prototype as Record<string, unknown>).clientWidth;
+  delete (HTMLDivElement.prototype as unknown as Record<string, unknown>).clientWidth;
 });
 
 /**
