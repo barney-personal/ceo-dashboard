@@ -25,14 +25,19 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const hourBucket = now.toISOString().slice(0, 13); // "2026-04-10T14"
 
-  await db
-    .insert(pageViews)
-    .values({
-      clerkUserId: userId,
-      path: sanitizedPath,
-      hourBucket,
-    })
-    .onConflictDoNothing();
+  try {
+    await db
+      .insert(pageViews)
+      .values({
+        clerkUserId: userId,
+        path: sanitizedPath,
+        hourBucket,
+      })
+      .onConflictDoNothing();
+  } catch {
+    // Table may not exist yet (pre-migration) — silently skip
+    return NextResponse.json({ ok: true });
+  }
 
   return NextResponse.json({ ok: true });
 }
