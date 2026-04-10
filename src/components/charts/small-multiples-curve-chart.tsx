@@ -8,6 +8,7 @@ import { line as d3Line, curveMonotoneX } from "d3-shape";
 import { min, max, bisector } from "d3-array";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 interface CurveData {
   label: string;
@@ -69,11 +70,11 @@ export function SmallMultiplesCurveChart({
     if (!svgRef.current || !containerRef.current || panels.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const panelCount = panels.length;
     const panelHeight = 180;
     const panelGap = 16;
-    const margin = { top: 8, right: 80, bottom: 48, left: 64 };
+    const margin = { top: 8, right: 104, bottom: 48, left: 64 };
     const totalHeight =
       margin.top +
       panelCount * panelHeight +

@@ -8,6 +8,7 @@ import { line as d3Line, curveMonotoneX } from "d3-shape";
 import { min, max, bisector } from "d3-array";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 export interface ConversionCurveSeries {
   label: string;
@@ -59,10 +60,10 @@ export function ConversionCurveChart({
     if (!svgRef.current || !containerRef.current || series.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const height = 360;
-    // Extra right margin for direct end-labels
-    const margin = { top: 24, right: 72, bottom: 56, left: 72 };
+    // Extra right margin for direct end-labels (label ≈ 100px + 10px offset)
+    const margin = { top: 24, right: 120, bottom: 56, left: 72 };
     const innerWidth = width - margin.left - margin.right;
     const innerHeight = height - margin.top - margin.bottom;
 

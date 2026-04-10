@@ -7,6 +7,7 @@ import { axisBottom } from "d3-axis";
 import { max } from "d3-array";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 export interface BarChartData {
   label: string;
@@ -37,7 +38,7 @@ export function BarChart({
     if (!svgRef.current || !containerRef.current || data.length === 0) return;
 
     const container = containerRef.current;
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const barHeight = 34;
     const margin = { top: 12, right: 72, bottom: 32, left: 150 };
     const height = data.length * barHeight + margin.top + margin.bottom;

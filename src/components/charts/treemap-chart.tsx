@@ -10,6 +10,7 @@ import {
 } from "d3-hierarchy";
 import { scaleOrdinal } from "d3-scale";
 import { cn } from "@/lib/utils";
+import { getContentBoxWidth } from "./chart-utils";
 
 interface TreemapRoot {
   label?: string;
@@ -61,7 +62,7 @@ export function TreemapChart({
     const container = svg.parentElement;
     if (!container) return;
 
-    const width = container.clientWidth;
+    const width = getContentBoxWidth(container);
     const height = 420;
 
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
