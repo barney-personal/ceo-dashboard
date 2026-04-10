@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { pageViews } from "@/lib/db/schema";
-import { sql, gte, count, countDistinct } from "drizzle-orm";
+import { sql, gte, desc, count, countDistinct } from "drizzle-orm";
 import { isSchemaCompatibilityError } from "@/lib/db/errors";
 
 /** Return fallback value if the page_views table doesn't exist yet. */
@@ -151,7 +151,7 @@ export function getDashboardRetention(): Promise<
   }, []);
 }
 
-const SECTION_LABELS: Record<string, string> = {
+export const SECTION_LABELS: Record<string, string> = {
   "": "Overview",
   "unit-economics": "Unit Economics",
   financial: "Financial",
@@ -199,4 +199,117 @@ export function getPageViewsBySection(): Promise<
       };
     });
   }, []);
+}
+
+/**
+ * Daily retention cohorts — groups users by the day of their first page view,
+ * then checks which subsequent days they returned.
+ * Returns retention rates as fractions (0–1), same shape as weekly retention.
+ * Limited to last 30 days of cohorts to keep the triangle readable.
+ */
+export function getDailyRetention(): Promise<
+  { cohort: string; periods: (number | null)[] }[]
+> {
+  return safeQuery(async () => {
+    const result = await db.execute(sql`
+      WITH user_first_day AS (
+        SELECT
+          clerk_user_id,
+          date_trunc('day', MIN(viewed_at))::date AS cohort_day
+        FROM page_views
+        GROUP BY clerk_user_id
+      ),
+      user_active_days AS (
+        SELECT DISTINCT
+          clerk_user_id,
+          date_trunc('day', viewed_at)::date AS active_day
+        FROM page_views
+      ),
+      retention AS (
+        SELECT
+          f.cohort_day,
+          (a.active_day - f.cohort_day) AS day_number,
+          COUNT(DISTINCT a.clerk_user_id) AS active_users
+        FROM user_first_day f
+        JOIN user_active_days a ON a.clerk_user_id = f.clerk_user_id
+        WHERE a.active_day >= f.cohort_day
+          AND f.cohort_day >= CURRENT_DATE - interval '30 days'
+        GROUP BY f.cohort_day, day_number
+      )
+      SELECT
+        cohort_day::text AS cohort,
+        day_number,
+        active_users
+      FROM retention
+      ORDER BY cohort_day, day_number
+    `);
+
+    const byCohort = new Map<string, Map<number, number>>();
+    for (const row of result) {
+      const cohort = row.cohort as string;
+      const dayNum = Number(row.day_number);
+      const users = Number(row.active_users);
+
+      if (!byCohort.has(cohort)) byCohort.set(cohort, new Map());
+      byCohort.get(cohort)!.set(dayNum, users);
+    }
+
+    return [...byCohort.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([cohort, periods]) => {
+        const base = periods.get(0) ?? 1;
+        const maxDay = Math.max(...periods.keys());
+        return {
+          cohort,
+          periods: Array.from({ length: maxDay + 1 }, (_, i) =>
+            periods.has(i) ? periods.get(i)! / base : null
+          ),
+        };
+      });
+  }, []);
+}
+
+/**
+ * Recent page views with pagination, ordered by most recent first.
+ */
+export function getRecentPageViews(
+  page: number,
+  pageSize: number
+): Promise<{
+  rows: {
+    id: number;
+    clerkUserId: string;
+    path: string;
+    viewedAt: string;
+  }[];
+  total: number;
+}> {
+  return safeQuery(async () => {
+    const offset = (page - 1) * pageSize;
+
+    const [rows, totalResult] = await Promise.all([
+      db
+        .select({
+          id: pageViews.id,
+          clerkUserId: pageViews.clerkUserId,
+          path: pageViews.path,
+          viewedAt: pageViews.viewedAt,
+        })
+        .from(pageViews)
+        .orderBy(desc(pageViews.viewedAt))
+        .limit(pageSize)
+        .offset(offset),
+      db.select({ total: count() }).from(pageViews),
+    ]);
+
+    return {
+      rows: rows.map((r) => ({
+        id: r.id,
+        clerkUserId: r.clerkUserId,
+        path: r.path,
+        viewedAt: r.viewedAt.toISOString(),
+      })),
+      total: Number(totalResult[0]?.total ?? 0),
+    };
+  }, { rows: [], total: 0 });
 }
