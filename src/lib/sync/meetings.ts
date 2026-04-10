@@ -69,16 +69,26 @@ export async function syncGranolaNotes(
 
   // Skip notes already in the DB that haven't been updated since last sync.
   // This avoids expensive getNote() calls (with transcript) for unchanged notes.
+  // Notes without syncedByUserId are always re-processed to backfill ownership.
   const existingIds = new Set<string>();
+  const needsOwnerBackfill = new Set<string>();
   if (noteList.length > 0) {
     const ids = noteList.map((n) => n.id);
     const existing = await db
-      .select({ granolaMeetingId: meetingNotes.granolaMeetingId, syncedAt: meetingNotes.syncedAt })
+      .select({
+        granolaMeetingId: meetingNotes.granolaMeetingId,
+        syncedAt: meetingNotes.syncedAt,
+        syncedByUserId: meetingNotes.syncedByUserId,
+      })
       .from(meetingNotes)
       .where(inArray(meetingNotes.granolaMeetingId, ids));
     for (const row of existing) {
-      // Consider synced if we have a record and it was synced after the note's updated_at
-      existingIds.add(row.granolaMeetingId);
+      if (row.syncedByUserId === null && opts.syncedByUserId) {
+        // Existing note missing ownership — must re-process to stamp owner
+        needsOwnerBackfill.add(row.granolaMeetingId);
+      } else {
+        existingIds.add(row.granolaMeetingId);
+      }
     }
   }
 
@@ -141,6 +151,19 @@ export async function syncGranolaNotes(
       count++;
     } catch (error) {
       errors.push(`Failed to store Granola note ${note.id}: ${formatSyncError(error)}`);
+    }
+  }
+
+  // Backfill ownership on existing notes that are missing it (no API call needed)
+  if (needsOwnerBackfill.size > 0) {
+    try {
+      await db
+        .update(meetingNotes)
+        .set({ syncedByUserId: opts.syncedByUserId ?? null, syncedAt: new Date() })
+        .where(inArray(meetingNotes.granolaMeetingId, [...needsOwnerBackfill]));
+      count += needsOwnerBackfill.size;
+    } catch (error) {
+      errors.push(`Failed to backfill ownership on ${needsOwnerBackfill.size} notes: ${formatSyncError(error)}`);
     }
   }
 
