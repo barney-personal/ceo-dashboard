@@ -82,6 +82,7 @@ export default async function DashboardOverview() {
       getRecentSyncRuns(10),
       getMeetingsForRange(todayStart, todayEnd, {
         accessToken: accessToken ?? undefined,
+        userId: userId ?? undefined,
       }),
     ]);
 

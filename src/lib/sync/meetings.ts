@@ -83,7 +83,10 @@ export async function syncGranolaNotes(
       .from(meetingNotes)
       .where(inArray(meetingNotes.granolaMeetingId, ids));
     for (const row of existing) {
-      if (row.syncedByUserId === null && opts.syncedByUserId) {
+      if (row.syncedByUserId === "_pending") {
+        // Migration-era note — must backfill with correct owner (or null for enterprise)
+        needsOwnerBackfill.add(row.granolaMeetingId);
+      } else if (row.syncedByUserId === null && opts.syncedByUserId) {
         // Existing note missing ownership — must re-process to stamp owner
         needsOwnerBackfill.add(row.granolaMeetingId);
       } else {
