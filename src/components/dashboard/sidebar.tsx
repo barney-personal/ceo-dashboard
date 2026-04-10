@@ -173,7 +173,12 @@ for (const group of NAV_GROUPS) {
   }
 }
 
-export function Sidebar({ role, isCeo = false }: { role: Role; isCeo?: boolean }) {
+export interface ImpersonationInfo {
+  name: string;
+  role: Role;
+}
+
+export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
   const pathname = usePathname();
 
   const visibleGroups = NAV_GROUPS.map((group) => ({
@@ -236,7 +241,7 @@ export function Sidebar({ role, isCeo = false }: { role: Role; isCeo?: boolean }
       </nav>
 
       {/* Role preview — CEO only */}
-      {isCeo && <RolePreview activeRole={role} />}
+      {isCeo && <RolePreview activeRole={role} impersonation={impersonation ?? undefined} />}
 
       {/* Bottom section */}
       <div className="border-t border-sidebar-border px-4 py-3">

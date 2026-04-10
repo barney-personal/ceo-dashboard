@@ -1,9 +1,17 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
 
 export const ROLE_PREVIEW_COOKIE = "role-preview";
+export const IMPERSONATE_COOKIE = "impersonate";
+
+export interface Impersonation {
+  userId: string;
+  name: string;
+  role: Role;
+}
 
 /**
  * Fetch the current user's role from Clerk.
@@ -28,10 +36,21 @@ export async function getCurrentUserRole(): Promise<Role> {
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
 
-  // CEO-only role preview: override role via cookie for testing
+  // CEO-only overrides: impersonation takes precedence over role preview
   if (realRole === "ceo") {
     try {
       const cookieStore = await cookies();
+
+      // Check impersonation first — resolve role from Clerk, not the cookie
+      const cookieData = parseImpersonateCookie(
+        cookieStore.get(IMPERSONATE_COOKIE)?.value
+      );
+      if (cookieData) {
+        const role = await resolveUserRole(cookieData.userId);
+        return role;
+      }
+
+      // Fall back to role preview
       const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as Role | undefined;
       if (preview === "everyone" || preview === "leadership") {
         return preview;
@@ -62,4 +81,64 @@ export async function getRealUserRole(): Promise<Role> {
   return getUserRole(
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
+}
+
+/**
+ * Get the active impersonation, if any.
+ * Returns null if not impersonating or if the real user is not CEO.
+ * Resolves the target user's role from Clerk (not the cookie snapshot).
+ */
+export async function getImpersonation(): Promise<Impersonation | null> {
+  const result = await getCurrentUserWithTimeout();
+  if (result.status !== "authenticated") return null;
+
+  const realRole = getUserRole(
+    (result.user.publicMetadata as Record<string, unknown>) ?? {}
+  );
+  if (realRole !== "ceo") return null;
+
+  try {
+    const cookieStore = await cookies();
+    const cookieData = parseImpersonateCookie(
+      cookieStore.get(IMPERSONATE_COOKIE)?.value
+    );
+    if (!cookieData) return null;
+
+    // Resolve live role from Clerk rather than trusting cookie snapshot
+    const role = await resolveUserRole(cookieData.userId);
+    return { ...cookieData, role };
+  } catch {
+    return null;
+  }
+}
+
+/** Look up a user's current role from Clerk by ID. */
+async function resolveUserRole(userId: string): Promise<Role> {
+  try {
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    return getUserRole(
+      (user.publicMetadata as Record<string, unknown>) ?? {}
+    );
+  } catch {
+    return "everyone";
+  }
+}
+
+function parseImpersonateCookie(value: string | undefined): Impersonation | null {
+  if (!value) return null;
+  try {
+    const decoded = decodeURIComponent(value);
+    const parsed = JSON.parse(decoded);
+    if (
+      typeof parsed.userId === "string" &&
+      typeof parsed.name === "string" &&
+      (parsed.role === "everyone" || parsed.role === "leadership" || parsed.role === "ceo")
+    ) {
+      return { userId: parsed.userId, name: parsed.name, role: parsed.role };
+    }
+  } catch {
+    // malformed cookie
+  }
+  return null;
 }
