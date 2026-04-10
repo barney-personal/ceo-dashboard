@@ -903,13 +903,24 @@ export type ConversionCurveData = {
   data: { step: string; value: number }[];
 };
 
-const COHORT_PICKS = [
-  "2023-01",
-  "2023-07",
-  "2024-01",
-  "2024-07",
-  "2025-01",
-];
+/**
+ * Pick ~5 semi-annual cohort keys (Jan + Jul) from the available data,
+ * taking the most recent ones. This keeps the curve charts evergreen
+ * without needing manual updates when new cohorts appear.
+ */
+function pickCohorts(rows: Record<string, unknown>[], maxCount = 5): string[] {
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const d = new Date(rowStr(r, "cohort"));
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    seen.add(key);
+  }
+  // Keep only Jan + Jul cohorts, sorted chronologically, take the latest N
+  return [...seen]
+    .filter((k) => k.endsWith("-01") || k.endsWith("-07"))
+    .sort()
+    .slice(-maxCount);
+}
 
 const MONTH_WINDOWS = [
   "M0", "M1", "M2", "M3", "M4", "M5", "M6",
@@ -923,8 +934,9 @@ const MONTH_WINDOWS = [
 function buildProductCurves(
   rows: Record<string, unknown>[],
   pctField: string,
+  cohorts: string[],
 ): ConversionCurveData[] {
-  return COHORT_PICKS.map((cohortPrefix) => {
+  return cohorts.map((cohortPrefix) => {
     const cohortRows = rows.filter((r) => {
       const cohort = new Date(rowStr(r, "cohort"));
       const key = `${cohort.getFullYear()}-${String(cohort.getMonth() + 1).padStart(2, "0")}`;
@@ -962,6 +974,8 @@ export async function getProductConversionCurves(): Promise<ProductConversionPan
   const rows = loadCohortConversionRows(data);
   if (rows.length === 0) return [];
 
+  const cohorts = pickCohorts(rows);
+
   const PRODUCTS: { product: string; field: string }[] = [
     { product: "Plus", field: "pct_plus" },
     { product: "Builder", field: "pct_nitro" },
@@ -971,7 +985,7 @@ export async function getProductConversionCurves(): Promise<ProductConversionPan
   return PRODUCTS
     .map(({ product, field }) => ({
       product,
-      curves: buildProductCurves(rows, field),
+      curves: buildProductCurves(rows, field, cohorts),
     }))
     .filter((p) => p.curves.length > 0);
 }
@@ -985,7 +999,7 @@ export async function getConversionCurveSeries(): Promise<ConversionCurveData[]>
   ]);
   const rows = loadCohortConversionRows(data);
   if (rows.length === 0) return [];
-  return buildProductCurves(rows, "pct_premium");
+  return buildProductCurves(rows, "pct_premium", pickCohorts(rows));
 }
 
 /**
