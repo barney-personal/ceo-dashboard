@@ -869,7 +869,6 @@ export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
   const WINDOWS: { window: string; label: string; color: string }[] = [
     { window: "W1", label: "Week 1", color: "#94a3b8" },
     { window: "M1", label: "Month 1", color: "#6366f1" },
-    { window: "M2", label: "Month 2", color: "#4f8af7" },
     { window: "M3", label: "Month 3", color: "#3b3bba" },
     { window: "M6", label: "Month 6", color: "#7c3aed" },
     { window: "M11", label: "Month 11", color: "#c026d3" },
@@ -896,6 +895,45 @@ export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
       .filter((p) => Number.isFinite(p.value))
       .sort((a, b) => a.date.localeCompare(b.date)),
   })).filter((s) => s.data.length > 0);
+}
+
+/**
+ * Conversion cohort triangle for heatmap display.
+ * Each row is a monthly cohort, each period is a measurement window (M0–M23).
+ * Values are conversion rates as decimals (0–1).
+ */
+export async function getConversionCohortHeatmap(): Promise<
+  { cohort: string; periods: (number | null)[] }[]
+> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return [];
+
+  // Group rows by cohort month
+  const byCohort = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const cohort = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
+    const window = rowStr(r, "metric_window");
+    if (!MONTH_WINDOWS.includes(window)) continue;
+    const pct = rowNumOrNull(r, "pct_premium");
+    if (pct == null || !Number.isFinite(pct)) continue;
+
+    if (!byCohort.has(cohort)) byCohort.set(cohort, new Map());
+    byCohort.get(cohort)!.set(window, pct);
+  }
+
+  // Sort cohorts chronologically, take the most recent 24
+  const cohorts = [...byCohort.keys()].sort().slice(-24);
+
+  return cohorts.map((cohort) => {
+    const windowMap = byCohort.get(cohort)!;
+    return {
+      cohort,
+      periods: MONTH_WINDOWS.map((w) => windowMap.get(w) ?? null),
+    };
+  });
 }
 
 export type ConversionCurveData = {

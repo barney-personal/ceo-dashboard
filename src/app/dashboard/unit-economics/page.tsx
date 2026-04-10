@@ -6,6 +6,7 @@ import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { AlertTriangle } from "lucide-react";
+import { CohortHeatmap } from "@/components/charts/cohort-heatmap";
 import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
 import { SmallMultiplesCurveChart } from "@/components/charts/small-multiples-curve-chart";
 import {
@@ -13,7 +14,7 @@ import {
   getLtvCacRatioSeries,
   getQuery3Series,
   getSubscriptionRetentionCohorts,
-  getConversionByWindowSeries,
+  getConversionCohortHeatmap,
   getConversionCurveSeries,
   getProductConversionCurves,
   getLatestM6ConversionRate,
@@ -60,7 +61,7 @@ export default async function UnitEconomicsPage() {
     q3,
     retentionTiers,
     latestSyncRun,
-    conversionByWindow,
+    conversionHeatmap,
     conversionCurves,
     productCurves,
     latestM6,
@@ -70,7 +71,7 @@ export default async function UnitEconomicsPage() {
     getQuery3Series(),
     getSubscriptionRetentionCohorts(),
     getLatestTerminalSyncRun("mode"),
-    getConversionByWindowSeries(),
+    getConversionCohortHeatmap(),
     getConversionCurveSeries(),
     getProductConversionCurves(),
     getLatestM6ConversionRate(),
@@ -92,7 +93,7 @@ export default async function UnitEconomicsPage() {
   const conversionModeUrl = getModeReportLink("unit-economics", "conversion");
 
   const hasConversionData =
-    conversionByWindow.length > 0 ||
+    conversionHeatmap.length > 0 ||
     conversionCurves.length > 0 ||
     productCurves.length > 0;
   const conversionEmptyReason = resolveModeStaleReason(
@@ -259,14 +260,12 @@ export default async function UnitEconomicsPage() {
         </div>
       )}
 
-      {conversionByWindow.length > 0 ? (
-        <LineChart
-          series={conversionByWindow}
+      {conversionHeatmap.length > 0 ? (
+        <CohortHeatmap
+          data={conversionHeatmap}
+          periodLabel="Month"
           title="Conversion to Paid"
-          subtitle="By measurement window, cohort month"
-          yLabel="%"
-          yFormatType="percent"
-          zoomY
+          subtitle="Premium conversion rate by cohort month"
           modeUrl={conversionModeUrl}
         />
       ) : (
