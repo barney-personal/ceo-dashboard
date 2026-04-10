@@ -115,7 +115,7 @@ export async function getDashboardRetention(): Promise<
   `);
 
   const byCohort = new Map<string, Map<number, number>>();
-  for (const row of result.rows) {
+  for (const row of result) {
     const cohort = row.cohort as string;
     const weekNum = Number(row.week_number);
     const users = Number(row.active_users);
