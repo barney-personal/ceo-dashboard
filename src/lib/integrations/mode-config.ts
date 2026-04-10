@@ -122,8 +122,17 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     name: "Retention Dashboard",
     section: "unit-economics",
     category: "retention",
-    syncEnabled: false,
-    queries: [],
+    syncEnabled: true,
+    queries: [
+      {
+        name: "Query 1",
+        storageWindow: {
+          kind: "last-cohorts",
+          field: "subscriber_cohort",
+          count: 24,
+        },
+      },
+    ],
   },
   {
     reportToken: "9da7db154e14",

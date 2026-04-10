@@ -1,4 +1,6 @@
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
@@ -7,6 +9,7 @@ import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
   getQuery3Series,
+  getSubscriptionRetentionCohorts,
 } from "@/lib/data/chart-data";
 import {
   getLatestTerminalSyncRun,
@@ -16,6 +19,18 @@ import {
   getChartEmbeds,
   getModeReportLink,
 } from "@/lib/integrations/mode-config";
+
+const RetentionTriangle = dynamic(
+  () =>
+    import("@/components/charts/retention-triangle").then(
+      (m) => m.RetentionTriangle,
+    ),
+  {
+    loading: () => (
+      <div className="h-96 animate-pulse rounded-lg bg-muted/40" />
+    ),
+  },
+);
 
 function ChartPlaceholder({ title, reason }: { title: string; reason: string }) {
   return (
@@ -32,12 +47,14 @@ function ChartPlaceholder({ title, reason }: { title: string; reason: string }) 
 }
 
 export default async function UnitEconomicsPage() {
-  const [ltvSeries, ltvCacRatio, q3, latestSyncRun] = await Promise.all([
-    getLtvTimeSeries(),
-    getLtvCacRatioSeries(),
-    getQuery3Series(),
-    getLatestTerminalSyncRun("mode"),
-  ]);
+  const [ltvSeries, ltvCacRatio, q3, retentionTiers, latestSyncRun] =
+    await Promise.all([
+      getLtvTimeSeries(),
+      getLtvCacRatioSeries(),
+      getQuery3Series(),
+      getSubscriptionRetentionCohorts(),
+      getLatestTerminalSyncRun("mode"),
+    ]);
 
   const anyKpisEmpty =
     ltvCacRatio.length === 0 ||
@@ -155,6 +172,35 @@ export default async function UnitEconomicsPage() {
           reason={kpisEmptyReason}
         />
       )}
+
+      {/* ── Subscription Retention ── */}
+      <section className="space-y-6">
+        <SectionDivider
+          title="Subscription Retention"
+          subtitle="How well do we retain paid subscribers over time?"
+        />
+
+        {retentionTiers.length > 0 &&
+        retentionTiers.some((t) => t.data.length > 0) ? (
+          <RetentionTriangle
+            tiers={retentionTiers}
+            periodLabel="Month"
+            skipM0
+            title="Paid Retention"
+            subtitle="Monthly cohort triangle"
+            modeUrl={getModeReportLink("unit-economics", "retention")}
+          />
+        ) : (
+          <ChartPlaceholder
+            title="Subscription Retention"
+            reason={resolveModeStaleReason(
+              true,
+              latestSyncRun,
+              "No data — sync the Retention report to view cohort triangles",
+            )}
+          />
+        )}
+      </section>
 
       {/* Mode dashboard links */}
       {allEmbeds.length > 0 && (
