@@ -232,15 +232,15 @@ export default async function ProductPage() {
         {weeklyRetentionCohorts.length > 0 ? (
           <CohortHeatmap
             data={weeklyRetentionCohorts}
-            periodLabel="Week"
-            title="WAU Retention"
-            subtitle="Weekly cohort triangle"
+            periodLabel="Month"
+            title="WAU Retention by Signup Week"
+            subtitle="Weekly signup cohorts · monthly retention periods"
             modeUrl={modeUrlRetention}
           />
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
-              Weekly retention requires a cohort_week query in the App Retention Mode report
+              Sync the App Retention report to view weekly cohort retention
             </p>
           </div>
         )}

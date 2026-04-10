@@ -37,8 +37,8 @@ const RETENTION_QUERY_COLUMNS = [
 ] as const;
 const WEEKLY_RETENTION_QUERY_COLUMNS = [
   "cohort_week",
-  "activity_week",
-  "waus",
+  "activity_month",
+  "maus",
 ] as const;
 const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
   "subscription_type",
@@ -164,7 +164,7 @@ export function aggregateWeeklyCohortRows(
   const byCohort = new Map<string, Map<number, number>>();
 
   for (const row of rows) {
-    if (row.cohort_week == null || row.activity_week == null) continue;
+    if (row.cohort_week == null || row.activity_month == null) continue;
 
     const cohortStr = rowStr(row, "cohort_week");
     if (!isValidDateStr(cohortStr)) continue;
@@ -173,9 +173,9 @@ export function aggregateWeeklyCohortRows(
     const cohort = `${cohortDate.getFullYear()}-${String(
       cohortDate.getMonth() + 1,
     ).padStart(2, "0")}-${String(cohortDate.getDate()).padStart(2, "0")}`;
-    const period = rowNumOrNull(row, "activity_week");
-    const waus = rowNumOrNull(row, "waus");
-    if (period == null || waus == null) continue;
+    const period = rowNumOrNull(row, "activity_month");
+    const maus = rowNumOrNull(row, "maus");
+    if (period == null || maus == null) continue;
 
     let periods = byCohort.get(cohort);
     if (!periods) {
@@ -183,7 +183,7 @@ export function aggregateWeeklyCohortRows(
       byCohort.set(cohort, periods);
     }
 
-    periods.set(period, (periods.get(period) ?? 0) + waus);
+    periods.set(period, (periods.get(period) ?? 0) + maus);
   }
 
   return byCohort;
@@ -674,16 +674,18 @@ export async function getMauRetentionCohorts(): Promise<
 }
 
 /**
- * Weekly app retention cohort triangle from the App Retention report (Query 2).
- * Same logic as getMauRetentionCohorts but with weekly granularity.
+ * Weekly app retention cohort triangle from the App Retention report (Query 1).
+ * Same data source as getMauRetentionCohorts but aggregated by cohort_week
+ * instead of cohort_month, giving week-level signup cohort granularity with
+ * monthly retention periods (M0, M1, M2…).
  */
 export async function getWauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
-  const data = await getReportData("product", "retention", ["Query 2"]);
+  const data = await getReportData("product", "retention", ["Query 1"]);
   const query = getValidatedQuery(
     data,
-    "Query 2",
+    "Query 1",
     WEEKLY_RETENTION_QUERY_COLUMNS,
   );
   if (!query) return [];

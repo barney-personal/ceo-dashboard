@@ -568,20 +568,20 @@ describe("getMauRetentionCohorts", () => {
 describe("aggregateWeeklyCohortRows", () => {
   it("aggregates weekly cohort rows across segments", () => {
     const aggregated = aggregateWeeklyCohortRows([
-      { cohort_week: "2026-01-06", activity_week: 0, waus: 100 },
-      { cohort_week: "2026-01-06", activity_week: 0, waus: 50 },
-      { cohort_week: "2026-01-06", activity_week: 1, waus: 80 },
+      { cohort_week: "2026-01-06", activity_month: 0, maus: 100 },
+      { cohort_week: "2026-01-06", activity_month: 0, maus: 50 },
+      { cohort_week: "2026-01-06", activity_month: 1, maus: 80 },
     ]);
 
     expect(aggregated.get("2026-01-06")?.get(0)).toBe(150);
     expect(aggregated.get("2026-01-06")?.get(1)).toBe(80);
   });
 
-  it("skips rows with null activity_week or null waus", () => {
+  it("skips rows with null activity_month or null maus", () => {
     const aggregated = aggregateWeeklyCohortRows([
-      { cohort_week: "2026-01-06", activity_week: 0, waus: null },
-      { cohort_week: "2026-01-06", activity_week: null, waus: 100 },
-      { cohort_week: "2026-01-06", activity_week: 1, waus: 80 },
+      { cohort_week: "2026-01-06", activity_month: 0, maus: null },
+      { cohort_week: "2026-01-06", activity_month: null, maus: 100 },
+      { cohort_week: "2026-01-06", activity_month: 1, maus: 80 },
     ]);
 
     expect(aggregated.get("2026-01-06")?.has(0)).toBe(false);
@@ -590,9 +590,9 @@ describe("aggregateWeeklyCohortRows", () => {
 
   it("skips rows with invalid cohort_week date strings", () => {
     const aggregated = aggregateWeeklyCohortRows([
-      { cohort_week: "not-a-date", activity_week: 0, waus: 100 },
-      { cohort_week: "", activity_week: 0, waus: 50 },
-      { cohort_week: "2026-02-02", activity_week: 0, waus: 200 },
+      { cohort_week: "not-a-date", activity_month: 0, maus: 100 },
+      { cohort_week: "", activity_month: 0, maus: 50 },
+      { cohort_week: "2026-02-02", activity_month: 0, maus: 200 },
     ]);
 
     expect(aggregated.size).toBe(1);
@@ -601,14 +601,14 @@ describe("aggregateWeeklyCohortRows", () => {
 });
 
 describe("getWauRetentionCohorts", () => {
-  it("normalises weekly cohorts to W0 and drops the incomplete latest week", async () => {
+  it("normalises weekly cohorts to M0 and drops the incomplete latest period", async () => {
     mockGetReportData.mockResolvedValue([
       {
-        queryName: "Query 2",
+        queryName: "Query 1",
         rows: [
-          { cohort_week: "2026-01-06", activity_week: 0, waus: 200 },
-          { cohort_week: "2026-01-06", activity_week: 1, waus: 160 },
-          { cohort_week: "2026-01-06", activity_week: 2, waus: 120 },
+          { cohort_week: "2026-01-06", activity_month: 0, maus: 200 },
+          { cohort_week: "2026-01-06", activity_month: 1, maus: 160 },
+          { cohort_week: "2026-01-06", activity_month: 2, maus: 120 },
         ],
       },
     ]);
@@ -627,14 +627,14 @@ describe("getWauRetentionCohorts", () => {
     mockGetReportData.mockResolvedValue([
       {
         reportName: "App Retention",
-        queryName: "Query 2",
-        rows: [{ cohort_week: "2026-01-06", activity_week: 0 }],
+        queryName: "Query 1",
+        rows: [{ cohort_week: "2026-01-06", activity_month: 0 }],
       },
     ]);
     mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["cohort_week", "activity_week", "waus"],
-      presentColumns: ["cohort_week", "activity_week"],
-      missingColumns: ["waus"],
+      expectedColumns: ["cohort_week", "activity_month", "maus"],
+      presentColumns: ["cohort_week", "activity_month"],
+      missingColumns: ["maus"],
       isValid: false,
     });
 
