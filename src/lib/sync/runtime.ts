@@ -14,6 +14,7 @@ import { runModeSync } from "./mode";
 import { runSlackSync } from "./slack";
 import { runManagementAccountsSync } from "./management-accounts";
 import { runMeetingsSync } from "./meetings";
+import { runGitHubSync } from "./github";
 import { getSyncSourceConfig, type SyncSource } from "./config";
 import { isSchemaCompatibilityError } from "@/lib/db/errors";
 import {
@@ -40,6 +41,7 @@ const RUNNERS: Record<SyncSource, SyncRunner> = {
   slack: runSlackSync,
   "management-accounts": runManagementAccountsSync,
   meetings: runMeetingsSync,
+  github: runGitHubSync,
 };
 
 const FINALIZE_RECOVERY_DELAYS_MS = [5_000, 15_000, 30_000];

@@ -18,6 +18,7 @@ import {
   Heart,
   Database,
   Calendar,
+  GitPullRequest,
 } from "lucide-react";
 
 interface NavItem {
@@ -103,6 +104,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/performance",
         requiredRole: "leadership",
         icon: TrendingUp,
+      },
+      {
+        label: "Engineering",
+        href: "/dashboard/people/engineering",
+        requiredRole: "leadership",
+        icon: GitPullRequest,
       },
       {
         label: "Engagement",
