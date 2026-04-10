@@ -134,8 +134,8 @@ export function aggregateCohortRows(
     const cohortStr = rowStr(row, "cohort_month");
     if (!isValidDateStr(cohortStr)) continue;
     const cohortDate = new Date(cohortStr);
-    const cohort = `${cohortDate.getFullYear()}-${String(
-      cohortDate.getMonth() + 1,
+    const cohort = `${cohortDate.getUTCFullYear()}-${String(
+      cohortDate.getUTCMonth() + 1,
     ).padStart(2, "0")}`;
     const period = rowNumOrNull(row, "activity_month");
     const maus = rowNumOrNull(row, "maus");
