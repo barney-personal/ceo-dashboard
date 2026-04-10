@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, LogIn } from "lucide-react";
 
 interface User {
   id: string;
@@ -44,11 +45,21 @@ function formatDate(iso: string | null): string {
   });
 }
 
+function startImpersonation(user: User) {
+  const payload = JSON.stringify({
+    userId: user.id,
+    name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "Unknown",
+    role: user.role,
+  });
+  document.cookie = `impersonate=${encodeURIComponent(payload)}; path=/; max-age=86400`;
+}
+
 export function UserAdmin({ initialUsers }: UserAdminProps) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
   const [errorId, setErrorId] = useState<string | null>(null);
+  const router = useRouter();
 
   const updateRole = async (userId: string, newRole: string) => {
     setUpdatingId(userId);
@@ -84,7 +95,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
     <div className="space-y-6">
       <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
         {/* Table header */}
-        <div className="grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px] items-center gap-4 border-b border-border/50 bg-muted/30 px-5 py-3">
+        <div className="grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px_auto] items-center gap-4 border-b border-border/50 bg-muted/30 px-5 py-3">
           <span className="w-8" />
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Name
@@ -104,6 +115,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Last sign-in
           </span>
+          <span className="w-20" />
         </div>
 
         {/* User rows */}
@@ -117,7 +129,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
               <div
                 key={user.id}
                 className={cn(
-                  "grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px] items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/20",
+                  "grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px_auto] items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/20",
                   isSuccess && "bg-positive/[0.03]",
                   isError && "bg-destructive/[0.03]"
                 )}
@@ -188,6 +200,20 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
                 <span className="text-xs text-muted-foreground">
                   {formatDate(user.lastSignInAt)}
                 </span>
+
+                {/* Impersonate */}
+                <button
+                  onClick={() => {
+                    startImpersonation(user);
+                    router.push("/dashboard");
+                    router.refresh();
+                  }}
+                  title={`View as ${[user.firstName, user.lastName].filter(Boolean).join(" ") || "this user"}`}
+                  className="flex w-20 items-center justify-center gap-1.5 rounded-lg border border-border/60 px-2 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
+                >
+                  <LogIn className="h-3 w-3" />
+                  View as
+                </button>
               </div>
             );
           })}

@@ -1,6 +1,7 @@
 import { UserButton } from "@clerk/nextjs";
-import { getCurrentUserRole, getRealUserRole } from "@/lib/auth/roles.server";
+import { getCurrentUserRole, getRealUserRole, getImpersonation } from "@/lib/auth/roles.server";
 import { Sidebar } from "@/components/dashboard/sidebar";
+import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner";
 import { Bell } from "lucide-react";
 import { PageViewTracker } from "@/components/dashboard/page-view-tracker";
 
@@ -9,15 +10,19 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const [role, realRole] = await Promise.all([
+  const [role, realRole, impersonation] = await Promise.all([
     getCurrentUserRole(),
     getRealUserRole(),
+    getImpersonation(),
   ]);
 
   return (
     <div className="flex flex-1">
-      <Sidebar role={role} isCeo={realRole === "ceo"} />
+      <Sidebar role={role} isCeo={realRole === "ceo"} impersonation={impersonation} />
       <div className="flex flex-1 flex-col">
+        {impersonation && (
+          <ImpersonationBanner name={impersonation.name} role={impersonation.role} />
+        )}
         <header className="flex h-14 items-center justify-between border-b border-border/50 px-6">
           <div className="flex items-center gap-3">
             <div className="h-px w-8 bg-border" />
