@@ -74,25 +74,33 @@ export default async function AnalyticsPage({
   const params = await searchParams;
   const currentPage = Math.max(1, parseInt(params.page ?? "1", 10) || 1);
 
-  const [dau, retention, sectionViews, dailyRetention, recentViews, clerkUsers] =
+  const [dau, retention, sectionViews, dailyRetention, recentViews] =
     await Promise.all([
       getDashboardDAU(),
       getDashboardRetention(),
       getPageViewsBySection(),
       getDailyRetention(),
       getRecentPageViews(currentPage, PAGE_SIZE),
-      clerkClient().then((c) => c.users.getUserList({ limit: 100 })),
     ]);
 
-  // Build user lookup: clerkUserId → display name
-  const userMap = new Map(
-    clerkUsers.data.map((u) => [
-      u.id,
-      [u.firstName, u.lastName].filter(Boolean).join(" ") ||
-        u.emailAddresses[0]?.emailAddress ||
-        "Unknown",
-    ])
-  );
+  // Fetch only the Clerk users present in this page of results
+  const uniqueUserIds = [...new Set(recentViews.rows.map((r) => r.clerkUserId))];
+  const userMap = new Map<string, string>();
+  if (uniqueUserIds.length > 0) {
+    const client = await clerkClient();
+    const { data: users } = await client.users.getUserList({
+      userId: uniqueUserIds,
+      limit: uniqueUserIds.length,
+    });
+    for (const u of users) {
+      userMap.set(
+        u.id,
+        [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+          u.emailAddresses[0]?.emailAddress ||
+          "Unknown"
+      );
+    }
+  }
 
   // Resolve page view rows with user names and section labels
   const resolvedViews = recentViews.rows.map((r) => {
@@ -234,6 +242,7 @@ export default async function AnalyticsPage({
               <RecentPageViewsTable
                 rows={resolvedViews}
                 currentPage={currentPage}
+                pageSize={PAGE_SIZE}
                 totalPages={totalPages}
                 totalCount={recentViews.total}
               />

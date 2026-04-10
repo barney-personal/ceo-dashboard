@@ -15,6 +15,7 @@ interface PageViewRow {
 interface RecentPageViewsTableProps {
   rows: PageViewRow[];
   currentPage: number;
+  pageSize: number;
   totalPages: number;
   totalCount: number;
 }
@@ -39,10 +40,10 @@ function formatRelativeTime(iso: string): string {
 export function RecentPageViewsTable({
   rows,
   currentPage,
+  pageSize,
   totalPages,
   totalCount,
 }: RecentPageViewsTableProps) {
-  const pageSize = rows.length;
   const start = (currentPage - 1) * pageSize + 1;
   const end = start + rows.length - 1;
 
