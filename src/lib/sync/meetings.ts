@@ -6,7 +6,7 @@ import {
   getUserName,
   type SlackMessage,
 } from "@/lib/integrations/slack";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import {
   SyncCancelledError,
@@ -147,7 +147,12 @@ export async function syncGranolaNotes(
             transcript: transcriptText,
             participants: full.attendees ?? null,
             calendarEventId: full.calendar_event?.calendar_event_id ?? null,
-            syncedByUserId: opts.syncedByUserId ?? null,
+            // Personal sync always stamps ownership; enterprise sync (null)
+            // preserves existing ownership so it can't downgrade a private
+            // note to public.
+            syncedByUserId: opts.syncedByUserId
+              ? opts.syncedByUserId
+              : sql`coalesce(${meetingNotes.syncedByUserId}, null)`,
             syncedAt: new Date(),
           },
         });
