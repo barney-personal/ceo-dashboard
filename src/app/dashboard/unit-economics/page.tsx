@@ -279,7 +279,7 @@ export default async function UnitEconomicsPage() {
       {conversionCurves.length > 0 ? (
         <ConversionCurveChart
           series={conversionCurves}
-          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]}
+          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19", "M20", "M21", "M22", "M23"]}
           title="Conversion Curve"
           subtitle="How premium conversion builds over months since signup"
           yLabel="%"
@@ -295,7 +295,7 @@ export default async function UnitEconomicsPage() {
       {productCurves.length > 0 ? (
         <SmallMultiplesCurveChart
           panels={productCurves}
-          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]}
+          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19", "M20", "M21", "M22", "M23"]}
           title="Conversion by Product"
           subtitle="Plus, Builder, AI Pro — independent y-axes"
           modeUrl={conversionModeUrl}
