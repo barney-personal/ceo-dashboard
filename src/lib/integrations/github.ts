@@ -234,10 +234,9 @@ export async function getMergedPRs(
 
     for (const pr of batch) {
       if (!pr.merged_at) continue;
-      if (new Date(pr.merged_at) < since) {
-        return merged;
+      if (new Date(pr.merged_at) >= since) {
+        merged.push(pr);
       }
-      merged.push(pr);
     }
 
     if (batch.length < GITHUB_PER_PAGE) break;
