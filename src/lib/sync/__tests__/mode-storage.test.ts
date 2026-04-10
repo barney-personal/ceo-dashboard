@@ -7,10 +7,10 @@ import {
 
 describe("mode storage profiles", () => {
   it("does not sync embed-only reports", () => {
-    // Retention Dashboard and Seasonality Overview remain embed-only
-    expect(shouldSyncModeReport("9c02ab407985")).toBe(false);
+    // Seasonality Overview remains embed-only
     expect(shouldSyncModeReport("10b1f099768d")).toBe(false);
-    // Premium Conversion Dashboard and Strategic Finance KPIs are synced
+    // Retention Dashboard, Premium Conversion, and Strategic Finance KPIs are synced
+    expect(shouldSyncModeReport("9c02ab407985")).toBe(true);
     expect(shouldSyncModeReport("76bc42f598a7")).toBe(true);
     expect(shouldSyncModeReport("11c3172037ac")).toBe(true);
   });
