@@ -82,7 +82,7 @@ export default async function ProductPage() {
           label="MAU"
           value={latestMAU != null ? formatCompact(latestMAU) : "—"}
           subtitle={
-            latestMAU != null ? "daily, App Active Users" : "awaiting data"
+            latestMAU != null ? "monthly, App Active Users" : "awaiting data"
           }
           modeUrl={modeUrlActiveUsers}
           delay={0}
