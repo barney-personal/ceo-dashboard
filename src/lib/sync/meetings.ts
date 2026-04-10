@@ -52,7 +52,7 @@ async function fetchLastMeetingsSyncTimestamp(): Promise<Date | undefined> {
  */
 export async function syncGranolaNotes(
   sinceDate: Date,
-  opts: SyncControl & { token: string }
+  opts: SyncControl & { token: string; syncedByUserId?: string | null }
 ): Promise<{ count: number; errors: string[] }> {
   let noteList: GranolaNote[];
   try {
@@ -124,6 +124,7 @@ export async function syncGranolaNotes(
           meetingDate: new Date(full.created_at),
           durationMinutes: null,
           calendarEventId: full.calendar_event?.calendar_event_id ?? null,
+          syncedByUserId: opts.syncedByUserId ?? null,
         })
         .onConflictDoUpdate({
           target: meetingNotes.granolaMeetingId,
@@ -133,6 +134,7 @@ export async function syncGranolaNotes(
             transcript: transcriptText,
             participants: full.attendees ?? null,
             calendarEventId: full.calendar_event?.calendar_event_id ?? null,
+            syncedByUserId: opts.syncedByUserId ?? null,
             syncedAt: new Date(),
           },
         });
@@ -164,7 +166,7 @@ async function syncAllGranolaNotes(
       "Syncing Granola notes (enterprise)"
     );
     try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token: enterpriseToken });
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: enterpriseToken, syncedByUserId: null });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {
@@ -201,7 +203,7 @@ async function syncAllGranolaNotes(
       `Syncing Granola notes (personal)`
     );
     try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey });
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey, syncedByUserId: clerkUserId });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {

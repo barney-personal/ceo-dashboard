@@ -43,6 +43,13 @@
       "when": 1775823887148,
       "tag": "0005_awesome_switch",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1775828335312,
+      "tag": "0006_futuristic_mongu",
+      "breakpoints": true
     }
   ]
 }

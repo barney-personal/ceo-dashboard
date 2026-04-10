@@ -1,0 +1,1 @@
+ALTER TABLE "meeting_notes" ADD COLUMN "synced_by_user_id" text;

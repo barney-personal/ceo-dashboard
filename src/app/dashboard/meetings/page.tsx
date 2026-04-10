@@ -50,7 +50,7 @@ export default async function MeetingsPage({
     : [];
   const granolaConnected = granolaRow.length > 0;
 
-  const days = await getMeetingsForRange(weekStart, weekEnd, { accessToken: accessToken ?? undefined });
+  const days = await getMeetingsForRange(weekStart, weekEnd, { accessToken: accessToken ?? undefined, userId: userId ?? undefined });
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">

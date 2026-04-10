@@ -96,7 +96,7 @@ export async function PUT(request: NextRequest) {
   // Fire off a background sync — don't await, so the response returns immediately.
   // The sync can take minutes for 90 days of notes and would timeout on production.
   const sinceDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-  syncGranolaNotes(sinceDate, { token: body.apiKey }).catch(() => {
+  syncGranolaNotes(sinceDate, { token: body.apiKey, syncedByUserId: userId }).catch(() => {
     // Sync failure shouldn't surface — cron will retry
   });
 

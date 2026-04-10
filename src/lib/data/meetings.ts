@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { meetingNotes, preReads } from "@/lib/db/schema";
-import { and, gte, lte, desc, like, or, inArray, sql } from "drizzle-orm";
+import { and, gte, lte, desc, like, or, inArray, sql, isNull, eq } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ function calendarEventToMeetingRow(
 export async function getMeetingsForRange(
   startDate: Date,
   endDate: Date,
-  opts: { minAttendees?: number; accessToken?: string } = {}
+  opts: { minAttendees?: number; accessToken?: string; userId?: string } = {}
 ): Promise<DayData[]> {
   const minAttendees = opts.minAttendees ?? 2;
 
@@ -190,7 +190,14 @@ export async function getMeetingsForRange(
       .where(
         and(
           gte(meetingNotes.meetingDate, startDate),
-          lte(meetingNotes.meetingDate, endDate)
+          lte(meetingNotes.meetingDate, endDate),
+          // Only show notes owned by this user or enterprise (null)
+          opts.userId
+            ? or(
+                eq(meetingNotes.syncedByUserId, opts.userId),
+                isNull(meetingNotes.syncedByUserId)
+              )
+            : isNull(meetingNotes.syncedByUserId)
         )
       )
       .orderBy(desc(meetingNotes.meetingDate)),
@@ -360,7 +367,13 @@ export async function getMeetingsForRange(
       .where(
         and(
           or(...likeConditions),
-          lte(meetingNotes.meetingDate, startDate) // only past notes
+          lte(meetingNotes.meetingDate, startDate), // only past notes
+          opts.userId
+            ? or(
+                eq(meetingNotes.syncedByUserId, opts.userId),
+                isNull(meetingNotes.syncedByUserId)
+              )
+            : isNull(meetingNotes.syncedByUserId)
         )
       )
       .orderBy(desc(meetingNotes.meetingDate));
@@ -394,6 +407,12 @@ export async function getMeetingsForRange(
         and(
           or(...titleConditions),
           lte(meetingNotes.meetingDate, startDate),
+          opts.userId
+            ? or(
+                eq(meetingNotes.syncedByUserId, opts.userId),
+                isNull(meetingNotes.syncedByUserId)
+              )
+            : isNull(meetingNotes.syncedByUserId)
         )
       )
       .orderBy(desc(meetingNotes.meetingDate))
