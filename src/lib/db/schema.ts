@@ -229,6 +229,31 @@ export const userIntegrations = pgTable(
   (table) => [unique().on(table.clerkUserId, table.provider)]
 );
 
+// ---------------------------------------------------------------------------
+// GitHub engineering metrics
+// ---------------------------------------------------------------------------
+
+export const githubPrMetrics = pgTable(
+  "github_pr_metrics",
+  {
+    id: serial("id").primaryKey(),
+    login: text("login").notNull(),
+    avatarUrl: text("avatar_url"),
+    prsCount: integer("prs_count").notNull().default(0),
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    changedFiles: integer("changed_files").notNull().default(0),
+    repos: jsonb("repos").notNull(), // string[]
+    periodStart: timestamp("period_start").notNull(),
+    periodEnd: timestamp("period_end").notNull(),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.login, table.periodStart, table.periodEnd),
+    index("github_pr_metrics_period_idx").on(table.periodStart, table.periodEnd),
+  ]
+);
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")
