@@ -1,4 +1,5 @@
 "use client";
+"use no memo";
 
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -13,18 +14,19 @@ const ROLE_LABELS: Record<Role, string> = {
   ceo: "CEO",
 };
 
+function setRolePreviewCookie(role: Role) {
+  if (role === "ceo") {
+    document.cookie = "role-preview=; path=/; max-age=0";
+  } else {
+    document.cookie = `role-preview=${role}; path=/; max-age=86400`;
+  }
+}
+
 export function RolePreview({ activeRole }: { activeRole: Role }) {
   const router = useRouter();
 
   const setPreview = (role: Role) => {
-    if (role === "ceo") {
-      // Clear the cookie to return to real role
-      // eslint-disable-next-line react-hooks/immutability
-      document.cookie = "role-preview=; path=/; max-age=0";
-    } else {
-      // eslint-disable-next-line react-hooks/immutability
-      document.cookie = `role-preview=${role}; path=/; max-age=86400`;
-    }
+    setRolePreviewCookie(role);
     router.refresh();
   };
 
