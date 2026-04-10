@@ -92,9 +92,10 @@ function formatCohortLabel(cohort: string): string {
       ? new Date(cohort + "-01")
       : new Date(cohort + "T00:00");
   if (isNaN(d.getTime())) return cohort;
+  // Force UTC so date-only strings aren't shifted to the prior month in US timezones
   return cohort.length > 7
-    ? d.toLocaleDateString("en-US", { day: "numeric", month: "short" })
-    : d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+    ? d.toLocaleDateString("en-US", { day: "numeric", month: "short", timeZone: "UTC" })
+    : d.toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: "UTC" });
 }
 
 function formatCohortSize(n: number): string {

@@ -667,8 +667,8 @@ export async function getSubscriptionRetentionCohorts(): Promise<
     if (!isValidDateStr(cohortRaw)) continue;
 
     const cohortDate = new Date(cohortRaw);
-    const cohort = `${cohortDate.getFullYear()}-${String(
-      cohortDate.getMonth() + 1,
+    const cohort = `${cohortDate.getUTCFullYear()}-${String(
+      cohortDate.getUTCMonth() + 1,
     ).padStart(2, "0")}`;
 
     let typeCohorts = byType.get(type);
