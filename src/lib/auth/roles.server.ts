@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
 
@@ -40,12 +41,13 @@ export async function getCurrentUserRole(): Promise<Role> {
     try {
       const cookieStore = await cookies();
 
-      // Check impersonation first
-      const impersonation = parseImpersonateCookie(
+      // Check impersonation first — resolve role from Clerk, not the cookie
+      const cookieData = parseImpersonateCookie(
         cookieStore.get(IMPERSONATE_COOKIE)?.value
       );
-      if (impersonation) {
-        return impersonation.role;
+      if (cookieData) {
+        const role = await resolveUserRole(cookieData.userId);
+        return role;
       }
 
       // Fall back to role preview
@@ -84,6 +86,7 @@ export async function getRealUserRole(): Promise<Role> {
 /**
  * Get the active impersonation, if any.
  * Returns null if not impersonating or if the real user is not CEO.
+ * Resolves the target user's role from Clerk (not the cookie snapshot).
  */
 export async function getImpersonation(): Promise<Impersonation | null> {
   const result = await getCurrentUserWithTimeout();
@@ -96,16 +99,37 @@ export async function getImpersonation(): Promise<Impersonation | null> {
 
   try {
     const cookieStore = await cookies();
-    return parseImpersonateCookie(cookieStore.get(IMPERSONATE_COOKIE)?.value);
+    const cookieData = parseImpersonateCookie(
+      cookieStore.get(IMPERSONATE_COOKIE)?.value
+    );
+    if (!cookieData) return null;
+
+    // Resolve live role from Clerk rather than trusting cookie snapshot
+    const role = await resolveUserRole(cookieData.userId);
+    return { ...cookieData, role };
   } catch {
     return null;
+  }
+}
+
+/** Look up a user's current role from Clerk by ID. */
+async function resolveUserRole(userId: string): Promise<Role> {
+  try {
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    return getUserRole(
+      (user.publicMetadata as Record<string, unknown>) ?? {}
+    );
+  } catch {
+    return "everyone";
   }
 }
 
 function parseImpersonateCookie(value: string | undefined): Impersonation | null {
   if (!value) return null;
   try {
-    const parsed = JSON.parse(value);
+    const decoded = decodeURIComponent(value);
+    const parsed = JSON.parse(decoded);
     if (
       typeof parsed.userId === "string" &&
       typeof parsed.name === "string" &&
