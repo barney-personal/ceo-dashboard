@@ -6,7 +6,7 @@ import {
   getUserName,
   type SlackMessage,
 } from "@/lib/integrations/slack";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import {
   SyncCancelledError,
@@ -52,7 +52,7 @@ async function fetchLastMeetingsSyncTimestamp(): Promise<Date | undefined> {
  */
 export async function syncGranolaNotes(
   sinceDate: Date,
-  opts: SyncControl & { token: string }
+  opts: SyncControl & { token: string; syncedByUserId?: string | null }
 ): Promise<{ count: number; errors: string[] }> {
   let noteList: GranolaNote[];
   try {
@@ -69,16 +69,29 @@ export async function syncGranolaNotes(
 
   // Skip notes already in the DB that haven't been updated since last sync.
   // This avoids expensive getNote() calls (with transcript) for unchanged notes.
+  // Notes without syncedByUserId are always re-processed to backfill ownership.
   const existingIds = new Set<string>();
+  const needsOwnerBackfill = new Set<string>();
   if (noteList.length > 0) {
     const ids = noteList.map((n) => n.id);
     const existing = await db
-      .select({ granolaMeetingId: meetingNotes.granolaMeetingId, syncedAt: meetingNotes.syncedAt })
+      .select({
+        granolaMeetingId: meetingNotes.granolaMeetingId,
+        syncedAt: meetingNotes.syncedAt,
+        syncedByUserId: meetingNotes.syncedByUserId,
+      })
       .from(meetingNotes)
       .where(inArray(meetingNotes.granolaMeetingId, ids));
     for (const row of existing) {
-      // Consider synced if we have a record and it was synced after the note's updated_at
-      existingIds.add(row.granolaMeetingId);
+      if (row.syncedByUserId === "_pending") {
+        // Migration-era note — must backfill with correct owner (or null for enterprise)
+        needsOwnerBackfill.add(row.granolaMeetingId);
+      } else if (row.syncedByUserId === null && opts.syncedByUserId) {
+        // Existing note missing ownership — must re-process to stamp owner
+        needsOwnerBackfill.add(row.granolaMeetingId);
+      } else {
+        existingIds.add(row.granolaMeetingId);
+      }
     }
   }
 
@@ -124,6 +137,7 @@ export async function syncGranolaNotes(
           meetingDate: new Date(full.created_at),
           durationMinutes: null,
           calendarEventId: full.calendar_event?.calendar_event_id ?? null,
+          syncedByUserId: opts.syncedByUserId ?? null,
         })
         .onConflictDoUpdate({
           target: meetingNotes.granolaMeetingId,
@@ -133,12 +147,31 @@ export async function syncGranolaNotes(
             transcript: transcriptText,
             participants: full.attendees ?? null,
             calendarEventId: full.calendar_event?.calendar_event_id ?? null,
+            // Personal sync always stamps ownership; enterprise sync (null)
+            // preserves existing ownership so it can't downgrade a private
+            // note to public.
+            syncedByUserId: opts.syncedByUserId
+              ? opts.syncedByUserId
+              : sql`coalesce(${meetingNotes.syncedByUserId}, null)`,
             syncedAt: new Date(),
           },
         });
       count++;
     } catch (error) {
       errors.push(`Failed to store Granola note ${note.id}: ${formatSyncError(error)}`);
+    }
+  }
+
+  // Backfill ownership on existing notes that are missing it (no API call needed)
+  if (needsOwnerBackfill.size > 0) {
+    try {
+      await db
+        .update(meetingNotes)
+        .set({ syncedByUserId: opts.syncedByUserId ?? null, syncedAt: new Date() })
+        .where(inArray(meetingNotes.granolaMeetingId, [...needsOwnerBackfill]));
+      count += needsOwnerBackfill.size;
+    } catch (error) {
+      errors.push(`Failed to backfill ownership on ${needsOwnerBackfill.size} notes: ${formatSyncError(error)}`);
     }
   }
 
@@ -164,7 +197,7 @@ async function syncAllGranolaNotes(
       "Syncing Granola notes (enterprise)"
     );
     try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token: enterpriseToken });
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: enterpriseToken, syncedByUserId: null });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {
@@ -201,7 +234,7 @@ async function syncAllGranolaNotes(
       `Syncing Granola notes (personal)`
     );
     try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey });
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey, syncedByUserId: clerkUserId });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {

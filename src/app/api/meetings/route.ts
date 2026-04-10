@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
 
   const days = await getMeetingsForRange(weekStart, weekEnd, {
     accessToken: accessToken ?? undefined,
+    userId: userId ?? undefined,
   });
 
   return NextResponse.json({
