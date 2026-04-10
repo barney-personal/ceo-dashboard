@@ -17,6 +17,9 @@ interface CohortHeatmapProps {
   className?: string;
   /** When true, render only the table without the card wrapper and header */
   bare?: boolean;
+  /** [min, max] domain for the color scale. When set, the palette stretches
+   *  across this range so small differences become visible. */
+  colorDomain?: [number, number];
 }
 
 function retentionColor(rate: number): string {
@@ -24,6 +27,21 @@ function retentionColor(rate: number): string {
   if (rate >= 0.6) return `hsl(142, 55%, ${85 - rate * 30}%)`;
   if (rate >= 0.3) return `hsl(${40 + (rate - 0.3) * 340}, 60%, 80%)`;
   return `hsl(0, 55%, ${90 - rate * 20}%)`;
+}
+
+/**
+ * Diverging color scale normalised to a given [min, max] domain.
+ * Red (low end) → Yellow (midpoint) → Green (high end).
+ * t=0 maps to the domain min, t=1 to the domain max.
+ */
+function domainColor(rate: number, min: number, max: number): string {
+  const range = max - min || 1;
+  const t = Math.max(0, Math.min(1, (rate - min) / range));
+  // hue: 0 (red) → 60 (yellow) → 142 (green)
+  const hue = t * 142;
+  const saturation = 50 + t * 10;
+  const lightness = 85 - t * 30;
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 
 function formatCohortLabel(cohort: string): string {
@@ -45,7 +63,11 @@ export function CohortHeatmap({
   modeUrl,
   className,
   bare = false,
+  colorDomain,
 }: CohortHeatmapProps) {
+  const colorFn = colorDomain
+    ? (v: number) => domainColor(v, colorDomain[0], colorDomain[1])
+    : retentionColor;
   if (data.length === 0) return null;
 
   const maxPeriods = Math.max(...data.map((r) => r.periods.length));
@@ -94,7 +116,7 @@ export function CohortHeatmap({
                     <div
                       className="mx-auto rounded px-1 py-0.5 font-mono tabular-nums"
                       style={{
-                        backgroundColor: retentionColor(val),
+                        backgroundColor: colorFn(val),
                         minWidth: "36px",
                       }}
                     >

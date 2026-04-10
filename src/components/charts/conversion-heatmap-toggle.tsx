@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { CohortHeatmap, type CohortRow } from "./cohort-heatmap";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +19,14 @@ export function ConversionHeatmapToggle({
   const [active, setActive] = useState(products[0] ?? "All");
 
   const rows = data[active] ?? [];
+
+  // Compute color domain from the active product's data so the full
+  // red→green spectrum stretches across the actual value range.
+  const colorDomain = useMemo<[number, number]>(() => {
+    const vals = rows.flatMap((r) => r.periods.filter((v): v is number => v != null));
+    if (vals.length === 0) return [0, 1];
+    return [Math.min(...vals), Math.max(...vals)];
+  }, [rows]);
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-warm">
@@ -55,6 +63,7 @@ export function ConversionHeatmapToggle({
           title=""
           modeUrl={modeUrl}
           bare
+          colorDomain={colorDomain}
         />
       )}
     </div>
