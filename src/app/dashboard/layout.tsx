@@ -2,6 +2,7 @@ import { UserButton } from "@clerk/nextjs";
 import { getCurrentUserRole, getRealUserRole } from "@/lib/auth/roles.server";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Bell } from "lucide-react";
+import { PageViewTracker } from "@/components/dashboard/page-view-tracker";
 
 export default async function DashboardLayout({
   children,
@@ -37,6 +38,7 @@ export default async function DashboardLayout({
             <UserButton />
           </div>
         </header>
+        <PageViewTracker />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>

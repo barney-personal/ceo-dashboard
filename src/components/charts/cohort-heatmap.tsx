@@ -25,8 +25,14 @@ function retentionColor(rate: number): string {
 }
 
 function formatCohortLabel(cohort: string): string {
-  const d = new Date(cohort + "-01");
-  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  // Handle both "YYYY-MM" (monthly) and "YYYY-MM-DD" (weekly) formats
+  const d =
+    cohort.length <= 7 ? new Date(cohort + "-01") : new Date(cohort + "T00:00");
+  if (isNaN(d.getTime())) return cohort;
+  // Weekly cohorts get day + month, monthly cohorts get month + year
+  return cohort.length > 7
+    ? d.toLocaleDateString("en-US", { day: "numeric", month: "short" })
+    : d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
 }
 
 export function CohortHeatmap({

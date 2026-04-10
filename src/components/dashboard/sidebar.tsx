@@ -150,6 +150,12 @@ const NAV_GROUPS: NavGroup[] = [
         requiredRole: "ceo",
         icon: Database,
       },
+      {
+        label: "Analytics",
+        href: "/dashboard/admin/analytics",
+        requiredRole: "ceo",
+        icon: BarChart3,
+      },
     ],
   },
 ];

@@ -242,3 +242,23 @@ export const syncPhases = pgTable("sync_phases", {
   itemsProcessed: integer("items_processed").default(0),
   errorMessage: text("error_message"),
 });
+
+// ---------------------------------------------------------------------------
+// Page view tracking (dashboard usage analytics)
+// ---------------------------------------------------------------------------
+
+export const pageViews = pgTable(
+  "page_views",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    path: text("path").notNull(),
+    hourBucket: text("hour_bucket").notNull(), // "2026-04-10T14"
+    viewedAt: timestamp("viewed_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.clerkUserId, table.path, table.hourBucket),
+    index("page_views_viewed_at_idx").on(table.viewedAt),
+    index("page_views_user_viewed_idx").on(table.clerkUserId, table.viewedAt),
+  ]
+);
