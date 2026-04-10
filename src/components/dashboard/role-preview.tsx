@@ -19,8 +19,10 @@ export function RolePreview({ activeRole }: { activeRole: Role }) {
   const setPreview = (role: Role) => {
     if (role === "ceo") {
       // Clear the cookie to return to real role
+      // eslint-disable-next-line react-hooks/immutability
       document.cookie = "role-preview=; path=/; max-age=0";
     } else {
+      // eslint-disable-next-line react-hooks/immutability
       document.cookie = `role-preview=${role}; path=/; max-age=86400`;
     }
     router.refresh();

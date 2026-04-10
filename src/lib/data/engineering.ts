@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { githubPrMetrics } from "@/lib/db/schema";
-import { and, gte, lte, desc } from "drizzle-orm";
+import { and, gte, lte, desc, eq, max } from "drizzle-orm";
 
 export interface EngineerRanking {
   login: string;
@@ -17,9 +17,41 @@ export async function getEngineeringRankings(
   periodStart: Date,
   periodEnd: Date
 ): Promise<EngineerRanking[]> {
-  const rows = await db
-    .select()
+  // Subquery: get the latest periodEnd per engineer within the range
+  const latestSnapshot = db
+    .select({
+      login: githubPrMetrics.login,
+      maxPeriodEnd: max(githubPrMetrics.periodEnd).as("max_period_end"),
+    })
     .from(githubPrMetrics)
+    .where(
+      and(
+        gte(githubPrMetrics.periodStart, periodStart),
+        lte(githubPrMetrics.periodEnd, periodEnd)
+      )
+    )
+    .groupBy(githubPrMetrics.login)
+    .as("latest_snapshot");
+
+  // Join back to get full rows for only the latest snapshot per engineer
+  const rows = await db
+    .select({
+      login: githubPrMetrics.login,
+      avatarUrl: githubPrMetrics.avatarUrl,
+      prsCount: githubPrMetrics.prsCount,
+      additions: githubPrMetrics.additions,
+      deletions: githubPrMetrics.deletions,
+      changedFiles: githubPrMetrics.changedFiles,
+      repos: githubPrMetrics.repos,
+    })
+    .from(githubPrMetrics)
+    .innerJoin(
+      latestSnapshot,
+      and(
+        eq(githubPrMetrics.login, latestSnapshot.login),
+        eq(githubPrMetrics.periodEnd, latestSnapshot.maxPeriodEnd)
+      )
+    )
     .where(
       and(
         gte(githubPrMetrics.periodStart, periodStart),

@@ -4,7 +4,6 @@ import {
   checkGitHubHealth,
   getEngineeringStats,
 } from "@/lib/integrations/github";
-import { eq, and } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
 import {
   SyncCancelledError,
@@ -54,6 +53,7 @@ export async function runGitHubSync(
   const fetchPhaseId = await tracker.startPhase("github-fetch-pr-metrics");
   try {
     const periodEnd = new Date();
+    periodEnd.setHours(23, 59, 59, 999);
     const periodStart = new Date();
     periodStart.setDate(periodStart.getDate() - 30);
     periodStart.setHours(0, 0, 0, 0);
