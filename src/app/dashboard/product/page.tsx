@@ -229,7 +229,7 @@ export default async function ProductPage() {
           </div>
         )}
 
-        {weeklyRetentionCohorts.length > 0 && (
+        {weeklyRetentionCohorts.length > 0 ? (
           <CohortHeatmap
             data={weeklyRetentionCohorts}
             periodLabel="Week"
@@ -237,6 +237,12 @@ export default async function ProductPage() {
             subtitle="Weekly cohort triangle"
             modeUrl={modeUrlRetention}
           />
+        ) : (
+          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
+            <p className="text-sm text-muted-foreground">
+              Weekly retention requires a cohort_week query in the App Retention Mode report
+            </p>
+          </div>
         )}
 
         <div className="grid gap-2 lg:grid-cols-2">
