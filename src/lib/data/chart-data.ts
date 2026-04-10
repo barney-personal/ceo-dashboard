@@ -911,8 +911,7 @@ export type ConversionCurveData = {
 function pickCohorts(rows: Record<string, unknown>[], maxCount = 5): string[] {
   const seen = new Set<string>();
   for (const r of rows) {
-    const d = new Date(rowStr(r, "cohort"));
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
     seen.add(key);
   }
   // Keep only Jan + Jul cohorts, sorted chronologically, take the latest N
@@ -940,8 +939,7 @@ function buildProductCurves(
 ): ConversionCurveData[] {
   return cohorts.map((cohortPrefix) => {
     const cohortRows = rows.filter((r) => {
-      const cohort = new Date(rowStr(r, "cohort"));
-      const key = `${cohort.getFullYear()}-${String(cohort.getMonth() + 1).padStart(2, "0")}`;
+      const key = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
       return key === cohortPrefix;
     });
 
