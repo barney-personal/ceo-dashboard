@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { getCurrentUserRole, getImpersonation } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -29,28 +29,35 @@ export default async function MeetingsPage({
   const weekStart = getWeekStart(baseDate);
   const weekEnd = getWeekEnd(weekStart);
 
-  // Get per-user Google Calendar token from Clerk
-  const { userId } = await auth();
-  const accessToken = userId
-    ? await getUserGoogleAccessToken(userId)
+  const { userId: realUserId } = await auth();
+  const impersonation = await getImpersonation();
+
+  // Use the impersonated user's ID when active, otherwise the real user
+  const effectiveUserId = impersonation?.userId ?? realUserId;
+
+  const accessToken = effectiveUserId
+    ? await getUserGoogleAccessToken(effectiveUserId)
     : null;
 
-  // Check if user has Granola connected
-  const granolaRow = userId
-    ? await db
-        .select({ id: userIntegrations.id })
-        .from(userIntegrations)
-        .where(
-          and(
-            eq(userIntegrations.clerkUserId, userId),
-            eq(userIntegrations.provider, "granola")
+  const granolaConnected = effectiveUserId
+    ? (
+        await db
+          .select({ id: userIntegrations.id })
+          .from(userIntegrations)
+          .where(
+            and(
+              eq(userIntegrations.clerkUserId, effectiveUserId),
+              eq(userIntegrations.provider, "granola")
+            )
           )
-        )
-        .limit(1)
-    : [];
-  const granolaConnected = granolaRow.length > 0;
+          .limit(1)
+      ).length > 0
+    : false;
 
-  const days = await getMeetingsForRange(weekStart, weekEnd, { accessToken: accessToken ?? undefined, userId: userId ?? undefined });
+  const days = await getMeetingsForRange(weekStart, weekEnd, {
+    accessToken: accessToken ?? undefined,
+    userId: effectiveUserId ?? undefined,
+  });
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">

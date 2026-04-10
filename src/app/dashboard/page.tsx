@@ -1,5 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { getCurrentUserRole, getImpersonation } from "@/lib/auth/roles.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -61,11 +61,14 @@ function SectionLink({
 
 export default async function DashboardOverview() {
   const role = await getCurrentUserRole();
-  const { userId } = await auth();
+  const { userId: realUserId } = await auth();
+  const impersonation = await getImpersonation();
 
-  // Get per-user Google Calendar token
-  const accessToken = userId
-    ? await getUserGoogleAccessToken(userId)
+  // Use the impersonated user's ID when active, otherwise the real user
+  const effectiveUserId = impersonation?.userId ?? realUserId;
+
+  const accessToken = effectiveUserId
+    ? await getUserGoogleAccessToken(effectiveUserId)
     : null;
 
   // Today's date range for meetings
@@ -82,7 +85,7 @@ export default async function DashboardOverview() {
       getRecentSyncRuns(10),
       getMeetingsForRange(todayStart, todayEnd, {
         accessToken: accessToken ?? undefined,
-        userId: userId ?? undefined,
+        userId: effectiveUserId ?? undefined,
       }),
     ]);
 
