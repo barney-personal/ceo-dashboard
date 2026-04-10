@@ -1,4 +1,5 @@
 "use client";
+"use no memo";
 
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
