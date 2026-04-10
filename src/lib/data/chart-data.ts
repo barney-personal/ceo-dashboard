@@ -903,35 +903,28 @@ export type ConversionCurveData = {
   data: { step: string; value: number }[];
 };
 
+const COHORT_PICKS = [
+  "2023-01",
+  "2023-07",
+  "2024-01",
+  "2024-07",
+  "2025-01",
+];
+
+const MONTH_WINDOWS = [
+  "M0", "M1", "M2", "M3", "M4", "M5", "M6",
+  "M7", "M8", "M9", "M10", "M11",
+];
+
 /**
- * Conversion curves for recent quarterly cohorts.
- * Shows how premium conversion builds from M0 through M11 for each cohort,
- * allowing comparison of newer vs older cohort performance.
+ * Build conversion curves for a specific product field.
+ * Extracts the given pct field for each cohort pick across M0–M11.
  */
-export async function getConversionCurveSeries(): Promise<ConversionCurveData[]> {
-  const data = await getReportData("unit-economics", "conversion", [
-    "agg_cohort_conversion_rate_by_window",
-  ]);
-  const rows = loadCohortConversionRows(data);
-  if (rows.length === 0) return [];
-
-  // Pick quarterly cohorts from recent history
-  const COHORT_PICKS = [
-    "2023-01",
-    "2023-07",
-    "2024-01",
-    "2024-07",
-    "2025-01",
-  ];
-
-  const MONTH_WINDOWS = [
-    "M0", "M1", "M2", "M3", "M4", "M5", "M6",
-    "M7", "M8", "M9", "M10", "M11",
-  ];
-
-  const COLORS = ["#94a3b8", "#6366f1", "#3b3bba", "#7c3aed", "#c026d3"];
-
-  return COHORT_PICKS.map((cohortPrefix, idx) => {
+function buildProductCurves(
+  rows: Record<string, unknown>[],
+  pctField: string,
+): ConversionCurveData[] {
+  return COHORT_PICKS.map((cohortPrefix) => {
     const cohortRows = rows.filter((r) => {
       const cohort = new Date(rowStr(r, "cohort"));
       const key = `${cohort.getFullYear()}-${String(cohort.getMonth() + 1).padStart(2, "0")}`;
@@ -940,57 +933,59 @@ export async function getConversionCurveSeries(): Promise<ConversionCurveData[]>
 
     return {
       label: cohortPrefix,
-      color: COLORS[idx % COLORS.length],
+      color: "", // assigned by the chart component via sequential ramp
       data: MONTH_WINDOWS.map((w) => {
         const row = cohortRows.find((r) => rowStr(r, "metric_window") === w);
         if (!row) return null;
-        const value = rowNum(row, "pct_premium") * 100;
-        if (!Number.isFinite(value)) return null;
+        const value = rowNum(row, pctField) * 100;
+        if (!Number.isFinite(value) || value === 0) return null;
         return { step: w, value };
       }).filter((p): p is { step: string; value: number } => p !== null),
     };
   }).filter((s) => s.data.length > 2);
 }
 
+export type ProductConversionPanel = {
+  product: string;
+  curves: ConversionCurveData[];
+};
+
 /**
- * Subscription product mix at M6 window over time.
- * Returns series for Plus and Nitro conversion rates.
+ * Conversion curves broken out by product (Plus, Builder, AI Pro).
+ * Returns one panel per product, each containing cohort curves M0–M11.
+ * Designed for small-multiples display.
  */
-export async function getConversionProductMixSeries(): Promise<ChartSeries[]> {
+export async function getProductConversionCurves(): Promise<ProductConversionPanel[]> {
   const data = await getReportData("unit-economics", "conversion", [
     "agg_cohort_conversion_rate_by_window",
   ]);
   const rows = loadCohortConversionRows(data);
   if (rows.length === 0) return [];
 
-  const MIN_COHORT = "2020-01-01";
-  const m6Rows = rows
-    .filter(
-      (r) =>
-        rowStr(r, "metric_window") === "M6" &&
-        rowStr(r, "cohort") >= MIN_COHORT,
-    )
-    .map((r) => ({
-      date: new Date(rowStr(r, "cohort")).toISOString().slice(0, 10),
-      plus: rowNum(r, "pct_plus") * 100,
-      nitro: rowNum(r, "pct_nitro") * 100,
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  if (m6Rows.length === 0) return [];
-
-  return [
-    {
-      label: "Plus",
-      color: "#3b3bba",
-      data: m6Rows.map((r) => ({ date: r.date, value: r.plus })),
-    },
-    {
-      label: "Nitro",
-      color: "#7c3aed",
-      data: m6Rows.map((r) => ({ date: r.date, value: r.nitro })),
-    },
+  const PRODUCTS: { product: string; field: string }[] = [
+    { product: "Plus", field: "pct_plus" },
+    { product: "Builder", field: "pct_nitro" },
+    { product: "AI Pro", field: "pct_ai" },
   ];
+
+  return PRODUCTS
+    .map(({ product, field }) => ({
+      product,
+      curves: buildProductCurves(rows, field),
+    }))
+    .filter((p) => p.curves.length > 0);
+}
+
+/**
+ * Conversion curves for total premium (all products combined).
+ */
+export async function getConversionCurveSeries(): Promise<ConversionCurveData[]> {
+  const data = await getReportData("unit-economics", "conversion", [
+    "agg_cohort_conversion_rate_by_window",
+  ]);
+  const rows = loadCohortConversionRows(data);
+  if (rows.length === 0) return [];
+  return buildProductCurves(rows, "pct_premium");
 }
 
 /**

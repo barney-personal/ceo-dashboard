@@ -7,6 +7,7 @@ import { ColumnChart } from "@/components/charts/column-chart";
 import { LineChart } from "@/components/charts/line-chart";
 import { AlertTriangle } from "lucide-react";
 import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
+import { SmallMultiplesCurveChart } from "@/components/charts/small-multiples-curve-chart";
 import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
@@ -14,7 +15,7 @@ import {
   getSubscriptionRetentionCohorts,
   getConversionByWindowSeries,
   getConversionCurveSeries,
-  getConversionProductMixSeries,
+  getProductConversionCurves,
   getLatestM6ConversionRate,
 } from "@/lib/data/chart-data";
 import {
@@ -61,7 +62,7 @@ export default async function UnitEconomicsPage() {
     latestSyncRun,
     conversionByWindow,
     conversionCurves,
-    conversionProductMix,
+    productCurves,
     latestM6,
   ] = await Promise.all([
     getLtvTimeSeries(),
@@ -71,7 +72,7 @@ export default async function UnitEconomicsPage() {
     getLatestTerminalSyncRun("mode"),
     getConversionByWindowSeries(),
     getConversionCurveSeries(),
-    getConversionProductMixSeries(),
+    getProductConversionCurves(),
     getLatestM6ConversionRate(),
   ]);
 
@@ -93,7 +94,7 @@ export default async function UnitEconomicsPage() {
   const hasConversionData =
     conversionByWindow.length > 0 ||
     conversionCurves.length > 0 ||
-    conversionProductMix.length > 0;
+    productCurves.length > 0;
   const conversionEmptyReason = resolveModeStaleReason(
     !hasConversionData,
     latestSyncRun,
@@ -291,19 +292,17 @@ export default async function UnitEconomicsPage() {
         />
       )}
 
-      {conversionProductMix.length > 0 ? (
-        <LineChart
-          series={conversionProductMix}
-          title="Product Mix at M6"
-          subtitle="Plus vs Nitro conversion rates by cohort"
-          yLabel="%"
-          yFormatType="percent"
-          zoomY
+      {productCurves.length > 0 ? (
+        <SmallMultiplesCurveChart
+          panels={productCurves}
+          steps={["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"]}
+          title="Conversion by Product"
+          subtitle="Plus, Builder, AI Pro — independent y-axes"
           modeUrl={conversionModeUrl}
         />
       ) : (
         <ChartPlaceholder
-          title="Product Mix at M6"
+          title="Conversion by Product"
           reason={conversionEmptyReason}
         />
       )}
