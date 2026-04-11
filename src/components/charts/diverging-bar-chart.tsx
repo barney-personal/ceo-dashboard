@@ -28,6 +28,8 @@ interface DivergingBarChartProps {
   showNetLine?: boolean;
   modeUrl?: string;
   className?: string;
+  headerLeft?: React.ReactNode;
+  onBarClick?: (item: { date: string; type: "positive" | "negative" }) => void;
 }
 
 export function DivergingBarChart({
@@ -41,6 +43,8 @@ export function DivergingBarChart({
   showNetLine = true,
   modeUrl,
   className,
+  headerLeft,
+  onBarClick,
 }: DivergingBarChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -233,7 +237,7 @@ export function DivergingBarChart({
       .attr("height", innerHeight)
       .attr("fill", "none")
       .attr("pointer-events", "all")
-      .style("cursor", "crosshair")
+      .style("cursor", onBarClick ? "pointer" : "crosshair")
       .on("mouseenter", function (event: MouseEvent, d) {
         // Highlight bars
         g.selectAll("rect.pos").attr("opacity", (dd) =>
@@ -273,7 +277,20 @@ export function DivergingBarChart({
         g.selectAll("rect.neg").attr("opacity", 0.8);
         tooltip.style("opacity", 0);
       });
-  }, [data, positiveLabel, negativeLabel, positiveColor, negativeColor, showNetLine]);
+
+    if (onBarClick) {
+      const handler = onBarClick;
+      // Use ratio comparison so the hit test is invariant to CSS transforms/zoom.
+      const zeroRatio = y(0) / innerHeight;
+      g.selectAll<SVGRectElement, (typeof parsed)[0]>("rect.overlay")
+        .on("click", function (event, d) {
+          const rect = this.getBoundingClientRect();
+          const clickRatio = (event.clientY - rect.top) / rect.height;
+          const type: "positive" | "negative" = clickRatio <= zeroRatio ? "positive" : "negative";
+          handler({ date: d.date.toISOString().slice(0, 10), type });
+        });
+    }
+  }, [data, positiveLabel, negativeLabel, positiveColor, negativeColor, showNetLine, onBarClick]);
 
   useEffect(() => {
     draw();
@@ -290,7 +307,8 @@ export function DivergingBarChart({
       )}
     >
       <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
-        <div>
+        <div className="flex items-center gap-3">
+          {headerLeft}
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {subtitle && (
             <span className="ml-2 text-xs text-muted-foreground">
