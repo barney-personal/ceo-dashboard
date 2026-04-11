@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { BarChart } from "@/components/charts/bar-chart";
+import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown";
 
 const DivergingBarChart = dynamic(
   () =>
@@ -130,12 +131,16 @@ export default async function PeopleOrgPage() {
         />
       </div>
 
-      {/* Department bar chart */}
+      {/* Department bar chart with job-title drilldown */}
       {deptData.length > 0 && (
-        <BarChart
-          data={deptData}
-          title="Headcount by Department"
-          subtitle={`${metrics.total} total`}
+        <DepartmentDrilldown
+          deptData={deptData}
+          employees={employees.map((e) => ({
+            name: e.name,
+            jobTitle: e.jobTitle,
+            function: e.function,
+          }))}
+          total={metrics.total}
           modeUrl={modeUrl}
         />
       )}
