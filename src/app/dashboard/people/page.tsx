@@ -41,8 +41,9 @@ export default async function PeopleOrgPage() {
     getLatestTerminalSyncRun("mode"),
   ]);
 
-  const metrics = getPeopleMetrics(employees, allRows);
-  const tenureData = getTenureDistribution(employees);
+  const allActive = [...employees, ...unassigned];
+  const metrics = getPeopleMetrics(allActive, allRows);
+  const tenureData = getTenureDistribution(allActive);
   const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
   const monthlyMovement = getMonthlyJoinersAndDepartures(allRows, 36);
@@ -134,15 +135,24 @@ export default async function PeopleOrgPage() {
         />
       </div>
 
-      {/* Department bar chart with job-title drilldown */}
-      {employees.length > 0 && (
+      {/* Department bar chart with job-title drilldown (includes unassigned — they have valid functions) */}
+      {(employees.length > 0 || unassigned.length > 0) && (
         <DepartmentDrilldown
-          employees={employees.map((e) => ({
+          employees={[...employees, ...unassigned].map((e) => ({
             name: e.name,
+            email: e.email,
             jobTitle: e.jobTitle,
+            level: e.level,
             function: e.function,
+            squad: e.squad,
+            pillar: e.pillar,
+            manager: e.manager,
+            startDate: e.startDate,
+            location: e.location,
+            tenureMonths: e.tenureMonths,
+            employmentType: e.employmentType,
           }))}
-          total={metrics.total}
+          total={employees.length + unassigned.length}
           modeUrl={modeUrl}
         />
       )}
