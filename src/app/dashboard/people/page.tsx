@@ -56,7 +56,6 @@ export default async function PeopleOrgPage() {
     "Sync the Headcount SSoT Dashboard report to view org charts"
   );
 
-  // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({
     name: pillar.name,
     count: pillar.count,
@@ -65,10 +64,14 @@ export default async function PeopleOrgPage() {
       name: sq.name,
       people: sq.people.map((p) => ({
         name: p.name,
+        email: p.email,
         jobTitle: p.jobTitle,
         level: p.level,
         squad: p.squad,
+        pillar: p.pillar,
         function: p.function,
+        manager: p.manager,
+        startDate: p.startDate,
         location: p.location,
         tenureMonths: p.tenureMonths,
         employmentType: p.employmentType,
