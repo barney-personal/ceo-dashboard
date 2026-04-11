@@ -21,6 +21,9 @@ interface BarChartProps {
   subtitle?: string;
   modeUrl?: string;
   className?: string;
+  onBarClick?: (item: BarChartData) => void;
+  headerLeft?: React.ReactNode;
+  leftMargin?: number;
 }
 
 export function BarChart({
@@ -29,6 +32,9 @@ export function BarChart({
   subtitle,
   modeUrl,
   className,
+  onBarClick,
+  headerLeft,
+  leftMargin = 150,
 }: BarChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,7 +46,7 @@ export function BarChart({
     const container = containerRef.current;
     const width = getContentBoxWidth(container);
     const barHeight = 34;
-    const margin = { top: 12, right: 72, bottom: 32, left: 150 };
+    const margin = { top: 12, right: 72, bottom: 32, left: leftMargin };
     const height = data.length * barHeight + margin.top + margin.bottom;
     const innerWidth = width - margin.left - margin.right;
 
@@ -119,7 +125,10 @@ export function BarChart({
       .attr("fill", (d) => d.color ?? "#3b3bba")
       .attr("rx", 4)
       .attr("opacity", 0.85)
-      .style("cursor", "pointer")
+      .style("cursor", onBarClick ? "pointer" : "default")
+      .on("click", function (_event: MouseEvent, d: BarChartData) {
+        if (onBarClick) onBarClick(d);
+      })
       .on("mouseenter", function (event: MouseEvent, d: BarChartData) {
         select(this).attr("opacity", 1);
         const pct = ((d.value / maxVal) * 100).toFixed(0);
@@ -162,7 +171,7 @@ export function BarChart({
       .attr("font-size", "11px")
       .attr("font-family", "var(--font-geist-mono)")
       .text((d) => d.value.toLocaleString());
-  }, [data]);
+  }, [data, onBarClick, leftMargin]);
 
   useEffect(() => {
     draw();
@@ -179,7 +188,8 @@ export function BarChart({
       )}
     >
       <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
-        <div>
+        <div className="flex items-center gap-2">
+          {headerLeft}
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {subtitle && (
             <span className="ml-2 text-xs text-muted-foreground">
