@@ -11,19 +11,30 @@ export interface DrilldownPerson {
 }
 
 interface DepartmentDrilldownProps {
-  deptData: BarChartData[];
   employees: DrilldownPerson[];
   total: number;
   modeUrl?: string;
 }
 
 export function DepartmentDrilldown({
-  deptData,
   employees,
   total,
   modeUrl,
 }: DepartmentDrilldownProps) {
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
+
+  // Derive department bars from the same employees array used for drilldown,
+  // so labels always match and fallback-path divergence can't cause mismatches.
+  const deptData: BarChartData[] = useMemo(() => {
+    const byDept = new Map<string, number>();
+    for (const e of employees) {
+      const dept = e.function || "Unknown";
+      byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
+    }
+    return [...byDept.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, value]) => ({ label, value, color: "#3b3bba" }));
+  }, [employees]);
 
   const jobTitleData = useMemo(() => {
     if (!selectedDept) return [];
@@ -33,7 +44,7 @@ export function DepartmentDrilldown({
     // Group by normalised key but display the most common original casing
     const counts = new Map<string, { display: string; count: number }>();
     for (const e of deptEmployees) {
-      const raw = (e.jobTitle || "Untitled").trim();
+      const raw = e.jobTitle.trim() || "Untitled";
       const key = raw.toLowerCase();
       const entry = counts.get(key);
       if (entry) {

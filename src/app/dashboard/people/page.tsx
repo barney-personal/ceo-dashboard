@@ -132,9 +132,8 @@ export default async function PeopleOrgPage() {
       </div>
 
       {/* Department bar chart with job-title drilldown */}
-      {deptData.length > 0 && (
+      {employees.length > 0 && (
         <DepartmentDrilldown
-          deptData={deptData}
           employees={employees.map((e) => ({
             name: e.name,
             jobTitle: e.jobTitle,
