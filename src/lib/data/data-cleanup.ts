@@ -192,6 +192,7 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
     const specialisation = rowStr(r, "rp_specialisation");
     const normalizedTitle = rawTitle ? resolveEngineerDiscipline(normalizeJobTitle(rawTitle), level, specialisation) : "";
     const target = normalizeDepartment("Data Science", normalizedTitle);
+    if (target === "Data Science") continue; // no-op when title is missing — nothing actionable
     deptIssues.push({
       person: rowStr(r, "preferred_name") || "Unknown",
       email,

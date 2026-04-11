@@ -1,21 +1,9 @@
-import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
-import { BarChart } from "@/components/charts/bar-chart";
 import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown";
-
-const DivergingBarChart = dynamic(
-  () =>
-    import("@/components/charts/diverging-bar-chart").then(
-      (m) => m.DivergingBarChart
-    ),
-  {
-    loading: () => (
-      <div className="h-80 animate-pulse rounded-lg bg-muted/40" />
-    ),
-  }
-);
+import { JoinersLeaversDrilldown } from "@/components/dashboard/joiners-leavers-drilldown";
+import { TenureDrilldown } from "@/components/dashboard/tenure-drilldown";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import {
@@ -32,6 +20,7 @@ import {
   groupByPillarAndSquad,
   getTenureDistribution,
   getMonthlyJoinersAndDepartures,
+  getMonthlyMovementPeople,
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
@@ -47,6 +36,7 @@ export default async function PeopleOrgPage() {
   const byPillar = groupByPillarAndSquad(employees);
   const headcountCharts = getChartEmbeds("people", "headcount");
   const monthlyMovement = getMonthlyJoinersAndDepartures(allRows, 36);
+  const movementPeople = getMonthlyMovementPeople(allRows);
   const hasTenureData = tenureData.some((d) => d.value > 0);
   const hasMonthlyMovement = monthlyMovement.joiners.some((d) => d.value > 0);
   const hasAnyVisualData =
@@ -157,26 +147,39 @@ export default async function PeopleOrgPage() {
         />
       )}
 
-      {/* Tenure distribution */}
+      {/* Tenure distribution with drilldown */}
       {hasTenureData && (
-        <BarChart
+        <TenureDrilldown
           data={tenureData}
-          title="Tenure Distribution"
-          subtitle={`${metrics.total} employees`}
+          employees={[...employees, ...unassigned].map((e) => ({
+            name: e.name,
+            email: e.email,
+            jobTitle: e.jobTitle,
+            level: e.level,
+            function: e.function,
+            squad: e.squad,
+            pillar: e.pillar,
+            manager: e.manager,
+            startDate: e.startDate,
+            location: e.location,
+            tenureMonths: e.tenureMonths,
+            employmentType: e.employmentType,
+          }))}
+          total={metrics.total}
           modeUrl={modeUrl}
         />
       )}
 
-      {/* Joiners & departures — diverging from zero */}
+      {/* Joiners & departures — diverging from zero, with drilldown */}
       {hasMonthlyMovement && (
-        <DivergingBarChart
-          data={monthlyMovement.joiners.map((j, i) => ({
+        <JoinersLeaversDrilldown
+          chartData={monthlyMovement.joiners.map((j, i) => ({
             date: j.date,
             positive: j.value,
             negative: monthlyMovement.departures[i].value,
           }))}
-          title="Joiners & Departures"
-          subtitle="last 3 years, monthly"
+          joiners={movementPeople.joiners}
+          departures={movementPeople.departures}
           modeUrl={modeUrl}
         />
       )}
