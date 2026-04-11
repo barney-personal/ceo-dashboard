@@ -18,6 +18,7 @@ import {
   Heart,
   Database,
   Calendar,
+  AlertTriangle,
 } from "lucide-react";
 
 interface NavItem {
@@ -109,6 +110,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/engagement",
         requiredRole: "leadership",
         icon: Heart,
+      },
+      {
+        label: "Data Cleanup",
+        href: "/dashboard/people/data-cleanup",
+        requiredRole: "everyone",
+        icon: AlertTriangle,
       },
     ],
   },

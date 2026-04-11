@@ -4,6 +4,10 @@ import {
   DAYS_PER_MONTH,
   getPillarForSquad,
   isProductPillar,
+  normalizeJobTitle,
+  normalizeDepartment,
+  normalizeLevel,
+  resolveEngineerDiscipline,
 } from "@/lib/config/people";
 
 export interface Person {
@@ -71,14 +75,18 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
         0,
         Math.floor((now - startMs) / (DAYS_PER_MONTH * 24 * 60 * 60 * 1000)),
       );
+      const rawLevel = rowStr(r, "hb_level");
+      const specialisation = rowStr(r, "rp_specialisation");
+      const jobTitle = resolveEngineerDiscipline(normalizeJobTitle(rowStr(r, "job_title")), rawLevel, specialisation);
+      const func = rowStr(r, "hb_function") || "Unassigned";
       return {
         name: rowStr(r, "preferred_name") || "Unknown",
         email: rowStr(r, "email"),
-        jobTitle: rowStr(r, "job_title"),
-        level: rowStr(r, "hb_level"),
-        squad: rowStr(r, "hb_squad") || rowStr(r, "hb_function") || "Unassigned",
-        pillar: getPillarForSquad(rowStr(r, "hb_squad") || rowStr(r, "hb_function") || "Unassigned"),
-        function: rowStr(r, "hb_function") || "Unassigned",
+        jobTitle,
+        level: normalizeLevel(rawLevel, jobTitle),
+        squad: rowStr(r, "hb_squad") || func || "Unassigned",
+        pillar: getPillarForSquad(rowStr(r, "hb_squad") || func || "Unassigned"),
+        function: normalizeDepartment(func, jobTitle),
         manager: rowStr(r, "manager"),
         startDate,
         location: rowStr(r, "work_location"),
@@ -125,14 +133,18 @@ export function mergeEmployeeData(
       const squadName = rowStr(r, "squad_name");
       const functionName = rowStr(r, "function_name");
 
+      const rawLevel = old ? rowStr(old, "hb_level") : "";
+      const specialisation = old ? rowStr(old, "rp_specialisation") : "";
+      const jobTitle = old ? resolveEngineerDiscipline(normalizeJobTitle(rowStr(old, "job_title")), rawLevel, specialisation) : "";
+      const func = functionName || "Unassigned";
       return {
         name: rowStr(r, "preferred_name") || "Unknown",
         email,
-        jobTitle: old ? rowStr(old, "job_title") : "",
-        level: old ? rowStr(old, "hb_level") : "",
+        jobTitle,
+        level: normalizeLevel(rawLevel, jobTitle),
         squad: squadName || functionName || "Unassigned",
         pillar: rowStr(r, "pillar_name") || "Other",
-        function: functionName || "Unassigned",
+        function: normalizeDepartment(func, jobTitle),
         manager: old ? rowStr(old, "manager") : rowStr(r, "line_manager_email"),
         startDate,
         location: old ? rowStr(old, "work_location") : "",

@@ -128,7 +128,7 @@ describe("transformToPersons", () => {
     expect(people[2]).toMatchObject({
       name: "Zed",
       email: "zed@example.com",
-      jobTitle: "Engineer",
+      jobTitle: "Software Engineer",
       level: "L4",
       manager: "Boss",
       tenureMonths: 12,
