@@ -59,7 +59,7 @@ export function CohortHeatmap({
   const maxPeriods = Math.max(...data.map((r) => r.periods.length));
   const periodHeaders = Array.from(
     { length: maxPeriods },
-    (_, i) => `${periodLabel.charAt(0)}${i}`
+    (_, i) => `${periodLabel.charAt(0)}${i + 1}`
   );
 
   const table = (
@@ -97,7 +97,7 @@ export function CohortHeatmap({
                   <td
                     key={i}
                     className="px-1 py-0.5 text-center"
-                    title={`${formatCohortLabel(row.cohort)} ${periodLabel} ${i}: ${(val * 100).toFixed(1)}%`}
+                    title={`${formatCohortLabel(row.cohort)} ${periodLabel} ${i + 1}: ${(val * 100).toFixed(1)}%`}
                   >
                     <div
                       className="mx-auto rounded px-1 py-0.5 font-mono tabular-nums"
