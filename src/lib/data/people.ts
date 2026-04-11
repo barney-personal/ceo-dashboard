@@ -332,6 +332,90 @@ export function getMonthlyJoinersAndDepartures(
   };
 }
 
+export interface MovementPerson {
+  name: string;
+  email: string;
+  jobTitle: string;
+  level: string;
+  function: string;
+  squad: string;
+  location: string;
+  startDate: string;
+  terminationDate: string;
+  monthKey: string;
+}
+
+/**
+ * Get per-person joiner and departure records keyed by month.
+ * Used for drilldown from the Joiners & Departures chart.
+ */
+export function getMonthlyMovementPeople(
+  allRows: Record<string, unknown>[],
+): { joiners: MovementPerson[]; departures: MovementPerson[] } {
+  const joiners: MovementPerson[] = [];
+  const departures: MovementPerson[] = [];
+
+  for (const r of allRows) {
+    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    const name = rowStr(r, "preferred_name") || "Unknown";
+    const email = rowStr(r, "email");
+    const rawLevel = rowStr(r, "hb_level");
+    const specialisation = rowStr(r, "rp_specialisation");
+    const jobTitle = resolveEngineerDiscipline(
+      normalizeJobTitle(rowStr(r, "job_title")),
+      rawLevel,
+      specialisation,
+    );
+    const level = normalizeLevel(rawLevel, jobTitle);
+    const func = normalizeDepartment(
+      rowStr(r, "hb_function") || "Unassigned",
+      jobTitle,
+    );
+
+    const startDate = rowStr(r, "start_date");
+    if (startDate) {
+      const d = new Date(startDate);
+      if (!isNaN(d.getTime())) {
+        joiners.push({
+          name,
+          email,
+          jobTitle,
+          level,
+          function: func,
+          squad: rowStr(r, "hb_squad") || func,
+          location: rowStr(r, "work_location"),
+          startDate,
+          terminationDate: "",
+          monthKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        });
+      }
+    }
+
+    if (String(r.lifecycle_status).toLowerCase() === "terminated") {
+      const termDate = rowStr(r, "termination_date");
+      if (termDate) {
+        const d = new Date(termDate);
+        if (!isNaN(d.getTime())) {
+          departures.push({
+            name,
+            email,
+            jobTitle,
+            level,
+            function: func,
+            squad: rowStr(r, "hb_squad") || func,
+            location: rowStr(r, "work_location"),
+            startDate,
+            terminationDate: termDate,
+            monthKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+          });
+        }
+      }
+    }
+  }
+
+  return { joiners, departures };
+}
+
 /**
  * Part-time Customer Champions appear as "no pillar" / "no squad" in the
  * Current FTEs report AND belong to Customer Operations. They are excluded
