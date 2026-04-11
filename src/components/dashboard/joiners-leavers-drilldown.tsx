@@ -219,7 +219,7 @@ export function JoinersLeaversDrilldown({
       modeUrl={modeUrl}
       onBarClick={(item) => {
         const d = new Date(item.date);
-        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const monthKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
         setSelection({ monthKey, date: item.date, type: item.type });
       }}
     />
