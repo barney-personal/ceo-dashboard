@@ -1,6 +1,182 @@
 // Average Gregorian month length used for tenure bucketing.
 export const DAYS_PER_MONTH = 30.44;
 
+// ---------------------------------------------------------------------------
+// Job-title normalisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Seniority prefixes stripped from job titles — the `level` field handles
+ * seniority. Longer prefixes first to avoid partial matches.
+ */
+const SENIORITY_PREFIXES = [
+  "principal",
+  "associate",
+  "graduate",
+  "senior",
+  "junior",
+  "staff",
+  "lead",
+  "grad",
+  "intern",
+];
+
+/**
+ * Maps variant job titles (lowercased, after seniority stripping) to a single
+ * canonical display name. Only roles that genuinely need consolidation are
+ * listed — everything else gets title-cased as-is.
+ */
+const JOB_TITLE_ALIASES: Record<string, string> = {
+  // Backend Engineering
+  "backend engineer": "Backend Engineer",
+  "back-end engineer": "Backend Engineer",
+  "python engineer": "Backend Engineer",
+  // Frontend Engineering
+  "frontend engineer": "Frontend Engineer",
+  "front-end engineer": "Frontend Engineer",
+  "frontend software engineer": "Frontend Engineer",
+  // Generic Software Engineering (level prefix may refine further)
+  "full stack engineer": "Software Engineer",
+  "full-stack engineer": "Software Engineer",
+  "fullstack engineer": "Software Engineer",
+  "software engineer": "Software Engineer",
+  "software developer": "Software Engineer",
+  "engineer": "Software Engineer",
+  // Data Science → Machine Learning
+  "data scientist": "Machine Learning",
+  "data science": "Machine Learning",
+  "data science manager": "Machine Learning Manager",
+  // UX Researcher → User Researcher
+  "ux researcher": "User Researcher",
+};
+
+/** Words that should remain fully uppercased in title-cased output. */
+const UPPERCASE_WORDS = new Set([
+  "qa", "it", "vp", "hr", "pm", "cto", "cfo", "coo", "ceo",
+  "ui", "ux", "ml", "ai", "sre", "devops",
+]);
+
+/** Level suffixes stripped from job titles (e.g. "Software Engineer II"). */
+const LEVEL_SUFFIX_RE = /\s+I{1,3}$/i;
+
+/**
+ * Normalise a raw job title:
+ * 1. Strip seniority prefix (Senior, Graduate, etc.)
+ * 2. Strip level suffix (II, III)
+ * 3. Consolidate known aliases (Backend Engineer → Software Engineer)
+ * 4. Apply consistent Title Case
+ */
+export function normalizeJobTitle(raw: string): string {
+  let title = raw.trim();
+  if (!title) return title;
+
+  // Strip one seniority prefix
+  const lower = title.toLowerCase();
+  for (const prefix of SENIORITY_PREFIXES) {
+    if (lower.startsWith(prefix + " ")) {
+      title = title.slice(prefix.length + 1).trim();
+      break;
+    }
+  }
+
+  // Strip level suffix (e.g. "II", "III")
+  title = title.replace(LEVEL_SUFFIX_RE, "").trim();
+
+  if (!title) return toTitleCase(raw.trim());
+
+  // Check aliases (after prefix/suffix stripping)
+  const key = title.toLowerCase();
+  const alias = JOB_TITLE_ALIASES[key];
+  if (alias) return alias;
+
+  return toTitleCase(title);
+}
+
+/**
+ * Refine a generic "Software Engineer" title using available signals.
+ * Priority: rp_specialisation (from Rev) → level prefix (B/BE/F/FE).
+ * Only applies to "Software Engineer" — titles already resolved to
+ * "Backend Engineer" or "Frontend Engineer" pass through.
+ */
+export function resolveEngineerDiscipline(
+  normalizedTitle: string,
+  level: string,
+  specialisation?: string,
+): string {
+  if (normalizedTitle !== "Software Engineer") return normalizedTitle;
+
+  // Rev specialisation is the most reliable signal
+  if (specialisation) {
+    const specLower = specialisation.toLowerCase();
+    if (specLower.includes("backend")) return "Backend Engineer";
+    if (specLower.includes("frontend")) return "Frontend Engineer";
+  }
+
+  // Fall back to level prefix
+  const prefix = level.replace(/\d+$/, "").toUpperCase();
+  if (prefix === "B" || prefix === "BE") return "Backend Engineer";
+  if (prefix === "F" || prefix === "FE") return "Frontend Engineer";
+  return normalizedTitle;
+}
+
+/**
+ * Reassign people to the correct department based on their normalised job title.
+ *
+ * - "Data Science" → split into "Analytics" or "Machine Learning"
+ * - "Product" → move analysts to Analytics, marketing roles to Marketing,
+ *   design roles to Experience
+ */
+export function normalizeDepartment(department: string, normalizedJobTitle: string): string {
+  const lower = normalizedJobTitle.toLowerCase();
+
+  if (department === "Data Science") {
+    if (lower.includes("machine learning") || lower.includes("data engineer")) {
+      return "Machine Learning";
+    }
+    return "Analytics";
+  }
+
+  if (department === "Product") {
+    if (lower.includes("analyst")) return "Analytics";
+    if (lower.includes("marketing")) return "Marketing";
+    if (lower.includes("design")) return "Experience";
+  }
+
+  return department;
+}
+
+/**
+ * Normalise a raw level code so the prefix matches the person's discipline.
+ * Backend Engineers → B-prefix (e.g. SE3 → B3, BE1 → B1, DS3 → B3).
+ * Frontend Engineers → F-prefix (e.g. SE4 → F4, FE2 → F2).
+ * All other titles are left unchanged.
+ */
+export function normalizeLevel(level: string, normalizedJobTitle: string): string {
+  const trimmed = level.trim();
+  if (!trimmed) return trimmed;
+
+  const match = trimmed.match(/^([A-Za-z]+)(\d+)$/);
+  if (!match) return trimmed;
+
+  const [, , num] = match;
+  const titleLower = normalizedJobTitle.toLowerCase();
+
+  if (titleLower === "backend engineer") return `B${num}`;
+  if (titleLower === "frontend engineer") return `F${num}`;
+
+  return trimmed;
+}
+
+function toTitleCase(s: string): string {
+  return s
+    .split(/\s+/)
+    .map((word) => {
+      if (UPPERCASE_WORDS.has(word.toLowerCase())) return word.toUpperCase();
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
 const SQUAD_PILLAR_MAP: Record<string, string> = {
   // Growth
   "Growth Pillar": "Growth",
