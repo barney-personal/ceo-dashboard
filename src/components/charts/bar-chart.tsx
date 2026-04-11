@@ -5,7 +5,7 @@ import { select } from "d3-selection";
 import { scaleLinear, scaleBand } from "d3-scale";
 import { axisBottom } from "d3-axis";
 import { max } from "d3-array";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, MousePointerClick } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getContentBoxWidth } from "./chart-utils";
 
@@ -197,17 +197,25 @@ export function BarChart({
             </span>
           )}
         </div>
-        {modeUrl && (
-          <a
-            href={modeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
-          >
-            Mode
-            <ExternalLink className="h-2.5 w-2.5" />
-          </a>
-        )}
+        <div className="flex items-center gap-2">
+          {onBarClick && (
+            <span className="flex items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] text-primary/60">
+              <MousePointerClick className="h-2.5 w-2.5" />
+              Interactive
+            </span>
+          )}
+          {modeUrl && (
+            <a
+              href={modeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
+            >
+              Mode
+              <ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          )}
+        </div>
       </div>
       <div ref={containerRef} className="relative px-4 py-5">
         <svg ref={svgRef} className="w-full" />

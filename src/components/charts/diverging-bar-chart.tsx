@@ -7,7 +7,7 @@ import { axisLeft, axisBottom } from "d3-axis";
 import { line, curveMonotoneX } from "d3-shape";
 import { max } from "d3-array";
 import { timeFormat } from "d3-time-format";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, MousePointerClick } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getContentBoxWidth } from "./chart-utils";
 
@@ -343,6 +343,12 @@ export function DivergingBarChart({
               </div>
             )}
           </div>
+          {onBarClick && (
+            <span className="flex items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] text-primary/60">
+              <MousePointerClick className="h-2.5 w-2.5" />
+              Interactive
+            </span>
+          )}
           {modeUrl && (
             <a
               href={modeUrl}
