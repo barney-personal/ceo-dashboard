@@ -322,10 +322,36 @@ export function getMonthlyJoinersAndDepartures(
 
 /**
  * Part-time Customer Champions appear as "no pillar" / "no squad" in the
- * Current FTEs report. They are excluded from all metrics and shown separately.
+ * Current FTEs report AND belong to Customer Operations. They are excluded
+ * from all metrics and shown separately.
  */
 export function isPartTimeChampion(person: Person): boolean {
-  return person.pillar === "no pillar" || person.squad === "no squad";
+  return (
+    (person.pillar === "no pillar" || person.squad === "no squad") &&
+    person.function === "Customer Operations"
+  );
+}
+
+/**
+ * People with "no pillar" / "no squad" who are NOT in Customer Operations.
+ * Shown in a separate "Unassigned" bucket above part-time champions.
+ */
+export function isUnassigned(person: Person): boolean {
+  return (
+    (person.pillar === "no pillar" || person.squad === "no squad") &&
+    person.function !== "Customer Operations"
+  );
+}
+
+/**
+ * Compute tenure in calendar days from a start date string.
+ */
+export function computeTenureDays(startDate: string): number {
+  const start = new Date(startDate);
+  const now = Date.now();
+  const startMs = start.getTime();
+  if (!Number.isFinite(startMs)) return 0;
+  return Math.max(0, Math.floor((now - startMs) / (24 * 60 * 60 * 1000)));
 }
 
 /**
@@ -340,6 +366,7 @@ export function isPartTimeChampion(person: Person): boolean {
 export async function getActiveEmployees(): Promise<{
   employees: Person[];
   partTimeChampions: Person[];
+  unassigned: Person[];
   allRows: Record<string, unknown>[];
   lastSync: Date | null;
 }> {
@@ -384,8 +411,9 @@ export async function getActiveEmployees(): Promise<{
     if (fteValidation.isValid) {
       const all = mergeEmployeeData(fteQuery.rows, allRows);
       return {
-        employees: all.filter((p) => !isPartTimeChampion(p)),
+        employees: all.filter((p) => !isPartTimeChampion(p) && !isUnassigned(p)),
         partTimeChampions: all.filter(isPartTimeChampion),
+        unassigned: all.filter(isUnassigned),
         allRows,
         lastSync: fteQuery.syncedAt,
       };
@@ -394,7 +422,7 @@ export async function getActiveEmployees(): Promise<{
 
   // Fallback: use Headcount SSoT alone (allRows already validated above)
   if (allRows.length === 0) {
-    return { employees: [], partTimeChampions: [], allRows: [], lastSync: null };
+    return { employees: [], partTimeChampions: [], unassigned: [], allRows: [], lastSync: null };
   }
 
   const activeRows = allRows.filter(
@@ -405,8 +433,9 @@ export async function getActiveEmployees(): Promise<{
 
   const all = transformToPersons(activeRows);
   return {
-    employees: all.filter((p) => !isPartTimeChampion(p)),
+    employees: all.filter((p) => !isPartTimeChampion(p) && !isUnassigned(p)),
     partTimeChampions: all.filter(isPartTimeChampion),
+    unassigned: all.filter(isUnassigned),
     allRows,
     lastSync: headcountQuery?.syncedAt ?? null,
   };

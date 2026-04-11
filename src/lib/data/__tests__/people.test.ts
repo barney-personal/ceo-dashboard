@@ -15,11 +15,14 @@ vi.mock("../mode", () => ({
 }));
 
 import {
+  computeTenureDays,
   getActiveEmployees,
   getMonthlyJoinersAndDepartures,
   getPeopleMetrics,
   getTenureDistribution,
   groupByPillarAndSquad,
+  isPartTimeChampion,
+  isUnassigned,
   transformToPersons,
   type Person,
 } from "../people";
@@ -312,7 +315,7 @@ describe("getActiveEmployees", () => {
 
     const result = await getActiveEmployees();
 
-    expect(result).toEqual({ employees: [], partTimeChampions: [], allRows: [], lastSync: null });
+    expect(result).toEqual({ employees: [], partTimeChampions: [], unassigned: [], allRows: [], lastSync: null });
     expect(mockGetReportData).toHaveBeenCalledWith("people", "org", [
       "current_employees",
     ]);
@@ -441,5 +444,56 @@ describe("getActiveEmployees", () => {
     expect(result.employees).toHaveLength(1);
     expect(result.employees[0].name).toBe("Amy");
     expect(mockValidateModeColumns).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isPartTimeChampion", () => {
+  it("returns true for Customer Operations with no pillar", () => {
+    expect(isPartTimeChampion(makePerson({ pillar: "no pillar", function: "Customer Operations" }))).toBe(true);
+  });
+
+  it("returns true for Customer Operations with no squad", () => {
+    expect(isPartTimeChampion(makePerson({ squad: "no squad", function: "Customer Operations" }))).toBe(true);
+  });
+
+  it("returns false for non-Customer Operations even with no pillar", () => {
+    expect(isPartTimeChampion(makePerson({ pillar: "no pillar", function: "Growth" }))).toBe(false);
+  });
+
+  it("returns false for Customer Operations with normal pillar and squad", () => {
+    expect(isPartTimeChampion(makePerson({ pillar: "Operations", squad: "Champs", function: "Customer Operations" }))).toBe(false);
+  });
+});
+
+describe("isUnassigned", () => {
+  it("returns true for non-Customer Operations with no pillar", () => {
+    expect(isUnassigned(makePerson({ pillar: "no pillar", function: "Growth" }))).toBe(true);
+  });
+
+  it("returns true for non-Customer Operations with no squad", () => {
+    expect(isUnassigned(makePerson({ squad: "no squad", function: "Engineering" }))).toBe(true);
+  });
+
+  it("returns false for Customer Operations with no pillar", () => {
+    expect(isUnassigned(makePerson({ pillar: "no pillar", function: "Customer Operations" }))).toBe(false);
+  });
+
+  it("returns false for people with normal pillar and squad", () => {
+    expect(isUnassigned(makePerson({ pillar: "Growth", squad: "Growth Marketing", function: "Growth" }))).toBe(false);
+  });
+});
+
+describe("computeTenureDays", () => {
+  it("returns the number of days between start date and now", () => {
+    // System time is 2026-04-08T12:00:00Z, start is 7 days earlier
+    expect(computeTenureDays("2026-04-01T12:00:00Z")).toBe(7);
+  });
+
+  it("returns 0 for invalid start date", () => {
+    expect(computeTenureDays("not-a-date")).toBe(0);
+  });
+
+  it("returns 0 for empty start date", () => {
+    expect(computeTenureDays("")).toBe(0);
   });
 });
