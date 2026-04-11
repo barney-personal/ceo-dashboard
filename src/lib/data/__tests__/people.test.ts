@@ -18,6 +18,7 @@ import {
   computeTenureDays,
   getActiveEmployees,
   getMonthlyJoinersAndDepartures,
+  getMonthlyMovementPeople,
   getPeopleMetrics,
   getTenureDistribution,
   groupByPillarAndSquad,
@@ -495,5 +496,120 @@ describe("computeTenureDays", () => {
 
   it("returns 0 for empty start date", () => {
     expect(computeTenureDays("")).toBe(0);
+  });
+});
+
+describe("getMonthlyMovementPeople", () => {
+  it("returns joiners keyed by start_date month", () => {
+    const rows = [
+      {
+        preferred_name: "Alice",
+        email: "alice@co.com",
+        job_title: "Software Engineer",
+        hb_level: "SE3",
+        hb_squad: "Core",
+        hb_function: "Engineering",
+        manager: "Bob",
+        start_date: "2026-03-15",
+        work_location: "London",
+        lifecycle_status: "employed",
+        is_cleo_headcount: 1,
+      },
+    ];
+    const { joiners, departures } = getMonthlyMovementPeople(rows);
+    expect(joiners).toHaveLength(1);
+    expect(joiners[0].name).toBe("Alice");
+    expect(joiners[0].monthKey).toBe("2026-03");
+    expect(joiners[0].jobTitle).toBe("Software Engineer");
+    expect(departures).toHaveLength(0);
+  });
+
+  it("returns departures keyed by termination_date month", () => {
+    const rows = [
+      {
+        preferred_name: "Charlie",
+        email: "charlie@co.com",
+        job_title: "Product Manager",
+        hb_level: "SE4",
+        hb_squad: "Growth",
+        hb_function: "Product",
+        manager: "Dana",
+        start_date: "2024-01-10",
+        termination_date: "2026-02-28",
+        work_location: "Remote",
+        lifecycle_status: "terminated",
+        is_cleo_headcount: 1,
+      },
+    ];
+    const { joiners, departures } = getMonthlyMovementPeople(rows);
+    expect(joiners).toHaveLength(1);
+    expect(joiners[0].monthKey).toBe("2024-01");
+    expect(departures).toHaveLength(1);
+    expect(departures[0].name).toBe("Charlie");
+    expect(departures[0].monthKey).toBe("2026-02");
+    expect(departures[0].terminationDate).toBe("2026-02-28");
+  });
+
+  it("skips non-headcount rows", () => {
+    const rows = [
+      {
+        preferred_name: "Contractor",
+        email: "c@co.com",
+        job_title: "Consultant",
+        hb_level: "",
+        hb_squad: "",
+        hb_function: "",
+        manager: "",
+        start_date: "2026-01-01",
+        work_location: "",
+        lifecycle_status: "employed",
+        is_cleo_headcount: 0,
+      },
+    ];
+    const { joiners, departures } = getMonthlyMovementPeople(rows);
+    expect(joiners).toHaveLength(0);
+    expect(departures).toHaveLength(0);
+  });
+
+  it("applies job title and level normalization", () => {
+    const rows = [
+      {
+        preferred_name: "Eve",
+        email: "eve@co.com",
+        job_title: "Senior Backend Engineer",
+        hb_level: "SE3",
+        rp_specialisation: "Backend",
+        hb_squad: "Payments",
+        hb_function: "Engineering",
+        manager: "Frank",
+        start_date: "2025-06-01",
+        work_location: "Berlin",
+        lifecycle_status: "employed",
+        is_cleo_headcount: 1,
+      },
+    ];
+    const { joiners } = getMonthlyMovementPeople(rows);
+    expect(joiners[0].jobTitle).toBe("Backend Engineer");
+    expect(joiners[0].level).toBe("B3");
+  });
+
+  it("applies department normalization", () => {
+    const rows = [
+      {
+        preferred_name: "Grace",
+        email: "grace@co.com",
+        job_title: "Product Analyst",
+        hb_level: "SE2",
+        hb_squad: "Insights",
+        hb_function: "Product",
+        manager: "Hank",
+        start_date: "2025-09-01",
+        work_location: "London",
+        lifecycle_status: "employed",
+        is_cleo_headcount: 1,
+      },
+    ];
+    const { joiners } = getMonthlyMovementPeople(rows);
+    expect(joiners[0].function).toBe("Analytics");
   });
 });

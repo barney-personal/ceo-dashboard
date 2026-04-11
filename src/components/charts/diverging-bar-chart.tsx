@@ -280,12 +280,13 @@ export function DivergingBarChart({
 
     if (onBarClick) {
       const handler = onBarClick;
-      const zeroY = y(0);
+      // Use ratio comparison so the hit test is invariant to CSS transforms/zoom.
+      const zeroRatio = y(0) / innerHeight;
       g.selectAll<SVGRectElement, (typeof parsed)[0]>("rect.overlay")
         .on("click", function (event, d) {
           const rect = this.getBoundingClientRect();
-          const clickY = event.clientY - rect.top;
-          const type: "positive" | "negative" = clickY <= zeroY ? "positive" : "negative";
+          const clickRatio = (event.clientY - rect.top) / rect.height;
+          const type: "positive" | "negative" = clickRatio <= zeroRatio ? "positive" : "negative";
           handler({ date: d.date.toISOString().slice(0, 10), type });
         });
     }
