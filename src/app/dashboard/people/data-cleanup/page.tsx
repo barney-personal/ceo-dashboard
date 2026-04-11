@@ -27,7 +27,7 @@ const SEVERITY_CONFIG = {
 } as const;
 
 export default async function DataCleanupPage() {
-  const categories = await detectDataIssues();
+  const { categories, hasSourceData } = await detectDataIssues();
   const totalIssues = categories.reduce((sum, c) => sum + c.issues.length, 0);
 
   return (
@@ -66,7 +66,15 @@ export default async function DataCleanupPage() {
         })}
       </div>
 
-      {totalIssues === 0 && (
+      {totalIssues === 0 && !hasSourceData && (
+        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border/50 shadow-warm">
+          <p className="text-sm text-muted-foreground">
+            No source data available. Sync the Headcount SSoT and Current FTEs reports to detect issues.
+          </p>
+        </div>
+      )}
+
+      {totalIssues === 0 && hasSourceData && (
         <div className="flex h-40 items-center justify-center gap-3 rounded-xl border border-positive/30 bg-positive/5 shadow-warm">
           <CheckCircle2 className="h-5 w-5 text-positive" />
           <p className="text-sm font-medium text-positive">

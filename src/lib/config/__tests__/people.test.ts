@@ -223,6 +223,11 @@ describe("resolveEngineerDiscipline", () => {
 });
 
 describe("normalizeDepartment", () => {
+  it("returns department unchanged when job title is empty", () => {
+    expect(normalizeDepartment("Data Science", "")).toBe("Data Science");
+    expect(normalizeDepartment("Product", "")).toBe("Product");
+  });
+
   it("passes through unaffected departments unchanged", () => {
     expect(normalizeDepartment("Engineering", "Software Engineer")).toBe("Engineering");
     expect(normalizeDepartment("Analytics", "Product Analyst")).toBe("Analytics");

@@ -127,6 +127,7 @@ export function resolveEngineerDiscipline(
  *   design roles to Experience
  */
 export function normalizeDepartment(department: string, normalizedJobTitle: string): string {
+  if (!normalizedJobTitle) return department;
   const lower = normalizedJobTitle.toLowerCase();
 
   if (department === "Data Science") {

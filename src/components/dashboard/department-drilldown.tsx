@@ -289,7 +289,7 @@ export function DepartmentDrilldown({
         title={selectedTitle}
         subtitle={`${titleCount} in ${selectedDept}`}
         modeUrl={modeUrl}
-        headerLeft={backButton(() => setSelectedTitle(null))}
+        headerLeft={backButton(() => { setSelectedTitle(null); setSelectedLevel(null); })}
         onBarClick={(item) => setSelectedLevel(item.label)}
       />
     );
@@ -306,7 +306,7 @@ export function DepartmentDrilldown({
         subtitle={`${deptCount} employees`}
         modeUrl={modeUrl}
         leftMargin={220}
-        headerLeft={backButton(() => setSelectedDept(null))}
+        headerLeft={backButton(() => { setSelectedDept(null); setSelectedTitle(null); setSelectedLevel(null); })}
         onBarClick={(item) => setSelectedTitle(item.label)}
       />
     );

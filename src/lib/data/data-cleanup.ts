@@ -21,6 +21,11 @@ export interface DataIssueCategory {
   issues: DataIssue[];
 }
 
+export interface DataCleanupResult {
+  categories: DataIssueCategory[];
+  hasSourceData: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Detection
 // ---------------------------------------------------------------------------
@@ -30,7 +35,7 @@ export interface DataIssueCategory {
  * Compares raw field values against our normalisation rules to surface
  * what the People team should fix at source (in HiBob / Rev).
  */
-export async function detectDataIssues(): Promise<DataIssueCategory[]> {
+export async function detectDataIssues(): Promise<DataCleanupResult> {
   const [fteData, headcountData] = await Promise.all([
     getReportData("people", "org", ["current_employees"]),
     getReportData("people", "headcount", ["headcount"]),
@@ -340,5 +345,8 @@ export async function detectDataIssues(): Promise<DataIssueCategory[]> {
     issues: missingLocation.sort((a, b) => a.person.localeCompare(b.person)),
   });
 
-  return categories.filter((c) => c.issues.length > 0);
+  return {
+    categories: categories.filter((c) => c.issues.length > 0),
+    hasSourceData: fteRows.length > 0 || hcRows.length > 0,
+  };
 }
