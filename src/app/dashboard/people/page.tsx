@@ -1,9 +1,9 @@
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
-import { BarChart } from "@/components/charts/bar-chart";
 import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown";
 import { JoinersLeaversDrilldown } from "@/components/dashboard/joiners-leavers-drilldown";
+import { TenureDrilldown } from "@/components/dashboard/tenure-drilldown";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import {
@@ -147,12 +147,25 @@ export default async function PeopleOrgPage() {
         />
       )}
 
-      {/* Tenure distribution */}
+      {/* Tenure distribution with drilldown */}
       {hasTenureData && (
-        <BarChart
+        <TenureDrilldown
           data={tenureData}
-          title="Tenure Distribution"
-          subtitle={`${metrics.total} employees`}
+          employees={[...employees, ...unassigned].map((e) => ({
+            name: e.name,
+            email: e.email,
+            jobTitle: e.jobTitle,
+            level: e.level,
+            function: e.function,
+            squad: e.squad,
+            pillar: e.pillar,
+            manager: e.manager,
+            startDate: e.startDate,
+            location: e.location,
+            tenureMonths: e.tenureMonths,
+            employmentType: e.employmentType,
+          }))}
+          total={metrics.total}
           modeUrl={modeUrl}
         />
       )}
