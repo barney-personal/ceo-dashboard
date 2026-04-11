@@ -35,7 +35,7 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, partTimeChampions, allRows }, deptData, latestSyncRun] = await Promise.all([
+  const [{ employees, partTimeChampions, unassigned, allRows }, deptData, latestSyncRun] = await Promise.all([
     getActiveEmployees(),
     getHeadcountByDepartment(),
     getLatestTerminalSyncRun("mode"),
@@ -57,7 +57,6 @@ export default async function PeopleOrgPage() {
     "Sync the Headcount SSoT Dashboard report to view org charts"
   );
 
-  // Serialize for client component (strip email/manager — not needed in directory UI)
   const serializedPillars = byPillar.map((pillar) => ({
     name: pillar.name,
     count: pillar.count,
@@ -66,10 +65,14 @@ export default async function PeopleOrgPage() {
       name: sq.name,
       people: sq.people.map((p) => ({
         name: p.name,
+        email: p.email,
         jobTitle: p.jobTitle,
         level: p.level,
         squad: p.squad,
+        pillar: p.pillar,
         function: p.function,
+        manager: p.manager,
+        startDate: p.startDate,
         location: p.location,
         tenureMonths: p.tenureMonths,
         employmentType: p.employmentType,
@@ -177,6 +180,39 @@ export default async function PeopleOrgPage() {
       {/* Team directory */}
       {employees.length > 0 && <PeopleDirectory pillars={serializedPillars} />}
 
+      {/* Unassigned — no pillar/squad, not Customer Operations */}
+      {unassigned.length > 0 && (
+        <details className="rounded-xl border border-border/60 bg-card shadow-warm">
+          <summary className="cursor-pointer select-none px-5 py-3 text-sm text-muted-foreground hover:text-foreground">
+            <span className="font-medium">{unassigned.length} unassigned</span>
+            <span className="ml-1.5 text-muted-foreground/50">— no pillar or squad assigned</span>
+          </summary>
+          <div className="divide-y divide-border/30 border-t border-border/30">
+            {unassigned.map((p) => (
+              <div
+                key={p.email}
+                className="flex items-center gap-3 px-5 py-2"
+              >
+                <span className="flex-1 min-w-0 text-sm text-foreground truncate">
+                  {p.name}
+                </span>
+                {(p.jobTitle || p.level) && (
+                  <span className="shrink-0 text-xs text-muted-foreground/60">
+                    {[p.jobTitle, p.level].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs text-muted-foreground/60 tabular-nums">
+                  {p.tenureMonths}mo
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground/60">
+                  {p.function}
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
       {/* Part-time Customer Champions — collapsible, excluded from metrics */}
       {partTimeChampions.length > 0 && (
         <details className="rounded-xl border border-border/60 bg-card shadow-warm">
@@ -192,6 +228,14 @@ export default async function PeopleOrgPage() {
               >
                 <span className="flex-1 min-w-0 text-sm text-foreground truncate">
                   {p.name}
+                </span>
+                {(p.jobTitle || p.level) && (
+                  <span className="shrink-0 text-xs text-muted-foreground/60">
+                    {[p.jobTitle, p.level].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs text-muted-foreground/60 tabular-nums">
+                  {p.tenureMonths}mo
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground/60">
                   {p.function}

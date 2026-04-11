@@ -1,14 +1,18 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Search, ArrowLeft, MapPin, Users } from "lucide-react";
+import { Search, ArrowLeft, MapPin, Users, Briefcase, Calendar, Clock, Mail, UserIcon } from "lucide-react";
 
 interface PersonData {
   name: string;
+  email: string;
   jobTitle: string;
   level: string;
   squad: string;
+  pillar: string;
   function: string;
+  manager: string;
+  startDate: string;
   location: string;
   tenureMonths: number;
   employmentType: string;
@@ -37,6 +41,13 @@ function formatTenure(months: number): string {
   const remaining = months % 12;
   if (remaining === 0) return `${years}y`;
   return `${years}y ${remaining}mo`;
+}
+
+function formatDate(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function PillarCard({
@@ -86,6 +97,7 @@ function PillarCard({
 export function PeopleDirectory({ pillars }: PeopleDirectoryProps) {
   const [selectedPillar, setSelectedPillar] = useState<string | null>(null);
   const [selectedSquad, setSelectedSquad] = useState<string | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<PersonData | null>(null);
   const [search, setSearch] = useState("");
 
   const activePillar = pillars.find((p) => p.name === selectedPillar);
@@ -244,7 +256,7 @@ export function PeopleDirectory({ pillars }: PeopleDirectoryProps) {
       )}
 
       {/* ── Squad detail: people list ── */}
-      {selectedPillar && activePillar && selectedSquad && activeSquad && (
+      {selectedPillar && activePillar && selectedSquad && activeSquad && !selectedPerson && (
         <div className="space-y-4">
           <div className="flex items-center gap-3">
             <button
@@ -283,9 +295,10 @@ export function PeopleDirectory({ pillars }: PeopleDirectoryProps) {
           <div className="rounded-xl border border-border/60 bg-card shadow-warm">
             <div className="divide-y divide-border/30">
               {filteredSquadPeople.map((person) => (
-                <div
+                <button
                   key={`${person.name}-${person.jobTitle}`}
-                  className="flex items-center gap-3 px-5 py-3"
+                  onClick={() => setSelectedPerson(person)}
+                  className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-muted/30"
                 >
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-foreground">
@@ -312,7 +325,7 @@ export function PeopleDirectory({ pillars }: PeopleDirectoryProps) {
                   <span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">
                     {formatTenure(person.tenureMonths)}
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -324,6 +337,117 @@ export function PeopleDirectory({ pillars }: PeopleDirectoryProps) {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Person detail ── */}
+      {selectedPerson && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSelectedPerson(null)}
+              className="flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              {activeSquad?.name ?? activePillar?.name ?? "Back"}
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-border/60 bg-card p-6 shadow-warm space-y-5">
+            <div>
+              <h3 className="text-xl font-semibold text-foreground">
+                {selectedPerson.name}
+              </h3>
+              {selectedPerson.jobTitle && (
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {selectedPerson.jobTitle}
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {selectedPerson.email && (
+                <div className="flex items-start gap-2.5">
+                  <Mail className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Email</p>
+                    <p className="text-sm text-foreground">{selectedPerson.email}</p>
+                  </div>
+                </div>
+              )}
+              {selectedPerson.level && (
+                <div className="flex items-start gap-2.5">
+                  <Briefcase className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Level</p>
+                    <p className="text-sm text-foreground">{selectedPerson.level}</p>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-start gap-2.5">
+                <Users className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Squad</p>
+                  <p className="text-sm text-foreground">{selectedPerson.squad}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <Users className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Pillar</p>
+                  <p className="text-sm text-foreground">{selectedPerson.pillar}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <Briefcase className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Function</p>
+                  <p className="text-sm text-foreground">{selectedPerson.function}</p>
+                </div>
+              </div>
+              {selectedPerson.manager && (
+                <div className="flex items-start gap-2.5">
+                  <UserIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Manager</p>
+                    <p className="text-sm text-foreground">{selectedPerson.manager}</p>
+                  </div>
+                </div>
+              )}
+              {selectedPerson.location && (
+                <div className="flex items-start gap-2.5">
+                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Location</p>
+                    <p className="text-sm text-foreground">{selectedPerson.location}</p>
+                  </div>
+                </div>
+              )}
+              {selectedPerson.employmentType && (
+                <div className="flex items-start gap-2.5">
+                  <Briefcase className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Employment Type</p>
+                    <p className="text-sm text-foreground">{selectedPerson.employmentType}</p>
+                  </div>
+                </div>
+              )}
+              <div className="flex items-start gap-2.5">
+                <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Start Date</p>
+                  <p className="text-sm text-foreground">{formatDate(selectedPerson.startDate)}</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" />
+                <div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">Tenure</p>
+                  <p className="text-sm text-foreground">{formatTenure(selectedPerson.tenureMonths)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
