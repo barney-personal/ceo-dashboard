@@ -76,6 +76,10 @@ export default async function ProductPage() {
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
   const modeUrlActiveUsers = getModeReportLink("product", "active-users");
   const modeUrlRetention = getModeReportLink("product", "retention");
+  const modeUrlRetentionWeekly = getModeReportLink(
+    "product",
+    "retention-weekly"
+  );
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
@@ -240,7 +244,7 @@ export default async function ProductPage() {
             periodLabel="Week"
             title="WAU Retention"
             subtitle="Weekly cohort triangle"
-            modeUrl={modeUrlRetention}
+            modeUrl={modeUrlRetentionWeekly}
           />
         ) : (
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">

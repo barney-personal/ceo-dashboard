@@ -159,11 +159,17 @@ export function aggregateCohortRows(
 }
 
 /**
- * Aggregate weekly retention rows across segments.
- * Cohort key is the ISO date of the cohort week (YYYY-MM-DD).
- * Period is `relative_moving_week` (0 = signup week, 1 = next week, …).
- * Metric is `active_users_weekly` summed across segment dimensions
- * (d30_subscriber, age, user_segment, core_intent).
+ * Normalise stored weekly retention rows into `cohort → period → WAU`.
+ *
+ * The sync layer (see `weeklyRetentionAggregator`) has already collapsed the
+ * raw segment-broken-down rows into one row per `(cohort_week,
+ * relative_moving_week)`, so this function only needs to:
+ *  - parse `cohort_week` into a YYYY-MM-DD UTC key
+ *  - drop rows with invalid dates / missing numerics
+ *  - bucket by cohort + period
+ *
+ * If multiple rows for the same cohort/period are ever encountered (e.g. a
+ * legacy un-aggregated payload), they are still summed for safety.
  */
 export function aggregateWeeklyCohortRows(
   rows: Record<string, unknown>[],
@@ -189,7 +195,8 @@ export function aggregateWeeklyCohortRows(
       byCohort.set(cohort, periods);
     }
 
-    periods.set(period, (periods.get(period) ?? 0) + wau);
+    const existing = periods.get(period);
+    periods.set(period, existing == null ? wau : existing + wau);
   }
 
   return byCohort;

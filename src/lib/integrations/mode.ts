@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import type { ModeRowAggregator } from "./mode-config";
 
 const MODE_BASE_URL = "https://app.mode.com/api";
 const MODE_METADATA_TIMEOUT_MS = 30_000;
@@ -508,6 +509,296 @@ export async function getQueryResultContent(
     rows: data,
     responseBytes: bytesRead,
   };
+}
+
+/**
+ * Minimal RFC 4180 CSV row reader. Designed for incremental feeding of byte
+ * chunks from a streaming response — push bytes via `push`, then either
+ * `flushRecord()` per complete record returned by `push`, or call `end` for
+ * the final pending record.
+ *
+ * Handles:
+ *  - quoted fields with escaped quotes (`""`)
+ *  - embedded commas / newlines inside quoted fields
+ *  - CRLF and LF line terminators
+ *
+ * Does NOT handle: alternative delimiters, BOM stripping (Mode does not emit
+ * a BOM on its CSV exports — verified empirically), or multi-byte field
+ * separators. Sufficient for Mode result CSVs.
+ */
+class StreamingCsvParser {
+  private readonly decoder = new TextDecoder("utf-8");
+  private buffer = "";
+  private field = "";
+  private record: string[] = [];
+  private inQuotes = false;
+  private prevWasQuote = false;
+  private prevWasCR = false;
+
+  /**
+   * Push a byte chunk into the parser and yield any records that completed
+   * during this chunk.
+   */
+  push(chunk: Uint8Array): string[][] {
+    this.buffer += this.decoder.decode(chunk, { stream: true });
+    return this.drain();
+  }
+
+  /**
+   * Signal end-of-stream. Yields the final pending record if one is buffered
+   * (i.e. the file did not end with a newline).
+   */
+  end(): string[][] {
+    this.buffer += this.decoder.decode();
+    const records = this.drain();
+    if (this.field.length > 0 || this.record.length > 0) {
+      this.record.push(this.field);
+      records.push(this.record);
+      this.field = "";
+      this.record = [];
+    }
+    return records;
+  }
+
+  private drain(): string[][] {
+    const out: string[][] = [];
+    const buf = this.buffer;
+    let i = 0;
+    while (i < buf.length) {
+      const ch = buf[i];
+
+      if (this.inQuotes) {
+        if (this.prevWasQuote) {
+          this.prevWasQuote = false;
+          if (ch === '"') {
+            // Escaped quote inside quoted field.
+            this.field += '"';
+            i++;
+            continue;
+          }
+          // Closing quote — fall through to non-quoted branch with this ch.
+          this.inQuotes = false;
+        } else if (ch === '"') {
+          this.prevWasQuote = true;
+          i++;
+          continue;
+        } else {
+          this.field += ch;
+          i++;
+          continue;
+        }
+      }
+
+      if (ch === '"') {
+        this.inQuotes = true;
+        this.prevWasQuote = false;
+        i++;
+        continue;
+      }
+
+      if (ch === ",") {
+        this.record.push(this.field);
+        this.field = "";
+        i++;
+        this.prevWasCR = false;
+        continue;
+      }
+
+      if (ch === "\r") {
+        this.record.push(this.field);
+        this.field = "";
+        out.push(this.record);
+        this.record = [];
+        this.prevWasCR = true;
+        i++;
+        continue;
+      }
+
+      if (ch === "\n") {
+        if (this.prevWasCR) {
+          // CRLF — already emitted on \r.
+          this.prevWasCR = false;
+          i++;
+          continue;
+        }
+        this.record.push(this.field);
+        this.field = "";
+        out.push(this.record);
+        this.record = [];
+        i++;
+        continue;
+      }
+
+      this.prevWasCR = false;
+      this.field += ch;
+      i++;
+    }
+
+    this.buffer = "";
+    return out;
+  }
+}
+
+/**
+ * Stream a Mode query result as CSV and feed each row through `aggregator`.
+ *
+ * The whole point is to avoid buffering the response in memory: for the
+ * weekly retention dataset the JSON variant exceeds 200 MB, but the
+ * aggregated result is only ~1.4k rows. We download the CSV, parse it
+ * incrementally, and let the aggregator collapse rows on the fly.
+ *
+ * Returns the finalized rows and the total bytes streamed (for parity with
+ * the buffered path's `responseBytes` accounting).
+ */
+export async function streamQueryResultAndAggregate<TState>(
+  reportToken: string,
+  runToken: string,
+  queryRunToken: string,
+  aggregator: ModeRowAggregator<TState>,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<{
+  rows: Record<string, unknown>[];
+  responseBytes: number;
+  sourceRowCount: number;
+}> {
+  const config = getConfig();
+  const path = `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.csv`;
+  const url = `${MODE_BASE_URL}/${config.workspace}${path}`;
+  const timeoutMs = opts.timeoutMs ?? MODE_RESULTS_TIMEOUT_MS;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= MODE_MAX_RETRIES; attempt++) {
+    const { signal, cleanup, timedOut } = composeSignal(
+      timeoutMs,
+      opts.signal,
+      "Mode query result request timed out",
+    );
+
+    try {
+      const res = await fetch(url, {
+        signal,
+        headers: {
+          ...authHeaders(config),
+          Accept: "text/csv",
+        },
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        if (res.status === 401 || res.status === 403) {
+          captureModeAuthError({
+            path,
+            requestType: "query-result",
+            status: res.status,
+            body,
+          });
+        }
+        const error = new Error(`Mode API error ${res.status}: ${body}`);
+        if (
+          attempt < MODE_MAX_RETRIES &&
+          (res.status === 429 || res.status >= 500)
+        ) {
+          lastError = error;
+          if (res.status === 429) {
+            const { waitMs } = getModeRateLimitDelay({
+              headers: res.headers,
+              attempt,
+              path,
+            });
+            await sleep(waitMs);
+          } else {
+            await sleep(getRetryDelayMs(attempt));
+          }
+          continue;
+        }
+        throw error;
+      }
+
+      if (!res.body) {
+        throw new Error("Mode response body is empty");
+      }
+
+      const parser = new StreamingCsvParser();
+      const reader = res.body.getReader();
+      let bytesRead = 0;
+      let header: string[] | null = null;
+      let state = aggregator.initial();
+      let sourceRowCount = 0;
+
+      const consumeRecord = (record: string[]) => {
+        if (!header) {
+          header = record;
+          return;
+        }
+        const row: Record<string, string> = {};
+        for (let c = 0; c < header.length; c++) {
+          row[header[c]] = record[c] ?? "";
+        }
+        sourceRowCount++;
+        state = aggregator.reduce(state, row);
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        bytesRead += value.byteLength;
+        const records = parser.push(value);
+        for (const rec of records) consumeRecord(rec);
+      }
+
+      const trailing = parser.end();
+      for (const rec of trailing) consumeRecord(rec);
+
+      if (!header) {
+        throw new Error("Mode CSV stream contained no header row");
+      }
+
+      return {
+        rows: aggregator.finalize(state),
+        responseBytes: bytesRead,
+        sourceRowCount,
+      };
+    } catch (error) {
+      if (signal.aborted) {
+        if (timedOut()) {
+          throw new Error("Mode query result request timed out");
+        }
+
+        if (signal.reason instanceof Error) {
+          throw signal.reason;
+        }
+
+        throw new Error("Mode query result request was aborted");
+      }
+
+      if (error instanceof ModeAuthError) {
+        throw error;
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = isRetryableModeError(message);
+      if (attempt < MODE_MAX_RETRIES && retryable) {
+        lastError = error instanceof Error ? error : new Error(message);
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+      Sentry.captureException(error, {
+        tags: { integration: "mode" },
+        extra: { path, attempt, requestType: "query-result-stream" },
+      });
+      throw error;
+    } finally {
+      cleanup();
+    }
+  }
+
+  const terminalError = lastError ?? new Error("Mode CSV stream request failed");
+  Sentry.captureException(terminalError, {
+    tags: { integration: "mode" },
+    extra: { path, requestType: "query-result-stream" },
+  });
+  throw terminalError;
 }
 
 export async function getModeJsonWithLimit<T>(

@@ -11,6 +11,7 @@ import {
   getQueryResultContent,
   getQueryRuns,
   getReportQueries,
+  streamQueryResultAndAggregate,
 } from "@/lib/integrations/mode";
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { createPhaseTracker } from "./phase-tracker";
@@ -580,23 +581,55 @@ async function syncReport(
       const queryStartedAt = Date.now();
 
       try {
-        const { rows: sourceRows, responseBytes } = await getQueryResultContent(
-          report.reportToken,
-          run.token,
-          queryRunToken,
-          1000,
-          {
-            signal: opts.signal,
-            maxBytes: queryProfile.maxResponseBytes,
-          },
-        );
-        const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
+        let prepared: ReturnType<typeof prepareModeRowsForStorage>;
+        let responseBytes: number;
+        let columns: Array<{ name: string; type: string }>;
 
-        const sampleRow = prepared.rows[0] ?? sourceRows[0] ?? {};
-        const columns = Object.keys(sampleRow).map((name) => ({
-          name,
-          type: typeof sampleRow[name],
-        }));
+        if (queryProfile.aggregator) {
+          // Streaming + on-the-fly aggregation: skips JSON.parse on huge
+          // payloads and stores only the rolled-up rows.
+          const aggregated = await streamQueryResultAndAggregate(
+            report.reportToken,
+            run.token,
+            queryRunToken,
+            queryProfile.aggregator,
+            { signal: opts.signal },
+          );
+          prepared = {
+            sourceRowCount: aggregated.sourceRowCount,
+            storedRowCount: aggregated.rows.length,
+            truncated: aggregated.rows.length !== aggregated.sourceRowCount,
+            rows: aggregated.rows,
+            storageWindow: queryProfile.storageWindow,
+          };
+          responseBytes = aggregated.responseBytes;
+          const sampleRow = aggregated.rows[0] ?? {};
+          columns =
+            queryProfile.aggregator.columns ??
+            Object.keys(sampleRow).map((name) => ({
+              name,
+              type: typeof sampleRow[name],
+            }));
+        } else {
+          const { rows: sourceRows, responseBytes: bytesRead } =
+            await getQueryResultContent(
+              report.reportToken,
+              run.token,
+              queryRunToken,
+              1000,
+              {
+                signal: opts.signal,
+                maxBytes: queryProfile.maxResponseBytes,
+              },
+            );
+          prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
+          responseBytes = bytesRead;
+          const sampleRow = prepared.rows[0] ?? sourceRows[0] ?? {};
+          columns = Object.keys(sampleRow).map((name) => ({
+            name,
+            type: typeof sampleRow[name],
+          }));
+        }
         const existingRows = await db
           .select({
             rowCount: modeReportData.rowCount,
