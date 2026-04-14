@@ -92,6 +92,12 @@ services:
         sync: false
       - key: SLACK_PRE_READS_CHANNEL_ID
         value: "C04EU4DEX5E"
+      - key: GITHUB_API_TOKEN
+        sync: false
+      - key: GITHUB_ORG
+        sync: false
+      - key: GITHUB_REPOS
+        sync: false
 
   - type: cron
     name: ceo-dashboard-cron
