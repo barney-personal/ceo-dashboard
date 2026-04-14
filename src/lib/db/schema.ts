@@ -255,6 +255,40 @@ export const githubPrMetrics = pgTable(
   ]
 );
 
+export const githubPrs = pgTable(
+  "github_prs",
+  {
+    id: serial("id").primaryKey(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    title: text("title").notNull(),
+    authorLogin: text("author_login").notNull(),
+    authorAvatarUrl: text("author_avatar_url"),
+    mergedAt: timestamp("merged_at").notNull(),
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    changedFiles: integer("changed_files").notNull().default(0),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.repo, table.prNumber),
+    index("github_prs_merged_at_idx").on(table.mergedAt),
+    index("github_prs_author_idx").on(table.authorLogin),
+  ]
+);
+
+export const githubEmployeeMap = pgTable("github_employee_map", {
+  id: serial("id").primaryKey(),
+  githubLogin: text("github_login").notNull().unique(),
+  employeeName: text("employee_name"),
+  employeeEmail: text("employee_email"),
+  githubName: text("github_name"), // display name from GitHub profile
+  matchMethod: text("match_method").notNull(), // 'auto' | 'manual'
+  matchConfidence: text("match_confidence"), // 'high' | 'medium' | 'low'
+  isBot: boolean("is_bot").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")

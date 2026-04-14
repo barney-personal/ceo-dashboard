@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
-import { githubPrMetrics } from "@/lib/db/schema";
-import { and, gte, lte, desc, eq, max } from "drizzle-orm";
+import { githubPrs, githubEmployeeMap } from "@/lib/db/schema";
+import { and, gte, desc, eq, sql, count, sum } from "drizzle-orm";
 
 export interface EngineerRanking {
   login: string;
@@ -11,73 +11,70 @@ export interface EngineerRanking {
   netLines: number;
   changedFiles: number;
   repos: string[];
+  employeeName: string | null;
+  employeeEmail: string | null;
+  isBot: boolean;
 }
 
-export async function getEngineeringRankings(
-  periodStart: Date,
-  periodEnd: Date
-): Promise<EngineerRanking[]> {
-  // Subquery: get the latest periodEnd per engineer within the range
-  const latestSnapshot = db
-    .select({
-      login: githubPrMetrics.login,
-      maxPeriodEnd: max(githubPrMetrics.periodEnd).as("max_period_end"),
-    })
-    .from(githubPrMetrics)
-    .where(
-      and(
-        gte(githubPrMetrics.periodStart, periodStart),
-        lte(githubPrMetrics.periodEnd, periodEnd)
-      )
-    )
-    .groupBy(githubPrMetrics.login)
-    .as("latest_snapshot");
+export const PERIOD_OPTIONS = [
+  { label: "30 days", value: 30 },
+  { label: "90 days", value: 90 },
+  { label: "180 days", value: 180 },
+  { label: "360 days", value: 360 },
+] as const;
 
-  // Join back to get full rows for only the latest snapshot per engineer
+export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["value"];
+
+export async function getEngineeringRankings(
+  days: PeriodDays = 30
+): Promise<EngineerRanking[]> {
+  const since = new Date();
+  since.setUTCDate(since.getUTCDate() - days);
+  since.setUTCHours(0, 0, 0, 0);
+
   const rows = await db
     .select({
-      login: githubPrMetrics.login,
-      avatarUrl: githubPrMetrics.avatarUrl,
-      prsCount: githubPrMetrics.prsCount,
-      additions: githubPrMetrics.additions,
-      deletions: githubPrMetrics.deletions,
-      changedFiles: githubPrMetrics.changedFiles,
-      repos: githubPrMetrics.repos,
+      login: githubPrs.authorLogin,
+      avatarUrl: sql<string | null>`MAX(${githubPrs.authorAvatarUrl})`.as(
+        "avatar_url"
+      ),
+      prsCount: count().as("prs_count"),
+      additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
+      deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
+      changedFiles: sum(githubPrs.changedFiles)
+        .mapWith(Number)
+        .as("changed_files"),
+      repos:
+        sql<string[]>`ARRAY_AGG(DISTINCT ${githubPrs.repo})`.as("repos"),
+      employeeName: githubEmployeeMap.employeeName,
+      employeeEmail: githubEmployeeMap.employeeEmail,
+      isBot: githubEmployeeMap.isBot,
     })
-    .from(githubPrMetrics)
-    .innerJoin(
-      latestSnapshot,
-      and(
-        eq(githubPrMetrics.login, latestSnapshot.login),
-        eq(githubPrMetrics.periodEnd, latestSnapshot.maxPeriodEnd)
-      )
+    .from(githubPrs)
+    .leftJoin(
+      githubEmployeeMap,
+      eq(githubPrs.authorLogin, githubEmployeeMap.githubLogin)
     )
-    .where(
-      and(
-        gte(githubPrMetrics.periodStart, periodStart),
-        lte(githubPrMetrics.periodEnd, periodEnd)
-      )
+    .where(gte(githubPrs.mergedAt, since))
+    .groupBy(
+      githubPrs.authorLogin,
+      githubEmployeeMap.employeeName,
+      githubEmployeeMap.employeeEmail,
+      githubEmployeeMap.isBot
     )
-    .orderBy(desc(githubPrMetrics.prsCount));
+    .orderBy(desc(sql`prs_count`));
 
   return rows.map((row) => ({
     login: row.login,
     avatarUrl: row.avatarUrl,
     prsCount: row.prsCount,
-    additions: row.additions,
-    deletions: row.deletions,
-    netLines: row.additions - row.deletions,
-    changedFiles: row.changedFiles,
-    repos: Array.isArray(row.repos) ? (row.repos as string[]) : [],
+    additions: row.additions ?? 0,
+    deletions: row.deletions ?? 0,
+    netLines: (row.additions ?? 0) - (row.deletions ?? 0),
+    changedFiles: row.changedFiles ?? 0,
+    repos: Array.isArray(row.repos) ? row.repos : [],
+    employeeName: row.employeeName,
+    employeeEmail: row.employeeEmail,
+    isBot: row.isBot ?? false,
   }));
-}
-
-export function getDefaultPeriod(days: number = 30): { start: Date; end: Date } {
-  // Use UTC bounds to match how the sync writes periodStart/periodEnd.
-  const end = new Date();
-  end.setUTCHours(23, 59, 59, 999);
-  const start = new Date();
-  start.setUTCDate(start.getUTCDate() - days);
-  start.setUTCHours(0, 0, 0, 0);
-  return { start, end };
 }
