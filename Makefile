@@ -29,10 +29,10 @@ ensure-doppler:
 	@doppler run -- true 2>/dev/null || doppler setup --project ceo-dashboard --config dev --no-interactive
 
 probe:
-	npx tsx scripts/probe.ts $(filter-out $@,$(MAKECMDGOALS))
+	npx tsx scripts/probe.ts $(filter-out $@,$(MAKECMDGOALS)) $(if $(target),--target=$(target)) $(if $(dry_run),--dry-run)
 
 probe-all:
-	npx tsx scripts/probe.ts --all
+	npx tsx scripts/probe.ts --all $(if $(target),--target=$(target)) $(if $(dry_run),--dry-run)
 
 db-generate: ensure-doppler
 	doppler run -- npx drizzle-kit generate

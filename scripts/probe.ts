@@ -82,6 +82,14 @@ export function resolveChecks(
 }
 
 // ---------------------------------------------------------------------------
+// Summary name — normalize the CLI arg for the final machine-readable line
+// ---------------------------------------------------------------------------
+
+export function formatSummaryName(nameArg: string): string {
+  return nameArg === "--all" ? "probe-all" : nameArg;
+}
+
+// ---------------------------------------------------------------------------
 // Git SHA — static command with no user input, safe to use execSync
 // ---------------------------------------------------------------------------
 
@@ -277,14 +285,17 @@ async function main(): Promise<void> {
 
   const allGreen = passed === total;
   const icon = allGreen ? "\u2705" : "\u274C";
+  const summaryName = formatSummaryName(nameArg);
   console.log(
-    `\n${icon} ${nameArg}: ${passed}/${total} passed in ${elapsedStr} | report: ${reportPath}\n`
+    `\n${icon} ${summaryName}: ${passed}/${total} passed in ${elapsedStr} | report: ${reportPath}\n`
   );
 
   process.exit(allGreen ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err);
-  process.exit(1);
-});
+if (!process.env.VITEST) {
+  main().catch((err) => {
+    console.error("Fatal:", err);
+    process.exit(1);
+  });
+}
