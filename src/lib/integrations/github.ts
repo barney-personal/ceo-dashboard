@@ -458,9 +458,12 @@ export async function fetchMergedPRRecords(
   for (const repoName of repoNames) {
     let cursor: string | null = null;
     let repoCount = 0;
-    let reachedEnd = false;
+    // Results are ordered by UPDATED_AT, not mergedAt, so a recently-updated
+    // old PR can appear before newer ones. Instead of breaking on the first
+    // out-of-range PR, we filter and stop after 3 consecutive empty pages.
+    let consecutiveEmptyPages = 0;
 
-    while (!reachedEnd) {
+    while (consecutiveEmptyPages < 3) {
       const gqlData: GraphQLPRResponse = await graphqlRequest(
         GRAPHQL_QUERY,
         { owner: config.org, repo: repoName, cursor },
@@ -471,12 +474,9 @@ export async function fetchMergedPRRecords(
       const page: MergedPRRecord[] = [];
 
       for (const pr of nodes) {
-        const mergedAt = new Date(pr.mergedAt);
-        if (mergedAt < since) {
-          reachedEnd = true;
-          break;
-        }
         if (!pr.author) continue;
+        const mergedAt = new Date(pr.mergedAt);
+        if (mergedAt < since) continue; // skip but don't stop
 
         page.push({
           repo: repoName,
@@ -492,8 +492,11 @@ export async function fetchMergedPRRecords(
         repoCount++;
       }
 
-      if (page.length > 0 && opts.onPage) {
-        await opts.onPage(page);
+      if (page.length > 0) {
+        consecutiveEmptyPages = 0;
+        if (opts.onPage) await opts.onPage(page);
+      } else {
+        consecutiveEmptyPages++;
       }
       total += page.length;
 
