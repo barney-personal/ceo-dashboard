@@ -661,13 +661,13 @@ describe("getWauRetentionCohorts", () => {
     }));
   }
 
-  it("normalises to W0 base and drops W0 + the incomplete latest week", async () => {
+  it("normalises to W0 base and keeps every observed retention period", async () => {
     mockGetReportData.mockResolvedValue([
       {
         queryName: "Query 1",
-        // 6 weeks observed (W0..W5) — W5 is dropped (latest, incomplete),
-        // W0 is dropped (always 100%). Two segment slices at W0 verify
-        // aggregation across dimensions.
+        // 6 weeks observed (W0..W5) — W0 is dropped as the base (always
+        // 100%). Upstream only emits complete weeks so W5 is kept. Two
+        // segment slices at W0 verify aggregation across dimensions.
         rows: [
           {
             cohort_week: "2025-10-06",
@@ -720,32 +720,39 @@ describe("getWauRetentionCohorts", () => {
 
     const cohorts = await getWauRetentionCohorts();
 
-    // Base = 150. periods = [W1, W2, W3, W4] = [120/150, 60/150, 20/150, 15/150]
+    // Base = 150. periods = [W1..W5] = [120/150, 60/150, 20/150, 15/150, 5/150]
     expect(cohorts).toEqual([
       {
         cohort: "2025-10-06",
-        periods: [0.8, 0.4, 20 / 150, 15 / 150],
+        periods: [0.8, 0.4, 20 / 150, 15 / 150, 5 / 150],
       },
     ]);
   });
 
-  it("filters out cohorts with fewer than 4 observed periods", async () => {
+  it("includes recent cohorts that have at least one retention data point", async () => {
     mockGetReportData.mockResolvedValue([
       {
         queryName: "Query 1",
         rows: [
-          // Cohort A: only W0/W1/W2 → after dropping last period only [W1] remains → too short
-          ...rowsForCohort("2026-01-05", [100, 80, 60]),
-          // Cohort B: W0..W5 → after dropping last → [W1,W2,W3,W4] meets minimum of 4
-          ...rowsForCohort("2025-12-01", [100, 80, 60, 50, 40, 30]),
+          // Cohort A: only W0 → no retention points → filtered out.
+          ...rowsForCohort("2026-01-12", [100]),
+          // Cohort B: W0/W1 → [W1] is one retention point, enough to show
+          // (this is the short bottom row of the triangle).
+          ...rowsForCohort("2026-01-05", [100, 80]),
+          // Cohort C: W0..W4 → [W1,W2,W3,W4] is a full early-retention row.
+          ...rowsForCohort("2025-12-01", [100, 80, 60, 50, 40]),
         ],
       },
     ]);
 
     const cohorts = await getWauRetentionCohorts();
 
-    expect(cohorts.map((c) => c.cohort)).toEqual(["2025-12-01"]);
+    expect(cohorts.map((c) => c.cohort)).toEqual([
+      "2025-12-01",
+      "2026-01-05",
+    ]);
     expect(cohorts[0].periods.length).toBe(4);
+    expect(cohorts[1].periods).toEqual([0.8]);
   });
 
   it("returns at most 52 cohorts (newest last)", async () => {
@@ -755,7 +762,7 @@ describe("getWauRetentionCohorts", () => {
       const cohortDate = new Date(Date.UTC(2025, 0, 6 + i * 7))
         .toISOString()
         .slice(0, 10);
-      // 6 periods so >=4 survive after dropping last + W0.
+      // 6 periods so every cohort has W1..W5 after dropping W0.
       rows.push(...rowsForCohort(cohortDate, [100, 80, 60, 50, 40, 30]));
     }
 
