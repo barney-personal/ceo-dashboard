@@ -2,7 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 30_000;
-const GITHUB_MAX_RETRIES = 3;
+const GITHUB_MAX_RETRIES = 5;
 const GITHUB_PER_PAGE = 100;
 
 interface GitHubConfig {
@@ -78,8 +78,14 @@ async function githubRequest<T>(
 
       if (!res.ok) {
         const body = await res.text();
+        const retryAfter = res.headers.get("retry-after");
 
-        if (res.status === 401 || res.status === 403) {
+        // GitHub uses 403 for secondary rate limits (with retry-after header).
+        // Only treat 401 and 403-without-retry-after as auth errors.
+        if (
+          res.status === 401 ||
+          (res.status === 403 && !retryAfter)
+        ) {
           const error = new Error(
             `GitHub API auth error ${res.status} — check GITHUB_API_TOKEN`
           );
@@ -94,18 +100,17 @@ async function githubRequest<T>(
         const error = new Error(`GitHub API error ${res.status}: ${body}`);
         if (
           attempt < GITHUB_MAX_RETRIES &&
-          (res.status === 429 || res.status >= 500)
+          (res.status === 429 || res.status === 403 || res.status >= 500)
         ) {
           lastError = error;
-          if (res.status === 429) {
-            const retryAfter = res.headers.get("retry-after");
+          if (res.status === 429 || (res.status === 403 && retryAfter)) {
             const waitMs = retryAfter
               ? parseInt(retryAfter, 10) * 1000
               : getRetryDelayMs(attempt);
             Sentry.addBreadcrumb({
               category: "github.rate_limit",
               level: "warning",
-              message: `Rate limited on ${path}, waiting ${waitMs}ms`,
+              message: `Rate limited (${res.status}) on ${path}, waiting ${waitMs}ms`,
             });
             await sleep(waitMs);
           } else {
