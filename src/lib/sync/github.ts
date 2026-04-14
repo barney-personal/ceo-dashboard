@@ -1,8 +1,8 @@
 import { db } from "@/lib/db";
-import { githubPrMetrics } from "@/lib/db/schema";
+import { githubPrs } from "@/lib/db/schema";
 import {
   checkGitHubHealth,
-  getEngineeringStats,
+  fetchMergedPRRecords,
 } from "@/lib/integrations/github";
 import { createPhaseTracker } from "./phase-tracker";
 import {
@@ -11,7 +11,10 @@ import {
   type SyncControl,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import { runGitHubEmployeeMapping } from "./github-employee-match";
 import * as Sentry from "@sentry/nextjs";
+
+const SYNC_WINDOW_DAYS = 360;
 
 interface SyncRun {
   id: number;
@@ -49,57 +52,54 @@ export async function runGitHubSync(
     return { status: "error", recordsSynced: 0, errors: [message] };
   }
 
-  // Fetch and store metrics for 30-day rolling window
-  const fetchPhaseId = await tracker.startPhase("github-fetch-pr-metrics");
+  // Fetch and store individual PRs for the full window
+  const fetchPhaseId = await tracker.startPhase("github-fetch-prs");
   try {
-    // Normalize period bounds to UTC day boundaries so the upsert
-    // conflict key (login, periodStart, periodEnd) matches across syncs
-    // regardless of the runtime timezone of the sync worker.
-    const periodEnd = new Date();
-    periodEnd.setUTCHours(23, 59, 59, 999);
-    const periodStart = new Date();
-    periodStart.setUTCDate(periodStart.getUTCDate() - 30);
-    periodStart.setUTCHours(0, 0, 0, 0);
+    const since = new Date();
+    since.setUTCDate(since.getUTCDate() - SYNC_WINDOW_DAYS);
+    since.setUTCHours(0, 0, 0, 0);
 
-    const stats = await getEngineeringStats(periodStart, {
+    const repoFilter = process.env.GITHUB_REPOS?.split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+
+    const prs = await fetchMergedPRRecords(since, {
       signal: opts.signal,
-      onRepoProgress: (repo) => {
+      repos: repoFilter,
+      onRepoProgress: (repo, count) => {
         Sentry.addBreadcrumb({
           category: "sync.github",
           level: "info",
-          message: `Processing repo ${repo}`,
+          message: `Fetched ${count} merged PRs from ${repo}`,
         });
       },
     });
 
-    // Upsert metrics per engineer
-    for (const engineer of stats) {
+    // Upsert each PR
+    for (const pr of prs) {
       await db
-        .insert(githubPrMetrics)
+        .insert(githubPrs)
         .values({
-          login: engineer.login,
-          avatarUrl: engineer.avatarUrl,
-          prsCount: engineer.prsCount,
-          additions: engineer.additions,
-          deletions: engineer.deletions,
-          changedFiles: engineer.changedFiles,
-          repos: Array.from(engineer.repos),
-          periodStart,
-          periodEnd,
+          repo: pr.repo,
+          prNumber: pr.prNumber,
+          title: pr.title,
+          authorLogin: pr.authorLogin,
+          authorAvatarUrl: pr.authorAvatarUrl,
+          mergedAt: pr.mergedAt,
+          additions: pr.additions,
+          deletions: pr.deletions,
+          changedFiles: pr.changedFiles,
         })
         .onConflictDoUpdate({
-          target: [
-            githubPrMetrics.login,
-            githubPrMetrics.periodStart,
-            githubPrMetrics.periodEnd,
-          ],
+          target: [githubPrs.repo, githubPrs.prNumber],
           set: {
-            avatarUrl: engineer.avatarUrl,
-            prsCount: engineer.prsCount,
-            additions: engineer.additions,
-            deletions: engineer.deletions,
-            changedFiles: engineer.changedFiles,
-            repos: Array.from(engineer.repos),
+            title: pr.title,
+            authorLogin: pr.authorLogin,
+            authorAvatarUrl: pr.authorAvatarUrl,
+            mergedAt: pr.mergedAt,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            changedFiles: pr.changedFiles,
             syncedAt: new Date(),
           },
         });
@@ -110,7 +110,7 @@ export async function runGitHubSync(
     await tracker.endPhase(fetchPhaseId, {
       status: "success",
       itemsProcessed: recordsSynced,
-      detail: `Synced ${recordsSynced} engineers across ${stats.reduce((acc, s) => acc + s.repos.size, 0)} repo contributions`,
+      detail: `Stored ${recordsSynced} PRs from ${SYNC_WINDOW_DAYS} day window`,
     });
   } catch (error) {
     if (
@@ -124,13 +124,46 @@ export async function runGitHubSync(
       throw error;
     }
 
-    const message = `Failed to sync GitHub PR metrics: ${formatSyncError(error)}`;
+    const message = `Failed to sync GitHub PRs: ${formatSyncError(error)}`;
     errors.push(message);
     Sentry.captureException(error, {
       tags: { integration: "github" },
-      extra: { phase: "fetch-pr-metrics" },
+      extra: { phase: "fetch-prs" },
     });
     await tracker.endPhase(fetchPhaseId, {
+      status: "error",
+      errorMessage: message,
+    });
+  }
+
+  // Match GitHub logins to employee records
+  const matchPhaseId = await tracker.startPhase("github-employee-matching");
+  try {
+    const matchResult = await runGitHubEmployeeMapping(opts);
+    await tracker.endPhase(matchPhaseId, {
+      status: "success",
+      itemsProcessed: matchResult.mapped + matchResult.bots,
+      detail: `Matched ${matchResult.mapped} employees, ${matchResult.bots} bots, ${matchResult.unmatched} unmatched, ${matchResult.skipped} skipped`,
+    });
+  } catch (error) {
+    if (
+      error instanceof SyncCancelledError ||
+      error instanceof SyncDeadlineExceededError
+    ) {
+      await tracker.endPhase(matchPhaseId, {
+        status: "error",
+        errorMessage: error.message,
+      });
+      throw error;
+    }
+
+    const message = `Employee matching failed: ${formatSyncError(error)}`;
+    errors.push(message);
+    Sentry.captureException(error, {
+      tags: { integration: "github" },
+      extra: { phase: "employee-matching" },
+    });
+    await tracker.endPhase(matchPhaseId, {
       status: "error",
       errorMessage: message,
     });

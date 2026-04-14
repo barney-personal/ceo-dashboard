@@ -4,40 +4,58 @@ import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { EngineeringTable } from "@/components/dashboard/engineering-table";
+import { PeriodPicker } from "@/components/dashboard/period-picker";
 import {
   getEngineeringRankings,
-  getDefaultPeriod,
+  PERIOD_OPTIONS,
+  type PeriodDays,
 } from "@/lib/data/engineering";
 import { getLatestTerminalSyncRun } from "@/lib/data/mode";
 
-export default async function EngineeringPerformancePage() {
+export default async function EngineeringPerformancePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ period?: string }>;
+}) {
   const role = await getCurrentUserRole();
   if (!hasAccess(role, "leadership")) {
     redirect("/dashboard");
   }
 
-  const { start, end } = getDefaultPeriod(30);
+  const params = await searchParams;
+  const validPeriods = PERIOD_OPTIONS.map((p) => p.value);
+  const periodDays = validPeriods.includes(Number(params.period) as PeriodDays)
+    ? (Number(params.period) as PeriodDays)
+    : 30;
+
   const [rankings, latestSync] = await Promise.all([
-    getEngineeringRankings(start, end),
+    getEngineeringRankings(periodDays),
     getLatestTerminalSyncRun("github"),
   ]);
 
-  const totalPRs = rankings.reduce((sum, r) => sum + r.prsCount, 0);
-  const totalAdditions = rankings.reduce((sum, r) => sum + r.additions, 0);
-  const totalDeletions = rankings.reduce((sum, r) => sum + r.deletions, 0);
-  const uniqueRepos = new Set(rankings.flatMap((r) => r.repos)).size;
+  const humans = rankings.filter((r) => !r.isBot);
+  const totalPRs = humans.reduce((sum, r) => sum + r.prsCount, 0);
+  const totalAdditions = humans.reduce((sum, r) => sum + r.additions, 0);
+  const totalDeletions = humans.reduce((sum, r) => sum + r.deletions, 0);
+  const uniqueRepos = new Set(humans.flatMap((r) => r.repos)).size;
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title="Engineering"
-        description="Pull request activity and lines of code across the org (last 30 days)"
-      />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader
+          title="Engineering"
+          description={`Pull request activity and lines of code across the org (last ${periodDays} days)`}
+        />
+        <PeriodPicker
+          periods={PERIOD_OPTIONS}
+          current={periodDays}
+        />
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           label="Contributors"
-          value={rankings.length.toString()}
+          value={humans.length.toString()}
           subtitle="engineers"
           delay={0}
         />
