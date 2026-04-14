@@ -273,6 +273,72 @@ export async function getPRDetails(
   );
 }
 
+export interface MergedPRRecord {
+  repo: string;
+  prNumber: number;
+  title: string;
+  authorLogin: string;
+  authorAvatarUrl: string;
+  mergedAt: Date;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+export async function fetchMergedPRRecords(
+  since: Date,
+  opts: {
+    signal?: AbortSignal;
+    onRepoProgress?: (repo: string, prCount: number) => void;
+    repos?: string[];
+  } = {}
+): Promise<MergedPRRecord[]> {
+  const config = getConfig();
+  let repos: GitHubRepo[];
+
+  if (opts.repos && opts.repos.length > 0) {
+    repos = opts.repos.map((name) => ({
+      name,
+      full_name: `${config.org}/${name}`,
+      archived: false,
+      fork: false,
+      private: true,
+    }));
+  } else {
+    repos = await getOrgRepos(opts);
+  }
+
+  const records: MergedPRRecord[] = [];
+
+  for (const repo of repos) {
+    const mergedPRs = await getMergedPRs(repo.full_name, since, opts);
+    opts.onRepoProgress?.(repo.full_name, mergedPRs.length);
+
+    const details = await mapWithConcurrency(
+      mergedPRs,
+      (pr) => getPRDetails(repo.full_name, pr.number, opts),
+      10
+    );
+
+    for (const pr of details) {
+      if (!pr.user || !pr.merged_at) continue;
+      records.push({
+        repo: repo.name,
+        prNumber: pr.number,
+        title: pr.title,
+        authorLogin: pr.user.login,
+        authorAvatarUrl: pr.user.avatar_url,
+        mergedAt: new Date(pr.merged_at),
+        additions: pr.additions,
+        deletions: pr.deletions,
+        changedFiles: pr.changed_files,
+      });
+    }
+  }
+
+  return records;
+}
+
 export interface EngineerPRStats {
   login: string;
   avatarUrl: string;

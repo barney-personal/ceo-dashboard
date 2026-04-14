@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { githubPrMetrics, githubEmployeeMap, modeReportData } from "@/lib/db/schema";
+import { githubPrs, githubEmployeeMap, modeReportData } from "@/lib/db/schema";
 import { getUserProfile } from "@/lib/integrations/github";
 import {
   SyncCancelledError,
@@ -93,10 +93,10 @@ function findEmployeeMatch(
 export async function runGitHubEmployeeMapping(
   opts: SyncControl = {}
 ): Promise<{ mapped: number; bots: number; unmatched: number; skipped: number }> {
-  // Get all unique GitHub logins from PR metrics
+  // Get all unique GitHub logins from PRs
   const prLogins = await db
-    .selectDistinct({ login: githubPrMetrics.login })
-    .from(githubPrMetrics);
+    .selectDistinct({ login: githubPrs.authorLogin })
+    .from(githubPrs);
 
   // Get already-mapped logins
   const existingMappings = await db
