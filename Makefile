@@ -29,10 +29,11 @@ ensure-doppler:
 	@doppler run -- true 2>/dev/null || doppler setup --project ceo-dashboard --config dev --no-interactive
 
 probe:
-	@./scripts/probe.sh $(filter-out $@,$(MAKECMDGOALS))
+	@if [ -z "$(SUITE)" ]; then echo "Error: SUITE required. Usage: make probe SUITE=<name> [PROBE_FLAGS='--dry-run --target=staging']" >&2; exit 1; fi
+	@./scripts/probe.sh $(SUITE) $(PROBE_FLAGS)
 
 probe-all:
-	@./scripts/probe.sh --all
+	@./scripts/probe.sh --all $(PROBE_FLAGS)
 
 db-generate: ensure-doppler
 	doppler run -- npx drizzle-kit generate
@@ -42,7 +43,3 @@ db-migrate: ensure-doppler
 
 db-studio: ensure-doppler
 	doppler run -- npx drizzle-kit studio
-
-# Allow `make probe <name>` to pass extra args without "No rule to make target" errors
-%:
-	@:
