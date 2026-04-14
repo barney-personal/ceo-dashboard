@@ -73,9 +73,11 @@ export async function getEngineeringRankings(
 }
 
 export function getDefaultPeriod(days: number = 30): { start: Date; end: Date } {
+  // Use UTC bounds to match how the sync writes periodStart/periodEnd.
   const end = new Date();
+  end.setUTCHours(23, 59, 59, 999);
   const start = new Date();
-  start.setDate(start.getDate() - days);
-  start.setHours(0, 0, 0, 0);
+  start.setUTCDate(start.getUTCDate() - days);
+  start.setUTCHours(0, 0, 0, 0);
   return { start, end };
 }

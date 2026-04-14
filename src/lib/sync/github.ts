@@ -52,11 +52,14 @@ export async function runGitHubSync(
   // Fetch and store metrics for 30-day rolling window
   const fetchPhaseId = await tracker.startPhase("github-fetch-pr-metrics");
   try {
+    // Normalize period bounds to UTC day boundaries so the upsert
+    // conflict key (login, periodStart, periodEnd) matches across syncs
+    // regardless of the runtime timezone of the sync worker.
     const periodEnd = new Date();
-    periodEnd.setHours(23, 59, 59, 999);
+    periodEnd.setUTCHours(23, 59, 59, 999);
     const periodStart = new Date();
-    periodStart.setDate(periodStart.getDate() - 30);
-    periodStart.setHours(0, 0, 0, 0);
+    periodStart.setUTCDate(periodStart.getUTCDate() - 30);
+    periodStart.setUTCHours(0, 0, 0, 0);
 
     const stats = await getEngineeringStats(periodStart, {
       signal: opts.signal,
