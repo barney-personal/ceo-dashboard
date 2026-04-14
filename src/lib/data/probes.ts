@@ -9,7 +9,8 @@ import {
 
 export const STALE_HEARTBEAT_MINUTES = 15;
 
-const RUN_HISTORY_LIMIT = 200;
+const RUN_HISTORY_LIMIT = 1000;
+const UPTIME_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface ProbeCheckSummary {
   checkName: string;
@@ -68,18 +69,20 @@ export async function getProbeStatusSummary(
 
     const latestRun = runs[0] ?? null;
 
-    // Find matching heartbeat — any heartbeat counts (probeId is the runner identity)
-    const heartbeat = heartbeatMap.values().next().value ?? null;
+    const heartbeat = latestRun?.probeId
+      ? heartbeatMap.get(latestRun.probeId) ?? null
+      : null;
     const heartbeatFresh = heartbeat
       ? heartbeat.lastSeenAt >= staleCutoff
       : false;
 
-    // Uptime: percentage of green runs out of total
+    const sevenDaysAgo = new Date(now.getTime() - UPTIME_WINDOW_MS);
+    const runs7d = runs.filter((r: { ts: Date }) => r.ts >= sevenDaysAgo);
     const uptimePercent7d =
-      runs.length > 0
+      runs7d.length > 0
         ? Math.round(
-            (runs.filter((r: { status: string }) => r.status === "green").length /
-              runs.length) *
+            (runs7d.filter((r: { status: string }) => r.status === "green").length /
+              runs7d.length) *
               100,
           )
         : null;

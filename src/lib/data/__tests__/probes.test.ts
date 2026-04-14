@@ -313,6 +313,71 @@ describe("getProbeStatusSummary", () => {
     expect(result[0].openIncident).toBeNull();
   });
 
+  it("resolves heartbeat per-check via probeId from latest run", async () => {
+    const now = new Date("2026-04-14T10:05:00Z");
+
+    mockAllHeartbeats.mockResolvedValue([
+      makeHeartbeat({ probeId: "runner-a", lastSeenAt: new Date("2026-04-14T10:03:00Z") }),
+      makeHeartbeat({ probeId: "runner-b", lastSeenAt: new Date("2026-04-14T09:30:00Z") }),
+    ]);
+
+    // check-a runs come from runner-a (fresh heartbeat)
+    mockLastRunsForCheck.mockResolvedValueOnce([
+      makeRun({ checkName: "check-a", probeId: "runner-a", status: "green" }),
+    ]);
+    // check-b runs come from runner-b (stale heartbeat — 35 min old)
+    mockLastRunsForCheck.mockResolvedValueOnce([
+      makeRun({ checkName: "check-b", probeId: "runner-b", status: "green" }),
+    ]);
+    mockOpenIncidentForCheck.mockResolvedValue(null);
+
+    const result = await getProbeStatusSummary(["check-a", "check-b"], now);
+
+    expect(result[0].heartbeatFresh).toBe(true);
+    expect(result[0].heartbeatLastSeen).toEqual(new Date("2026-04-14T10:03:00Z"));
+    expect(result[0].heartbeatVersion).toBe("1.0.0");
+
+    // runner-b last seen 35 min ago → stale
+    expect(result[1].heartbeatFresh).toBe(false);
+    expect(result[1].heartbeatLastSeen).toEqual(new Date("2026-04-14T09:30:00Z"));
+  });
+
+  it("computes uptimePercent7d from only runs within the last 7 days", async () => {
+    const now = new Date("2026-04-14T10:00:00Z");
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    mockAllHeartbeats.mockResolvedValue([
+      makeHeartbeat({ lastSeenAt: now }),
+    ]);
+
+    // 10 green runs within last 7 days
+    const recentGreen = Array.from({ length: 10 }, (_, i) =>
+      makeRun({
+        id: i + 1,
+        status: "green",
+        latencyMs: 100,
+        ts: new Date(now.getTime() - i * 3600_000),
+      }),
+    );
+    // 5 red runs older than 7 days (should NOT count)
+    const oldRed = Array.from({ length: 5 }, (_, i) =>
+      makeRun({
+        id: 100 + i,
+        status: "red",
+        latencyMs: 500,
+        ts: new Date(sevenDaysAgo.getTime() - (i + 1) * 3600_000),
+      }),
+    );
+
+    mockLastRunsForCheck.mockResolvedValue([...recentGreen, ...oldRed]);
+    mockOpenIncidentForCheck.mockResolvedValue(null);
+
+    const result = await getProbeStatusSummary(["ceo-ping-auth"], now);
+
+    // Only the 10 recent green runs count → 100% uptime
+    expect(result[0].uptimePercent7d).toBe(100);
+  });
+
   it("handles multiple checks in a single call", async () => {
     const now = new Date("2026-04-14T10:00:00Z");
     mockAllHeartbeats.mockResolvedValue([
