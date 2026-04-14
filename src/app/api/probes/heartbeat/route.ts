@@ -51,14 +51,34 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (!body || typeof body !== "object" || typeof (body as Record<string, unknown>).probeId !== "string") {
+  if (!body || typeof body !== "object") {
     return NextResponse.json(
-      { error: "Missing required field: probeId" },
+      { error: "Invalid payload" },
       { status: 400 }
     );
   }
 
-  const { probeId, version } = body as { probeId: string; version?: string };
+  const b = body as Record<string, unknown>;
+  const probeId =
+    typeof b.probe_id === "string" ? b.probe_id :
+    typeof b.probeId === "string" ? b.probeId :
+    null;
+
+  if (!probeId) {
+    return NextResponse.json(
+      { error: "Missing required field: probe_id" },
+      { status: 400 }
+    );
+  }
+
+  if (b.version !== undefined && typeof b.version !== "string") {
+    return NextResponse.json(
+      { error: "Invalid field: version must be a string" },
+      { status: 400 }
+    );
+  }
+
+  const version = b.version as string | undefined;
 
   await upsertHeartbeat(probeId, version);
 

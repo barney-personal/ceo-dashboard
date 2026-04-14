@@ -26,7 +26,8 @@ function makeRequest(
   });
 }
 
-const VALID_BODY = { probeId: "ha-local" };
+const VALID_BODY = { probe_id: "ha-local" };
+const VALID_BODY_CAMEL = { probeId: "ha-local" };
 
 describe("POST /api/probes/heartbeat", () => {
   beforeEach(() => {
@@ -103,7 +104,7 @@ describe("POST /api/probes/heartbeat", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 400 when probeId is missing", async () => {
+  it("returns 400 when neither probe_id nor probeId is present", async () => {
     mockVerify.mockReturnValue(true);
     const res = await POST(
       makeRequest(
@@ -116,7 +117,7 @@ describe("POST /api/probes/heartbeat", () => {
     );
     expect(res.status).toBe(400);
     const json = await res.json();
-    expect(json.error).toMatch(/probeId/i);
+    expect(json.error).toMatch(/probe_id/i);
   });
 
   it("returns 204 for valid heartbeat without version", async () => {
@@ -135,7 +136,7 @@ describe("POST /api/probes/heartbeat", () => {
     mockVerify.mockReturnValue(true);
     const res = await POST(
       makeRequest(
-        { probeId: "ha-local", version: "abc123" },
+        { probe_id: "ha-local", version: "abc123" },
         {
           "X-Probe-Signature": "sha256=validsig",
           "X-Probe-Timestamp": "1700000000",
@@ -181,5 +182,80 @@ describe("POST /api/probes/heartbeat", () => {
       "test-secret",
       "old-secret"
     );
+  });
+
+  it("accepts camelCase probeId for backward compatibility", async () => {
+    mockVerify.mockReturnValue(true);
+    const res = await POST(
+      makeRequest(VALID_BODY_CAMEL, {
+        "X-Probe-Signature": "sha256=validsig",
+        "X-Probe-Timestamp": "1700000000",
+      })
+    );
+    expect(res.status).toBe(204);
+    expect(mockUpsert).toHaveBeenCalledWith("ha-local", undefined);
+  });
+
+  it("prefers probe_id over probeId when both are present", async () => {
+    mockVerify.mockReturnValue(true);
+    const res = await POST(
+      makeRequest(
+        { probe_id: "canonical-id", probeId: "legacy-id" },
+        {
+          "X-Probe-Signature": "sha256=validsig",
+          "X-Probe-Timestamp": "1700000000",
+        }
+      )
+    );
+    expect(res.status).toBe(204);
+    expect(mockUpsert).toHaveBeenCalledWith("canonical-id", undefined);
+  });
+
+  it("returns 400 when version is not a string", async () => {
+    mockVerify.mockReturnValue(true);
+    const res = await POST(
+      makeRequest(
+        { probe_id: "ha-local", version: 12345 },
+        {
+          "X-Probe-Signature": "sha256=validsig",
+          "X-Probe-Timestamp": "1700000000",
+        }
+      )
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toMatch(/version/i);
+  });
+
+  it("returns 400 when version is an object", async () => {
+    mockVerify.mockReturnValue(true);
+    const res = await POST(
+      makeRequest(
+        { probe_id: "ha-local", version: { malicious: true } },
+        {
+          "X-Probe-Signature": "sha256=validsig",
+          "X-Probe-Timestamp": "1700000000",
+        }
+      )
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toMatch(/version/i);
+  });
+
+  it("returns 400 when probe_id is empty string", async () => {
+    mockVerify.mockReturnValue(true);
+    const res = await POST(
+      makeRequest(
+        { probe_id: "" },
+        {
+          "X-Probe-Signature": "sha256=validsig",
+          "X-Probe-Timestamp": "1700000000",
+        }
+      )
+    );
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toMatch(/probe_id/i);
   });
 });
