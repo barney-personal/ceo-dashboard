@@ -698,9 +698,9 @@ const WAU_RETENTION_MIN_PERIODS = 4;
 
 /**
  * Maximum number of cohorts to render in the WAU retention triangle.
- * 26 weeks ≈ 6 months — enough history without overflowing the UI.
+ * 52 weeks = one year of history.
  */
-const WAU_RETENTION_MAX_COHORTS = 26;
+const WAU_RETENTION_MAX_COHORTS = 52;
 
 /**
  * Weekly WAU retention cohort triangle from the App Retention Weekly

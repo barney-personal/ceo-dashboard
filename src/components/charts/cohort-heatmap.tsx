@@ -63,17 +63,17 @@ export function CohortHeatmap({
   );
 
   const table = (
-    <div className="overflow-x-auto px-4 py-4">
+    <div className="max-h-[720px] overflow-auto px-4 py-4">
       <table className="w-full border-collapse text-[11px]">
         <thead>
           <tr>
-            <th className="sticky left-0 bg-card px-2 py-1 text-left font-medium text-muted-foreground">
+            <th className="sticky left-0 top-0 z-10 bg-card px-2 py-1 text-left font-medium text-muted-foreground">
               Cohort
             </th>
             {periodHeaders.map((h) => (
               <th
                 key={h}
-                className="px-1 py-1 text-center font-medium text-muted-foreground"
+                className="sticky top-0 z-10 bg-card px-1 py-1 text-center font-medium text-muted-foreground"
               >
                 {h}
               </th>

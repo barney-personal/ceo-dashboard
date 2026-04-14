@@ -748,10 +748,10 @@ describe("getWauRetentionCohorts", () => {
     expect(cohorts[0].periods.length).toBe(4);
   });
 
-  it("returns at most 26 cohorts (newest last)", async () => {
-    // Generate 30 cohorts each with enough periods to qualify.
+  it("returns at most 52 cohorts (newest last)", async () => {
+    // Generate 60 cohorts each with enough periods to qualify.
     const rows: Record<string, unknown>[] = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 60; i++) {
       const cohortDate = new Date(Date.UTC(2025, 0, 6 + i * 7))
         .toISOString()
         .slice(0, 10);
@@ -763,10 +763,10 @@ describe("getWauRetentionCohorts", () => {
 
     const cohorts = await getWauRetentionCohorts();
 
-    expect(cohorts).toHaveLength(26);
+    expect(cohorts).toHaveLength(52);
     // Cohorts are returned in chronological order with the newest last,
-    // so the last entry should be the 30th generated date.
-    const last = new Date(Date.UTC(2025, 0, 6 + 29 * 7))
+    // so the last entry should be the 60th generated date.
+    const last = new Date(Date.UTC(2025, 0, 6 + 59 * 7))
       .toISOString()
       .slice(0, 10);
     expect(cohorts[cohorts.length - 1].cohort).toBe(last);
