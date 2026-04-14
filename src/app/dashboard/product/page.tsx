@@ -20,6 +20,7 @@ import {
   getActiveUsersSeries,
   getEngagementSeries,
   getMauRetentionCohorts,
+  getWauRetentionCohorts,
   getLatestMAU,
   getLatestWauMau,
   getLatestM11Retention,
@@ -35,6 +36,7 @@ export default async function ProductPage() {
     activeUsers,
     engagement,
     retentionCohorts,
+    weeklyRetentionCohorts,
     latestMAU,
     latestWauMau,
     latestM11,
@@ -43,6 +45,7 @@ export default async function ProductPage() {
     getActiveUsersSeries(),
     getEngagementSeries(),
     getMauRetentionCohorts(),
+    getWauRetentionCohorts(),
     getLatestMAU(),
     getLatestWauMau(),
     getLatestM11Retention(),
@@ -63,6 +66,11 @@ export default async function ProductPage() {
     retentionCohorts.length === 0,
     latestSyncRun,
     "Sync the App Retention report to view MAU retention cohorts"
+  );
+  const weeklyRetentionEmptyReason = resolveModeStaleReason(
+    weeklyRetentionCohorts.length === 0,
+    latestSyncRun,
+    "Sync the App Retention Weekly dataset to view WAU retention cohorts"
   );
 
   const modeUrlKpis = getModeReportLink("unit-economics", "kpis");
@@ -207,7 +215,7 @@ export default async function ProductPage() {
       <section className="space-y-6">
         <SectionDivider
           title="Retention"
-          subtitle="How well do we retain MAUs over time?"
+          subtitle="How well do we retain users over time?"
         />
 
         {retentionCohorts.length > 0 ? (
@@ -222,6 +230,22 @@ export default async function ProductPage() {
           <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
             <p className="text-sm text-muted-foreground">
               {retentionEmptyReason}
+            </p>
+          </div>
+        )}
+
+        {weeklyRetentionCohorts.length > 0 ? (
+          <CohortHeatmap
+            data={weeklyRetentionCohorts}
+            periodLabel="Week"
+            title="WAU Retention"
+            subtitle="Weekly cohort triangle"
+            modeUrl={modeUrlRetention}
+          />
+        ) : (
+          <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-border/50">
+            <p className="text-sm text-muted-foreground">
+              {weeklyRetentionEmptyReason}
             </p>
           </div>
         )}

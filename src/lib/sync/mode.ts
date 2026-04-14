@@ -585,7 +585,10 @@ async function syncReport(
           run.token,
           queryRunToken,
           1000,
-          { signal: opts.signal },
+          {
+            signal: opts.signal,
+            maxBytes: queryProfile.maxResponseBytes,
+          },
         );
         const prepared = prepareModeRowsForStorage(sourceRows, queryProfile);
 

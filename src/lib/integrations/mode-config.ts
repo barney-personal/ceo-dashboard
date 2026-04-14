@@ -26,6 +26,14 @@ export type ModeStorageWindow =
 export interface ModeQuerySyncProfile {
   name: string;
   storageWindow: ModeStorageWindow;
+  /**
+   * Optional override for the per-query Mode response size cap (bytes). The
+   * default cap (`MODE_MAX_RESULT_BYTES`, 25 MB) is enough for most queries,
+   * but very wide datasets — e.g. weekly retention broken down by segment —
+   * exceed that before the storage window can filter rows down. Set this to
+   * raise the streaming download cap for the affected query only.
+   */
+  maxResponseBytes?: number;
 }
 
 export interface ModeSyncProfile extends ModeReportConfig {
@@ -188,6 +196,34 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
           field: "cohort_month",
           count: 24,
         },
+      },
+    ],
+  },
+  {
+    // Source report for the "dataset_app_activity_retention_weekly" dataset
+    // imported into App Retention (5a033d810ddc). Synced directly here so
+    // we get the underlying weekly cohort rows.
+    reportToken: "4e4ed264ed7a",
+    name: "App Retention Weekly",
+    section: "product",
+    category: "retention-weekly",
+    syncEnabled: true,
+    queries: [
+      {
+        // The full query is ~839k rows broken down by segment dimensions
+        // (d30_subscriber, age, user_segment, core_intent), with a raw JSON
+        // payload measured at >128 MB. last-cohorts filters to the last 52
+        // weekly cohort_week values, which keeps the *stored* payload to
+        // roughly 52 cohorts × ~52 periods × ~64 segment combinations. Mode
+        // still streams the full source result before we can filter, so we
+        // raise the per-query response cap to 512 MB.
+        name: "Query 1",
+        storageWindow: {
+          kind: "last-cohorts",
+          field: "cohort_week",
+          count: 52,
+        },
+        maxResponseBytes: 512 * 1024 * 1024,
       },
     ],
   },

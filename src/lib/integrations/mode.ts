@@ -497,7 +497,7 @@ export async function getQueryResultContent(
   runToken: string,
   queryRunToken: string,
   maxRows: number = 1000,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; maxBytes?: number },
 ): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
   const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
     `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`,
