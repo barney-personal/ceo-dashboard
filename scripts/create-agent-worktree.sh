@@ -46,5 +46,12 @@ git -C "$worktree_path" config core.hooksPath .githooks
 # Reuse dependencies from an existing checkout when possible.
 "$worktree_path/scripts/ensure-node-modules.sh"
 
+# Configure Doppler so `doppler run` works in the worktree
+if command -v doppler >/dev/null 2>&1; then
+  doppler setup --project ceo-dashboard --config dev --no-interactive --scope "$worktree_path" >/dev/null 2>&1 \
+    && printf 'Doppler configured for project ceo-dashboard (dev)\n' \
+    || printf 'Warning: doppler setup failed — run manually in the worktree\n'
+fi
+
 printf 'Created worktree:\n  %s\n' "$worktree_path"
 printf 'Branch:\n  %s\n' "$branch_name"
