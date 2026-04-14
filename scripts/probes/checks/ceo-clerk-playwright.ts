@@ -52,7 +52,7 @@ export const run: CheckHandler = async (ctx: CheckContext): Promise<CheckResult>
     const url = new URL(ctx.baseUrl);
     await context.addCookies([
       {
-        name: "__clerk_db_jwt",
+        name: "__clerk_testing_token",
         value: clerkTestToken,
         domain: url.hostname,
         path: "/",

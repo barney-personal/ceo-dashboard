@@ -149,17 +149,35 @@ describe("ceo-clerk-playwright check", () => {
     );
   });
 
-  it("sets Clerk testing token cookie with correct domain", async () => {
+  it("sets Clerk testing token cookie using __clerk_testing_token (not __clerk_db_jwt)", async () => {
     const { run } = await import("../checks/ceo-clerk-playwright");
     await run(makeCtx({ baseUrl: "https://my-app.onrender.com" }));
 
     expect(mockAddCookies).toHaveBeenCalledWith([
       expect.objectContaining({
-        name: "__clerk_db_jwt",
+        name: "__clerk_testing_token",
         value: "test-clerk-token-123",
         domain: "my-app.onrender.com",
       }),
     ]);
+
+    const cookies = mockAddCookies.mock.calls[0][0];
+    const hasPrivateCookie = cookies.some((c: { name: string }) => c.name === "__clerk_db_jwt");
+    expect(hasPrivateCookie).toBe(false);
+  });
+
+  it("returns red with auth-specific error when Clerk rejects the testing token", async () => {
+    mockGoto.mockResolvedValue(undefined);
+    mockLocator.mockReturnValue({
+      textContent: vi.fn().mockRejectedValue(new Error("Timeout 10000ms exceeded")),
+    });
+
+    const { run } = await import("../checks/ceo-clerk-playwright");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(result.error).toBeDefined();
+    expect(mockBrowserClose).toHaveBeenCalled();
   });
 
   it("always closes browser even on error", async () => {
