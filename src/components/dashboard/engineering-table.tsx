@@ -17,9 +17,10 @@ interface EngineerRow {
   isBot: boolean;
 }
 
-type SortKey = "prsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
+type SortKey = "outputScore" | "prsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
 
 const COLUMNS: { key: SortKey; label: string; format: (v: number) => string }[] = [
+  { key: "outputScore", label: "Output Score", format: (v) => v.toLocaleString() },
   { key: "prsCount", label: "PRs Merged", format: (v) => v.toLocaleString() },
   { key: "additions", label: "Lines Added", format: (v) => v.toLocaleString() },
   { key: "deletions", label: "Lines Deleted", format: (v) => v.toLocaleString() },
@@ -34,10 +35,15 @@ export function EngineeringTable({
   data: EngineerRow[];
   hideBots?: boolean;
 }) {
-  const [sortKey, setSortKey] = useState<SortKey>("prsCount");
+  const [sortKey, setSortKey] = useState<SortKey>("outputScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const filtered = hideBots ? data.filter((r) => !r.isBot) : data;
+  const filtered = (hideBots ? data.filter((r) => !r.isBot) : data).map(
+    (r) => ({
+      ...r,
+      outputScore: r.prsCount * (r.additions + r.deletions),
+    })
+  );
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
