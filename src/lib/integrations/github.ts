@@ -438,6 +438,7 @@ interface GraphQLPRResponse {
   };
 }
 
+
 export async function fetchMergedPRRecords(
   since: Date,
   opts: {
