@@ -62,6 +62,60 @@ The dashboard layout renders a visually-hidden `<span data-testid="probe-canary"
 
 To change the canary value, update `CANARY_EXPECTED_VALUE` in both Doppler and GitHub Actions secrets simultaneously.
 
+## Running Probes
+
+### Locally
+
+Run a single probe suite with the shell wrapper (bypasses GNU Make's option parser):
+
+```bash
+./scripts/probe.sh ceo-15m-suite --dry-run          # 15-min suite, dry run (no report posted)
+./scripts/probe.sh ceo-60m-suite --dry-run           # Hourly Playwright suite, dry run
+./scripts/probe.sh ceo-15m-suite --target=staging     # Target a staging URL
+```
+
+Or via Make (flags passed as variables):
+
+```bash
+make probe SUITE=ceo-15m-suite PROBE_FLAGS='--dry-run'
+make probe-all PROBE_FLAGS='--dry-run --target=staging'
+```
+
+### In CI (GitHub Actions)
+
+The `.github/workflows/prod-probes.yml` workflow runs automatically on cron. To trigger manually:
+
+```bash
+gh workflow run prod-probes.yml             # Runs both 15m and 60m jobs
+```
+
+## Investigating Probe Failures
+
+### Artifacts
+
+| Artifact | Location | Retention | Contents |
+|----------|----------|-----------|----------|
+| Probe reports | GitHub Actions artifacts → `probe-report-*` | 14 days | JSON results from each check (status, latency, details) |
+| Screenshots | GitHub Actions artifacts → `probe-screenshot-*` | 14 days | PNG captures from Playwright failures (canary mismatch, auth error, timeout) |
+| Telegram alerts | Configured chat/group | Persistent | Alert, escalation, recovery, and reminder messages |
+
+### What to check
+
+1. **Red probe run** — download the probe report artifact. The `details` field contains the failure reason (e.g. `db_ok: false`, `connection refused`, `canary mismatch`).
+2. **Screenshot on Playwright failure** — the 60m job captures a screenshot when the canary assertion fails. Check for auth issues (Clerk sign-in page rendered instead of dashboard), canary element missing, or unexpected DOM state.
+3. **Stale heartbeat alert** — means a probe runner hasn't posted to `/api/probes/heartbeat` within 15 minutes. Check whether the GitHub Actions workflow is running and whether the dashboard API is reachable.
+4. **Escalation (⚠️)** — fires after 3 consecutive red runs. The underlying issue persists — investigate the root cause in the probe details rather than the probe system itself.
+5. **Telegram fallback** — if the dashboard itself is down, the GitHub Actions workflow sends a direct Telegram message via `TELEGRAM_FALLBACK_BOT_TOKEN` (separate from the dashboard's alert bot). This fires when the workflow job fails entirely.
+
+### Control-plane routes
+
+| Route | Method | Auth | Purpose |
+|-------|--------|------|---------|
+| `/api/probes/report` | POST | HMAC (`PROBE_SECRET`) | Ingests probe run results |
+| `/api/probes/heartbeat` | POST | HMAC (`PROBE_SECRET`) | Upserts runner heartbeat |
+| `/api/probes/ping-auth` | GET | None (public) | Health check target (returns `db_ok`, `version`, `mode_sync_age_hours`) |
+| `/api/cron/probe-heartbeat` | GET | Bearer (`INTERNAL_CRON_SECRET`) | Detects stale heartbeats, triggers alerts and recoveries |
+
 ## Render Cron Job
 
 The meta-heartbeat watcher runs as a separate Render Cron Job resource that hits `GET /api/cron/probe-heartbeat` with `Authorization: Bearer <INTERNAL_CRON_SECRET>`. Declare this in `render.yaml`.
