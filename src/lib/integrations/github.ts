@@ -443,15 +443,17 @@ export async function fetchMergedPRRecords(
   opts: {
     signal?: AbortSignal;
     onRepoProgress?: (repo: string, prCount: number) => void;
+    /** Called with each page of PRs as they're fetched — enables streaming to DB */
+    onPage?: (records: MergedPRRecord[]) => Promise<void>;
     repos?: string[];
   } = {}
-): Promise<MergedPRRecord[]> {
+): Promise<{ total: number }> {
   const config = getConfig();
   const repoNames = opts.repos?.length
     ? opts.repos
     : (await getOrgRepos(opts)).map((r) => r.name);
 
-  const records: MergedPRRecord[] = [];
+  let total = 0;
 
   for (const repoName of repoNames) {
     let cursor: string | null = null;
@@ -466,6 +468,7 @@ export async function fetchMergedPRRecords(
       );
 
       const { nodes, pageInfo } = gqlData.repository.pullRequests;
+      const page: MergedPRRecord[] = [];
 
       for (const pr of nodes) {
         const mergedAt = new Date(pr.mergedAt);
@@ -475,7 +478,7 @@ export async function fetchMergedPRRecords(
         }
         if (!pr.author) continue;
 
-        records.push({
+        page.push({
           repo: repoName,
           prNumber: pr.number,
           title: pr.title,
@@ -489,6 +492,11 @@ export async function fetchMergedPRRecords(
         repoCount++;
       }
 
+      if (page.length > 0 && opts.onPage) {
+        await opts.onPage(page);
+      }
+      total += page.length;
+
       if (!pageInfo.hasNextPage) break;
       cursor = pageInfo.endCursor;
     }
@@ -496,7 +504,7 @@ export async function fetchMergedPRRecords(
     opts.onRepoProgress?.(repoName, repoCount);
   }
 
-  return records;
+  return { total };
 }
 
 // ---------------------------------------------------------------------------
@@ -571,15 +579,17 @@ export async function fetchCommitRecords(
   opts: {
     signal?: AbortSignal;
     onRepoProgress?: (repo: string, commitCount: number) => void;
+    /** Called with each page of commits as they're fetched — enables streaming to DB */
+    onPage?: (records: CommitRecord[]) => Promise<void>;
     repos?: string[];
   } = {}
-): Promise<CommitRecord[]> {
+): Promise<{ total: number }> {
   const config = getConfig();
   const repoNames = opts.repos?.length
     ? opts.repos
     : (await getOrgRepos(opts)).map((r) => r.name);
 
-  const records: CommitRecord[] = [];
+  let total = 0;
 
   for (const repoName of repoNames) {
     let cursor: string | null = null;
@@ -601,12 +611,12 @@ export async function fetchCommitRecords(
       if (!branch) break;
 
       const { nodes, pageInfo } = branch.target.history;
+      const page: CommitRecord[] = [];
 
       for (const commit of nodes) {
-        // Skip commits without a linked GitHub user (e.g. bot email-only commits)
         if (!commit.author.user) continue;
 
-        records.push({
+        page.push({
           repo: repoName,
           sha: commit.oid,
           authorLogin: commit.author.user.login,
@@ -614,10 +624,15 @@ export async function fetchCommitRecords(
           committedAt: new Date(commit.committedDate),
           additions: commit.additions,
           deletions: commit.deletions,
-          message: commit.message.split("\n")[0], // first line only
+          message: commit.message.split("\n")[0],
         });
         repoCount++;
       }
+
+      if (page.length > 0 && opts.onPage) {
+        await opts.onPage(page);
+      }
+      total += page.length;
 
       if (!pageInfo.hasNextPage) break;
       cursor = pageInfo.endCursor;
@@ -626,7 +641,7 @@ export async function fetchCommitRecords(
     opts.onRepoProgress?.(repoName, repoCount);
   }
 
-  return records;
+  return { total };
 }
 
 export interface EngineerPRStats {

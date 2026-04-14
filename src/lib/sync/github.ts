@@ -83,9 +83,41 @@ export async function runGitHubSync(
       }
     }
 
-    const prs = await fetchMergedPRRecords(since, {
+    const { total: prTotal } = await fetchMergedPRRecords(since, {
       signal: opts.signal,
       repos: repoFilter,
+      onPage: async (page) => {
+        // Batch upsert entire page (up to 100 rows per insert)
+        for (const pr of page) {
+          await db
+            .insert(githubPrs)
+            .values({
+              repo: pr.repo,
+              prNumber: pr.prNumber,
+              title: pr.title,
+              authorLogin: pr.authorLogin,
+              authorAvatarUrl: pr.authorAvatarUrl,
+              mergedAt: pr.mergedAt,
+              additions: pr.additions,
+              deletions: pr.deletions,
+              changedFiles: pr.changedFiles,
+            })
+            .onConflictDoUpdate({
+              target: [githubPrs.repo, githubPrs.prNumber],
+              set: {
+                title: pr.title,
+                authorLogin: pr.authorLogin,
+                authorAvatarUrl: pr.authorAvatarUrl,
+                mergedAt: pr.mergedAt,
+                additions: pr.additions,
+                deletions: pr.deletions,
+                changedFiles: pr.changedFiles,
+                syncedAt: new Date(),
+              },
+            });
+        }
+        recordsSynced += page.length;
+      },
       onRepoProgress: (repo, count) => {
         Sentry.addBreadcrumb({
           category: "sync.github",
@@ -95,42 +127,10 @@ export async function runGitHubSync(
       },
     });
 
-    // Upsert each PR
-    for (const pr of prs) {
-      await db
-        .insert(githubPrs)
-        .values({
-          repo: pr.repo,
-          prNumber: pr.prNumber,
-          title: pr.title,
-          authorLogin: pr.authorLogin,
-          authorAvatarUrl: pr.authorAvatarUrl,
-          mergedAt: pr.mergedAt,
-          additions: pr.additions,
-          deletions: pr.deletions,
-          changedFiles: pr.changedFiles,
-        })
-        .onConflictDoUpdate({
-          target: [githubPrs.repo, githubPrs.prNumber],
-          set: {
-            title: pr.title,
-            authorLogin: pr.authorLogin,
-            authorAvatarUrl: pr.authorAvatarUrl,
-            mergedAt: pr.mergedAt,
-            additions: pr.additions,
-            deletions: pr.deletions,
-            changedFiles: pr.changedFiles,
-            syncedAt: new Date(),
-          },
-        });
-
-      recordsSynced += 1;
-    }
-
     await tracker.endPhase(fetchPhaseId, {
       status: "success",
-      itemsProcessed: recordsSynced,
-      detail: `Stored ${recordsSynced} PRs (since ${since.toISOString().slice(0, 10)})`,
+      itemsProcessed: prTotal,
+      detail: `Stored ${prTotal} PRs (since ${since.toISOString().slice(0, 10)})`,
     });
   } catch (error) {
     if (
@@ -184,9 +184,37 @@ export async function runGitHubSync(
       }
     }
 
-    const commits = await fetchCommitRecords(commitSince, {
+    const { total: commitTotal } = await fetchCommitRecords(commitSince, {
       signal: opts.signal,
       repos: repoFilter,
+      onPage: async (page) => {
+        for (const commit of page) {
+          await db
+            .insert(githubCommits)
+            .values({
+              repo: commit.repo,
+              sha: commit.sha,
+              authorLogin: commit.authorLogin,
+              authorAvatarUrl: commit.authorAvatarUrl,
+              committedAt: commit.committedAt,
+              additions: commit.additions,
+              deletions: commit.deletions,
+              message: commit.message,
+            })
+            .onConflictDoUpdate({
+              target: [githubCommits.repo, githubCommits.sha],
+              set: {
+                authorLogin: commit.authorLogin,
+                authorAvatarUrl: commit.authorAvatarUrl,
+                additions: commit.additions,
+                deletions: commit.deletions,
+                message: commit.message,
+                syncedAt: new Date(),
+              },
+            });
+        }
+        commitsSynced += page.length;
+      },
       onRepoProgress: (repo, count) => {
         Sentry.addBreadcrumb({
           category: "sync.github",
@@ -196,38 +224,10 @@ export async function runGitHubSync(
       },
     });
 
-    for (const commit of commits) {
-      await db
-        .insert(githubCommits)
-        .values({
-          repo: commit.repo,
-          sha: commit.sha,
-          authorLogin: commit.authorLogin,
-          authorAvatarUrl: commit.authorAvatarUrl,
-          committedAt: commit.committedAt,
-          additions: commit.additions,
-          deletions: commit.deletions,
-          message: commit.message,
-        })
-        .onConflictDoUpdate({
-          target: [githubCommits.repo, githubCommits.sha],
-          set: {
-            authorLogin: commit.authorLogin,
-            authorAvatarUrl: commit.authorAvatarUrl,
-            additions: commit.additions,
-            deletions: commit.deletions,
-            message: commit.message,
-            syncedAt: new Date(),
-          },
-        });
-
-      commitsSynced += 1;
-    }
-
     await tracker.endPhase(commitPhaseId, {
       status: "success",
-      itemsProcessed: commitsSynced,
-      detail: `Stored ${commitsSynced} commits (since ${commitSince.toISOString().slice(0, 10)})`,
+      itemsProcessed: commitTotal,
+      detail: `Stored ${commitTotal} commits (since ${commitSince.toISOString().slice(0, 10)})`,
     });
   } catch (error) {
     if (
