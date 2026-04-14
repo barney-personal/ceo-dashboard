@@ -1,3 +1,4 @@
+import { mkdirSync } from "fs";
 import type { CheckContext, CheckHandler } from "../../probe";
 import type { CheckResult } from "../report";
 
@@ -11,6 +12,7 @@ async function captureScreenshot(
   dir: string,
 ): Promise<ScreenshotMeta> {
   try {
+    mkdirSync(dir, { recursive: true });
     const path = `${dir}/playwright-failure-${Date.now()}.png`;
     await page.screenshot({ path, fullPage: true });
     return { path };

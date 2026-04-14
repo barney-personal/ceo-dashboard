@@ -11,11 +11,16 @@ const mockAddCookies = vi.fn();
 const mockNewContext = vi.fn();
 const mockBrowserClose = vi.fn();
 const mockLaunch = vi.fn();
+const mockMkdirSync = vi.fn();
 
 vi.mock("@playwright/test", () => ({
   chromium: {
     launch: (...args: unknown[]) => mockLaunch(...args),
   },
+}));
+
+vi.mock("fs", () => ({
+  mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
 }));
 
 describe("ceo-clerk-playwright check", () => {
@@ -187,5 +192,30 @@ describe("ceo-clerk-playwright check", () => {
     await run(makeCtx());
 
     expect(mockBrowserClose).toHaveBeenCalled();
+  });
+
+  it("creates screenshot directory before capturing screenshot on failure", async () => {
+    mockGoto.mockRejectedValue(new Error("timeout"));
+    process.env.PROBE_SCREENSHOT_DIR = "/tmp/test-probe-screenshots";
+
+    const { run } = await import("../checks/ceo-clerk-playwright");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(mockMkdirSync).toHaveBeenCalledWith("/tmp/test-probe-screenshots", { recursive: true });
+    expect(mockScreenshot).toHaveBeenCalled();
+    const screenshotCall = mockScreenshot.mock.calls[0][0];
+    expect(screenshotCall.path).toMatch(/^\/tmp\/test-probe-screenshots\/playwright-failure-/);
+  });
+
+  it("creates screenshot directory using default .probe-reports when PROBE_SCREENSHOT_DIR is unset", async () => {
+    delete process.env.PROBE_SCREENSHOT_DIR;
+    mockTextContent.mockResolvedValue("wrong-canary");
+
+    const { run } = await import("../checks/ceo-clerk-playwright");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(mockMkdirSync).toHaveBeenCalledWith(".probe-reports", { recursive: true });
   });
 });
