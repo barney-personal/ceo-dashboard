@@ -9,6 +9,11 @@ export interface CheckResult {
   error?: string;
 }
 
+export interface DeliveryFailure {
+  checkName: string;
+  error: string;
+}
+
 export interface ProbeReport {
   suite: string;
   target: string;
@@ -16,6 +21,7 @@ export interface ProbeReport {
   finishedAt: Date;
   results: CheckResult[];
   gitSha: string;
+  deliveryFailures?: DeliveryFailure[];
 }
 
 function pad2(n: number): string {
@@ -96,6 +102,15 @@ export function renderMarkdown(report: ProbeReport): string {
         );
       lines.push("");
     }
+  }
+
+  const deliveryFailures = report.deliveryFailures ?? [];
+  if (deliveryFailures.length > 0) {
+    lines.push("", "## Delivery Failures", "");
+    for (const df of deliveryFailures) {
+      lines.push(`- **${df.checkName}**: ${df.error}`);
+    }
+    lines.push("");
   }
 
   return lines.join("\n") + "\n";

@@ -12,7 +12,7 @@ import { resolve, dirname, join } from "path";
 import { execSync } from "child_process";
 import { parse as parseYaml } from "yaml";
 import { signPayload } from "@/lib/probes/hmac";
-import type { CheckResult, ProbeReport } from "./probes/report";
+import type { CheckResult, ProbeReport, DeliveryFailure } from "./probes/report";
 import { writeReport } from "./probes/report";
 
 // ---------------------------------------------------------------------------
@@ -140,11 +140,15 @@ async function runCheck(
 // Report posting (to control plane)
 // ---------------------------------------------------------------------------
 
-async function postResult(
+export type DeliveryResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function postResult(
   result: CheckResult,
   ctx: CheckContext,
   runId: string
-): Promise<void> {
+): Promise<DeliveryResult> {
   const payload = JSON.stringify({
     probeId: "cloud-cron",
     checkName: result.checkName,
@@ -168,12 +172,15 @@ async function postResult(
       body: payload,
     });
     if (!res.ok) {
-      console.error(`  [report] POST failed: ${res.status} ${res.statusText}`);
+      const error = `${res.status} ${res.statusText}`;
+      console.error(`  [report] POST failed: ${error}`);
+      return { ok: false, error };
     }
+    return { ok: true };
   } catch (err) {
-    console.error(
-      `  [report] POST error: ${err instanceof Error ? err.message : err}`
-    );
+    const error = err instanceof Error ? err.message : String(err);
+    console.error(`  [report] POST error: ${error}`);
+    return { ok: false, error };
   }
 }
 
@@ -229,6 +236,7 @@ async function main(): Promise<void> {
   const runId = `${Date.now()}-${gitSha}`;
   const startedAt = new Date();
   const results: CheckResult[] = [];
+  const deliveryFailures: DeliveryFailure[] = [];
 
   console.log(
     `\nProbe run: ${nameArg} | target=${target} | sha=${gitSha}${dryRun ? " | DRY RUN" : ""}\n`
@@ -255,7 +263,11 @@ async function main(): Promise<void> {
     console.log(`\r${icon} ${name} ${result.latencyMs}ms`);
 
     if (!dryRun) {
-      await postResult(result, ctx, runId);
+      const delivery = await postResult(result, ctx, runId);
+      if (!delivery.ok) {
+        deliveryFailures.push({ checkName: name, error: delivery.error });
+        console.error(`  \u26A0\uFE0F ${name}: delivery failed — ${delivery.error}`);
+      }
     }
   }
 
@@ -267,6 +279,7 @@ async function main(): Promise<void> {
     finishedAt,
     results,
     gitSha,
+    deliveryFailures: deliveryFailures.length > 0 ? deliveryFailures : undefined,
   };
 
   const reportsDir = resolve(
@@ -284,13 +297,22 @@ async function main(): Promise<void> {
       : `${Math.floor(elapsed / 60000)}m${String(Math.round((elapsed % 60000) / 1000)).padStart(2, "0")}s`;
 
   const allGreen = passed === total;
-  const icon = allGreen ? "\u2705" : "\u274C";
+  const hasDeliveryFailures = deliveryFailures.length > 0;
   const summaryName = formatSummaryName(nameArg);
+
+  if (hasDeliveryFailures) {
+    console.log(
+      `\n\u26A0\uFE0F ${summaryName}: ${deliveryFailures.length} delivery failure(s) — results not ingested`
+    );
+  }
+
+  const ok = allGreen && !hasDeliveryFailures;
+  const exitIcon = ok ? "\u2705" : "\u274C";
   console.log(
-    `\n${icon} ${summaryName}: ${passed}/${total} passed in ${elapsedStr} | report: ${reportPath}\n`
+    `\n${exitIcon} ${summaryName}: ${passed}/${total} passed in ${elapsedStr} | report: ${reportPath}\n`
   );
 
-  process.exit(allGreen ? 0 : 1);
+  process.exit(ok ? 0 : 1);
 }
 
 if (!process.env.VITEST) {
