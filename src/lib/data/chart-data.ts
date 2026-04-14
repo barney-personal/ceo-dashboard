@@ -35,6 +35,11 @@ const RETENTION_QUERY_COLUMNS = [
   "activity_month",
   "maus",
 ] as const;
+const WEEKLY_RETENTION_QUERY_COLUMNS = [
+  "cohort_week",
+  "relative_moving_week",
+  "active_users_weekly",
+] as const;
 const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
   "subscription_type",
   "subscriber_cohort",
@@ -148,6 +153,50 @@ export function aggregateCohortRows(
     }
 
     periods.set(period, (periods.get(period) ?? 0) + maus);
+  }
+
+  return byCohort;
+}
+
+/**
+ * Normalise stored weekly retention rows into `cohort → period → WAU`.
+ *
+ * The sync layer (see `weeklyRetentionAggregator`) has already collapsed the
+ * raw segment-broken-down rows into one row per `(cohort_week,
+ * relative_moving_week)`, so this function only needs to:
+ *  - parse `cohort_week` into a YYYY-MM-DD UTC key
+ *  - drop rows with invalid dates / missing numerics
+ *  - bucket by cohort + period
+ *
+ * If multiple rows for the same cohort/period are ever encountered (e.g. a
+ * legacy un-aggregated payload), they are still summed for safety.
+ */
+export function aggregateWeeklyCohortRows(
+  rows: Record<string, unknown>[],
+): Map<string, Map<number, number>> {
+  const byCohort = new Map<string, Map<number, number>>();
+
+  for (const row of rows) {
+    if (row.cohort_week == null || row.relative_moving_week == null) continue;
+
+    const cohortStr = rowStr(row, "cohort_week");
+    if (!isValidDateStr(cohortStr)) continue;
+    const cohortDate = new Date(cohortStr);
+    // Format as YYYY-MM-DD using UTC to avoid timezone shifts.
+    const cohort = cohortDate.toISOString().slice(0, 10);
+
+    const period = rowNumOrNull(row, "relative_moving_week");
+    const wau = rowNumOrNull(row, "active_users_weekly");
+    if (period == null || wau == null) continue;
+
+    let periods = byCohort.get(cohort);
+    if (!periods) {
+      periods = new Map();
+      byCohort.set(cohort, periods);
+    }
+
+    const existing = periods.get(period);
+    periods.set(period, existing == null ? wau : existing + wau);
   }
 
   return byCohort;
@@ -638,6 +687,64 @@ export async function getMauRetentionCohorts(): Promise<
       };
     })
     .filter((c) => c.periods.length > 0);
+}
+
+/**
+ * Minimum number of weekly periods (after the W0 base) we require for a
+ * cohort to appear in the WAU retention triangle. Filters out very recent
+ * cohorts that only have W0/W1 data.
+ */
+const WAU_RETENTION_MIN_PERIODS = 4;
+
+/**
+ * Maximum number of cohorts to render in the WAU retention triangle.
+ * 26 weeks ≈ 6 months — enough history without overflowing the UI.
+ */
+const WAU_RETENTION_MAX_COHORTS = 26;
+
+/**
+ * Weekly WAU retention cohort triangle from the App Retention Weekly
+ * dataset (4e4ed264ed7a, Query 1). Aggregates `active_users_weekly`
+ * across segment dimensions, then expresses each cohort as a retention
+ * rate relative to its W0 starting WAU.
+ *
+ * Returns at most {@link WAU_RETENTION_MAX_COHORTS} cohorts, newest last,
+ * dropping W0 (always 100%) and the most recent partial week.
+ */
+export async function getWauRetentionCohorts(): Promise<
+  { cohort: string; periods: (number | null)[] }[]
+> {
+  const data = await getReportData("product", "retention-weekly", ["Query 1"]);
+  const query = getValidatedQuery(
+    data,
+    "Query 1",
+    WEEKLY_RETENTION_QUERY_COLUMNS,
+  );
+  if (!query) return [];
+
+  const byCohort = aggregateWeeklyCohortRows(query.rows);
+
+  const cohorts = [...byCohort.keys()].sort();
+
+  const triangle = cohorts
+    .filter((c) => byCohort.get(c)!.has(0) && byCohort.get(c)!.get(0)! > 0)
+    .map((cohort) => {
+      const periods = byCohort.get(cohort)!;
+      const base = periods.get(0)!;
+      // Drop the latest period (always incomplete) and W0 (always ~100%).
+      const maxPeriod = Math.max(...periods.keys()) - 1;
+      if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
+      return {
+        cohort,
+        periods: Array.from({ length: maxPeriod }, (_, i) =>
+          periods.has(i + 1) ? periods.get(i + 1)! / base : null,
+        ),
+      };
+    })
+    .filter((c) => c.periods.length >= WAU_RETENTION_MIN_PERIODS);
+
+  // Keep the most recent N cohorts so the UI stays compact.
+  return triangle.slice(-WAU_RETENTION_MAX_COHORTS);
 }
 
 /**
