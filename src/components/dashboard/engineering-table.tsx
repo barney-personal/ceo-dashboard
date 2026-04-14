@@ -21,7 +21,7 @@ interface EngineerRow {
 type SortKey = "outputScore" | "prsCount" | "commitsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
 
 const COLUMNS: { key: SortKey; label: string; format: (v: number) => string }[] = [
-  { key: "outputScore", label: "Output Score", format: (v) => v.toLocaleString() },
+  { key: "outputScore", label: "Impact", format: (v) => v.toLocaleString() },
   { key: "prsCount", label: "PRs Merged", format: (v) => v.toLocaleString() },
   { key: "commitsCount", label: "Commits", format: (v) => v.toLocaleString() },
   { key: "additions", label: "Lines Added", format: (v) => v.toLocaleString() },
@@ -43,7 +43,9 @@ export function EngineeringTable({
   const filtered = (hideBots ? data.filter((r) => !r.isBot) : data).map(
     (r) => ({
       ...r,
-      outputScore: r.prsCount * (r.additions + r.deletions),
+      outputScore: r.prsCount > 0
+        ? Math.round(r.prsCount * Math.log2(1 + (r.additions + r.deletions) / r.prsCount))
+        : 0,
     })
   );
 
