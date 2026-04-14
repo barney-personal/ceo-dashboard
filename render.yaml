@@ -61,6 +61,16 @@ services:
         value: "C04EU4DEX5E"
       - key: CRON_SECRET
         generateValue: true
+      - key: PROBE_SECRET
+        sync: false
+      - key: PROBE_SECRET_PREVIOUS
+        sync: false
+      - key: INTERNAL_CRON_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_PROBE_CHAT_ID
+        sync: false
 
   - type: worker
     name: ceo-dashboard-sync-worker
@@ -105,6 +115,24 @@ services:
           name: ceo-dashboard
           type: web
           envVarKey: CRON_SECRET
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          name: ceo-dashboard
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
+
+  - type: cron
+    name: ceo-dashboard-probe-heartbeat
+    runtime: node
+    schedule: "*/5 * * * *"
+    buildCommand: npm ci
+    startCommand: 'curl -s -H "Authorization: Bearer $INTERNAL_CRON_SECRET" ${RENDER_EXTERNAL_URL}/api/cron/probe-heartbeat'
+    envVars:
+      - key: INTERNAL_CRON_SECRET
+        fromService:
+          name: ceo-dashboard
+          type: web
+          envVarKey: INTERNAL_CRON_SECRET
       - key: RENDER_EXTERNAL_URL
         fromService:
           name: ceo-dashboard
