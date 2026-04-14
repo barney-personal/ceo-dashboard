@@ -2,7 +2,7 @@ import * as Sentry from "@sentry/nextjs";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 30_000;
-const GITHUB_MAX_RETRIES = 3;
+const GITHUB_MAX_RETRIES = 5;
 const GITHUB_PER_PAGE = 100;
 
 interface GitHubConfig {
@@ -78,8 +78,18 @@ async function githubRequest<T>(
 
       if (!res.ok) {
         const body = await res.text();
+        const retryAfter = res.headers.get("retry-after");
 
-        if (res.status === 401 || res.status === 403) {
+        // Determine if this is a rate limit response (429 or 403 with rate limit info)
+        const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
+        const rateLimitReset = res.headers.get("x-ratelimit-reset");
+        const isRateLimit =
+          res.status === 429 ||
+          (res.status === 403 &&
+            (retryAfter || rateLimitRemaining === "0"));
+
+        // Only treat 401 and non-rate-limit 403 as auth errors
+        if (res.status === 401 || (res.status === 403 && !isRateLimit)) {
           const error = new Error(
             `GitHub API auth error ${res.status} — check GITHUB_API_TOKEN`
           );
@@ -94,18 +104,25 @@ async function githubRequest<T>(
         const error = new Error(`GitHub API error ${res.status}: ${body}`);
         if (
           attempt < GITHUB_MAX_RETRIES &&
-          (res.status === 429 || res.status >= 500)
+          (isRateLimit || res.status >= 500)
         ) {
           lastError = error;
-          if (res.status === 429) {
-            const retryAfter = res.headers.get("retry-after");
-            const waitMs = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
-              : getRetryDelayMs(attempt);
+          if (isRateLimit) {
+            let waitMs: number;
+            if (retryAfter) {
+              waitMs = parseInt(retryAfter, 10) * 1000;
+            } else if (rateLimitReset) {
+              waitMs = Math.max(
+                1000,
+                parseInt(rateLimitReset, 10) * 1000 - Date.now()
+              );
+            } else {
+              waitMs = getRetryDelayMs(attempt);
+            }
             Sentry.addBreadcrumb({
               category: "github.rate_limit",
               level: "warning",
-              message: `Rate limited on ${path}, waiting ${waitMs}ms`,
+              message: `Rate limited (${res.status}) on ${path}, waiting ${Math.round(waitMs / 1000)}s`,
             });
             await sleep(waitMs);
           } else {
@@ -198,11 +215,9 @@ interface GitHubPullRequestListItem {
 export async function checkGitHubHealth(opts: {
   signal?: AbortSignal;
 } = {}): Promise<void> {
-  const config = getConfig();
-  await githubRequest(`/orgs/${config.org}`, {
-    signal: opts.signal,
-    timeoutMs: 5_000,
-  });
+  // Use GraphQL for the health check — it has a separate (higher) rate limit
+  // bucket from the REST API, so it won't fail when REST is exhausted.
+  await graphqlRequest("{ viewer { login } }", {}, opts);
 }
 
 export async function getUserProfile(
@@ -285,58 +300,352 @@ export interface MergedPRRecord {
   changedFiles: number;
 }
 
+// Use GitHub GraphQL API to fetch merged PRs with stats in bulk
+// (avoids per-PR REST calls that exhaust the rate limit).
+const GRAPHQL_QUERY = `
+query($owner: String!, $repo: String!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(
+      states: MERGED
+      first: 100
+      after: $cursor
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        mergedAt
+        additions
+        deletions
+        changedFiles
+        author {
+          login
+          avatarUrl
+        }
+      }
+    }
+  }
+}`;
+
+async function graphqlRequest<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  opts: { signal?: AbortSignal } = {}
+): Promise<T> {
+  const config = getConfig();
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= GITHUB_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error("GitHub GraphQL request timed out")),
+      GITHUB_TIMEOUT_MS
+    );
+
+    if (opts.signal?.aborted) {
+      clearTimeout(timeoutId);
+      throw opts.signal.reason instanceof Error
+        ? opts.signal.reason
+        : new Error("GitHub GraphQL request was aborted");
+    }
+
+    const onParentAbort = () => controller.abort(opts.signal?.reason);
+    opts.signal?.addEventListener("abort", onParentAbort, { once: true });
+
+    try {
+      const res = await fetch("https://api.github.com/graphql", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          ...authHeaders(config),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const error = new Error(`GitHub GraphQL error ${res.status}: ${body}`);
+
+        // Retry on server errors and rate limits
+        if (
+          attempt < GITHUB_MAX_RETRIES &&
+          (res.status >= 500 || res.status === 429)
+        ) {
+          lastError = error;
+          Sentry.addBreadcrumb({
+            category: "github.graphql",
+            level: "warning",
+            message: `GraphQL ${res.status} on attempt ${attempt}, retrying`,
+          });
+          await sleep(getRetryDelayMs(attempt));
+          continue;
+        }
+
+        throw error;
+      }
+
+      const json = (await res.json()) as { data: T; errors?: { message: string }[] };
+      if (json.errors?.length) {
+        throw new Error(`GitHub GraphQL: ${json.errors[0].message}`);
+      }
+      return json.data;
+    } catch (error) {
+      if (controller.signal.aborted && opts.signal?.aborted) {
+        throw opts.signal.reason instanceof Error
+          ? opts.signal.reason
+          : new Error("GitHub GraphQL request was aborted");
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("timed out")) {
+        throw new Error("GitHub GraphQL request timed out");
+      }
+
+      if (attempt < GITHUB_MAX_RETRIES && isRetryable(message)) {
+        lastError = error instanceof Error ? error : new Error(message);
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      opts.signal?.removeEventListener("abort", onParentAbort);
+    }
+  }
+
+  throw lastError ?? new Error("GitHub GraphQL request failed");
+}
+
+interface GraphQLPRNode {
+  number: number;
+  title: string;
+  mergedAt: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  author: { login: string; avatarUrl: string } | null;
+}
+
+interface GraphQLPRResponse {
+  repository: {
+    pullRequests: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      nodes: GraphQLPRNode[];
+    };
+  };
+}
+
+
 export async function fetchMergedPRRecords(
   since: Date,
   opts: {
     signal?: AbortSignal;
     onRepoProgress?: (repo: string, prCount: number) => void;
+    /** Called with each page of PRs as they're fetched — enables streaming to DB */
+    onPage?: (records: MergedPRRecord[]) => Promise<void>;
     repos?: string[];
   } = {}
-): Promise<MergedPRRecord[]> {
+): Promise<{ total: number }> {
   const config = getConfig();
-  let repos: GitHubRepo[];
+  const repoNames = opts.repos?.length
+    ? opts.repos
+    : (await getOrgRepos(opts)).map((r) => r.name);
 
-  if (opts.repos && opts.repos.length > 0) {
-    repos = opts.repos.map((name) => ({
-      name,
-      full_name: `${config.org}/${name}`,
-      archived: false,
-      fork: false,
-      private: true,
-    }));
-  } else {
-    repos = await getOrgRepos(opts);
+  let total = 0;
+
+  for (const repoName of repoNames) {
+    let cursor: string | null = null;
+    let repoCount = 0;
+    // Results are ordered by UPDATED_AT, not mergedAt, so a recently-updated
+    // old PR can appear before newer ones. Instead of breaking on the first
+    // out-of-range PR, we filter and stop after 3 consecutive empty pages.
+    let consecutiveEmptyPages = 0;
+
+    while (consecutiveEmptyPages < 3) {
+      const gqlData: GraphQLPRResponse = await graphqlRequest(
+        GRAPHQL_QUERY,
+        { owner: config.org, repo: repoName, cursor },
+        opts
+      );
+
+      const { nodes, pageInfo } = gqlData.repository.pullRequests;
+      const page: MergedPRRecord[] = [];
+
+      for (const pr of nodes) {
+        if (!pr.author) continue;
+        const mergedAt = new Date(pr.mergedAt);
+        if (mergedAt < since) continue; // skip but don't stop
+
+        page.push({
+          repo: repoName,
+          prNumber: pr.number,
+          title: pr.title,
+          authorLogin: pr.author.login,
+          authorAvatarUrl: pr.author.avatarUrl,
+          mergedAt,
+          additions: pr.additions,
+          deletions: pr.deletions,
+          changedFiles: pr.changedFiles,
+        });
+        repoCount++;
+      }
+
+      if (page.length > 0) {
+        consecutiveEmptyPages = 0;
+        if (opts.onPage) await opts.onPage(page);
+      } else {
+        consecutiveEmptyPages++;
+      }
+      total += page.length;
+
+      if (!pageInfo.hasNextPage) break;
+      cursor = pageInfo.endCursor;
+    }
+
+    opts.onRepoProgress?.(repoName, repoCount);
   }
 
-  const records: MergedPRRecord[] = [];
+  return { total };
+}
 
-  for (const repo of repos) {
-    const mergedPRs = await getMergedPRs(repo.full_name, since, opts);
-    opts.onRepoProgress?.(repo.full_name, mergedPRs.length);
+// ---------------------------------------------------------------------------
+// Commit fetching via GraphQL
+// ---------------------------------------------------------------------------
 
-    const details = await mapWithConcurrency(
-      mergedPRs,
-      (pr) => getPRDetails(repo.full_name, pr.number, opts),
-      10
-    );
+export interface CommitRecord {
+  repo: string;
+  sha: string;
+  authorLogin: string;
+  authorAvatarUrl: string;
+  committedAt: Date;
+  additions: number;
+  deletions: number;
+  message: string;
+}
 
-    for (const pr of details) {
-      if (!pr.user || !pr.merged_at) continue;
-      records.push({
-        repo: repo.name,
-        prNumber: pr.number,
-        title: pr.title,
-        authorLogin: pr.user.login,
-        authorAvatarUrl: pr.user.avatar_url,
-        mergedAt: new Date(pr.merged_at),
-        additions: pr.additions,
-        deletions: pr.deletions,
-        changedFiles: pr.changed_files,
-      });
+const COMMITS_GRAPHQL_QUERY = `
+query($owner: String!, $repo: String!, $since: GitTimestamp!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    defaultBranchRef {
+      target {
+        ... on Commit {
+          history(first: 100, after: $cursor, since: $since) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              oid
+              message
+              committedDate
+              additions
+              deletions
+              author {
+                user {
+                  login
+                  avatarUrl
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
+}`;
 
-  return records;
+interface GraphQLCommitNode {
+  oid: string;
+  message: string;
+  committedDate: string;
+  additions: number;
+  deletions: number;
+  author: {
+    user: { login: string; avatarUrl: string } | null;
+  };
+}
+
+interface GraphQLCommitResponse {
+  repository: {
+    defaultBranchRef: {
+      target: {
+        history: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: GraphQLCommitNode[];
+        };
+      };
+    } | null;
+  };
+}
+
+export async function fetchCommitRecords(
+  since: Date,
+  opts: {
+    signal?: AbortSignal;
+    onRepoProgress?: (repo: string, commitCount: number) => void;
+    /** Called with each page of commits as they're fetched — enables streaming to DB */
+    onPage?: (records: CommitRecord[]) => Promise<void>;
+    repos?: string[];
+  } = {}
+): Promise<{ total: number }> {
+  const config = getConfig();
+  const repoNames = opts.repos?.length
+    ? opts.repos
+    : (await getOrgRepos(opts)).map((r) => r.name);
+
+  let total = 0;
+
+  for (const repoName of repoNames) {
+    let cursor: string | null = null;
+    let repoCount = 0;
+
+    while (true) {
+      const gqlData: GraphQLCommitResponse = await graphqlRequest(
+        COMMITS_GRAPHQL_QUERY,
+        {
+          owner: config.org,
+          repo: repoName,
+          since: since.toISOString(),
+          cursor,
+        },
+        opts
+      );
+
+      const branch = gqlData.repository.defaultBranchRef;
+      if (!branch) break;
+
+      const { nodes, pageInfo } = branch.target.history;
+      const page: CommitRecord[] = [];
+
+      for (const commit of nodes) {
+        if (!commit.author.user) continue;
+
+        page.push({
+          repo: repoName,
+          sha: commit.oid,
+          authorLogin: commit.author.user.login,
+          authorAvatarUrl: commit.author.user.avatarUrl,
+          committedAt: new Date(commit.committedDate),
+          additions: commit.additions,
+          deletions: commit.deletions,
+          message: commit.message.split("\n")[0],
+        });
+        repoCount++;
+      }
+
+      if (page.length > 0 && opts.onPage) {
+        await opts.onPage(page);
+      }
+      total += page.length;
+
+      if (!pageInfo.hasNextPage) break;
+      cursor = pageInfo.endCursor;
+    }
+
+    opts.onRepoProgress?.(repoName, repoCount);
+  }
+
+  return { total };
 }
 
 export interface EngineerPRStats {

@@ -101,8 +101,8 @@ export const SYNC_SOURCE_CONFIGS: Record<SyncSource, SyncSourceConfig> = {
     normalIntervalMs: 4 * 60 * 60 * 1000, // every 4 hours
     retryAfterMs: 30 * 60 * 1000,
     leaseMs: 2 * 60 * 1000,
-    staleTimeoutMs: 45 * 60 * 1000,
-    executionBudgetMs: 30 * 60 * 1000,
+    staleTimeoutMs: 60 * 60 * 1000,
+    executionBudgetMs: 45 * 60 * 1000,
     maxAttempts: 1,
   },
 };
