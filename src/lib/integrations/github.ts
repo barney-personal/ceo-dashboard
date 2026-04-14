@@ -334,36 +334,89 @@ async function graphqlRequest<T>(
   opts: { signal?: AbortSignal } = {}
 ): Promise<T> {
   const config = getConfig();
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), GITHUB_TIMEOUT_MS);
-  const onParentAbort = () => controller.abort(opts.signal?.reason);
-  opts.signal?.addEventListener("abort", onParentAbort, { once: true });
+  let lastError: Error | null = null;
 
-  try {
-    const res = await fetch("https://api.github.com/graphql", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        ...authHeaders(config),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query, variables }),
-    });
+  for (let attempt = 1; attempt <= GITHUB_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(new Error("GitHub GraphQL request timed out")),
+      GITHUB_TIMEOUT_MS
+    );
 
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`GitHub GraphQL error ${res.status}: ${body}`);
+    if (opts.signal?.aborted) {
+      clearTimeout(timeoutId);
+      throw opts.signal.reason instanceof Error
+        ? opts.signal.reason
+        : new Error("GitHub GraphQL request was aborted");
     }
 
-    const json = (await res.json()) as { data: T; errors?: { message: string }[] };
-    if (json.errors?.length) {
-      throw new Error(`GitHub GraphQL: ${json.errors[0].message}`);
+    const onParentAbort = () => controller.abort(opts.signal?.reason);
+    opts.signal?.addEventListener("abort", onParentAbort, { once: true });
+
+    try {
+      const res = await fetch("https://api.github.com/graphql", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          ...authHeaders(config),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const error = new Error(`GitHub GraphQL error ${res.status}: ${body}`);
+
+        // Retry on server errors and rate limits
+        if (
+          attempt < GITHUB_MAX_RETRIES &&
+          (res.status >= 500 || res.status === 429)
+        ) {
+          lastError = error;
+          Sentry.addBreadcrumb({
+            category: "github.graphql",
+            level: "warning",
+            message: `GraphQL ${res.status} on attempt ${attempt}, retrying`,
+          });
+          await sleep(getRetryDelayMs(attempt));
+          continue;
+        }
+
+        throw error;
+      }
+
+      const json = (await res.json()) as { data: T; errors?: { message: string }[] };
+      if (json.errors?.length) {
+        throw new Error(`GitHub GraphQL: ${json.errors[0].message}`);
+      }
+      return json.data;
+    } catch (error) {
+      if (controller.signal.aborted && opts.signal?.aborted) {
+        throw opts.signal.reason instanceof Error
+          ? opts.signal.reason
+          : new Error("GitHub GraphQL request was aborted");
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("timed out")) {
+        throw new Error("GitHub GraphQL request timed out");
+      }
+
+      if (attempt < GITHUB_MAX_RETRIES && isRetryable(message)) {
+        lastError = error instanceof Error ? error : new Error(message);
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      opts.signal?.removeEventListener("abort", onParentAbort);
     }
-    return json.data;
-  } finally {
-    clearTimeout(timeoutId);
-    opts.signal?.removeEventListener("abort", onParentAbort);
   }
+
+  throw lastError ?? new Error("GitHub GraphQL request failed");
 }
 
 interface GraphQLPRNode {
