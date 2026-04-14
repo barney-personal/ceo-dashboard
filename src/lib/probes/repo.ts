@@ -78,8 +78,8 @@ export async function openIncident(
   return row ?? null;
 }
 
-export async function closeIncident(incidentId: number) {
-  await db
+export async function closeIncident(incidentId: number): Promise<boolean> {
+  const rows = await db
     .update(probeIncidents)
     .set({ closedAt: new Date() })
     .where(
@@ -87,7 +87,9 @@ export async function closeIncident(incidentId: number) {
         eq(probeIncidents.id, incidentId),
         isNull(probeIncidents.closedAt)
       )
-    );
+    )
+    .returning({ id: probeIncidents.id });
+  return rows.length > 0;
 }
 
 export async function openIncidentForCheck(checkName: string) {
@@ -109,16 +111,35 @@ export async function escalateIncident(
   incidentId: number,
   level: number,
   lastAlertedAt: Date = new Date()
-) {
-  await db
+): Promise<boolean> {
+  const rows = await db
     .update(probeIncidents)
     .set({ escalationLevel: level, lastAlertedAt })
-    .where(eq(probeIncidents.id, incidentId));
+    .where(
+      and(
+        eq(probeIncidents.id, incidentId),
+        isNull(probeIncidents.closedAt),
+        lt(probeIncidents.escalationLevel, level)
+      )
+    )
+    .returning({ id: probeIncidents.id });
+  return rows.length > 0;
 }
 
-export async function setLastAlertedAt(incidentId: number, at: Date) {
-  await db
+export async function setLastAlertedAt(
+  incidentId: number,
+  at: Date
+): Promise<boolean> {
+  const rows = await db
     .update(probeIncidents)
     .set({ lastAlertedAt: at })
-    .where(eq(probeIncidents.id, incidentId));
+    .where(
+      and(
+        eq(probeIncidents.id, incidentId),
+        isNull(probeIncidents.closedAt),
+        lt(probeIncidents.lastAlertedAt, at)
+      )
+    )
+    .returning({ id: probeIncidents.id });
+  return rows.length > 0;
 }

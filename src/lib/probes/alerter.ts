@@ -170,20 +170,20 @@ export async function runAlerter(checkName: string): Promise<void> {
     }
 
     case "escalate": {
-      await escalateIncident(decision.incidentId, decision.level, now);
-      await sendTelegram(decision.message);
+      const changed = await escalateIncident(decision.incidentId, decision.level, now);
+      if (changed) await sendTelegram(decision.message);
       return;
     }
 
     case "recover": {
-      await closeIncident(decision.incidentId);
-      await sendTelegram(decision.message);
+      const changed = await closeIncident(decision.incidentId);
+      if (changed) await sendTelegram(decision.message);
       return;
     }
 
     case "remind": {
-      await setLastAlertedAt(decision.incidentId, now);
-      await sendTelegram(decision.message);
+      const changed = await setLastAlertedAt(decision.incidentId, now);
+      if (changed) await sendTelegram(decision.message);
       return;
     }
   }

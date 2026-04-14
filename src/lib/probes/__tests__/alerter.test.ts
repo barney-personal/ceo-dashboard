@@ -223,6 +223,7 @@ describe("runAlerter", () => {
       { status: "green", ts: NOW, detailsJson: null },
     ]);
     (repo.openIncidentForCheck as ReturnType<typeof vi.fn>).mockResolvedValue(inc);
+    (repo.closeIncident as ReturnType<typeof vi.fn>).mockResolvedValue(true);
 
     await runAlerter(CHECK);
 
@@ -239,11 +240,63 @@ describe("runAlerter", () => {
       { status: "red", ts: new Date(NOW.getTime() - 10 * 60_000), detailsJson: null },
     ]);
     (repo.openIncidentForCheck as ReturnType<typeof vi.fn>).mockResolvedValue(inc);
+    (repo.escalateIncident as ReturnType<typeof vi.fn>).mockResolvedValue(true);
 
     await runAlerter(CHECK);
 
     expect(repo.escalateIncident).toHaveBeenCalledWith(7, 1, expect.any(Date));
     expect(tg.sendTelegram).toHaveBeenCalledOnce();
     expect((tg.sendTelegram as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain("⚠️");
+  });
+
+  it("suppresses duplicate escalation when escalateIncident returns false", async () => {
+    const inc = incident({ id: 7, escalationLevel: 0 });
+    (repo.lastRunsForCheck as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { status: "red", ts: NOW, detailsJson: null },
+      { status: "red", ts: new Date(NOW.getTime() - 5 * 60_000), detailsJson: null },
+      { status: "red", ts: new Date(NOW.getTime() - 10 * 60_000), detailsJson: null },
+    ]);
+    (repo.openIncidentForCheck as ReturnType<typeof vi.fn>).mockResolvedValue(inc);
+    (repo.escalateIncident as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    await runAlerter(CHECK);
+
+    expect(repo.escalateIncident).toHaveBeenCalled();
+    expect(tg.sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate recovery when closeIncident returns false", async () => {
+    const inc = incident({ id: 5 });
+    (repo.lastRunsForCheck as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { status: "green", ts: NOW, detailsJson: null },
+    ]);
+    (repo.openIncidentForCheck as ReturnType<typeof vi.fn>).mockResolvedValue(inc);
+    (repo.closeIncident as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    await runAlerter(CHECK);
+
+    expect(repo.closeIncident).toHaveBeenCalledWith(5);
+    expect(tg.sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate reminder when setLastAlertedAt returns false", async () => {
+    const inc = incident({
+      id: 9,
+      escalationLevel: 1,
+      lastAlertedAt: new Date(NOW.getTime() - 90 * 60_000),
+    });
+    (repo.lastRunsForCheck as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { status: "red", ts: NOW, detailsJson: null },
+      { status: "red", ts: new Date(NOW.getTime() - 5 * 60_000), detailsJson: null },
+      { status: "red", ts: new Date(NOW.getTime() - 10 * 60_000), detailsJson: null },
+      { status: "red", ts: new Date(NOW.getTime() - 15 * 60_000), detailsJson: null },
+    ]);
+    (repo.openIncidentForCheck as ReturnType<typeof vi.fn>).mockResolvedValue(inc);
+    (repo.setLastAlertedAt as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+    await runAlerter(CHECK);
+
+    expect(repo.setLastAlertedAt).toHaveBeenCalled();
+    expect(tg.sendTelegram).not.toHaveBeenCalled();
   });
 });
