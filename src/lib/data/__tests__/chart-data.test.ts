@@ -516,7 +516,7 @@ describe("aggregateCohortRows", () => {
 });
 
 describe("getMauRetentionCohorts", () => {
-  it("normalises cohorts to M0 and drops the incomplete latest month", async () => {
+  it("normalises cohorts to M0, drops M0 and the incomplete latest month", async () => {
     mockGetReportData.mockResolvedValue([
       {
         queryName: "Query 1",
@@ -527,16 +527,19 @@ describe("getMauRetentionCohorts", () => {
           { cohort_month: "2026-01-01", activity_month: 1, maus: 45 },
           { cohort_month: "2026-01-01", activity_month: 2, maus: 30 },
           { cohort_month: "2026-01-01", activity_month: 2, maus: 30 },
+          { cohort_month: "2026-01-01", activity_month: 3, maus: 20 },
         ],
       },
     ]);
 
     const cohorts = await getMauRetentionCohorts();
 
+    // M0 (always ~100%) is dropped, M3 (incomplete) is dropped
+    // Remaining: M1 = 120/150 = 0.8, M2 = 60/150 = 0.4
     expect(cohorts).toEqual([
       {
         cohort: "2026-01",
-        periods: [1, 0.8],
+        periods: [0.8, 0.4],
       },
     ]);
   });
