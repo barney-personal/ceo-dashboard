@@ -33,6 +33,20 @@ The `.github/workflows/prod-probes.yml` workflow requires these secrets in the r
 - `TELEGRAM_PROBE_CHAT_ID` — same value as Doppler
 - `TELEGRAM_FALLBACK_BOT_TOKEN` — same value as Doppler
 
+## GitHub Actions Workflow
+
+The `.github/workflows/prod-probes.yml` workflow runs production probes on a schedule:
+
+| Job | Schedule | Suite | What it does |
+|-----|----------|-------|-------------|
+| `probe-15m` | Every 15 min (`*/15 * * * *`) | `ceo-15m-suite` | Hits `/api/probes/ping-auth`, asserts `db_ok: true`, posts result to control plane |
+
+The workflow uses `./scripts/probe.sh ceo-15m-suite` to invoke the probe runner (approved contract). On probe failure or delivery failure, a Telegram fallback message is sent directly via `TELEGRAM_FALLBACK_BOT_TOKEN` — this fires even when the dashboard itself is down.
+
+Probe reports are uploaded as workflow artifacts (14-day retention).
+
+To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`.
+
 ## Render Cron Job
 
 The meta-heartbeat watcher runs as a separate Render Cron Job resource that hits `GET /api/cron/probe-heartbeat` with `Authorization: Bearer <INTERNAL_CRON_SECRET>`. Declare this in `render.yaml`.
