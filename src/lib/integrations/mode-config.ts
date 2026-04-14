@@ -1,4 +1,5 @@
 import { CHART_HISTORY_START_DATE } from "@/lib/config/charts";
+import { weeklyRetentionAggregator } from "./mode-aggregators";
 
 export type DashboardSection =
   | "unit-economics"
@@ -23,9 +24,49 @@ export type ModeStorageWindow =
   | { kind: "snapshot" }
   | { kind: "full-if-under"; maxRows: number };
 
+/**
+ * Streaming row aggregator. When set, the sync worker fetches the query
+ * result as CSV and feeds each row through `reduce` instead of buffering the
+ * full JSON payload in memory. Use this for very large datasets where we only
+ * need a small aggregated subset (e.g. weekly retention rolled up across
+ * segment dimensions).
+ */
+export type ModeRowAggregator<TAggregated = unknown> = {
+  /** Initial state passed to the first `reduce` call. */
+  initial: () => TAggregated;
+  /** Called once per CSV row. May mutate or return a new state. */
+  reduce: (
+    state: TAggregated,
+    row: Record<string, string>,
+  ) => TAggregated;
+  /** Convert the final state to plain rows for storage in `mode_report_data`. */
+  finalize: (state: TAggregated) => Record<string, unknown>[];
+  /** Optional column metadata to persist alongside the aggregated rows. */
+  columns?: Array<{ name: string; type: string }>;
+};
+
 export interface ModeQuerySyncProfile {
   name: string;
   storageWindow: ModeStorageWindow;
+  /**
+   * Optional override for the per-query Mode response size cap (bytes). The
+   * default cap (`MODE_MAX_RESULT_BYTES`, 25 MB) is enough for most queries,
+   * but very wide datasets — e.g. weekly retention broken down by segment —
+   * exceed that before the storage window can filter rows down. Set this to
+   * raise the buffered download cap for the affected query only. Ignored when
+   * `aggregator` is set (streaming has no buffered cap).
+   */
+  maxResponseBytes?: number;
+  /**
+   * Optional streaming aggregator. When provided, the sync worker streams the
+   * Mode CSV result and feeds each row through this aggregator rather than
+   * buffering the JSON response. The aggregated rows are stored in place of
+   * the raw payload, which keeps memory bounded regardless of source size.
+   * `storageWindow` is ignored for aggregated profiles — the aggregator owns
+   * the row shape end-to-end.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  aggregator?: ModeRowAggregator<any>;
 }
 
 export interface ModeSyncProfile extends ModeReportConfig {
@@ -188,6 +229,32 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
           field: "cohort_month",
           count: 24,
         },
+      },
+    ],
+  },
+  {
+    // Source report for the "dataset_app_activity_retention_weekly" dataset
+    // imported into App Retention (5a033d810ddc). Synced directly here so
+    // we get the underlying weekly cohort rows.
+    reportToken: "4e4ed264ed7a",
+    name: "App Retention Weekly",
+    section: "product",
+    category: "retention-weekly",
+    syncEnabled: true,
+    queries: [
+      {
+        // The full query is ~230k rows broken down by segment dimensions
+        // (d30_subscriber, age, user_segment, core_intent). The CSV stream is
+        // ~90 MB and the JSON variant balloons to >200 MB. We don't need any
+        // of the segment dimensions for the WAU triangle, so we stream the
+        // CSV and roll rows up to (cohort_week, relative_moving_week,
+        // active_users_weekly) on the fly. That keeps peak heap bounded
+        // regardless of source size and shrinks storage from ~230k rows to
+        // ~1.4k. `storageWindow` is unused for aggregated profiles but kept
+        // so the schema stays uniform.
+        name: "Query 1",
+        storageWindow: { kind: "all" },
+        aggregator: weeklyRetentionAggregator,
       },
     ],
   },

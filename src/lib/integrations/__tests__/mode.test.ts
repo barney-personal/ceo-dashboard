@@ -14,7 +14,9 @@ import {
   checkModeHealth,
   getLatestRun,
   getQueryResultContent,
+  streamQueryResultAndAggregate,
 } from "../mode";
+import type { ModeRowAggregator } from "../mode-config";
 
 describe("Mode transport resilience", () => {
   const originalToken = process.env.MODE_API_TOKEN;
@@ -243,5 +245,153 @@ describe("Mode transport resilience", () => {
 
     await rejection;
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("streamQueryResultAndAggregate", () => {
+  const originalToken = process.env.MODE_API_TOKEN;
+  const originalSecret = process.env.MODE_API_SECRET;
+  const originalWorkspace = process.env.MODE_WORKSPACE;
+
+  beforeEach(() => {
+    process.env.MODE_API_TOKEN = "mode-token";
+    process.env.MODE_API_SECRET = "mode-secret";
+    process.env.MODE_WORKSPACE = "cleoai";
+  });
+
+  afterEach(() => {
+    process.env.MODE_API_TOKEN = originalToken;
+    process.env.MODE_API_SECRET = originalSecret;
+    process.env.MODE_WORKSPACE = originalWorkspace;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    mockCaptureException.mockClear();
+  });
+
+  type SumState = { count: number; total: number };
+  const sumAggregator: ModeRowAggregator<SumState> = {
+    initial: () => ({ count: 0, total: 0 }),
+    reduce: (state, row) => {
+      const v = Number(row.value);
+      if (Number.isFinite(v)) {
+        state.count += 1;
+        state.total += v;
+      }
+      return state;
+    },
+    finalize: (state) => [{ count: state.count, total: state.total }],
+    columns: [
+      { name: "count", type: "number" },
+      { name: "total", type: "number" },
+    ],
+  };
+
+  function csvResponse(body: string): Response {
+    const encoded = new TextEncoder().encode(body);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Split into multiple chunks to exercise the streaming parser.
+        const chunkSize = 16;
+        for (let i = 0; i < encoded.length; i += chunkSize) {
+          controller.enqueue(encoded.subarray(i, i + chunkSize));
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/csv" },
+    });
+  }
+
+  it("parses streaming CSV and feeds rows through the aggregator", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      csvResponse('"id","value"\n"a",1\n"b",2\n"c",3\n'),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamQueryResultAndAggregate(
+      "report-token",
+      "run-token",
+      "query-run-token",
+      sumAggregator,
+    );
+
+    expect(result.rows).toEqual([{ count: 3, total: 6 }]);
+    expect(result.sourceRowCount).toBe(3);
+    expect(result.responseBytes).toBeGreaterThan(0);
+  });
+
+  it("handles quoted fields with embedded commas, newlines and escaped quotes", async () => {
+    const collected: Record<string, string>[] = [];
+    const collector: ModeRowAggregator<Record<string, string>[]> = {
+      initial: () => collected,
+      reduce: (state, row) => {
+        state.push({ ...row });
+        return state;
+      },
+      finalize: (state) => state.map((row) => ({ ...row })),
+    };
+
+    const csv =
+      '"id","note"\r\n' +
+      '"1","hello, world"\r\n' +
+      '"2","line\nbreak"\r\n' +
+      '"3","a ""quoted"" word"\r\n';
+    const fetchMock = vi.fn().mockResolvedValueOnce(csvResponse(csv));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamQueryResultAndAggregate(
+      "report-token",
+      "run-token",
+      "query-run-token",
+      collector,
+    );
+
+    expect(result.rows).toEqual([
+      { id: "1", note: "hello, world" },
+      { id: "2", note: "line\nbreak" },
+      { id: "3", note: 'a "quoted" word' },
+    ]);
+    expect(result.sourceRowCount).toBe(3);
+  });
+
+  it("requests the CSV endpoint with text/csv accept header", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(csvResponse('"value"\n1\n'));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await streamQueryResultAndAggregate(
+      "rep",
+      "run",
+      "qr",
+      sumAggregator,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "https://app.mode.com/api/cleoai/reports/rep/runs/run/query_runs/qr/results/content.csv",
+    );
+    expect(
+      (init as RequestInit).headers as Record<string, string>,
+    ).toMatchObject({
+      Accept: "text/csv",
+    });
+  });
+
+  it("throws when the CSV stream has no header row", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(csvResponse(""));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      streamQueryResultAndAggregate(
+        "report-token",
+        "run-token",
+        "query-run-token",
+        sumAggregator,
+      ),
+    ).rejects.toThrow("Mode CSV stream contained no header row");
   });
 });

@@ -22,6 +22,7 @@ vi.mock("../mode", () => ({
 
 import {
   aggregateCohortRows,
+  aggregateWeeklyCohortRows,
   getActiveUsersSeries,
   getEngagementSeries,
   getHeadcountByDepartment,
@@ -30,6 +31,7 @@ import {
   getLtvCacRatioSeries,
   getMauRetentionCohorts,
   getQuery3Series,
+  getWauRetentionCohorts,
   groupByWeek,
 } from "../chart-data";
 
@@ -562,6 +564,241 @@ describe("getMauRetentionCohorts", () => {
     const cohorts = await getMauRetentionCohorts();
 
     expect(cohorts).toEqual([]);
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("aggregateWeeklyCohortRows", () => {
+  it("sums active_users_weekly across segment dimensions per cohort week", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      // Two segment slices for the same cohort/period — should sum.
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: 0,
+        active_users_weekly: 100,
+        d30_subscriber: "true",
+        age: "18-24",
+        user_segment: "A",
+        core_intent: "save",
+      },
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: 0,
+        active_users_weekly: 50,
+        d30_subscriber: "false",
+        age: "18-24",
+        user_segment: "B",
+        core_intent: "save",
+      },
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: 1,
+        active_users_weekly: 80,
+      },
+    ]);
+
+    expect(aggregated.get("2026-01-05")?.get(0)).toBe(150);
+    expect(aggregated.get("2026-01-05")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with null relative_moving_week or null active_users_weekly", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: 0,
+        active_users_weekly: null,
+      },
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: null,
+        active_users_weekly: 100,
+      },
+      {
+        cohort_week: "2026-01-05",
+        relative_moving_week: 1,
+        active_users_weekly: 80,
+      },
+    ]);
+
+    expect(aggregated.get("2026-01-05")?.has(0)).toBe(false);
+    expect(aggregated.get("2026-01-05")?.get(1)).toBe(80);
+  });
+
+  it("skips rows with invalid cohort_week date strings", () => {
+    const aggregated = aggregateWeeklyCohortRows([
+      {
+        cohort_week: "not-a-date",
+        relative_moving_week: 0,
+        active_users_weekly: 100,
+      },
+      {
+        cohort_week: "",
+        relative_moving_week: 0,
+        active_users_weekly: 50,
+      },
+      {
+        cohort_week: "2026-02-02",
+        relative_moving_week: 0,
+        active_users_weekly: 200,
+      },
+    ]);
+
+    expect(aggregated.size).toBe(1);
+    expect(aggregated.get("2026-02-02")?.get(0)).toBe(200);
+  });
+});
+
+describe("getWauRetentionCohorts", () => {
+  function rowsForCohort(
+    cohort: string,
+    weekly: number[],
+  ): Record<string, unknown>[] {
+    // weekly[i] = active_users_weekly for relative_moving_week = i
+    return weekly.map((value, i) => ({
+      cohort_week: cohort,
+      relative_moving_week: i,
+      active_users_weekly: value,
+    }));
+  }
+
+  it("normalises to W0 base and drops W0 + the incomplete latest week", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 1",
+        // 6 weeks observed (W0..W5) — W5 is dropped (latest, incomplete),
+        // W0 is dropped (always 100%). Two segment slices at W0 verify
+        // aggregation across dimensions.
+        rows: [
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 0,
+            active_users_weekly: 100,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 0,
+            active_users_weekly: 50,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 1,
+            active_users_weekly: 75,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 1,
+            active_users_weekly: 45,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 2,
+            active_users_weekly: 30,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 2,
+            active_users_weekly: 30,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 3,
+            active_users_weekly: 20,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 4,
+            active_users_weekly: 15,
+          },
+          {
+            cohort_week: "2025-10-06",
+            relative_moving_week: 5,
+            active_users_weekly: 5,
+          },
+        ],
+      },
+    ]);
+
+    const cohorts = await getWauRetentionCohorts();
+
+    // Base = 150. periods = [W1, W2, W3, W4] = [120/150, 60/150, 20/150, 15/150]
+    expect(cohorts).toEqual([
+      {
+        cohort: "2025-10-06",
+        periods: [0.8, 0.4, 20 / 150, 15 / 150],
+      },
+    ]);
+  });
+
+  it("filters out cohorts with fewer than 4 observed periods", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        queryName: "Query 1",
+        rows: [
+          // Cohort A: only W0/W1/W2 → after dropping last period only [W1] remains → too short
+          ...rowsForCohort("2026-01-05", [100, 80, 60]),
+          // Cohort B: W0..W5 → after dropping last → [W1,W2,W3,W4] meets minimum of 4
+          ...rowsForCohort("2025-12-01", [100, 80, 60, 50, 40, 30]),
+        ],
+      },
+    ]);
+
+    const cohorts = await getWauRetentionCohorts();
+
+    expect(cohorts.map((c) => c.cohort)).toEqual(["2025-12-01"]);
+    expect(cohorts[0].periods.length).toBe(4);
+  });
+
+  it("returns at most 26 cohorts (newest last)", async () => {
+    // Generate 30 cohorts each with enough periods to qualify.
+    const rows: Record<string, unknown>[] = [];
+    for (let i = 0; i < 30; i++) {
+      const cohortDate = new Date(Date.UTC(2025, 0, 6 + i * 7))
+        .toISOString()
+        .slice(0, 10);
+      // 6 periods so >=4 survive after dropping last + W0.
+      rows.push(...rowsForCohort(cohortDate, [100, 80, 60, 50, 40, 30]));
+    }
+
+    mockGetReportData.mockResolvedValue([{ queryName: "Query 1", rows }]);
+
+    const cohorts = await getWauRetentionCohorts();
+
+    expect(cohorts).toHaveLength(26);
+    // Cohorts are returned in chronological order with the newest last,
+    // so the last entry should be the 30th generated date.
+    const last = new Date(Date.UTC(2025, 0, 6 + 29 * 7))
+      .toISOString()
+      .slice(0, 10);
+    expect(cohorts[cohorts.length - 1].cohort).toBe(last);
+  });
+
+  it("returns empty fallback when weekly retention columns drift", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "App Retention Weekly",
+        queryName: "Query 1",
+        rows: [{ cohort_week: "2026-01-05", relative_moving_week: 0 }],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: [
+        "cohort_week",
+        "relative_moving_week",
+        "active_users_weekly",
+      ],
+      presentColumns: ["cohort_week", "relative_moving_week"],
+      missingColumns: ["active_users_weekly"],
+      isValid: false,
+    });
+
+    const cohorts = await getWauRetentionCohorts();
+
+    expect(cohorts).toEqual([]);
+    expect(mockGetReportData).toHaveBeenCalledWith(
+      "product",
+      "retention-weekly",
+      ["Query 1"],
+    );
     expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 });
