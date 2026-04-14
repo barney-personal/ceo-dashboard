@@ -691,10 +691,12 @@ export async function getMauRetentionCohorts(): Promise<
 
 /**
  * Minimum number of weekly periods (after the W0 base) we require for a
- * cohort to appear in the WAU retention triangle. Filters out very recent
- * cohorts that only have W0/W1 data.
+ * cohort to appear in the WAU retention triangle. A cohort needs at least
+ * one non-partial retention point (W1 onward) to be plotted; this keeps
+ * the triangle naturally short at the bottom while still surfacing the
+ * newest cohorts as soon as they have any retention signal.
  */
-const WAU_RETENTION_MIN_PERIODS = 4;
+const WAU_RETENTION_MIN_PERIODS = 1;
 
 /**
  * Maximum number of cohorts to render in the WAU retention triangle.
@@ -709,7 +711,11 @@ const WAU_RETENTION_MAX_COHORTS = 52;
  * rate relative to its W0 starting WAU.
  *
  * Returns at most {@link WAU_RETENTION_MAX_COHORTS} cohorts, newest last,
- * dropping W0 (always 100%) and the most recent partial week.
+ * dropping W0 (always 100%). The upstream query is already restricted to
+ * fully-elapsed weeks, so every observed period after W0 is a complete
+ * retention data point. This means the youngest cohorts legitimately
+ * have fewer periods than older ones, producing the expected triangular
+ * shape where the bottom rows are short (only 1–2 cells filled in).
  */
 export async function getWauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
@@ -731,8 +737,10 @@ export async function getWauRetentionCohorts(): Promise<
     .map((cohort) => {
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
-      // Drop the latest period (always incomplete) and W0 (always ~100%).
-      const maxPeriod = Math.max(...periods.keys()) - 1;
+      // Keep every period after W0 (W0 itself is always 100% so it's
+      // skipped as the base row). The upstream query only emits complete
+      // weeks, so there is no partial tail to trim.
+      const maxPeriod = Math.max(...periods.keys());
       if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
       return {
         cohort,
