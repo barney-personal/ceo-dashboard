@@ -705,17 +705,36 @@ const WAU_RETENTION_MIN_PERIODS = 1;
 const WAU_RETENTION_MAX_COHORTS = 52;
 
 /**
+ * Monday 00:00 UTC of the current (incomplete) ISO week. Any retention
+ * observation whose week starts at or after this cutoff still has days
+ * left for users to be counted as active, so its retention % is
+ * misleadingly low. Matches Redshift's `DATE_TRUNC('week', ...)` which
+ * is Monday-aligned.
+ */
+function currentIncompleteWeekStart(now: Date = new Date()): Date {
+  const d = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const dow = d.getUTCDay(); // 0 = Sun, 1 = Mon, ...
+  const offsetToMonday = dow === 0 ? 6 : dow - 1;
+  d.setUTCDate(d.getUTCDate() - offsetToMonday);
+  return d;
+}
+
+/**
  * Weekly WAU retention cohort triangle from the App Retention Weekly
  * dataset (4e4ed264ed7a, Query 1). Aggregates `active_users_weekly`
  * across segment dimensions, then expresses each cohort as a retention
  * rate relative to its W0 starting WAU.
  *
  * Returns at most {@link WAU_RETENTION_MAX_COHORTS} cohorts, newest last,
- * dropping W0 (always 100%). The upstream query is already restricted to
- * fully-elapsed weeks, so every observed period after W0 is a complete
- * retention data point. This means the youngest cohorts legitimately
- * have fewer periods than older ones, producing the expected triangular
- * shape where the bottom rows are short (only 1–2 cells filled in).
+ * dropping W0 (always 100%) and any per-cohort observation that falls in
+ * the current (incomplete) ISO week — the "unmatured diagonal". An
+ * observation at `cohort_week + relative_moving_week * 7 days` that lands
+ * on or after the current Monday still has days left for users to be
+ * counted as active, so its retention % would be misleadingly low.
+ * Filtering per observation (rather than a single global `max - 1` drop)
+ * correctly trims only the diagonal that touches the current week.
  */
 export async function getWauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
@@ -728,7 +747,27 @@ export async function getWauRetentionCohorts(): Promise<
   );
   if (!query) return [];
 
-  const byCohort = aggregateWeeklyCohortRows(query.rows);
+  // Drop any (cohort, period) observation whose observation date lands in
+  // the current incomplete week — the "unmatured diagonal". This is
+  // applied per row so every cohort loses exactly the cell that maps to
+  // the current week, not a fixed global tail.
+  const cutoff = currentIncompleteWeekStart().getTime();
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const maturedRows = query.rows.filter((row) => {
+    const cohortStr = rowStr(row, "cohort_week");
+    const period = rowNumOrNull(row, "relative_moving_week");
+    if (!isValidDateStr(cohortStr) || period == null) {
+      // Keep malformed rows — aggregateWeeklyCohortRows will drop them
+      // with the same validity checks and produce consistent behaviour.
+      return true;
+    }
+    const cohortMs = new Date(cohortStr).getTime();
+    if (!Number.isFinite(cohortMs)) return true;
+    const observationMs = cohortMs + period * WEEK_MS;
+    return observationMs < cutoff;
+  });
+
+  const byCohort = aggregateWeeklyCohortRows(maturedRows);
 
   const cohorts = [...byCohort.keys()].sort();
 
@@ -738,8 +777,8 @@ export async function getWauRetentionCohorts(): Promise<
       const periods = byCohort.get(cohort)!;
       const base = periods.get(0)!;
       // Keep every period after W0 (W0 itself is always 100% so it's
-      // skipped as the base row). The upstream query only emits complete
-      // weeks, so there is no partial tail to trim.
+      // skipped as the base row). Unmatured observations were already
+      // filtered above, so every remaining period is a complete week.
       const maxPeriod = Math.max(...periods.keys());
       if (maxPeriod < 1) return { cohort, periods: [] as (number | null)[] };
       return {
