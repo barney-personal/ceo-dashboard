@@ -8,27 +8,43 @@ const PREV_SECRET = "prev-secret-xyz789";
 const PAYLOAD = JSON.stringify({ probeId: "cloud-cron", status: "green" });
 
 describe("signPayload / verifyPayload", () => {
+  it("signPayload returns sha256= prefixed signature", () => {
+    const { signature } = signPayload(PAYLOAD, SECRET);
+    expect(signature).toMatch(/^sha256=[0-9a-f]{64}$/);
+  });
+
   it("round-trip: signed payload verifies successfully", () => {
     const { signature, ts } = signPayload(PAYLOAD, SECRET);
     expect(verifyPayload(PAYLOAD, signature, ts, SECRET)).toBe(true);
   });
 
-  it("bad signature: forged signature is rejected", () => {
+  it("bad signature: forged prefixed signature is rejected", () => {
     const { ts } = signPayload(PAYLOAD, SECRET);
-    expect(verifyPayload(PAYLOAD, "deadbeef".repeat(8), ts, SECRET)).toBe(
-      false
-    );
+    const forged = "sha256=" + "deadbeef".repeat(8);
+    expect(verifyPayload(PAYLOAD, forged, ts, SECRET)).toBe(false);
+  });
+
+  it("unprefixed bare hex signature is rejected", () => {
+    const { signature, ts } = signPayload(PAYLOAD, SECRET);
+    const bareHex = signature.replace("sha256=", "");
+    expect(verifyPayload(PAYLOAD, bareHex, ts, SECRET)).toBe(false);
+  });
+
+  it("wrong prefix is rejected", () => {
+    const { signature, ts } = signPayload(PAYLOAD, SECRET);
+    const wrongPrefix = signature.replace("sha256=", "md5=");
+    expect(verifyPayload(PAYLOAD, wrongPrefix, ts, SECRET)).toBe(false);
   });
 
   it("stale timestamp: skew > 5 minutes is rejected", () => {
     const { signature } = signPayload(PAYLOAD, SECRET);
-    const staleTs = Math.floor(Date.now() / 1000) - 6 * 60; // 6 min ago
+    const staleTs = Math.floor(Date.now() / 1000) - 6 * 60;
     expect(verifyPayload(PAYLOAD, signature, staleTs, SECRET)).toBe(false);
   });
 
   it("future timestamp: skew > 5 minutes in future is rejected", () => {
     const { signature } = signPayload(PAYLOAD, SECRET);
-    const futureTs = Math.floor(Date.now() / 1000) + 6 * 60; // 6 min ahead
+    const futureTs = Math.floor(Date.now() / 1000) + 6 * 60;
     expect(verifyPayload(PAYLOAD, signature, futureTs, SECRET)).toBe(false);
   });
 
