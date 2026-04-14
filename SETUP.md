@@ -40,12 +40,15 @@ The `.github/workflows/prod-probes.yml` workflow runs production probes on a sch
 | Job | Schedule | Suite | What it does |
 |-----|----------|-------|-------------|
 | `probe-15m` | Every 15 min (`*/15 * * * *`) | `ceo-15m-suite` | Hits `/api/probes/ping-auth`, asserts `db_ok: true`, posts result to control plane |
+| `probe-60m` | Every hour (`0 * * * *`) | `ceo-60m-suite` | Launches Chromium via Playwright, authenticates with Clerk test token, asserts canary element, captures screenshots on failure |
 
-The workflow uses `./scripts/probe.sh ceo-15m-suite` to invoke the probe runner (approved contract). On probe failure or delivery failure, a Telegram fallback message is sent directly via `TELEGRAM_FALLBACK_BOT_TOKEN` — this fires even when the dashboard itself is down.
+**Schedule gating:** Both schedules trigger the entire workflow, but each job has an `if:` guard so `probe-15m` only runs on the 15-minute cron (or manual dispatch) and `probe-60m` only runs on the hourly cron (or manual dispatch). At :00, both schedules fire — creating two workflow runs, each executing only its matching job.
 
-Probe reports are uploaded as workflow artifacts (14-day retention).
+The workflow uses `./scripts/probe.sh <suite>` to invoke the probe runner. On probe failure, a Telegram fallback message is sent directly via `TELEGRAM_FALLBACK_BOT_TOKEN` — this fires even when the dashboard itself is down.
 
-To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`.
+Probe reports are uploaded as workflow artifacts (14-day retention). The 60m job also uploads failure screenshots as a separate artifact.
+
+To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`. Manual dispatch runs both jobs.
 
 ## Dashboard Canary
 
