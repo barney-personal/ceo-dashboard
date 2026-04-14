@@ -1,11 +1,12 @@
 import { db } from "@/lib/db";
-import { githubPrs, githubEmployeeMap } from "@/lib/db/schema";
-import { and, gte, desc, eq, sql, count, sum } from "drizzle-orm";
+import { githubPrs, githubCommits, githubEmployeeMap } from "@/lib/db/schema";
+import { gte, desc, eq, sql, count, sum } from "drizzle-orm";
 
 export interface EngineerRanking {
   login: string;
   avatarUrl: string | null;
   prsCount: number;
+  commitsCount: number;
   additions: number;
   deletions: number;
   netLines: number;
@@ -32,6 +33,17 @@ export async function getEngineeringRankings(
   since.setUTCDate(since.getUTCDate() - days);
   since.setUTCHours(0, 0, 0, 0);
 
+  // Subquery: commit counts per author in the same window
+  const commitCounts = db
+    .select({
+      login: githubCommits.authorLogin,
+      commitsCount: count().as("commits_count"),
+    })
+    .from(githubCommits)
+    .where(gte(githubCommits.committedAt, since))
+    .groupBy(githubCommits.authorLogin)
+    .as("commit_counts");
+
   const rows = await db
     .select({
       login: githubPrs.authorLogin,
@@ -39,6 +51,10 @@ export async function getEngineeringRankings(
         "avatar_url"
       ),
       prsCount: count().as("prs_count"),
+      commitsCount:
+        sql<number>`COALESCE(MAX(${commitCounts.commitsCount}), 0)`.as(
+          "commits_count"
+        ),
       additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
       deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
       changedFiles: sum(githubPrs.changedFiles)
@@ -55,6 +71,7 @@ export async function getEngineeringRankings(
       githubEmployeeMap,
       eq(githubPrs.authorLogin, githubEmployeeMap.githubLogin)
     )
+    .leftJoin(commitCounts, eq(githubPrs.authorLogin, commitCounts.login))
     .where(gte(githubPrs.mergedAt, since))
     .groupBy(
       githubPrs.authorLogin,
@@ -68,6 +85,7 @@ export async function getEngineeringRankings(
     login: row.login,
     avatarUrl: row.avatarUrl,
     prsCount: row.prsCount,
+    commitsCount: Number(row.commitsCount) || 0,
     additions: row.additions ?? 0,
     deletions: row.deletions ?? 0,
     netLines: (row.additions ?? 0) - (row.deletions ?? 0),

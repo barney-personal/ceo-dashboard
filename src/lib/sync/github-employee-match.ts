@@ -98,15 +98,22 @@ export async function runGitHubEmployeeMapping(
     .selectDistinct({ login: githubPrs.authorLogin })
     .from(githubPrs);
 
-  // Get already-mapped logins
+  // Get already-mapped logins — exclude low-confidence rows so they get retried
   const existingMappings = await db
-    .select({ githubLogin: githubEmployeeMap.githubLogin })
+    .select({
+      githubLogin: githubEmployeeMap.githubLogin,
+      matchConfidence: githubEmployeeMap.matchConfidence,
+    })
     .from(githubEmployeeMap);
 
-  const mappedSet = new Set(existingMappings.map((m) => m.githubLogin));
+  const skipSet = new Set(
+    existingMappings
+      .filter((m) => m.matchConfidence !== "low")
+      .map((m) => m.githubLogin)
+  );
   const unmappedLogins = prLogins
     .map((r) => r.login)
-    .filter((login) => !mappedSet.has(login));
+    .filter((login) => !skipSet.has(login));
 
   if (unmappedLogins.length === 0) {
     return { mapped: 0, bots: 0, unmatched: 0, skipped: 0 };
