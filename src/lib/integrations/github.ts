@@ -446,6 +446,136 @@ export async function fetchMergedPRRecords(
   return records;
 }
 
+// ---------------------------------------------------------------------------
+// Commit fetching via GraphQL
+// ---------------------------------------------------------------------------
+
+export interface CommitRecord {
+  repo: string;
+  sha: string;
+  authorLogin: string;
+  authorAvatarUrl: string;
+  committedAt: Date;
+  additions: number;
+  deletions: number;
+  message: string;
+}
+
+const COMMITS_GRAPHQL_QUERY = `
+query($owner: String!, $repo: String!, $since: GitTimestamp!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    defaultBranchRef {
+      target {
+        ... on Commit {
+          history(first: 100, after: $cursor, since: $since) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              oid
+              message
+              committedDate
+              additions
+              deletions
+              author {
+                user {
+                  login
+                  avatarUrl
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+interface GraphQLCommitNode {
+  oid: string;
+  message: string;
+  committedDate: string;
+  additions: number;
+  deletions: number;
+  author: {
+    user: { login: string; avatarUrl: string } | null;
+  };
+}
+
+interface GraphQLCommitResponse {
+  repository: {
+    defaultBranchRef: {
+      target: {
+        history: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: GraphQLCommitNode[];
+        };
+      };
+    } | null;
+  };
+}
+
+export async function fetchCommitRecords(
+  since: Date,
+  opts: {
+    signal?: AbortSignal;
+    onRepoProgress?: (repo: string, commitCount: number) => void;
+    repos?: string[];
+  } = {}
+): Promise<CommitRecord[]> {
+  const config = getConfig();
+  const repoNames = opts.repos?.length
+    ? opts.repos
+    : (await getOrgRepos(opts)).map((r) => r.name);
+
+  const records: CommitRecord[] = [];
+
+  for (const repoName of repoNames) {
+    let cursor: string | null = null;
+    let repoCount = 0;
+
+    while (true) {
+      const gqlData: GraphQLCommitResponse = await graphqlRequest(
+        COMMITS_GRAPHQL_QUERY,
+        {
+          owner: config.org,
+          repo: repoName,
+          since: since.toISOString(),
+          cursor,
+        },
+        opts
+      );
+
+      const branch = gqlData.repository.defaultBranchRef;
+      if (!branch) break;
+
+      const { nodes, pageInfo } = branch.target.history;
+
+      for (const commit of nodes) {
+        // Skip commits without a linked GitHub user (e.g. bot email-only commits)
+        if (!commit.author.user) continue;
+
+        records.push({
+          repo: repoName,
+          sha: commit.oid,
+          authorLogin: commit.author.user.login,
+          authorAvatarUrl: commit.author.user.avatarUrl,
+          committedAt: new Date(commit.committedDate),
+          additions: commit.additions,
+          deletions: commit.deletions,
+          message: commit.message.split("\n")[0], // first line only
+        });
+        repoCount++;
+      }
+
+      if (!pageInfo.hasNextPage) break;
+      cursor = pageInfo.endCursor;
+    }
+
+    opts.onRepoProgress?.(repoName, repoCount);
+  }
+
+  return records;
+}
+
 export interface EngineerPRStats {
   login: string;
   avatarUrl: string;

@@ -1,8 +1,9 @@
 import { db } from "@/lib/db";
-import { githubPrs } from "@/lib/db/schema";
+import { githubPrs, githubCommits } from "@/lib/db/schema";
 import {
   checkGitHubHealth,
   fetchMergedPRRecords,
+  fetchCommitRecords,
 } from "@/lib/integrations/github";
 import { createPhaseTracker } from "./phase-tracker";
 import {
@@ -131,6 +132,87 @@ export async function runGitHubSync(
       extra: { phase: "fetch-prs" },
     });
     await tracker.endPhase(fetchPhaseId, {
+      status: "error",
+      errorMessage: message,
+    });
+  }
+
+  // Fetch and store commits for the same window
+  const commitPhaseId = await tracker.startPhase("github-fetch-commits");
+  let commitsSynced = 0;
+  try {
+    const since = new Date();
+    since.setUTCDate(since.getUTCDate() - SYNC_WINDOW_DAYS);
+    since.setUTCHours(0, 0, 0, 0);
+
+    const repoFilter = process.env.GITHUB_REPOS?.split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+
+    const commits = await fetchCommitRecords(since, {
+      signal: opts.signal,
+      repos: repoFilter,
+      onRepoProgress: (repo, count) => {
+        Sentry.addBreadcrumb({
+          category: "sync.github",
+          level: "info",
+          message: `Fetched ${count} commits from ${repo}`,
+        });
+      },
+    });
+
+    for (const commit of commits) {
+      await db
+        .insert(githubCommits)
+        .values({
+          repo: commit.repo,
+          sha: commit.sha,
+          authorLogin: commit.authorLogin,
+          authorAvatarUrl: commit.authorAvatarUrl,
+          committedAt: commit.committedAt,
+          additions: commit.additions,
+          deletions: commit.deletions,
+          message: commit.message,
+        })
+        .onConflictDoUpdate({
+          target: [githubCommits.repo, githubCommits.sha],
+          set: {
+            authorLogin: commit.authorLogin,
+            authorAvatarUrl: commit.authorAvatarUrl,
+            additions: commit.additions,
+            deletions: commit.deletions,
+            message: commit.message,
+            syncedAt: new Date(),
+          },
+        });
+
+      commitsSynced += 1;
+    }
+
+    await tracker.endPhase(commitPhaseId, {
+      status: "success",
+      itemsProcessed: commitsSynced,
+      detail: `Stored ${commitsSynced} commits from ${SYNC_WINDOW_DAYS} day window`,
+    });
+  } catch (error) {
+    if (
+      error instanceof SyncCancelledError ||
+      error instanceof SyncDeadlineExceededError
+    ) {
+      await tracker.endPhase(commitPhaseId, {
+        status: "error",
+        errorMessage: error.message,
+      });
+      throw error;
+    }
+
+    const message = `Failed to sync GitHub commits: ${formatSyncError(error)}`;
+    errors.push(message);
+    Sentry.captureException(error, {
+      tags: { integration: "github" },
+      extra: { phase: "fetch-commits" },
+    });
+    await tracker.endPhase(commitPhaseId, {
       status: "error",
       errorMessage: message,
     });

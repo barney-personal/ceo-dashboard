@@ -8,6 +8,7 @@ interface EngineerRow {
   login: string;
   avatarUrl: string | null;
   prsCount: number;
+  commitsCount: number;
   additions: number;
   deletions: number;
   netLines: number;
@@ -17,11 +18,12 @@ interface EngineerRow {
   isBot: boolean;
 }
 
-type SortKey = "outputScore" | "prsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
+type SortKey = "outputScore" | "prsCount" | "commitsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
 
 const COLUMNS: { key: SortKey; label: string; format: (v: number) => string }[] = [
   { key: "outputScore", label: "Output Score", format: (v) => v.toLocaleString() },
   { key: "prsCount", label: "PRs Merged", format: (v) => v.toLocaleString() },
+  { key: "commitsCount", label: "Commits", format: (v) => v.toLocaleString() },
   { key: "additions", label: "Lines Added", format: (v) => v.toLocaleString() },
   { key: "deletions", label: "Lines Deleted", format: (v) => v.toLocaleString() },
   { key: "netLines", label: "Net Lines", format: (v) => (v >= 0 ? `+${v.toLocaleString()}` : v.toLocaleString()) },
