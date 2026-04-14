@@ -8,6 +8,8 @@ import {
   type SyncControl,
 } from "./errors";
 import { eq } from "drizzle-orm";
+import Anthropic from "@anthropic-ai/sdk";
+import * as Sentry from "@sentry/nextjs";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
 const BOT_PATTERNS = ["[bot]", "circleci"];
@@ -86,6 +88,111 @@ function findEmployeeMatch(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// LLM-assisted matching for logins that deterministic rules can't resolve
+// ---------------------------------------------------------------------------
+
+interface UnmatchedLogin {
+  login: string;
+  githubName: string | null;
+}
+
+interface LlmMatch {
+  login: string;
+  employeeName: string;
+  employeeEmail: string;
+}
+
+const LLM_MATCH_TIMEOUT_MS = 60_000;
+
+/**
+ * Send unmatched GitHub logins + the employee directory to Claude and ask it
+ * to match them. Returns only matches where the LLM is confident.
+ */
+async function llmMatchEmployees(
+  unmatched: UnmatchedLogin[],
+  employees: Employee[],
+  opts: { signal?: AbortSignal } = {}
+): Promise<LlmMatch[]> {
+  if (unmatched.length === 0 || employees.length === 0) return [];
+
+  const client = new Anthropic();
+
+  const employeeList = employees
+    .map((e) => `${e.preferred_name} <${e.employee_email}>`)
+    .join("\n");
+
+  const unmatchedList = unmatched
+    .map((u) => `- login: "${u.login}"${u.githubName ? `, display name: "${u.githubName}"` : ""}`)
+    .join("\n");
+
+  const response = await client.messages.create(
+    {
+      model: "claude-sonnet-4-6",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: `You are matching GitHub accounts to company employees. For each GitHub login below, determine if it matches an employee from the directory. Only include matches you are confident about.
+
+GitHub accounts to match:
+${unmatchedList}
+
+Employee directory:
+${employeeList}
+
+Respond with a JSON array of matches. Each match should have:
+- "login": the GitHub login
+- "employeeName": the employee's preferred_name from the directory
+- "employeeEmail": the employee's email from the directory
+
+Only include confident matches. Common patterns:
+- GitHub login may contain parts of the person's name (e.g. "andrew-muir" → "Andrew Muir")
+- Login may have a "-cleo" suffix (company account)
+- Display name may be a nickname or shortened version
+- Login may be initials or abbreviations of the name
+- Login may match the email prefix
+
+If you cannot confidently match a login, omit it. Respond ONLY with the JSON array, no other text.`,
+        },
+      ],
+    },
+    {
+      signal: AbortSignal.timeout(LLM_MATCH_TIMEOUT_MS),
+    }
+  );
+
+  const text =
+    response.content[0].type === "text" ? response.content[0].text : "";
+
+  try {
+    // Extract JSON from response (handle markdown code blocks)
+    const jsonStr = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
+    const parsed = JSON.parse(jsonStr) as unknown[];
+
+    // Validate and build a set of known employee emails for verification
+    const emailSet = new Set(employees.map((e) => e.employee_email.toLowerCase()));
+
+    return parsed
+      .filter((item): item is { login: string; employeeName: string; employeeEmail: string } => {
+        if (!item || typeof item !== "object") return false;
+        const obj = item as Record<string, unknown>;
+        return (
+          typeof obj.login === "string" &&
+          typeof obj.employeeName === "string" &&
+          typeof obj.employeeEmail === "string" &&
+          emailSet.has((obj.employeeEmail as string).toLowerCase())
+        );
+      });
+  } catch {
+    Sentry.captureMessage("Failed to parse LLM employee match response", {
+      level: "warning",
+      extra: { responseText: text.slice(0, 500) },
+    });
+    return [];
+  }
+}
+
 /**
  * Fetch GitHub profiles for unmapped logins and attempt to match them
  * against employee records from Mode.
@@ -134,6 +241,9 @@ export async function runGitHubEmployeeMapping(
   let unmatched = 0;
   let skipped = 0;
 
+  // Collect logins that deterministic matching can't resolve for LLM pass
+  const stillUnmatched: UnmatchedLogin[] = [];
+
   for (const login of unmappedLogins) {
     throwIfSyncShouldStop(opts, {
       cancelled: "employee matching cancelled",
@@ -146,6 +256,9 @@ export async function runGitHubEmployeeMapping(
         githubLogin: login,
         matchMethod: "auto",
         isBot: true,
+      }).onConflictDoUpdate({
+        target: githubEmployeeMap.githubLogin,
+        set: { isBot: true, matchMethod: "auto" },
       });
       bots++;
       continue;
@@ -184,6 +297,15 @@ export async function runGitHubEmployeeMapping(
           githubName,
           matchMethod: "auto",
           matchConfidence: "high",
+        }).onConflictDoUpdate({
+          target: githubEmployeeMap.githubLogin,
+          set: {
+            employeeName: emailMatch.preferred_name,
+            employeeEmail: emailMatch.employee_email,
+            githubName,
+            matchMethod: "auto",
+            matchConfidence: "high",
+          },
         });
         mapped++;
         continue;
@@ -201,20 +323,104 @@ export async function runGitHubEmployeeMapping(
           githubName,
           matchMethod: "auto",
           matchConfidence: nameMatch.confidence,
+        }).onConflictDoUpdate({
+          target: githubEmployeeMap.githubLogin,
+          set: {
+            employeeName: nameMatch.employee.preferred_name,
+            employeeEmail: nameMatch.employee.employee_email,
+            githubName,
+            matchMethod: "auto",
+            matchConfidence: nameMatch.confidence,
+          },
         });
         mapped++;
         continue;
       }
     }
 
-    // No match found — store with GitHub name for manual review
-    await db.insert(githubEmployeeMap).values({
-      githubLogin: login,
-      githubName,
-      matchMethod: "auto",
-      matchConfidence: "low",
-    });
-    unmatched++;
+    // Deterministic matching failed — collect for LLM pass
+    stillUnmatched.push({ login, githubName });
+  }
+
+  // LLM-assisted matching for remaining logins
+  if (stillUnmatched.length > 0 && employees.length > 0) {
+    try {
+      throwIfSyncShouldStop(opts, {
+        cancelled: "employee matching cancelled",
+        deadlineExceeded: "employee matching exceeded execution budget",
+      });
+
+      const llmMatches = await llmMatchEmployees(stillUnmatched, employees, opts);
+      const llmMatchedLogins = new Set<string>();
+
+      for (const match of llmMatches) {
+        await db.insert(githubEmployeeMap).values({
+          githubLogin: match.login,
+          employeeName: match.employeeName,
+          employeeEmail: match.employeeEmail,
+          githubName: stillUnmatched.find((u) => u.login === match.login)?.githubName ?? null,
+          matchMethod: "llm",
+          matchConfidence: "medium",
+        }).onConflictDoUpdate({
+          target: githubEmployeeMap.githubLogin,
+          set: {
+            employeeName: match.employeeName,
+            employeeEmail: match.employeeEmail,
+            matchMethod: "llm",
+            matchConfidence: "medium",
+          },
+        });
+        llmMatchedLogins.add(match.login);
+        mapped++;
+      }
+
+      // Store remaining as truly unmatched
+      for (const entry of stillUnmatched) {
+        if (llmMatchedLogins.has(entry.login)) continue;
+        await db.insert(githubEmployeeMap).values({
+          githubLogin: entry.login,
+          githubName: entry.githubName,
+          matchMethod: "auto",
+          matchConfidence: "low",
+        }).onConflictDoUpdate({
+          target: githubEmployeeMap.githubLogin,
+          set: {
+            githubName: entry.githubName,
+            matchMethod: "auto",
+            matchConfidence: "low",
+          },
+        });
+        unmatched++;
+      }
+    } catch (error) {
+      if (
+        error instanceof SyncCancelledError ||
+        error instanceof SyncDeadlineExceededError
+      ) {
+        throw error;
+      }
+      // LLM failure is non-fatal — store all as unmatched
+      Sentry.captureException(error, {
+        tags: { integration: "github" },
+        extra: { phase: "llm-employee-matching", unmatchedCount: stillUnmatched.length },
+      });
+      for (const entry of stillUnmatched) {
+        await db.insert(githubEmployeeMap).values({
+          githubLogin: entry.login,
+          githubName: entry.githubName,
+          matchMethod: "auto",
+          matchConfidence: "low",
+        }).onConflictDoUpdate({
+          target: githubEmployeeMap.githubLogin,
+          set: {
+            githubName: entry.githubName,
+            matchMethod: "auto",
+            matchConfidence: "low",
+          },
+        });
+        unmatched++;
+      }
+    }
   }
 
   return { mapped, bots, unmatched, skipped };
