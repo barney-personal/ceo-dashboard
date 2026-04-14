@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio
+.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio probe probe-all
 
 setup:
 	./scripts/setup.sh
@@ -28,6 +28,12 @@ test:
 ensure-doppler:
 	@doppler run -- true 2>/dev/null || doppler setup --project ceo-dashboard --config dev --no-interactive
 
+probe:
+	npx tsx scripts/probe.ts $(filter-out $@,$(MAKECMDGOALS))
+
+probe-all:
+	npx tsx scripts/probe.ts --all
+
 db-generate: ensure-doppler
 	doppler run -- npx drizzle-kit generate
 
@@ -36,3 +42,7 @@ db-migrate: ensure-doppler
 
 db-studio: ensure-doppler
 	doppler run -- npx drizzle-kit studio
+
+# Allow `make probe <name>` to pass extra args without "No rule to make target" errors
+%:
+	@:
