@@ -48,6 +48,26 @@ export const run: CheckHandler = async (ctx: CheckContext): Promise<CheckResult>
       };
     }
 
+    if (!body.version) {
+      return {
+        checkName,
+        status: "red",
+        latencyMs,
+        error: "version is missing — deploy version not visible",
+        details: body as unknown as Record<string, unknown>,
+      };
+    }
+
+    if (body.mode_sync_age_hours === null || body.mode_sync_age_hours >= 26) {
+      return {
+        checkName,
+        status: "red",
+        latencyMs,
+        error: `mode_sync_age_hours is ${body.mode_sync_age_hours ?? "null"} — Mode data is stale or unavailable`,
+        details: body as unknown as Record<string, unknown>,
+      };
+    }
+
     return {
       checkName,
       status: "green",

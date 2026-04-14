@@ -118,7 +118,7 @@ describe("ceo-ping-auth check", () => {
       json: async () => ({
         db_ok: true,
         version: "v1",
-        mode_sync_age_hours: null,
+        mode_sync_age_hours: 1.0,
         deploying: false,
         ts: "2026-04-14T00:00:00Z",
       }),
@@ -150,5 +150,109 @@ describe("ceo-ping-auth check", () => {
     expect(result.checkName).toBe("ceo-ping-auth");
     expect(result.status).toBe("red");
     expect(result.error).toMatch(/deploying/i);
+  });
+
+  it("returns red when version is null", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        db_ok: true,
+        version: null,
+        mode_sync_age_hours: 1.0,
+        deploying: false,
+        ts: "2026-04-14T00:00:00Z",
+      }),
+    });
+
+    const { run } = await import("../checks/ceo-ping-auth");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(result.error).toMatch(/version/i);
+    expect(result.details).toMatchObject({ db_ok: true });
+  });
+
+  it("returns red when version is empty string", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        db_ok: true,
+        version: "",
+        mode_sync_age_hours: 2.0,
+        deploying: false,
+        ts: "2026-04-14T00:00:00Z",
+      }),
+    });
+
+    const { run } = await import("../checks/ceo-ping-auth");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(result.error).toMatch(/version/i);
+    expect(result.details).toMatchObject({ db_ok: true });
+  });
+
+  it("returns red when mode_sync_age_hours is null", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        db_ok: true,
+        version: "abc1234",
+        mode_sync_age_hours: null,
+        deploying: false,
+        ts: "2026-04-14T00:00:00Z",
+      }),
+    });
+
+    const { run } = await import("../checks/ceo-ping-auth");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(result.error).toMatch(/mode.sync/i);
+    expect(result.details).toMatchObject({ db_ok: true });
+  });
+
+  it("returns red when mode_sync_age_hours >= 26", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        db_ok: true,
+        version: "abc1234",
+        mode_sync_age_hours: 26,
+        deploying: false,
+        ts: "2026-04-14T00:00:00Z",
+      }),
+    });
+
+    const { run } = await import("../checks/ceo-ping-auth");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("red");
+    expect(result.error).toMatch(/mode.sync/i);
+    expect(result.details).toMatchObject({ mode_sync_age_hours: 26 });
+  });
+
+  it("returns green when mode_sync_age_hours is just under 26", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        db_ok: true,
+        version: "abc1234",
+        mode_sync_age_hours: 25.9,
+        deploying: false,
+        ts: "2026-04-14T00:00:00Z",
+      }),
+    });
+
+    const { run } = await import("../checks/ceo-ping-auth");
+    const result = await run(makeCtx());
+
+    expect(result.status).toBe("green");
+    expect(result.details).toMatchObject({ mode_sync_age_hours: 25.9 });
   });
 });
