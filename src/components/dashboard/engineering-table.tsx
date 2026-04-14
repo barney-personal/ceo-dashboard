@@ -13,6 +13,8 @@ interface EngineerRow {
   netLines: number;
   changedFiles: number;
   repos: string[];
+  employeeName: string | null;
+  isBot: boolean;
 }
 
 type SortKey = "prsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
@@ -25,9 +27,17 @@ const COLUMNS: { key: SortKey; label: string; format: (v: number) => string }[] 
   { key: "changedFiles", label: "Files Changed", format: (v) => v.toLocaleString() },
 ];
 
-export function EngineeringTable({ data }: { data: EngineerRow[] }) {
+export function EngineeringTable({
+  data,
+  hideBots = true,
+}: {
+  data: EngineerRow[];
+  hideBots?: boolean;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>("prsCount");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const filtered = hideBots ? data.filter((r) => !r.isBot) : data;
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -38,12 +48,12 @@ export function EngineeringTable({ data }: { data: EngineerRow[] }) {
     }
   };
 
-  const sorted = [...data].sort((a, b) => {
+  const sorted = [...filtered].sort((a, b) => {
     const diff = a[sortKey] - b[sortKey];
     return sortDir === "desc" ? -diff : diff;
   });
 
-  if (data.length === 0) {
+  if (filtered.length === 0) {
     return (
       <div className="rounded-xl border border-border/60 bg-card p-12 text-center shadow-warm">
         <p className="text-sm text-muted-foreground">
@@ -103,18 +113,36 @@ export function EngineeringTable({ data }: { data: EngineerRow[] }) {
                     {row.avatarUrl && (
                       <img
                         src={row.avatarUrl}
-                        alt={row.login}
+                        alt={row.employeeName ?? row.login}
                         className="h-6 w-6 rounded-full"
                       />
                     )}
-                    <a
-                      href={`https://github.com/${row.login}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-medium text-foreground hover:text-primary transition-colors"
-                    >
-                      {row.login}
-                    </a>
+                    <div className="flex flex-col">
+                      {row.employeeName ? (
+                        <>
+                          <span className="font-medium text-foreground">
+                            {row.employeeName}
+                          </span>
+                          <a
+                            href={`https://github.com/${row.login}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            @{row.login}
+                          </a>
+                        </>
+                      ) : (
+                        <a
+                          href={`https://github.com/${row.login}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-medium text-foreground hover:text-primary transition-colors"
+                        >
+                          {row.login}
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </td>
                 {COLUMNS.map((col) => (

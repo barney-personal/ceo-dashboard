@@ -11,6 +11,7 @@ import {
   type SyncControl,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import { runGitHubEmployeeMapping } from "./github-employee-match";
 import * as Sentry from "@sentry/nextjs";
 
 interface SyncRun {
@@ -61,8 +62,15 @@ export async function runGitHubSync(
     periodStart.setUTCDate(periodStart.getUTCDate() - 30);
     periodStart.setUTCHours(0, 0, 0, 0);
 
+    // If GITHUB_REPOS is set (comma-separated), only sync those repos
+    // instead of crawling the entire org.
+    const repoFilter = process.env.GITHUB_REPOS?.split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+
     const stats = await getEngineeringStats(periodStart, {
       signal: opts.signal,
+      repos: repoFilter,
       onRepoProgress: (repo) => {
         Sentry.addBreadcrumb({
           category: "sync.github",
@@ -131,6 +139,39 @@ export async function runGitHubSync(
       extra: { phase: "fetch-pr-metrics" },
     });
     await tracker.endPhase(fetchPhaseId, {
+      status: "error",
+      errorMessage: message,
+    });
+  }
+
+  // Match GitHub logins to employee records
+  const matchPhaseId = await tracker.startPhase("github-employee-matching");
+  try {
+    const matchResult = await runGitHubEmployeeMapping({ signal: opts.signal });
+    await tracker.endPhase(matchPhaseId, {
+      status: "success",
+      itemsProcessed: matchResult.mapped + matchResult.bots,
+      detail: `Matched ${matchResult.mapped} employees, ${matchResult.bots} bots, ${matchResult.unmatched} unmatched`,
+    });
+  } catch (error) {
+    if (
+      error instanceof SyncCancelledError ||
+      error instanceof SyncDeadlineExceededError
+    ) {
+      await tracker.endPhase(matchPhaseId, {
+        status: "error",
+        errorMessage: error.message,
+      });
+      throw error;
+    }
+
+    const message = `Employee matching failed: ${formatSyncError(error)}`;
+    errors.push(message);
+    Sentry.captureException(error, {
+      tags: { integration: "github" },
+      extra: { phase: "employee-matching" },
+    });
+    await tracker.endPhase(matchPhaseId, {
       status: "error",
       errorMessage: message,
     });

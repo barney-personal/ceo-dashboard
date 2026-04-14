@@ -22,10 +22,11 @@ export default async function EngineeringPerformancePage() {
     getLatestTerminalSyncRun("github"),
   ]);
 
-  const totalPRs = rankings.reduce((sum, r) => sum + r.prsCount, 0);
-  const totalAdditions = rankings.reduce((sum, r) => sum + r.additions, 0);
-  const totalDeletions = rankings.reduce((sum, r) => sum + r.deletions, 0);
-  const uniqueRepos = new Set(rankings.flatMap((r) => r.repos)).size;
+  const humans = rankings.filter((r) => !r.isBot);
+  const totalPRs = humans.reduce((sum, r) => sum + r.prsCount, 0);
+  const totalAdditions = humans.reduce((sum, r) => sum + r.additions, 0);
+  const totalDeletions = humans.reduce((sum, r) => sum + r.deletions, 0);
+  const uniqueRepos = new Set(humans.flatMap((r) => r.repos)).size;
 
   return (
     <div className="space-y-8">
@@ -37,7 +38,7 @@ export default async function EngineeringPerformancePage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
           label="Contributors"
-          value={rankings.length.toString()}
+          value={humans.length.toString()}
           subtitle="engineers"
           delay={0}
         />

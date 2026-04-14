@@ -167,6 +167,13 @@ interface GitHubRepo {
   private: boolean;
 }
 
+interface GitHubUser {
+  login: string;
+  name: string | null;
+  email: string | null;
+  avatar_url: string;
+}
+
 interface GitHubPullRequest {
   number: number;
   title: string;
@@ -195,6 +202,15 @@ export async function checkGitHubHealth(opts: {
   await githubRequest(`/orgs/${config.org}`, {
     signal: opts.signal,
     timeoutMs: 5_000,
+  });
+}
+
+export async function getUserProfile(
+  login: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<GitHubUser> {
+  return githubRequest<GitHubUser>(`/users/${login}`, {
+    signal: opts.signal,
   });
 }
 
@@ -269,9 +285,28 @@ export interface EngineerPRStats {
 
 export async function getEngineeringStats(
   since: Date,
-  opts: { signal?: AbortSignal; onRepoProgress?: (repo: string) => void } = {}
+  opts: {
+    signal?: AbortSignal;
+    onRepoProgress?: (repo: string) => void;
+    repos?: string[];
+  } = {}
 ): Promise<EngineerPRStats[]> {
-  const repos = await getOrgRepos(opts);
+  const config = getConfig();
+  let repos: GitHubRepo[];
+
+  if (opts.repos && opts.repos.length > 0) {
+    // Use specified repos instead of crawling the entire org
+    repos = opts.repos.map((name) => ({
+      name,
+      full_name: `${config.org}/${name}`,
+      archived: false,
+      fork: false,
+      private: true,
+    }));
+  } else {
+    repos = await getOrgRepos(opts);
+  }
+
   const statsMap = new Map<string, EngineerPRStats>();
 
   for (const repo of repos) {
@@ -279,11 +314,11 @@ export async function getEngineeringStats(
 
     const mergedPRs = await getMergedPRs(repo.full_name, since, opts);
 
-    // Fetch PR details in bounded concurrency (3 at a time)
+    // Fetch PR details in bounded concurrency (10 at a time)
     const details = await mapWithConcurrency(
       mergedPRs,
       (pr) => getPRDetails(repo.full_name, pr.number, opts),
-      3
+      10
     );
 
     for (const pr of details) {

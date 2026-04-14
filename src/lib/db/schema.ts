@@ -255,6 +255,18 @@ export const githubPrMetrics = pgTable(
   ]
 );
 
+export const githubEmployeeMap = pgTable("github_employee_map", {
+  id: serial("id").primaryKey(),
+  githubLogin: text("github_login").notNull().unique(),
+  employeeName: text("employee_name"),
+  employeeEmail: text("employee_email"),
+  githubName: text("github_name"), // display name from GitHub profile
+  matchMethod: text("match_method").notNull(), // 'auto' | 'manual'
+  matchConfidence: text("match_confidence"), // 'high' | 'medium' | 'low'
+  isBot: boolean("is_bot").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const syncPhases = pgTable("sync_phases", {
   id: serial("id").primaryKey(),
   syncLogId: integer("sync_log_id")

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { githubPrMetrics } from "@/lib/db/schema";
+import { githubPrMetrics, githubEmployeeMap } from "@/lib/db/schema";
 import { and, gte, lte, desc, eq, max } from "drizzle-orm";
 
 export interface EngineerRanking {
@@ -11,6 +11,9 @@ export interface EngineerRanking {
   netLines: number;
   changedFiles: number;
   repos: string[];
+  employeeName: string | null;
+  employeeEmail: string | null;
+  isBot: boolean;
 }
 
 export async function getEngineeringRankings(
@@ -33,7 +36,8 @@ export async function getEngineeringRankings(
     .groupBy(githubPrMetrics.login)
     .as("latest_snapshot");
 
-  // Join back to get full rows for only the latest snapshot per engineer
+  // Join back to get full rows for only the latest snapshot per engineer,
+  // plus the employee mapping
   const rows = await db
     .select({
       login: githubPrMetrics.login,
@@ -43,6 +47,9 @@ export async function getEngineeringRankings(
       deletions: githubPrMetrics.deletions,
       changedFiles: githubPrMetrics.changedFiles,
       repos: githubPrMetrics.repos,
+      employeeName: githubEmployeeMap.employeeName,
+      employeeEmail: githubEmployeeMap.employeeEmail,
+      isBot: githubEmployeeMap.isBot,
     })
     .from(githubPrMetrics)
     .innerJoin(
@@ -51,6 +58,10 @@ export async function getEngineeringRankings(
         eq(githubPrMetrics.login, latestSnapshot.login),
         eq(githubPrMetrics.periodEnd, latestSnapshot.maxPeriodEnd)
       )
+    )
+    .leftJoin(
+      githubEmployeeMap,
+      eq(githubPrMetrics.login, githubEmployeeMap.githubLogin)
     )
     .where(
       and(
@@ -69,6 +80,9 @@ export async function getEngineeringRankings(
     netLines: row.additions - row.deletions,
     changedFiles: row.changedFiles,
     repos: Array.isArray(row.repos) ? (row.repos as string[]) : [],
+    employeeName: row.employeeName,
+    employeeEmail: row.employeeEmail,
+    isBot: row.isBot ?? false,
   }));
 }
 

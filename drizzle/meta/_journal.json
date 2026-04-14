@@ -57,6 +57,13 @@
       "when": 1775828400000,
       "tag": "0007_lying_eternals",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776166530528,
+      "tag": "0008_equal_toro",
+      "breakpoints": true
     }
   ]
 }
