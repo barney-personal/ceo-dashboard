@@ -1,9 +1,16 @@
 import { db } from "@/lib/db";
 import { githubPrMetrics, githubEmployeeMap, modeReportData } from "@/lib/db/schema";
 import { getUserProfile } from "@/lib/integrations/github";
-import { eq, notInArray, isNull } from "drizzle-orm";
+import {
+  SyncCancelledError,
+  SyncDeadlineExceededError,
+  throwIfSyncShouldStop,
+  type SyncControl,
+} from "./errors";
+import { eq } from "drizzle-orm";
 
-const BOT_SUFFIXES = ["[bot]", "bot", "ci", "circleci"];
+// Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
+const BOT_PATTERNS = ["[bot]", "circleci"];
 
 interface Employee {
   preferred_name: string;
@@ -13,9 +20,7 @@ interface Employee {
 
 function isLikelyBot(login: string): boolean {
   const lower = login.toLowerCase();
-  return BOT_SUFFIXES.some(
-    (s) => lower.endsWith(s) || lower.includes("bot") || lower.includes("ci-")
-  );
+  return BOT_PATTERNS.some((p) => lower.endsWith(p) || lower === p);
 }
 
 /**
@@ -85,9 +90,9 @@ function findEmployeeMatch(
  * Fetch GitHub profiles for unmapped logins and attempt to match them
  * against employee records from Mode.
  */
-export async function runGitHubEmployeeMapping(opts: {
-  signal?: AbortSignal;
-} = {}): Promise<{ mapped: number; bots: number; unmatched: number }> {
+export async function runGitHubEmployeeMapping(
+  opts: SyncControl = {}
+): Promise<{ mapped: number; bots: number; unmatched: number; skipped: number }> {
   // Get all unique GitHub logins from PR metrics
   const prLogins = await db
     .selectDistinct({ login: githubPrMetrics.login })
@@ -104,7 +109,7 @@ export async function runGitHubEmployeeMapping(opts: {
     .filter((login) => !mappedSet.has(login));
 
   if (unmappedLogins.length === 0) {
-    return { mapped: 0, bots: 0, unmatched: 0 };
+    return { mapped: 0, bots: 0, unmatched: 0, skipped: 0 };
   }
 
   // Load employee data from Mode
@@ -120,9 +125,13 @@ export async function runGitHubEmployeeMapping(opts: {
   let mapped = 0;
   let bots = 0;
   let unmatched = 0;
+  let skipped = 0;
 
   for (const login of unmappedLogins) {
-    if (opts.signal?.aborted) break;
+    throwIfSyncShouldStop(opts, {
+      cancelled: "employee matching cancelled",
+      deadlineExceeded: "employee matching exceeded execution budget",
+    });
 
     // Check if it's a bot
     if (isLikelyBot(login)) {
@@ -142,8 +151,17 @@ export async function runGitHubEmployeeMapping(opts: {
       const profile = await getUserProfile(login, opts);
       githubName = profile.name;
       githubEmail = profile.email;
-    } catch {
-      // Profile fetch failed — still try email-based matching below
+    } catch (error) {
+      // Re-throw cancellation/deadline errors
+      if (
+        error instanceof SyncCancelledError ||
+        error instanceof SyncDeadlineExceededError
+      ) {
+        throw error;
+      }
+      // Transient failure — skip this login so it retries next sync
+      skipped++;
+      continue;
     }
 
     // Try to match by email first (highest confidence)
@@ -192,5 +210,5 @@ export async function runGitHubEmployeeMapping(opts: {
     unmatched++;
   }
 
-  return { mapped, bots, unmatched };
+  return { mapped, bots, unmatched, skipped };
 }

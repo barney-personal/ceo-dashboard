@@ -147,11 +147,11 @@ export async function runGitHubSync(
   // Match GitHub logins to employee records
   const matchPhaseId = await tracker.startPhase("github-employee-matching");
   try {
-    const matchResult = await runGitHubEmployeeMapping({ signal: opts.signal });
+    const matchResult = await runGitHubEmployeeMapping(opts);
     await tracker.endPhase(matchPhaseId, {
       status: "success",
       itemsProcessed: matchResult.mapped + matchResult.bots,
-      detail: `Matched ${matchResult.mapped} employees, ${matchResult.bots} bots, ${matchResult.unmatched} unmatched`,
+      detail: `Matched ${matchResult.mapped} employees, ${matchResult.bots} bots, ${matchResult.unmatched} unmatched, ${matchResult.skipped} skipped`,
     });
   } catch (error) {
     if (
