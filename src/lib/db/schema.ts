@@ -322,3 +322,51 @@ export const pageViews = pgTable(
     index("page_views_user_viewed_idx").on(table.clerkUserId, table.viewedAt),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Production probes
+// ---------------------------------------------------------------------------
+
+export const probeRuns = pgTable(
+  "probe_runs",
+  {
+    id: serial("id").primaryKey(),
+    probeId: text("probe_id").notNull(),
+    checkName: text("check_name").notNull(),
+    status: text("status").notNull(), // 'green' | 'red' | 'timeout'
+    latencyMs: integer("latency_ms").notNull(),
+    detailsJson: jsonb("details_json"),
+    runId: text("run_id"),
+    target: text("target").notNull().default("prod"), // 'prod' | 'staging'
+    ts: timestamp("ts", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("probe_runs_check_name_ts_idx").on(table.checkName, table.ts),
+  ]
+);
+
+export const probeHeartbeats = pgTable("probe_heartbeats", {
+  probeId: text("probe_id").primaryKey(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+  version: text("version"),
+});
+
+export const probeIncidents = pgTable(
+  "probe_incidents",
+  {
+    id: serial("id").primaryKey(),
+    checkName: text("check_name").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    ackedAt: timestamp("acked_at", { withTimezone: true }),
+    escalationLevel: integer("escalation_level").notNull().default(0),
+    lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
+  },
+  (table) => [
+    // Prevents two open incidents for the same check under concurrent requests
+    uniqueIndex("probe_incidents_open_uniq")
+      .on(table.checkName)
+      .where(sql`${table.closedAt} IS NULL`),
+  ]
+);
+

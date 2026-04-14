@@ -71,6 +71,20 @@
       "when": 1776168593196,
       "tag": "0009_massive_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776167956896,
+      "tag": "0010_last_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1776170835936,
+      "tag": "0011_fine_dorian_gray",
+      "breakpoints": true
     }
   ]
 }

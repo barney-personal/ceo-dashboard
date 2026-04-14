@@ -1,0 +1,138 @@
+name: Production Probes
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: prod-probes-${{ github.event.schedule || 'manual' }}
+  cancel-in-progress: false
+
+jobs:
+  probe-15m:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/15 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run 15-minute probe suite
+        id: probe
+        continue-on-error: true
+        env:
+          PROBE_SECRET: ${{ secrets.PROBE_SECRET }}
+          CEO_DASHBOARD_URL: ${{ secrets.CEO_DASHBOARD_URL }}
+        run: ./scripts/probe.sh ceo-15m-suite
+
+      - name: Upload probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-report-15m-${{ github.run_number }}
+          path: .probe-reports/
+          retention-days: 14
+
+      - name: Telegram fallback on failure
+        if: steps.probe.outcome == 'failure'
+        env:
+          TELEGRAM_FALLBACK_BOT_TOKEN: ${{ secrets.TELEGRAM_FALLBACK_BOT_TOKEN }}
+          TELEGRAM_PROBE_CHAT_ID: ${{ secrets.TELEGRAM_PROBE_CHAT_ID }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$TELEGRAM_FALLBACK_BOT_TOKEN" ] || [ -z "$TELEGRAM_PROBE_CHAT_ID" ]; then
+            echo "::warning::Telegram fallback secrets not configured — skipping alert"
+            exit 0
+          fi
+          MESSAGE=$(printf '🔴 prod-probes 15m FAILED\nSuite: ceo-15m-suite\nRun: %s\nSHA: %s' "$GH_RUN_URL" "$GH_SHA")
+          curl -sf -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_FALLBACK_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_PROBE_CHAT_ID" --arg text "$MESSAGE" '{chat_id: $chat_id, text: $text}')" \
+            || echo "::warning::Telegram fallback send failed"
+
+      - name: Fail workflow if probe failed
+        if: steps.probe.outcome == 'failure'
+        run: exit 1
+
+  probe-60m:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run 60-minute probe suite
+        id: probe
+        continue-on-error: true
+        env:
+          PROBE_SECRET: ${{ secrets.PROBE_SECRET }}
+          CEO_DASHBOARD_URL: ${{ secrets.CEO_DASHBOARD_URL }}
+          CLERK_TEST_TOKEN: ${{ secrets.CLERK_TEST_TOKEN }}
+          CANARY_EXPECTED_VALUE: ${{ secrets.CANARY_EXPECTED_VALUE }}
+        run: ./scripts/probe.sh ceo-60m-suite
+
+      - name: Upload probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-report-60m-${{ github.run_number }}
+          path: .probe-reports/
+          retention-days: 14
+
+      - name: Upload failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-screenshots-60m-${{ github.run_number }}
+          path: .probe-reports/*.png
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Telegram fallback on failure
+        if: steps.probe.outcome == 'failure'
+        env:
+          TELEGRAM_FALLBACK_BOT_TOKEN: ${{ secrets.TELEGRAM_FALLBACK_BOT_TOKEN }}
+          TELEGRAM_PROBE_CHAT_ID: ${{ secrets.TELEGRAM_PROBE_CHAT_ID }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$TELEGRAM_FALLBACK_BOT_TOKEN" ] || [ -z "$TELEGRAM_PROBE_CHAT_ID" ]; then
+            echo "::warning::Telegram fallback secrets not configured — skipping alert"
+            exit 0
+          fi
+          MESSAGE=$(printf '🔴 prod-probes 60m FAILED\nSuite: ceo-60m-suite\nRun: %s\nSHA: %s' "$GH_RUN_URL" "$GH_SHA")
+          curl -sf -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_FALLBACK_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg chat_id "$TELEGRAM_PROBE_CHAT_ID" --arg text "$MESSAGE" '{chat_id: $chat_id, text: $text}')" \
+            || echo "::warning::Telegram fallback send failed"
+
+      - name: Fail workflow if probe failed
+        if: steps.probe.outcome == 'failure'
+        run: exit 1
