@@ -277,6 +277,27 @@ export const githubPrs = pgTable(
   ]
 );
 
+export const githubCommits = pgTable(
+  "github_commits",
+  {
+    id: serial("id").primaryKey(),
+    repo: text("repo").notNull(),
+    sha: text("sha").notNull(),
+    authorLogin: text("author_login").notNull(),
+    authorAvatarUrl: text("author_avatar_url"),
+    committedAt: timestamp("committed_at").notNull(),
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    message: text("message").notNull(),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.repo, table.sha),
+    index("github_commits_committed_at_idx").on(table.committedAt),
+    index("github_commits_author_idx").on(table.authorLogin),
+  ]
+);
+
 export const githubEmployeeMap = pgTable("github_employee_map", {
   id: serial("id").primaryKey(),
   githubLogin: text("github_login").notNull().unique(),

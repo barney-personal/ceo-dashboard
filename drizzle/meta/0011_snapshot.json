@@ -1,6 +1,6 @@
 {
-  "id": "45362859-87e7-4257-9e9e-c84b2252187c",
-  "prevId": "294e3cc6-3212-43f1-a38c-125fd900e5a1",
+  "id": "294e3cc6-3212-43f1-a38c-125fd900e5a1",
+  "prevId": "96c7ff09-6a38-4549-a6e9-b100fccd2a7f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1156,32 +1156,9 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "last_alerted_at": {
-          "name": "last_alerted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         }
       },
-      "indexes": {
-        "probe_incidents_open_uniq": {
-          "name": "probe_incidents_open_uniq",
-          "columns": [
-            {
-              "expression": "check_name",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"probe_incidents\".\"closed_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
