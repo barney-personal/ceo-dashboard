@@ -8,7 +8,7 @@
  *   npx tsx scripts/probe.ts --all
  */
 import { readFileSync } from "fs";
-import { resolve, dirname, join } from "path";
+import { resolve, dirname } from "path";
 import { execSync } from "child_process";
 import { parse as parseYaml } from "yaml";
 import { signPayload } from "@/lib/probes/hmac";

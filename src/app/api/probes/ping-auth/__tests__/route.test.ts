@@ -31,14 +31,14 @@ function mockModeSyncQuery(completedAt: Date | null) {
   const mockWhere = vi.fn().mockReturnValue({ orderBy: mockOrderBy });
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
   const mockSelect = vi.fn().mockReturnValue({ from: mockFrom });
-  (db as any).select = mockSelect;
+  (db as unknown as { select: typeof mockSelect }).select = mockSelect;
 }
 
 describe("GET /api/probes/ping-auth", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.stubEnv("RENDER_GIT_COMMIT", "abc123def");
-    mockExecute.mockResolvedValue([] as any);
+    mockExecute.mockResolvedValue([] as unknown as never);
     mockModeSyncQuery(new Date(Date.now() - 3 * 60 * 60 * 1000));
   });
 

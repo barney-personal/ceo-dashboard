@@ -49,7 +49,17 @@ export const run: CheckHandler = async (ctx: CheckContext): Promise<CheckResult>
   try {
     const { chromium } = await import("@playwright/test");
     browser = await chromium.launch({ headless: true });
-    const context = await (browser as any).newContext();
+    // Playwright's Browser type is narrower than what we need; we only use
+    // a handful of methods on the context and page. Cast via `unknown` to
+    // keep lint happy without pulling @playwright/test types into a lib build.
+    const context = await (
+      browser as unknown as {
+        newContext: () => Promise<{
+          addCookies: (cookies: Array<{ name: string; value: string; domain: string; path: string }>) => Promise<void>;
+          newPage: () => Promise<typeof page>;
+        }>;
+      }
+    ).newContext();
 
     const url = new URL(ctx.baseUrl);
     await context.addCookies([

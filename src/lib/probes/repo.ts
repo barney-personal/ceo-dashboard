@@ -5,7 +5,7 @@ import {
   probeIncidents,
 } from "@/lib/db/schema";
 import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
-import type { ProbeRunPayload, ProbeStatus } from "./types";
+import type { ProbeRunPayload } from "./types";
 
 export async function insertProbeRun(payload: ProbeRunPayload) {
   const [row] = await db
