@@ -52,6 +52,10 @@ export async function lastRunsForCheck(
     .limit(limit);
 }
 
+export async function allHeartbeats() {
+  return db.select().from(probeHeartbeats);
+}
+
 export async function staleHeartbeats(thresholdMinutes = 15) {
   const cutoff = sql`now() - interval '1 minute' * ${thresholdMinutes}`;
   return db
