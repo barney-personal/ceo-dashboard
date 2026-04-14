@@ -1,0 +1,2 @@
+ALTER TABLE "probe_incidents" ADD COLUMN "last_alerted_at" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "probe_incidents_open_uniq" ON "probe_incidents" USING btree ("check_name") WHERE "probe_incidents"."closed_at" IS NULL;

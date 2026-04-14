@@ -297,14 +297,24 @@ export const probeHeartbeats = pgTable("probe_heartbeats", {
   version: text("version"),
 });
 
-export const probeIncidents = pgTable("probe_incidents", {
-  id: serial("id").primaryKey(),
-  checkName: text("check_name").notNull(),
-  openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
-  closedAt: timestamp("closed_at", { withTimezone: true }),
-  ackedAt: timestamp("acked_at", { withTimezone: true }),
-  escalationLevel: integer("escalation_level").notNull().default(0),
-});
+export const probeIncidents = pgTable(
+  "probe_incidents",
+  {
+    id: serial("id").primaryKey(),
+    checkName: text("check_name").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    ackedAt: timestamp("acked_at", { withTimezone: true }),
+    escalationLevel: integer("escalation_level").notNull().default(0),
+    lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }),
+  },
+  (table) => [
+    // Prevents two open incidents for the same check under concurrent requests
+    uniqueIndex("probe_incidents_open_uniq")
+      .on(table.checkName)
+      .where(sql`${table.closedAt} IS NULL`),
+  ]
+);
 
 // ---------------------------------------------------------------------------
 // Page view tracking (dashboard usage analytics)

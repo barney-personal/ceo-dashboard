@@ -63,16 +63,19 @@ export async function staleHeartbeats(thresholdMinutes = 15) {
 export async function openIncident(
   checkName: string,
   escalationLevel = 0
-) {
+): Promise<{ id: number } | null> {
+  const now = new Date();
   const [row] = await db
     .insert(probeIncidents)
     .values({
       checkName,
-      openedAt: new Date(),
+      openedAt: now,
       escalationLevel,
+      lastAlertedAt: now,
     })
+    .onConflictDoNothing()
     .returning({ id: probeIncidents.id });
-  return row;
+  return row ?? null;
 }
 
 export async function closeIncident(incidentId: number) {
@@ -102,9 +105,20 @@ export async function openIncidentForCheck(checkName: string) {
   return row ?? null;
 }
 
-export async function escalateIncident(incidentId: number, level: number) {
+export async function escalateIncident(
+  incidentId: number,
+  level: number,
+  lastAlertedAt: Date = new Date()
+) {
   await db
     .update(probeIncidents)
-    .set({ escalationLevel: level })
+    .set({ escalationLevel: level, lastAlertedAt })
+    .where(eq(probeIncidents.id, incidentId));
+}
+
+export async function setLastAlertedAt(incidentId: number, at: Date) {
+  await db
+    .update(probeIncidents)
+    .set({ lastAlertedAt: at })
     .where(eq(probeIncidents.id, incidentId));
 }
