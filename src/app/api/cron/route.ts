@@ -21,18 +21,20 @@ export async function GET(request: NextRequest) {
       console.error("Failed to clean up debug logs", error);
     }
 
-    const [mode, slack, managementAccounts, meetings] = await Promise.all([
+    const [mode, slack, managementAccounts, meetings, github] = await Promise.all([
       enqueueSyncRun("mode", { trigger: "cron" }),
       enqueueSyncRun("slack", { trigger: "cron" }),
       enqueueSyncRun("management-accounts", { trigger: "cron" }),
       enqueueSyncRun("meetings", { trigger: "cron" }),
+      enqueueSyncRun("github", { trigger: "cron" }),
     ]);
 
-    if ([mode, slack, managementAccounts, meetings].some((result) => result.outcome !== "skipped")) {
+    const allResults = [mode, slack, managementAccounts, meetings, github];
+    if (allResults.some((result) => result.outcome !== "skipped")) {
       const workerId = createWorkerId("web-cron");
-      const runIds = [mode.runId, slack.runId, managementAccounts.runId, meetings.runId].filter(
-        (runId): runId is number => runId != null
-      );
+      const runIds = allResults
+        .map((r) => r.runId)
+        .filter((runId): runId is number => runId != null);
       startBackgroundSyncDrain(workerId, {
         runIds,
         triggerLabel: "cron trigger",
@@ -46,6 +48,7 @@ export async function GET(request: NextRequest) {
         slack: serializeEnqueueSyncResult(slack),
         managementAccounts: serializeEnqueueSyncResult(managementAccounts),
         meetings: serializeEnqueueSyncResult(meetings),
+        github: serializeEnqueueSyncResult(github),
       },
     });
   } catch (error) {

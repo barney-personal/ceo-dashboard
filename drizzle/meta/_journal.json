@@ -50,6 +50,13 @@
       "when": 1775828335312,
       "tag": "0006_futuristic_mongu",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775828400000,
+      "tag": "0007_lying_eternals",
+      "breakpoints": true
     }
   ]
 }
