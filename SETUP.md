@@ -47,6 +47,18 @@ Probe reports are uploaded as workflow artifacts (14-day retention).
 
 To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`.
 
+## Dashboard Canary
+
+The dashboard layout renders a visually-hidden `<span data-testid="probe-canary">` element on every authenticated page. The Playwright hourly probe (M19) navigates to an authenticated page and asserts this element contains the expected value.
+
+- **Source:** `src/components/dashboard/probe-canary.tsx`
+- **Location:** `src/app/dashboard/layout.tsx` (rendered after `<main>`)
+- **Env var:** `CANARY_EXPECTED_VALUE` — the text content the probe asserts on
+- **Default:** `ceo-dashboard-canary-ok` (used when env is unset or empty)
+- **Security:** The canary is a static string with no customer data. It uses `aria-hidden="true"` and `sr-only` to stay invisible to sighted users.
+
+To change the canary value, update `CANARY_EXPECTED_VALUE` in both Doppler and GitHub Actions secrets simultaneously.
+
 ## Render Cron Job
 
 The meta-heartbeat watcher runs as a separate Render Cron Job resource that hits `GET /api/cron/probe-heartbeat` with `Authorization: Bearer <INTERNAL_CRON_SECRET>`. Declare this in `render.yaml`.
