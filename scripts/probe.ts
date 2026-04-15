@@ -149,12 +149,21 @@ export async function postResult(
   ctx: CheckContext,
   runId: string
 ): Promise<DeliveryResult> {
+  // Fold `error` into `details` so failure messages survive ingestion.
+  // The report endpoint only persists `details` → `details_json`, so a
+  // top-level CheckResult.error would otherwise be dropped and failures
+  // would show up in the dashboard as opaque "red" rows.
+  const detailsWithError =
+    result.error !== undefined
+      ? { ...(result.details ?? {}), error: result.error }
+      : result.details;
+
   const payload = JSON.stringify({
     probeId: "cloud-cron",
     checkName: result.checkName,
     status: result.status,
     latencyMs: result.latencyMs,
-    details: result.details,
+    details: detailsWithError,
     runId,
     target: ctx.target,
   });

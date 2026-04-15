@@ -28,9 +28,7 @@ describe("probe CLI contract", () => {
     it("resolves --all to every check in manifest", () => {
       const manifest = loadManifest(MANIFEST_PATH);
       const checks = resolveChecks(manifest, "--all");
-      expect(checks).toEqual(
-        expect.arrayContaining(["ceo-ping-auth", "ceo-clerk-playwright"])
-      );
+      expect(checks).toEqual(expect.arrayContaining(["ceo-ping-auth"]));
       expect(checks).toHaveLength(Object.keys(manifest.checks).length);
     });
 
@@ -141,6 +139,68 @@ describe("probe CLI contract", () => {
       const body = JSON.parse(opts.body);
       expect(body.checkName).toBe("ceo-ping-auth");
       expect(body.runId).toBe("run-123");
+    });
+
+    // Regression: CheckResult.error used to be dropped from the POST payload
+    // because the report endpoint only reads `details`. The dashboard then
+    // showed red runs with no failure message. postResult now folds
+    // `error` into `details.error` so it survives ingestion.
+    it("folds CheckResult.error into details.error so it reaches the DB", async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      });
+      const redResult: CheckResult = {
+        checkName: "ceo-ping-auth",
+        status: "red",
+        latencyMs: 1200,
+        error: "connection refused",
+        details: { url: "https://example.com/api/probes/ping-auth" },
+      };
+      await postResult(redResult, makeCtx(), "run-err");
+      const [, opts] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.details).toEqual({
+        url: "https://example.com/api/probes/ping-auth",
+        error: "connection refused",
+      });
+    });
+
+    it("folds error into a fresh details object when no details were provided", async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      });
+      const redResult: CheckResult = {
+        checkName: "ceo-ping-auth",
+        status: "red",
+        latencyMs: 800,
+        error: "timeout",
+      };
+      await postResult(redResult, makeCtx(), "run-err-2");
+      const [, opts] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.details).toEqual({ error: "timeout" });
+    });
+
+    it("leaves details untouched when CheckResult has no error", async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+      });
+      const greenWithDetails: CheckResult = {
+        checkName: "ceo-ping-auth",
+        status: "green",
+        latencyMs: 42,
+        details: { db_ok: true },
+      };
+      await postResult(greenWithDetails, makeCtx(), "run-green");
+      const [, opts] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(opts.body);
+      expect(body.details).toEqual({ db_ok: true });
     });
   });
 

@@ -8,7 +8,7 @@ import { ProbeSummary } from "./_components/ProbeSummary";
 import { ProbeTimeline } from "./_components/ProbeTimeline";
 import { serializeSummary, serializeTimelineRun } from "./_components/format";
 
-const KNOWN_CHECKS = ["ceo-ping-auth", "ceo-clerk-playwright"];
+const KNOWN_CHECKS = ["ceo-ping-auth"];
 
 export default async function ProbesPage() {
   const role = await getCurrentUserRole();
