@@ -205,6 +205,9 @@ function ViewToggle({
 
 // ── Distribution table (Level 1 + Level 2) ───────────────────────────────
 
+type SortColumn = "name" | "people" | 5 | 4 | 3 | 2 | 1 | "missed";
+type SortDir = "asc" | "desc";
+
 function DistributionTable({
   rows,
   cycle,
@@ -214,13 +217,39 @@ function DistributionTable({
   cycle: string;
   onSelect: (name: string) => void;
 }) {
+  const [sortCol, setSortCol] = useState<SortColumn>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
   // Compute distribution for each row
-  const rowData = rows.map((row) => {
+  const rowData = useMemo(() => rows.map((row) => {
     const dist = cycleDistribution(row.people, cycle);
     const distMap = new Map(dist.map((d) => [d.rating, d]));
     const reviewed = dist.reduce((sum, d) => sum + d.count, 0);
     return { ...row, distMap, reviewed };
-  });
+  }), [rows, cycle]);
+
+  // Sort rows
+  const sortedRows = useMemo(() => {
+    const sorted = [...rowData].sort((a, b) => {
+      let av: number, bv: number;
+      if (sortCol === "name") {
+        const cmp = a.name.localeCompare(b.name);
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      if (sortCol === "people") {
+        av = a.people.length;
+        bv = b.people.length;
+      } else if (sortCol === "missed") {
+        av = a.reviewed > 0 ? (a.distMap.get(null)?.count ?? 0) / a.reviewed : 0;
+        bv = b.reviewed > 0 ? (b.distMap.get(null)?.count ?? 0) / b.reviewed : 0;
+      } else {
+        av = a.reviewed > 0 ? (a.distMap.get(sortCol)?.count ?? 0) / a.reviewed : 0;
+        bv = b.reviewed > 0 ? (b.distMap.get(sortCol)?.count ?? 0) / b.reviewed : 0;
+      }
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+    return sorted;
+  }, [rowData, sortCol, sortDir]);
 
   // Compute totals
   const totalPeople = rowData.reduce((sum, r) => sum + r.people.length, 0);
@@ -234,15 +263,30 @@ function DistributionTable({
 
   const ratingColumns = [5, 4, 3, 2, 1] as const;
 
-  function pct(count: number, total: number): string {
-    if (total === 0) return "—";
-    return `${Math.round((count / total) * 100)}%`;
+  function toggleSort(col: SortColumn) {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir(col === "name" ? "asc" : "desc");
+    }
   }
+
+  function sortIndicator(col: SortColumn) {
+    if (sortCol !== col) return null;
+    return (
+      <span className="ml-0.5 text-primary">
+        {sortDir === "asc" ? "↑" : "↓"}
+      </span>
+    );
+  }
+
+  const thClass = "px-3 py-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 cursor-pointer select-none hover:text-muted-foreground transition-colors";
 
   function pctCell(count: number, total: number, rating: number | null) {
     if (total === 0) return <span className="text-muted-foreground/30">—</span>;
-    const percentage = Math.round((count / total) * 100);
     if (count === 0) return <span className="text-muted-foreground/30">—</span>;
+    const percentage = Math.round((count / total) * 100);
     return (
       <span className="font-medium" style={{ color: ratingColour(rating) }}>
         {percentage}%
@@ -255,33 +299,43 @@ function DistributionTable({
       <table className="w-full min-w-[600px] text-sm">
         <thead>
           <tr className="border-b border-border/30">
-            <th className="px-5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Name
+            <th
+              onClick={() => toggleSort("name")}
+              className={`px-5 ${thClass} text-left`}
+            >
+              Name{sortIndicator("name")}
             </th>
-            <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              People
+            <th
+              onClick={() => toggleSort("people")}
+              className={`${thClass} text-right`}
+            >
+              People{sortIndicator("people")}
             </th>
             {ratingColumns.map((r) => (
               <th
                 key={r}
-                className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
+                onClick={() => toggleSort(r)}
+                className={`${thClass} text-center`}
               >
                 <span className="inline-flex items-center gap-1">
                   <span
                     className="inline-block h-2 w-2 rounded-full"
                     style={{ backgroundColor: ratingColour(r) }}
                   />
-                  {r}
+                  {r}{sortIndicator(r)}
                 </span>
               </th>
             ))}
-            <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+            <th
+              onClick={() => toggleSort("missed")}
+              className={`${thClass} text-center`}
+            >
               <span className="inline-flex items-center gap-1">
                 <span
                   className="inline-block h-2 w-2 rounded-full"
                   style={{ backgroundColor: ratingColour(null) }}
                 />
-                Missed
+                Missed{sortIndicator("missed")}
               </span>
             </th>
             <th className="w-40 px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
@@ -290,7 +344,7 @@ function DistributionTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-border/20">
-          {rowData.map((row) => {
+          {sortedRows.map((row) => {
             const missed = row.distMap.get(null)?.count ?? 0;
             return (
               <tr
