@@ -159,26 +159,47 @@ describe("getAttritionData", () => {
 
 describe("getRollingAttritionSeries", () => {
   it("computes attrition rate as leavers_l12m / avg_headcount_l12m", async () => {
+    // Mode provides granular rows per department+tenure; aggregateByPeriod sums them
     mockReportData([
       makeAttritionRow({
         reporting_period: "2026-01-01T00:00:00.000Z",
-        department: "All",
-        tenure: "All",
-        avg_headcount_l12m: 100,
-        leavers_l12m: 10,
-        leavers_voluntary_regrettable_l12m: 4,
-        leavers_voluntary_non_regrettable_l12m: 3,
-        leavers_involuntary_non_regrettable_l12m: 3,
+        department: "Engineering",
+        tenure: "< 1 Year",
+        avg_headcount_l12m: 50,
+        leavers_l12m: 5,
+        leavers_voluntary_regrettable_l12m: 2,
+        leavers_voluntary_non_regrettable_l12m: 1,
+        leavers_involuntary_non_regrettable_l12m: 2,
+      }),
+      makeAttritionRow({
+        reporting_period: "2026-01-01T00:00:00.000Z",
+        department: "Engineering",
+        tenure: "1+ Year",
+        avg_headcount_l12m: 50,
+        leavers_l12m: 5,
+        leavers_voluntary_regrettable_l12m: 2,
+        leavers_voluntary_non_regrettable_l12m: 2,
+        leavers_involuntary_non_regrettable_l12m: 1,
       }),
       makeAttritionRow({
         reporting_period: "2026-02-01T00:00:00.000Z",
-        department: "All",
-        tenure: "All",
-        avg_headcount_l12m: 100,
-        leavers_l12m: 12,
-        leavers_voluntary_regrettable_l12m: 5,
-        leavers_voluntary_non_regrettable_l12m: 4,
-        leavers_involuntary_non_regrettable_l12m: 3,
+        department: "Engineering",
+        tenure: "< 1 Year",
+        avg_headcount_l12m: 50,
+        leavers_l12m: 6,
+        leavers_voluntary_regrettable_l12m: 2,
+        leavers_voluntary_non_regrettable_l12m: 2,
+        leavers_involuntary_non_regrettable_l12m: 2,
+      }),
+      makeAttritionRow({
+        reporting_period: "2026-02-01T00:00:00.000Z",
+        department: "Engineering",
+        tenure: "1+ Year",
+        avg_headcount_l12m: 50,
+        leavers_l12m: 6,
+        leavers_voluntary_regrettable_l12m: 3,
+        leavers_voluntary_non_regrettable_l12m: 2,
+        leavers_involuntary_non_regrettable_l12m: 1,
       }),
     ]);
 
@@ -195,8 +216,8 @@ describe("getRollingAttritionSeries", () => {
   it("returns separate series for regretted and non-regretted", async () => {
     mockReportData([
       makeAttritionRow({
-        department: "All",
-        tenure: "All",
+        department: "Engineering",
+        tenure: "1+ Year",
         avg_headcount_l12m: 100,
         leavers_l12m: 10,
         leavers_voluntary_regrettable_l12m: 4,
@@ -218,8 +239,8 @@ describe("getRollingAttritionSeries", () => {
   it("skips rows where avg_headcount_l12m is zero", async () => {
     mockReportData([
       makeAttritionRow({
-        department: "All",
-        tenure: "All",
+        department: "Engineering",
+        tenure: "1+ Year",
         avg_headcount_l12m: 0,
         leavers_l12m: 0,
       }),
@@ -237,7 +258,7 @@ describe("getY1AttritionSeries", () => {
       [],
       [
         makeY1Row({
-          department: "All",
+          department: "Engineering",
           num_starters_l12m: 40,
           num_leavers_within_1y_l12m: 8,
           num_voluntary_regrettable_leavers_within_1y_l12m: 3,
@@ -281,16 +302,16 @@ describe("getLatestAttritionMetrics", () => {
     mockReportData([
       makeAttritionRow({
         reporting_period: "2026-03-01T00:00:00.000Z",
-        department: "All",
-        tenure: "All",
+        department: "Engineering",
+        tenure: "1+ Year",
         avg_headcount_l12m: 200,
         leavers_l12m: 20,
         leavers_voluntary_regrettable_l12m: 8,
       }),
       makeAttritionRow({
         reporting_period: "2026-02-01T00:00:00.000Z",
-        department: "All",
-        tenure: "All",
+        department: "Engineering",
+        tenure: "1+ Year",
         avg_headcount_l12m: 200,
         leavers_l12m: 18,
         leavers_voluntary_regrettable_l12m: 7,
@@ -312,16 +333,30 @@ describe("getAttritionByDepartment", () => {
       makeAttritionRow({
         reporting_period: "2026-01-01T00:00:00.000Z",
         department: "Engineering",
-        tenure: "All",
-        avg_headcount_l12m: 80,
-        leavers_l12m: 8,
+        tenure: "< 1 Year",
+        avg_headcount_l12m: 40,
+        leavers_l12m: 4,
+      }),
+      makeAttritionRow({
+        reporting_period: "2026-01-01T00:00:00.000Z",
+        department: "Engineering",
+        tenure: "1+ Year",
+        avg_headcount_l12m: 40,
+        leavers_l12m: 4,
       }),
       makeAttritionRow({
         reporting_period: "2026-01-01T00:00:00.000Z",
         department: "Product",
-        tenure: "All",
-        avg_headcount_l12m: 20,
-        leavers_l12m: 4,
+        tenure: "< 1 Year",
+        avg_headcount_l12m: 10,
+        leavers_l12m: 2,
+      }),
+      makeAttritionRow({
+        reporting_period: "2026-01-01T00:00:00.000Z",
+        department: "Product",
+        tenure: "1+ Year",
+        avg_headcount_l12m: 10,
+        leavers_l12m: 2,
       }),
     ]);
 
