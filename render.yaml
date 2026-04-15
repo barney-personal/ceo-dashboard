@@ -8,9 +8,12 @@ databases:
 # Environment variable management
 # ---------------------------------------------------------------------------
 # Doppler (`ceo-dashboard/prd`) is the source of truth for all secrets and
-# operator-tunable config. To push Doppler → Render run:
-#     RENDER_API_KEY=rnd_... make sync-render-env
-# (or `doppler run -- make sync-render-env` if RENDER_API_KEY is in Doppler).
+# operator-tunable config. The .github/workflows/sync-doppler-to-render.yml
+# workflow pushes Doppler → Render automatically on every merge to main and
+# triggers a fresh deploy. To push manually (e.g. after editing Doppler
+# without a merge) run:
+#     doppler run -- make sync-render-env
+# (RENDER_API_KEY now lives in `ceo-dashboard/prd` so the inline form is rare.)
 #
 # This file declares only:
 #   1. Render-managed values that have no Doppler analogue:
