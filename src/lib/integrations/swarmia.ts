@@ -256,7 +256,7 @@ export async function getTeams(): Promise<SwarmiaTeam[]> {
   try {
     const parsed = JSON.parse(body) as { teams?: SwarmiaTeam[] };
     return parsed.teams ?? [];
-  } catch (err) {
+  } catch {
     throw new SwarmiaApiError(
       `Swarmia /teams returned non-JSON: ${body.slice(0, 120)}`,
       200,

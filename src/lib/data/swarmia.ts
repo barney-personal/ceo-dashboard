@@ -11,7 +11,6 @@ import {
   getPullRequestMetricsForRange,
   isSwarmiaConfigured,
   type SwarmiaDora,
-  type SwarmiaTeamPrMetrics,
   type SwarmiaTimeframe,
 } from "@/lib/integrations/swarmia";
 
