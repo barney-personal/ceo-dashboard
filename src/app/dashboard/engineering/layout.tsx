@@ -11,9 +11,9 @@ export default async function EngineeringLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // All engineering sub-pages are leadership+. Enforce once here.
+  // All engineering sub-pages are open to everyone.
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
+  if (!hasAccess(role, "everyone")) {
     redirect("/dashboard");
   }
 
