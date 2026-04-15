@@ -26,6 +26,7 @@ node_modules/
 
 # === Runtime data ===
 /data/
+.probe-reports/
 
 # === Claude Code worktrees ===
 .claude/worktrees/
