@@ -22,7 +22,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CEO Dashboard",
+  title: "Cleo Dashboard",
   description: "Company metrics and data in one place",
 };
 
