@@ -104,7 +104,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Performance",
         href: "/dashboard/people/performance",
-        requiredRole: "leadership",
+        requiredRole: "ceo",
         icon: TrendingUp,
       },
       {

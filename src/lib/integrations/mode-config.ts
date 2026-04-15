@@ -312,8 +312,13 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     name: "Performance Dashboard",
     section: "people",
     category: "performance",
-    syncEnabled: false,
-    queries: [],
+    syncEnabled: true,
+    queries: [
+      {
+        name: "manager_distributions_individual_ratings",
+        storageWindow: { kind: "snapshot" },
+      },
+    ],
   },
 ];
 
