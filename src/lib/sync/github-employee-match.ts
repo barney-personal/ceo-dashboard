@@ -344,6 +344,8 @@ export async function runGitHubEmployeeMapping(
 
   // LLM-assisted matching for remaining logins
   if (stillUnmatched.length > 0 && employees.length > 0) {
+    const unmatchedLoginSet = new Set(stillUnmatched.map((u) => u.login));
+
     try {
       throwIfSyncShouldStop(opts, {
         cancelled: "employee matching cancelled",
@@ -354,6 +356,9 @@ export async function runGitHubEmployeeMapping(
       const llmMatchedLogins = new Set<string>();
 
       for (const match of llmMatches) {
+        // Validate: only accept logins we actually asked about
+        if (!unmatchedLoginSet.has(match.login)) continue;
+
         await db.insert(githubEmployeeMap).values({
           githubLogin: match.login,
           employeeName: match.employeeName,
@@ -420,6 +425,24 @@ export async function runGitHubEmployeeMapping(
         });
         unmatched++;
       }
+    }
+  } else if (stillUnmatched.length > 0) {
+    // No employee directory available — store as low-confidence for retry
+    for (const entry of stillUnmatched) {
+      await db.insert(githubEmployeeMap).values({
+        githubLogin: entry.login,
+        githubName: entry.githubName,
+        matchMethod: "auto",
+        matchConfidence: "low",
+      }).onConflictDoUpdate({
+        target: githubEmployeeMap.githubLogin,
+        set: {
+          githubName: entry.githubName,
+          matchMethod: "auto",
+          matchConfidence: "low",
+        },
+      });
+      unmatched++;
     }
   }
 
