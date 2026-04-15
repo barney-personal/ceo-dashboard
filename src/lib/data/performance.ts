@@ -111,7 +111,7 @@ export function transformPerformanceData(
       level: emp?.level ?? "",
       squad: emp?.squad ?? "",
       pillar: emp?.pillar ?? func,
-      function: func,
+      function: emp?.function ?? func,
       ratings,
     });
   }
