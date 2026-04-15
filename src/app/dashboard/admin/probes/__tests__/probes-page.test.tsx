@@ -80,7 +80,7 @@ describe("ProbesPage data loading", () => {
     await ProbesPage();
 
     expect(mockGetProbeStatusSummary).toHaveBeenCalledWith(
-      ["ceo-ping-auth", "ceo-clerk-playwright"],
+      ["ceo-ping-auth"],
       expect.any(Date),
     );
   });

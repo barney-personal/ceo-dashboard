@@ -17,8 +17,6 @@ This document covers the environment variables and secrets required for the prod
 | Variable | Purpose | Where to get it |
 |----------|---------|-----------------|
 | `CEO_DASHBOARD_URL` | Public URL of the ceo-dashboard (e.g. `https://ceo-dashboard.onrender.com`) | Render dashboard |
-| `CANARY_EXPECTED_VALUE` | DOM text string the hourly Playwright canary asserts is rendered | Choose a stable UI element visible after login |
-| `CLERK_TEST_TOKEN` | Clerk Testing Token for bypassing login UI in Playwright probes | Clerk dashboard > Testing > Create token |
 | `TELEGRAM_FALLBACK_BOT_TOKEN` | Fallback Telegram bot token used by GitHub Actions when the dashboard itself is down | Create a second bot via @BotFather, or reuse `TELEGRAM_BOT_TOKEN` |
 
 ## GitHub Actions Secrets
@@ -27,8 +25,6 @@ The `.github/workflows/prod-probes.yml` workflow requires these secrets in the r
 
 - `PROBE_SECRET` — same value as Doppler
 - `CEO_DASHBOARD_URL` — same value as Doppler
-- `CANARY_EXPECTED_VALUE` — same value as Doppler
-- `CLERK_TEST_TOKEN` — same value as Doppler
 - `TELEGRAM_BOT_TOKEN` — same value as Doppler
 - `TELEGRAM_PROBE_CHAT_ID` — same value as Doppler
 - `TELEGRAM_FALLBACK_BOT_TOKEN` — same value as Doppler
@@ -40,27 +36,21 @@ The `.github/workflows/prod-probes.yml` workflow runs production probes on a sch
 | Job | Schedule | Suite | What it does |
 |-----|----------|-------|-------------|
 | `probe-15m` | Every 15 min (`*/15 * * * *`) | `ceo-15m-suite` | Hits `/api/probes/ping-auth`, asserts `db_ok: true`, posts result to control plane |
-| `probe-60m` | Every hour (`0 * * * *`) | `ceo-60m-suite` | Launches Chromium via Playwright, authenticates with Clerk test token, asserts canary element, captures screenshots on failure |
-
-**Schedule gating:** Both schedules trigger the entire workflow, but each job has an `if:` guard so `probe-15m` only runs on the 15-minute cron (or manual dispatch) and `probe-60m` only runs on the hourly cron (or manual dispatch). At :00, both schedules fire — creating two workflow runs, each executing only its matching job.
 
 The workflow uses `./scripts/probe.sh <suite>` to invoke the probe runner. On probe failure, a Telegram fallback message is sent directly via `TELEGRAM_FALLBACK_BOT_TOKEN` — this fires even when the dashboard itself is down.
 
-Probe reports are uploaded as workflow artifacts (14-day retention). The 60m job also uploads failure screenshots as a separate artifact.
+Probe reports are uploaded as workflow artifacts (14-day retention).
 
-To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`. Manual dispatch runs both jobs.
+To run manually: trigger from the Actions tab or use `gh workflow run prod-probes.yml`.
 
-## Dashboard Canary
+### Previously removed: `probe-60m` (ceo-clerk-playwright)
 
-The dashboard layout renders a visually-hidden `<span data-testid="probe-canary">` element on every authenticated page. The Playwright hourly probe (M19) navigates to an authenticated page and asserts this element contains the expected value.
+An hourly Playwright job was removed on 2026-04-15. It navigated to `/dashboard` with a `__clerk_testing_token` cookie expecting to be signed in, but Clerk testing tokens only bypass bot detection — they are not session tokens. Every run was redirected to `/sign-in` and the canary element was never found, producing persistent false-red incidents.
 
-- **Source:** `src/components/dashboard/probe-canary.tsx`
-- **Location:** `src/app/dashboard/layout.tsx` (rendered after `<main>`)
-- **Env var:** `CANARY_EXPECTED_VALUE` — the text content the probe asserts on
-- **Default:** `ceo-dashboard-canary-ok` (used when env is unset or empty)
-- **Security:** The canary is a static string with no customer data. It uses `aria-hidden="true"` and `sr-only` to stay invisible to sighted users.
+Re-adding an authenticated Playwright probe requires either:
 
-To change the canary value, update `CANARY_EXPECTED_VALUE` in both Doppler and GitHub Actions secrets simultaneously.
+- A dedicated Clerk test user + per-run sign-in token (`POST https://api.clerk.com/v1/sign_in_tokens` → `/sign-in?__clerk_ticket=<token>` to establish a real session), or
+- `setupClerkTestingToken()` from the `@clerk/testing` package with a real signed-in session.
 
 ## Running Probes
 
@@ -70,8 +60,7 @@ Run a single probe suite with the shell wrapper (bypasses GNU Make's option pars
 
 ```bash
 ./scripts/probe.sh ceo-15m-suite --dry-run          # 15-min suite, dry run (no report posted)
-./scripts/probe.sh ceo-60m-suite --dry-run           # Hourly Playwright suite, dry run
-./scripts/probe.sh ceo-15m-suite --target=staging     # Target a staging URL
+./scripts/probe.sh ceo-15m-suite --target=staging    # Target a staging URL
 ```
 
 Or via Make (flags passed as variables):
@@ -86,7 +75,7 @@ make probe-all PROBE_FLAGS='--dry-run --target=staging'
 The `.github/workflows/prod-probes.yml` workflow runs automatically on cron. To trigger manually:
 
 ```bash
-gh workflow run prod-probes.yml             # Runs both 15m and 60m jobs
+gh workflow run prod-probes.yml
 ```
 
 ## Investigating Probe Failures
@@ -96,16 +85,14 @@ gh workflow run prod-probes.yml             # Runs both 15m and 60m jobs
 | Artifact | Location | Retention | Contents |
 |----------|----------|-----------|----------|
 | Probe reports | GitHub Actions artifacts → `probe-report-*` | 14 days | JSON results from each check (status, latency, details) |
-| Screenshots | GitHub Actions artifacts → `probe-screenshot-*` | 14 days | PNG captures from Playwright failures (canary mismatch, auth error, timeout) |
 | Telegram alerts | Configured chat/group | Persistent | Alert, escalation, recovery, and reminder messages |
 
 ### What to check
 
-1. **Red probe run** — download the probe report artifact. The `details` field contains the failure reason (e.g. `db_ok: false`, `connection refused`, `canary mismatch`).
-2. **Screenshot on Playwright failure** — the 60m job captures a screenshot when the canary assertion fails. Check for auth issues (Clerk sign-in page rendered instead of dashboard), canary element missing, or unexpected DOM state.
-3. **Stale heartbeat alert** — means a probe runner hasn't posted to `/api/probes/heartbeat` within 15 minutes. Check whether the GitHub Actions workflow is running and whether the dashboard API is reachable.
-4. **Escalation (⚠️)** — fires after 3 consecutive red runs. The underlying issue persists — investigate the root cause in the probe details rather than the probe system itself.
-5. **Telegram fallback** — if the dashboard itself is down, the GitHub Actions workflow sends a direct Telegram message via `TELEGRAM_FALLBACK_BOT_TOKEN` (separate from the dashboard's alert bot). This fires when the workflow job fails entirely.
+1. **Red probe run** — check the `details_json` field on `probe_runs` (visible at `/dashboard/admin/probes`). The `error` key carries the failure message (e.g. `db_ok: false`, `connection refused`); other keys carry check-specific context.
+2. **Stale heartbeat alert** — means a probe runner hasn't posted to `/api/probes/heartbeat` within 15 minutes. Check whether the GitHub Actions workflow is running and whether the dashboard API is reachable.
+3. **Escalation (⚠️)** — fires after 3 consecutive red runs. The underlying issue persists — investigate the root cause in the probe details rather than the probe system itself.
+4. **Telegram fallback** — if the dashboard itself is down, the GitHub Actions workflow sends a direct Telegram message via `TELEGRAM_FALLBACK_BOT_TOKEN` (separate from the dashboard's alert bot). This fires when the workflow job fails entirely.
 
 ### Control-plane routes
 
