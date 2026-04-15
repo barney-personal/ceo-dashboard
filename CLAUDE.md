@@ -192,33 +192,88 @@ Configured in `src/lib/integrations/mode-config.ts`. Key reports:
 
 ## Environment Variables
 
-Managed via **Doppler**. See `.env.example` for the full list (reference only).
+**Doppler is the single source of truth** for secrets in both dev and prod.
+Render is downstream — pushed to via a script, not edited directly.
+
+### Local development
 
 ```bash
-doppler setup                              # One-time config
+doppler setup                              # One-time: bind to ceo-dashboard/dev
 make dev                                   # Run with secrets injected
 ```
 
-**Never hardcode secrets. Never commit `.env`.**
+The `make dev` target wraps `doppler run -- npm run dev`, so every command in
+the Makefile that touches secrets passes through Doppler. Never create `.env`
+files; never commit `.env*`.
 
-### Required
+### Production (Render)
 
-- `DATABASE_URL` — PostgreSQL connection string
+Workflow:
+
+```
+edit secret in Doppler dashboard (ceo-dashboard/prd)
+  → RENDER_API_KEY=rnd_... make sync-render-env
+  → script PUTs to Render web + sync-worker
+  → Render redeploys with new values
+```
+
+`scripts/sync-doppler-to-render.py` is idempotent and safe to re-run any time.
+It merges Doppler's `prd` secrets into Render's current env, preserving
+Render-managed values (`DATABASE_URL` from the `fromDatabase` ref,
+`CRON_SECRET` from `generateValue: true`) and only replacing keys that
+exist in Doppler.
+
+**Do not add secrets directly in the Render UI.** They'll be silently
+overwritten on the next `make sync-render-env`. Add them to Doppler `prd`
+and re-sync.
+
+The `RENDER_API_KEY` itself can live in Doppler too — then run
+`doppler run -- make sync-render-env` to inject it. To get a fresh key:
+Render dashboard → Account Settings → API Keys → Generate.
+
+### What's NOT in Doppler (Render-managed only)
+
+These three live only in `render.yaml` and don't need Doppler entries:
+
+- `DATABASE_URL` — `fromDatabase:` ref auto-resolved by Render at deploy time
+- `CRON_SECRET` — Render auto-generates via `generateValue: true`
+- `NODE_ENV` — static `"production"` in `render.yaml`
+
+The cron service inherits `CRON_SECRET` and `RENDER_EXTERNAL_URL` from the
+web service via `fromService:` refs — also no Doppler entry needed.
+
+### Required keys (Doppler `dev` and `prd`)
+
 - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` / `CLERK_SECRET_KEY` — Clerk auth
+  (note: `dev` uses `pk_test_` / `sk_test_`; `prd` should ideally use
+  `pk_live_` / `sk_live_` from Clerk's Production environment, though
+  test keys also work for an internal-only deploy)
 - `NEXT_PUBLIC_CLERK_SIGN_IN_URL` / `NEXT_PUBLIC_CLERK_SIGN_UP_URL` — Clerk routes
 
-### Active Integrations
+### Active integrations (Doppler `dev` and `prd`)
 
 - `MODE_API_TOKEN` / `MODE_API_SECRET` / `MODE_WORKSPACE` — Mode Analytics
-- `SLACK_BOT_TOKEN` / `SLACK_OKR_CHANNEL_IDS` — Slack API
+- `SLACK_BOT_TOKEN` / `SLACK_OKR_CHANNEL_IDS` / `SLACK_PRE_READS_CHANNEL_ID` — Slack API
 - `ANTHROPIC_API_KEY` — Claude API for OKR and Excel parsing
-- `CRON_SECRET` — Auto-generated on Render for cron auth
+- `GITHUB_API_TOKEN` / `GITHUB_ORG` / `GITHUB_REPOS` — GitHub engineering metrics
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` / `GOOGLE_CALENDAR_ID` — Google Calendar
+- `GRANOLA_API_TOKEN` — Granola meeting transcripts
+- `SENTRY_AUTH_TOKEN` — Sentry source-map upload (build-time)
+- `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_ORG` / `SENTRY_PROJECT` — Sentry runtime config
 
-### Planned
+### Planned (not yet in Doppler)
 
 - `HIBOB_API_TOKEN` / `HIBOB_SERVICE_USER_ID` — HiBob
 - `NOTION_API_TOKEN` / `NOTION_OKR_DATABASE_IDS` — Notion
 - `CULTUREAMP_API_KEY` — Culture Amp
+
+### If you (the agent) need to add a new secret
+
+1. `doppler secrets set NEW_KEY="value" --project ceo-dashboard --config dev` (for local)
+2. `doppler secrets set NEW_KEY="value" --project ceo-dashboard --config prd` (for prod)
+3. Reference it in code via `process.env.NEW_KEY`
+4. Run `RENDER_API_KEY=rnd_... make sync-render-env` to push to Render
+5. Optionally update the "Active integrations" list above if it's a new system
 
 ## Testing
 

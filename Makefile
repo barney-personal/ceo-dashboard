@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio probe probe-all
+.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio probe probe-all sync-render-env
 
 setup:
 	./scripts/setup.sh
@@ -43,3 +43,14 @@ db-migrate: ensure-doppler
 
 db-studio: ensure-doppler
 	doppler run -- npx drizzle-kit studio
+
+# Push Doppler `prd` secrets to Render (web + sync-worker). Requires a Render
+# API key — pass via env or grab from Doppler if you've stored it there:
+#   make sync-render-env RENDER_API_KEY=rnd_...
+#   doppler run -- make sync-render-env  # if RENDER_API_KEY is in Doppler
+sync-render-env:
+	@if [ -z "$$RENDER_API_KEY" ]; then \
+	  echo "error: RENDER_API_KEY required (env var or 'doppler run -- make sync-render-env')" >&2; \
+	  exit 2; \
+	fi
+	python3 scripts/sync-doppler-to-render.py
