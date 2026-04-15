@@ -87,6 +87,7 @@ export function transformPerformanceData(
     if (cycle) cycleSet.add(cycle);
   }
 
+  // Lexicographic sort works because cycle names follow "YYYY H{1,2}-{A,B} ..."
   const reviewCycles = [...cycleSet].sort();
   const people: PersonPerformance[] = [];
 

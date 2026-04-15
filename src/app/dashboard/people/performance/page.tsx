@@ -87,18 +87,16 @@ export default async function PeoplePerformancePage() {
         />
       )}
 
-      {modeUrl && (
-        <div className="flex justify-end">
-          <a
-            href={modeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-muted-foreground/60 underline decoration-dotted underline-offset-2 hover:text-muted-foreground"
-          >
-            View in Mode
-          </a>
-        </div>
-      )}
+      <div className="flex justify-end">
+        <a
+          href={modeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-muted-foreground/60 underline decoration-dotted underline-offset-2 hover:text-muted-foreground"
+        >
+          View in Mode
+        </a>
+      </div>
     </div>
   );
 }

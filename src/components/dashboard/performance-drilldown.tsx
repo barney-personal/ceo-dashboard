@@ -3,41 +3,16 @@
 import { useState, useMemo } from "react";
 import { Search, ArrowLeft, Users, Briefcase, Flag, AlertTriangle } from "lucide-react";
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
-export interface PerformanceRating {
-  reviewCycle: string;
-  rating: number | null;
-  reviewerName: string;
-  flagged: boolean;
-  missed: boolean;
-}
-
-export interface PersonPerformance {
-  email: string;
-  name: string;
-  jobTitle: string;
-  level: string;
-  squad: string;
-  pillar: string;
-  function: string;
-  ratings: PerformanceRating[];
-}
-
-export interface PillarGroup {
-  name: string;
-  count: number;
-  squads: { name: string; people: PersonPerformance[] }[];
-}
-
-export interface FunctionGroup {
-  name: string;
-  people: PersonPerformance[];
-}
+import type {
+  PerformanceRating,
+  PersonPerformance,
+  PerformancePillarGroup,
+  PerformanceFunctionGroup,
+} from "@/lib/data/performance";
 
 export interface PerformanceDrilldownProps {
-  pillarGroups: PillarGroup[];
-  functionGroups: FunctionGroup[];
+  pillarGroups: PerformancePillarGroup[];
+  functionGroups: PerformanceFunctionGroup[];
   reviewCycles: string[];
 }
 
