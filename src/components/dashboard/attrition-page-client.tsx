@@ -141,6 +141,16 @@ export function AttritionPageClient({
     [rollingAttrition],
   );
 
+  const underOneYearSeries = useMemo(
+    () => getRollingAttritionSeries(rollingAttrition, filters.department ?? undefined, "< 1 Year"),
+    [rollingAttrition, filters.department],
+  );
+
+  const overOneYearSeries = useMemo(
+    () => getRollingAttritionSeries(rollingAttrition, filters.department ?? undefined, "1+ Year"),
+    [rollingAttrition, filters.department],
+  );
+
   const y1Series = useMemo(
     () => getY1AttritionSeries(y1Attrition, filters.department ?? undefined),
     [y1Attrition, filters.department],
@@ -216,6 +226,28 @@ export function AttritionPageClient({
               yFormatType="percent"
               modeUrl={modeUrl}
             />
+
+            {/* Tenure split */}
+            {!filters.tenure && (
+              <div className="grid gap-6 lg:grid-cols-2">
+                <LineChart
+                  series={underOneYearSeries}
+                  title="< 1 Year Tenure"
+                  subtitle="Rolling 12M attrition, by leaver type"
+                  yLabel="%"
+                  yFormatType="percent"
+                  modeUrl={modeUrl}
+                />
+                <LineChart
+                  series={overOneYearSeries}
+                  title="1+ Year Tenure"
+                  subtitle="Rolling 12M attrition, by leaver type"
+                  yLabel="%"
+                  yFormatType="percent"
+                  modeUrl={modeUrl}
+                />
+              </div>
+            )}
 
             {/* Department breakdown */}
             {!filters.department && deptSeries.length > 0 && (
