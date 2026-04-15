@@ -3,7 +3,7 @@ import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
-import { EngineeringTable } from "@/components/dashboard/engineering-table";
+import { EngineeringViewToggle } from "@/components/dashboard/engineering-view-toggle";
 import { PeriodPicker } from "@/components/dashboard/period-picker";
 import {
   getEngineeringRankings,
@@ -86,7 +86,7 @@ export default async function EngineeringPerformancePage({
         />
       </div>
 
-      <EngineeringTable data={rankings} />
+      <EngineeringViewToggle data={rankings} />
 
       {latestSync && (
         <p className="text-[11px] text-muted-foreground/60">
