@@ -386,20 +386,20 @@ describe("getProbeStatusSummary", () => {
 
     mockLastRunsForCheck
       .mockResolvedValueOnce([makeRun({ checkName: "ceo-ping-auth", status: "green" })])
-      .mockResolvedValueOnce([makeRun({ checkName: "ha-l4c", status: "red" })]);
+      .mockResolvedValueOnce([makeRun({ checkName: "mock-check-b", status: "red" })]);
     mockOpenIncidentForCheck
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(makeIncident({ checkName: "ha-l4c" }));
+      .mockResolvedValueOnce(makeIncident({ checkName: "mock-check-b" }));
 
     const result = await getProbeStatusSummary(
-      ["ceo-ping-auth", "ha-l4c"],
+      ["ceo-ping-auth", "mock-check-b"],
       now,
     );
 
     expect(result).toHaveLength(2);
     expect(result[0].checkName).toBe("ceo-ping-auth");
     expect(result[0].latestStatus).toBe("green");
-    expect(result[1].checkName).toBe("ha-l4c");
+    expect(result[1].checkName).toBe("mock-check-b");
     expect(result[1].latestStatus).toBe("red");
     expect(result[1].openIncident).not.toBeNull();
   });
