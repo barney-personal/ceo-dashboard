@@ -32,7 +32,7 @@ export default async function EngineerProfilePage({
   const validPeriods = PERIOD_OPTIONS.map((p) => p.value);
   const periodDays = validPeriods.includes(Number(sp.period) as PeriodDays)
     ? (Number(sp.period) as PeriodDays)
-    : 90;
+    : 30;
 
   const profile = await getEngineerProfile(login);
   if (!profile) notFound();

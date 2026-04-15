@@ -36,19 +36,22 @@ export interface EngineerTimeSeries {
 export async function getEngineerProfile(
   login: string
 ): Promise<EngineerProfile | null> {
-  const [mapRow] = await db
-    .select()
-    .from(githubEmployeeMap)
-    .where(eq(githubEmployeeMap.githubLogin, login))
-    .limit(1);
+  const [[mapRow], [prRow]] = await Promise.all([
+    db
+      .select()
+      .from(githubEmployeeMap)
+      .where(eq(githubEmployeeMap.githubLogin, login))
+      .limit(1),
+    db
+      .select({ avatarUrl: githubPrs.authorAvatarUrl })
+      .from(githubPrs)
+      .where(eq(githubPrs.authorLogin, login))
+      .orderBy(desc(githubPrs.mergedAt))
+      .limit(1),
+  ]);
 
-  // Get avatar from most recent PR
-  const [prRow] = await db
-    .select({ avatarUrl: githubPrs.authorAvatarUrl })
-    .from(githubPrs)
-    .where(eq(githubPrs.authorLogin, login))
-    .orderBy(desc(githubPrs.mergedAt))
-    .limit(1);
+  // Unknown login — no employee mapping and no PRs
+  if (!mapRow && !prRow) return null;
 
   // Look up person metadata from Mode/HiBob
   let person: Person | undefined;

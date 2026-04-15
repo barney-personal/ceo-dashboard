@@ -1,7 +1,7 @@
 "use client";
 
 import { StatusBadge } from "./status-badge";
-import { getSlackMessageUrl } from "@/lib/data/okrs";
+import { buildSlackMessageUrl } from "@/lib/config/slack";
 import { ExternalLink } from "lucide-react";
 
 interface OkrItem {
@@ -52,7 +52,7 @@ export function EngineerOkrCard({
           <div className="space-y-2.5">
             {krs.map((kr) => (
               <div
-                key={kr.krName}
+                key={`${objective}-${kr.krName}`}
                 className="flex items-center justify-between gap-3 rounded-lg bg-muted/20 px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
@@ -77,7 +77,7 @@ export function EngineerOkrCard({
                     }
                   />
                   <a
-                    href={getSlackMessageUrl(kr.channelId, kr.slackTs)}
+                    href={buildSlackMessageUrl(kr.channelId, kr.slackTs)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-muted-foreground/40 hover:text-primary transition-colors"
