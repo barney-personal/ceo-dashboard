@@ -12,7 +12,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
-const BOT_PATTERNS = ["[bot]", "circleci"];
+const BOT_PATTERNS = ["[bot]", "circleci", "dependabot", "cursor"];
 
 interface Employee {
   preferred_name: string;
