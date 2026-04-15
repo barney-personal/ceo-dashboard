@@ -10,6 +10,7 @@ import {
   getTenureBucket,
   type EngineeringFilterState,
 } from "./engineering-filters";
+import { MetricInfoTooltip } from "./metric-info-tooltip";
 
 interface EngineerRow {
   login: string;
@@ -32,8 +33,33 @@ interface EngineerRow {
 
 type SortKey = "outputScore" | "prsCount" | "commitsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
 
-const COLUMNS: { key: SortKey; label: string; format: (v: number) => string }[] = [
-  { key: "outputScore", label: "Impact", format: (v) => v.toLocaleString() },
+const COLUMNS: {
+  key: SortKey;
+  label: string;
+  format: (v: number) => string;
+  /** Optional info panel content shown behind a ⓘ icon next to the label. */
+  info?: React.ReactNode;
+}[] = [
+  {
+    key: "outputScore",
+    label: "Impact",
+    format: (v) => v.toLocaleString(),
+    info: (
+      <>
+        <p>
+          Combines how much someone ships (PR count) with how meaningful each
+          change is (lines per PR).
+        </p>
+        <p className="font-mono text-[11px] text-foreground/80">
+          PRs × log₂(1 + lines / PR)
+        </p>
+        <p>
+          Log-scaling prevents one huge PR from dominating a steady stream of
+          smaller changes, so both breadth and depth count.
+        </p>
+      </>
+    ),
+  },
   { key: "prsCount", label: "PRs Merged", format: (v) => v.toLocaleString() },
   { key: "commitsCount", label: "Commits", format: (v) => v.toLocaleString() },
   { key: "additions", label: "Lines Added", format: (v) => v.toLocaleString() },
@@ -173,6 +199,11 @@ export function EngineeringTable({
                     >
                       <div className="flex items-center justify-end gap-1">
                         {col.label}
+                        {col.info && (
+                          <MetricInfoTooltip label={col.label}>
+                            {col.info}
+                          </MetricInfoTooltip>
+                        )}
                         <SortIcon
                           className={cn(
                             "h-3 w-3",

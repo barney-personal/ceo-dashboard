@@ -68,12 +68,6 @@ const NAV_GROUPS: NavGroup[] = [
         requiredRole: "everyone",
         icon: BarChart3,
       },
-      {
-        label: "Engineering",
-        href: "/dashboard/engineering",
-        requiredRole: "everyone",
-        icon: GitPullRequest,
-      },
     ],
   },
   {
@@ -112,6 +106,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/performance",
         requiredRole: "leadership",
         icon: TrendingUp,
+      },
+      {
+        label: "Engineering",
+        href: "/dashboard/engineering",
+        requiredRole: "everyone",
+        icon: GitPullRequest,
       },
       {
         label: "Engagement",
