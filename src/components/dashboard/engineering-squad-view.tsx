@@ -55,18 +55,25 @@ const COLUMNS: {
   { key: "avgDeletions", label: "Avg Lines −", format: (v) => Math.round(v).toLocaleString() },
 ];
 
-export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
-  const [selectedSquad, setSelectedSquad] = useState<string | null>(null);
+export function EngineeringSquadView({
+  data,
+  groupBy = "squad",
+}: {
+  data: EngineerRow[];
+  groupBy?: "squad" | "pillar";
+}) {
+  const groupLabel = groupBy === "pillar" ? "Pillar" : "Squad";
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortField>("avgImpact");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const humans = useMemo(() => data.filter((r) => !r.isBot), [data]);
 
-  const squads = useMemo(() => {
+  const groups = useMemo(() => {
     const map = new Map<
       string,
       {
-        pillar: string | null;
+        subtitle: string | null;
         engineers: number;
         totalPrs: number;
         totalCommits: number;
@@ -76,31 +83,35 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
     >();
 
     for (const eng of humans) {
-      const squadName = eng.squad ?? "Unassigned";
-      let squad = map.get(squadName);
-      if (!squad) {
-        squad = {
-          pillar: eng.pillar,
+      const key =
+        groupBy === "pillar"
+          ? eng.pillar ?? "Unassigned"
+          : eng.squad ?? "Unassigned";
+      const subtitle = groupBy === "pillar" ? null : eng.pillar;
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          subtitle,
           engineers: 0,
           totalPrs: 0,
           totalCommits: 0,
           totalAdditions: 0,
           totalDeletions: 0,
         };
-        map.set(squadName, squad);
+        map.set(key, group);
       }
-      squad.engineers++;
-      squad.totalPrs += eng.prsCount;
-      squad.totalCommits += eng.commitsCount;
-      squad.totalAdditions += eng.additions;
-      squad.totalDeletions += eng.deletions;
+      group.engineers++;
+      group.totalPrs += eng.prsCount;
+      group.totalCommits += eng.commitsCount;
+      group.totalAdditions += eng.additions;
+      group.totalDeletions += eng.deletions;
     }
 
     const rows: SquadRow[] = [...map.entries()].map(([name, s]) => {
       const n = s.engineers;
       return {
         name,
-        pillar: s.pillar,
+        pillar: s.subtitle,
         engineers: n,
         avgImpact: computeImpact(s.totalPrs, s.totalAdditions, s.totalDeletions) / n,
         avgPrs: s.totalPrs / n,
@@ -114,7 +125,7 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
       const diff = a[sortKey] - b[sortKey];
       return sortDir === "desc" ? -diff : diff;
     });
-  }, [humans, sortKey, sortDir]);
+  }, [humans, sortKey, sortDir, groupBy]);
 
   const handleSort = (key: SortField) => {
     if (sortKey === key) {
@@ -125,34 +136,38 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
     }
   };
 
-  // Drill-down: show filtered table for selected squad
-  if (selectedSquad) {
-    const squadData = data.filter(
-      (r) => (r.squad ?? "Unassigned") === selectedSquad
-    );
+  // Drill-down: show filtered table for selected group
+  if (selectedGroup) {
+    const groupData = data.filter((r) => {
+      const val =
+        groupBy === "pillar"
+          ? r.pillar ?? "Unassigned"
+          : r.squad ?? "Unassigned";
+      return val === selectedGroup;
+    });
     return (
       <div className="space-y-3">
         <button
-          onClick={() => setSelectedSquad(null)}
+          onClick={() => setSelectedGroup(null)}
           className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to squads
+          Back to {groupLabel.toLowerCase()}s
         </button>
         <h3 className="text-lg font-semibold font-serif text-foreground">
-          {selectedSquad}
+          {selectedGroup}
         </h3>
-        <EngineeringTable data={squadData} />
+        <EngineeringTable data={groupData} />
       </div>
     );
   }
 
-  if (squads.length === 0) {
+  if (groups.length === 0) {
     return (
       <div className="rounded-xl border border-border/60 bg-card p-12 text-center shadow-warm">
         <p className="text-sm text-muted-foreground">
-          No squad data available. Employee metadata is needed for squad
-          grouping.
+          No {groupLabel.toLowerCase()} data available. Employee metadata is
+          needed for grouping.
         </p>
       </div>
     );
@@ -168,7 +183,7 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
                 #
               </th>
               <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                Squad
+                {groupLabel}
               </th>
               {COLUMNS.map((col) => {
                 const isActive = sortKey === col.key;
@@ -198,10 +213,10 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {squads.map((squad, i) => (
+            {groups.map((group, i) => (
               <tr
-                key={squad.name}
-                onClick={() => setSelectedSquad(squad.name)}
+                key={group.name}
+                onClick={() => setSelectedGroup(group.name)}
                 className="border-b border-border/30 last:border-0 hover:bg-muted/20 transition-colors cursor-pointer"
               >
                 <td className="px-4 py-3 text-muted-foreground font-medium tabular-nums">
@@ -210,11 +225,11 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
                 <td className="px-4 py-3">
                   <div className="flex flex-col">
                     <span className="font-medium text-foreground">
-                      {squad.name}
+                      {group.name}
                     </span>
-                    {squad.pillar && (
+                    {group.pillar && (
                       <span className="text-[11px] text-muted-foreground">
-                        {squad.pillar}
+                        {group.pillar}
                       </span>
                     )}
                   </div>
@@ -227,7 +242,7 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
                       col.key === "avgDeletions" && "text-negative/70"
                     )}
                   >
-                    {col.format(squad[col.key])}
+                    {col.format(group[col.key])}
                   </td>
                 ))}
               </tr>

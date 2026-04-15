@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Users, LayoutGrid } from "lucide-react";
+import { Users, LayoutGrid, Layers } from "lucide-react";
 import { EngineeringTable } from "./engineering-table";
 import { EngineeringSquadView } from "./engineering-squad-view";
 
-type ViewMode = "engineers" | "squads";
+type ViewMode = "engineers" | "squads" | "pillars";
 
 interface EngineerData {
   login: string;
@@ -58,12 +58,24 @@ export function EngineeringViewToggle({ data }: { data: EngineerData[] }) {
           <LayoutGrid className="h-3.5 w-3.5" />
           Squads
         </button>
+        <button
+          onClick={() => setView("pillars")}
+          className={cn(
+            "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+            view === "pillars"
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          Pillars
+        </button>
       </div>
 
       {view === "engineers" ? (
         <EngineeringTable data={data} />
       ) : (
-        <EngineeringSquadView data={data} />
+        <EngineeringSquadView data={data} groupBy={view === "pillars" ? "pillar" : "squad"} />
       )}
     </div>
   );
