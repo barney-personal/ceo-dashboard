@@ -1,6 +1,8 @@
 -- Remap Clerk dev user IDs to production user IDs in page_views
 -- One-time data migration after Clerk dev -> prod instance switch
 
+BEGIN;
+
 UPDATE page_views SET clerk_user_id = 'user_3COnRr5KpxSA67zPvodNMVk466b' WHERE clerk_user_id = 'user_3C81XxsM2VLoC8Z2TFTal7slrA1';
 UPDATE page_views SET clerk_user_id = 'user_3COnR6LuZcYUOkyKJ5KnfIRiLxc' WHERE clerk_user_id = 'user_3C82QKHOdKJZrSiKPxcPzlxlTIO';
 UPDATE page_views SET clerk_user_id = 'user_3COnOJNrMqoaqGKkV0q5EsVwb63' WHERE clerk_user_id = 'user_3COVDedcEfXbB3Z39ayjQr9qx0i';
@@ -101,3 +103,5 @@ UPDATE page_views SET clerk_user_id = 'user_3COnO9VXfIuJmlCUgimycVUOuSr' WHERE c
 UPDATE page_views SET clerk_user_id = 'user_3COnO4QVpgs26rYEyKAB6DoXb5c' WHERE clerk_user_id = 'user_3COVOJypjpRZOF3g193U3Haw5Sf';
 UPDATE page_views SET clerk_user_id = 'user_3COnOBpbEo88r844nd9eOSvu2yG' WHERE clerk_user_id = 'user_3COVJVlzCsfTIp6JJtyHP44jEJZ';
 UPDATE page_views SET clerk_user_id = 'user_3COnR7LVyy60g4k3QDPZk6vLPkj' WHERE clerk_user_id = 'user_3C82H8CGPrEWPKqjPROISk9axdg';
+
+COMMIT;

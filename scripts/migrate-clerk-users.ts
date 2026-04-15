@@ -23,6 +23,15 @@ if (!SOURCE_KEY || !TARGET_KEY) {
   process.exit(1);
 }
 
+// Guard against accidentally swapping source/target keys
+if (SOURCE_KEY.startsWith("sk_live_") || TARGET_KEY.startsWith("sk_test_")) {
+  console.error(
+    "Key direction looks wrong: SOURCE should be sk_test_* (dev) and TARGET should be sk_live_* (prod).\n" +
+    "If this is intentional, remove this check."
+  );
+  process.exit(1);
+}
+
 const dryRun = !process.argv.includes("--execute");
 
 if (dryRun) {
@@ -94,7 +103,10 @@ async function findExistingUserByEmail(
     `/users?email_address=${encodeURIComponent(email)}&limit=1`
   );
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to look up user by email ${email}: ${res.status} ${body}`);
+  }
 
   const users: ClerkUser[] = await res.json();
   return users.length > 0 ? users[0] : null;
@@ -139,8 +151,6 @@ async function createUser(
       first_name: sourceUser.first_name,
       last_name: sourceUser.last_name,
       public_metadata: sourceUser.public_metadata,
-      private_metadata: sourceUser.private_metadata,
-      unsafe_metadata: sourceUser.unsafe_metadata,
       // Don't set a password — users will sign in via Google SSO
       skip_password_requirement: true,
     }),
@@ -175,7 +185,7 @@ async function main() {
       process.stdout.write(`  Migrating ${email} (${name}, role: ${role})...`);
       const result = await createUser(TARGET_KEY!, user);
       if (result) {
-        console.log(` ✓ ${result.id}`);
+        console.log(` ✓ ${user.id} → ${result.id}`);
       } else {
         console.log(` ✗ failed`);
       }
