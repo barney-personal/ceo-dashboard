@@ -65,19 +65,20 @@ export function formatMinutesAsHours(m: number): string {
 
 export function formatDelta(
   current: number,
-  comparison: number,
-  unit = ""
+  comparison: number
 ): { change: string; trend: "up" | "down" | "flat" } {
   if (!Number.isFinite(comparison) || comparison === 0) {
     return { change: "", trend: "flat" };
   }
   const delta = current - comparison;
   const pct = (delta / comparison) * 100;
-  const absDelta = Math.abs(delta);
-  if (absDelta < 0.01) return { change: "flat vs 90d", trend: "flat" };
+  // Threshold on the percentage change, not the raw delta — raw units vary
+  // wildly across metrics (deploys/day vs lead-time minutes) so a single raw
+  // threshold is meaningless.
+  if (Math.abs(pct) < 1) return { change: "flat vs prior 30d", trend: "flat" };
   const sign = delta > 0 ? "+" : "";
   return {
-    change: `${sign}${pct.toFixed(0)}% vs 90d${unit}`,
+    change: `${sign}${pct.toFixed(0)}% vs prior 30d`,
     trend: delta > 0 ? "up" : "down",
   };
 }

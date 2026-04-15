@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { ExternalLink } from "lucide-react";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
@@ -34,7 +35,12 @@ export default async function EngineeringLayout({
         </a>
       </div>
 
-      <EngineeringTabs />
+      {/* Suspense boundary — EngineeringTabs uses useSearchParams(), which
+          Next.js requires to sit under Suspense to avoid bailout warnings
+          and to survive any future static rendering of children. */}
+      <Suspense fallback={<div className="h-9" />}>
+        <EngineeringTabs />
+      </Suspense>
 
       <div className="pt-2">{children}</div>
     </div>

@@ -229,39 +229,6 @@ export async function getPullRequestMetricsForRange(
   return parsePrMetricsCsv(csv);
 }
 
-export type InvestmentCategory =
-  | "New things"
-  | "Improving things"
-  | "KTLO"
-  | "Uncategorized";
-
-export interface SwarmiaInvestmentRow {
-  startDate: string;
-  endDate: string;
-  category: InvestmentCategory;
-  fteMonths: number;
-  relativePercent: number;
-  commits: number;
-  pullRequestMerges: number;
-  pullRequestReviews: number;
-}
-
-export async function getInvestmentBalance(
-  startDate: string,
-  endDate: string
-): Promise<SwarmiaInvestmentRow[]> {
-  const csv = await fetchSwarmia("/reports/investment", { startDate, endDate });
-  return parseCsv(csv).map((row) => ({
-    startDate: row["Start Date"],
-    endDate: row["End Date"],
-    category: row["Investment Category"] as InvestmentCategory,
-    fteMonths: toNumber(row["FTE months"]),
-    relativePercent: toNumber(row["Relative Percentage"]),
-    commits: toNumber(row["Commits"]),
-    pullRequestMerges: toNumber(row["Pull Request Merges"]),
-    pullRequestReviews: toNumber(row["Pull Request Reviews"]),
-  }));
-}
 
 export interface SwarmiaTeam {
   id: string;

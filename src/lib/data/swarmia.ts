@@ -7,11 +7,9 @@ import * as Sentry from "@sentry/nextjs";
 import {
   getDora,
   getDoraForRange,
-  getInvestmentBalance,
   getPullRequestMetrics,
   getPullRequestMetricsForRange,
   isSwarmiaConfigured,
-  type InvestmentCategory,
   type SwarmiaDora,
   type SwarmiaTeamPrMetrics,
   type SwarmiaTimeframe,
@@ -51,15 +49,25 @@ async function safeLoad<T>(
 export interface DoraScorecard {
   /** Last-30d headline figures (what the metric cards display). */
   current: SwarmiaDora;
-  /** 90d baseline, used for the "vs 90d" delta chip. */
+  /** Preceding 30d baseline (days -60 to -31), used for the delta chip. */
   comparison: SwarmiaDora | null;
 }
 
 export async function getDoraScorecard(): Promise<LoaderResult<DoraScorecard>> {
   return safeLoad("dora", async () => {
+    // Compare the last 30 days against the 30 days BEFORE that, not against
+    // the last 90 days (which contain the current window and therefore
+    // understate any change). Ranges are inclusive on both ends.
+    const today = new Date();
+    const day = (offset: number): string => {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() + offset);
+      return d.toISOString().slice(0, 10);
+    };
     const [current, comparison] = await Promise.all([
       getDora("last_30_days"),
-      getDora("last_90_days"),
+      // Prior 30-day window: e.g. today=D, returns [D-60 .. D-31].
+      getDoraForRange(day(-60), day(-31)),
     ]);
     if (!current) throw new Error("Swarmia DORA returned no rows");
     return { current, comparison };
@@ -358,82 +366,6 @@ export function computePillarMovers(
 }
 
 // ---------------------------------------------------------------------------
-// Investment balance — last 6 months
-// ---------------------------------------------------------------------------
-
-export interface InvestmentSeries {
-  /** One entry per month, oldest first. */
-  months: Array<{
-    /** First of month, e.g. "2026-03-01" — ready for LineChart x-axis. */
-    date: string;
-    /** Human label, e.g. "Mar 26". */
-    label: string;
-    byCategory: Record<InvestmentCategory, number>; // % of total FTE
-    totalFteMonths: number;
-  }>;
-}
-
-function firstOfMonth(year: number, monthIndex: number): string {
-  const mm = String(monthIndex + 1).padStart(2, "0");
-  return `${year}-${mm}-01`;
-}
-
-function lastOfMonth(year: number, monthIndex: number): string {
-  const d = new Date(Date.UTC(year, monthIndex + 1, 0));
-  return d.toISOString().slice(0, 10);
-}
-
-function monthLabel(date: Date): string {
-  const month = date.toLocaleString("en-GB", { month: "short", timeZone: "UTC" });
-  const yy = String(date.getUTCFullYear()).slice(-2);
-  return `${month} ${yy}`;
-}
-
-export async function getInvestmentSeries(): Promise<LoaderResult<InvestmentSeries>> {
-  return safeLoad("investment", async () => {
-    // Last 6 complete months, ending with the current month.
-    const now = new Date();
-    const months: Array<{ year: number; monthIndex: number }> = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      months.push({ year: d.getUTCFullYear(), monthIndex: d.getUTCMonth() });
-    }
-
-    const results = await Promise.all(
-      months.map(({ year, monthIndex }) =>
-        getInvestmentBalance(
-          firstOfMonth(year, monthIndex),
-          lastOfMonth(year, monthIndex)
-        )
-      )
-    );
-
-    return {
-      months: months.map(({ year, monthIndex }, i) => {
-        const rows = results[i];
-        const total = rows.reduce((sum, r) => sum + r.fteMonths, 0);
-        const byCategory: Record<InvestmentCategory, number> = {
-          "New things": 0,
-          "Improving things": 0,
-          KTLO: 0,
-          Uncategorized: 0,
-        };
-        for (const r of rows) {
-          byCategory[r.category] = total > 0 ? (r.fteMonths / total) * 100 : 0;
-        }
-        const d = new Date(Date.UTC(year, monthIndex, 1));
-        return {
-          date: firstOfMonth(year, monthIndex),
-          label: monthLabel(d),
-          byCategory,
-          totalFteMonths: total,
-        };
-      }),
-    };
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Squad cycle-time leaderboard
 // ---------------------------------------------------------------------------
 
@@ -450,8 +382,7 @@ export interface SquadLeaderboard {
 
 /**
  * Keep only squad-level rows (those with a non-empty parentTeam) and with at
- * least some PR activity. Pillar-level rows (empty parentTeam) are excluded
- * here — they go to the Pillar Velocity section.
+ * least some PR activity.
  */
 export async function getSquadLeaderboard(): Promise<LoaderResult<SquadLeaderboard>> {
   return safeLoad("squad-leaderboard", async () => {
@@ -468,40 +399,6 @@ export async function getSquadLeaderboard(): Promise<LoaderResult<SquadLeaderboa
       }))
       .sort((a, b) => a.cycleTimeHours - b.cycleTimeHours);
     return { squads };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Pillar velocity
-// ---------------------------------------------------------------------------
-
-export interface PillarVelocity {
-  pillars: Array<{
-    pillar: string;
-    cycleTimeHours: number;
-    prsPerWeek: number;
-    reviewRatePercent: number;
-    contributors: number;
-    prsInProgress: number;
-  }>;
-}
-
-export async function getPillarVelocity(): Promise<LoaderResult<PillarVelocity>> {
-  return safeLoad("pillar-velocity", async () => {
-    const rows = await getPullRequestMetrics("last_30_days");
-    // Pillar-level rows: parentTeam is empty.
-    const pillars = rows
-      .filter((r) => r.parentTeam === "")
-      .map((r: SwarmiaTeamPrMetrics) => ({
-        pillar: r.team,
-        cycleTimeHours: r.cycleTimeSeconds / 3600,
-        prsPerWeek: r.prsMergedPerWeek,
-        reviewRatePercent: r.reviewRatePercent,
-        contributors: r.contributors,
-        prsInProgress: r.prsInProgress,
-      }))
-      .sort((a, b) => b.prsPerWeek - a.prsPerWeek);
-    return { pillars };
   });
 }
 

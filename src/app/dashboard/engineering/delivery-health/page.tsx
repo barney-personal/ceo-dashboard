@@ -143,7 +143,7 @@ function DoraGrid({
     leadDelta.trend === "up" ? "down" : leadDelta.trend === "down" ? "up" : "flat";
 
   const cfrDelta = comparison
-    ? formatDelta(current.changeFailureRatePercent, comparison.changeFailureRatePercent, "pt")
+    ? formatDelta(current.changeFailureRatePercent, comparison.changeFailureRatePercent)
     : { change: "", trend: "flat" as const };
   const cfrTrend =
     cfrDelta.trend === "up" ? "down" : cfrDelta.trend === "down" ? "up" : "flat";
