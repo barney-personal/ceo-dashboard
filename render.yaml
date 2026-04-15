@@ -4,6 +4,23 @@ databases:
     databaseName: ceo_dashboard
     user: ceo_dashboard
 
+# ---------------------------------------------------------------------------
+# Environment variable management
+# ---------------------------------------------------------------------------
+# All secrets and configurable values live in Doppler (`ceo-dashboard/prd`).
+# To push Doppler → Render run:
+#     RENDER_API_KEY=rnd_... make sync-render-env
+# (or `doppler run -- make sync-render-env` if RENDER_API_KEY is in Doppler).
+#
+# Only Render-managed values stay declared here:
+#   - DATABASE_URL  → `fromDatabase` ref (auto-resolved)
+#   - CRON_SECRET   → `generateValue: true` (Render auto-generates)
+#   - NODE_ENV      → static "production"
+# Everything else (Mode, Slack, Clerk, Sentry, Anthropic, Google, GitHub,
+# Granola, etc.) is pushed from Doppler by the sync script and not
+# duplicated in this file.
+# ---------------------------------------------------------------------------
+
 services:
   - type: web
     name: ceo-dashboard
@@ -21,56 +38,8 @@ services:
         fromDatabase:
           name: ceo-dashboard-db
           property: connectionString
-      - key: NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-        sync: false
-      - key: CLERK_SECRET_KEY
-        sync: false
-      - key: NEXT_PUBLIC_CLERK_SIGN_IN_URL
-        value: /sign-in
-      - key: NEXT_PUBLIC_CLERK_SIGN_UP_URL
-        value: /sign-up
-      - key: MODE_API_TOKEN
-        sync: false
-      - key: MODE_API_SECRET
-        sync: false
-      - key: MODE_WORKSPACE
-        sync: false
-      - key: SLACK_BOT_TOKEN
-        sync: false
-      - key: SLACK_OKR_CHANNEL_IDS
-        value: "C05LACCBKPU,C09E6L6336G,C09E30B8PD0,C09DMP0UBGX,C09EG0TTJQ1"
-      - key: HIBOB_API_TOKEN
-        sync: false
-      - key: HIBOB_SERVICE_USER_ID
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: SENTRY_DSN
-        value: "https://b20d7c73b665f715d5c629addad2ec9b@o4511137405206528.ingest.us.sentry.io/4511184683270144"
-      - key: NEXT_PUBLIC_SENTRY_DSN
-        value: "https://b20d7c73b665f715d5c629addad2ec9b@o4511137405206528.ingest.us.sentry.io/4511184683270144"
-      - key: SENTRY_AUTH_TOKEN
-        sync: false
-      - key: SENTRY_ORG
-        value: "cleo-bf"
-      - key: SENTRY_PROJECT
-        value: "ceo-dashboard"
-      - key: GRANOLA_API_TOKEN
-        sync: false
-      - key: SLACK_PRE_READS_CHANNEL_ID
-        value: "C04EU4DEX5E"
       - key: CRON_SECRET
         generateValue: true
-      - key: PROBE_SECRET
-        sync: false
-      - key: PROBE_SECRET_PREVIOUS
-        sync: false
-      - key: INTERNAL_CRON_SECRET
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_PROBE_CHAT_ID
-        sync: false
 
   - type: worker
     name: ceo-dashboard-sync-worker
@@ -86,22 +55,6 @@ services:
         fromDatabase:
           name: ceo-dashboard-db
           property: connectionString
-      - key: MODE_API_TOKEN
-        sync: false
-      - key: MODE_API_SECRET
-        sync: false
-      - key: MODE_WORKSPACE
-        sync: false
-      - key: SLACK_BOT_TOKEN
-        sync: false
-      - key: SLACK_OKR_CHANNEL_IDS
-        value: "C05LACCBKPU,C09E6L6336G,C09E30B8PD0,C09DMP0UBGX,C09EG0TTJQ1"
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GRANOLA_API_TOKEN
-        sync: false
-      - key: SLACK_PRE_READS_CHANNEL_ID
-        value: "C04EU4DEX5E"
 
   - type: cron
     name: ceo-dashboard-cron
@@ -115,24 +68,6 @@ services:
           name: ceo-dashboard
           type: web
           envVarKey: CRON_SECRET
-      - key: RENDER_EXTERNAL_URL
-        fromService:
-          name: ceo-dashboard
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
-
-  - type: cron
-    name: ceo-dashboard-probe-heartbeat
-    runtime: node
-    schedule: "*/5 * * * *"
-    buildCommand: npm ci
-    startCommand: 'curl -s -H "Authorization: Bearer $INTERNAL_CRON_SECRET" ${RENDER_EXTERNAL_URL}/api/cron/probe-heartbeat'
-    envVars:
-      - key: INTERNAL_CRON_SECRET
-        fromService:
-          name: ceo-dashboard
-          type: web
-          envVarKey: INTERNAL_CRON_SECRET
       - key: RENDER_EXTERNAL_URL
         fromService:
           name: ceo-dashboard
