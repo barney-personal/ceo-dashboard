@@ -1,0 +1,27 @@
+# Probe manifest — defines all checks available in this repo.
+# Each check belongs to one or more suites. The CLI resolves
+# suite names to check lists at runtime.
+
+suites:
+  ceo-15m-suite:
+    description: "Cheap cloud checks — every 15 minutes"
+    checks:
+      - ceo-ping-auth
+
+  ceo-60m-suite:
+    description: "Expensive browser checks — every 60 minutes"
+    checks:
+      - ceo-clerk-playwright
+
+checks:
+  ceo-ping-auth:
+    description: "Hit /api/probes/ping-auth and assert healthy response"
+    handler: "./checks/ceo-ping-auth.ts"
+    timeout_ms: 10000
+    tags: [cloud, cheap]
+
+  ceo-clerk-playwright:
+    description: "Playwright login via Clerk test token and assert canary"
+    handler: "./checks/ceo-clerk-playwright.ts"
+    timeout_ms: 120000
+    tags: [cloud, expensive, browser]

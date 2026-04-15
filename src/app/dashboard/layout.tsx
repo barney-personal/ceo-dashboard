@@ -2,6 +2,7 @@ import { UserButton } from "@clerk/nextjs";
 import { getCurrentUserRole, getRealUserRole, getImpersonation } from "@/lib/auth/roles.server";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner";
+import { ProbeCanary } from "@/components/dashboard/probe-canary";
 import { Bell } from "lucide-react";
 import { PageViewTracker } from "@/components/dashboard/page-view-tracker";
 
@@ -45,6 +46,7 @@ export default async function DashboardLayout({
         </header>
         <PageViewTracker />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <ProbeCanary />
       </div>
     </div>
   );
