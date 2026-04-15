@@ -1,60 +1,50 @@
 name: Sync Doppler to Render
 
-# Push every Doppler `prd` secret to the Render web + sync-worker services
-# after each merge to main, then trigger a fresh deploy so the running pods
-# pick up the new env. Without this, a PR that adds a new env var would land
-# on main but production would silently lack the value until someone
-# remembered to run `make sync-render-env` locally.
+# Push every Doppler `prd` secret to the Render services after each merge to
+# main, then trigger a fresh deploy so the running pods pick up the new env.
+# Without this, a PR that adds a new env var would land on main but
+# production would silently lack the value until someone remembered to run
+# `make sync-render-env` locally.
+#
+# Service IDs are NOT secrets here — they live in SERVICES inside
+# scripts/sync-doppler-to-render.py so there's a single source of truth that
+# both local runs and this workflow share.
 #
 # Required repo secrets (Settings -> Secrets -> Actions):
-#   DOPPLER_TOKEN_PRD        — Doppler service token, scoped to ceo-dashboard
-#                              /prd, read-only. Generate at
-#                              https://dashboard.doppler.com/workplace/.../
-#                              projects/ceo-dashboard/configs/prd/access
-#   RENDER_API_KEY           — account-level Render API key (the one used for
-#                              local `make sync-render-env`).
-#   RENDER_WEB_SERVICE_ID    — srv-d7b2ed94tr6s73c2m8ag (web)
-#   RENDER_WORKER_SERVICE_ID — srv-d7b4qaudqaus73c8r3dg (sync worker)
+#   DOPPLER_TOKEN_PRD  — Doppler service token, scoped to ceo-dashboard/prd,
+#                        read-only. Generate at the Doppler dashboard ->
+#                        ceo-dashboard -> prd -> Access.
+#   RENDER_API_KEY     — account-level Render API key (the one used for local
+#                        `make sync-render-env`).
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# One sync at a time per branch; avoid two concurrent runs racing on the
-# same Render service.
+# One sync at a time; avoid concurrent runs racing on the same Render service.
 concurrency:
   group: sync-doppler-render
   cancel-in-progress: false
+
+# Only the secrets used below are exposed; nothing else needs write access.
+permissions:
+  contents: read
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned (v4 tag tip at 2026-04) — this workflow holds production
+      # credentials, so a moved tag would let arbitrary code see them.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      # SHA-pinned (v3 tag tip at 2026-04) — same reasoning.
       - name: Install Doppler CLI
-        uses: dopplerhq/cli-action@v3
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1
 
-      - name: Push Doppler prd to Render env vars
+      - name: Sync Doppler prd to Render and trigger deploys
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: doppler run -- python3 scripts/sync-doppler-to-render.py
-
-      - name: Trigger fresh deploys
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          WEB_ID: ${{ secrets.RENDER_WEB_SERVICE_ID }}
-          WORKER_ID: ${{ secrets.RENDER_WORKER_SERVICE_ID }}
-        run: |
-          set -euo pipefail
-          for sid in "$WEB_ID" "$WORKER_ID"; do
-            echo "Triggering deploy for $sid"
-            curl -fsS -X POST \
-              -H "Authorization: Bearer $RENDER_API_KEY" \
-              -H "Content-Type: application/json" \
-              "https://api.render.com/v1/services/$sid/deploys" \
-              -d '{"clearCache":"do_not_clear"}'
-            echo
-          done

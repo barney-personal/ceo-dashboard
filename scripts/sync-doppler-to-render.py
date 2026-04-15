@@ -50,6 +50,10 @@ RENDER_MANAGED = {
 # vars. If they did, a compromised service container could bootstrap to full
 # Doppler/Render account access. Stripped from both the Doppler view and the
 # merged Render env so a re-sync also REMOVES any historical leak.
+#
+# DOPPLER_TOKEN is also caught by the `DOPPLER_*` prefix skip in
+# fetch_doppler_secrets(); listing it here is defence-in-depth in case the
+# Doppler CLI ever changes its naming convention.
 NEVER_PUSH = {
     "RENDER_API_KEY",
     "DOPPLER_TOKEN",
@@ -133,6 +137,31 @@ def render_put_env(service_id: str, token: str, env: dict[str, str]) -> None:
         ) from e
 
 
+def render_trigger_deploy(service_id: str, token: str) -> str:
+    """Trigger a fresh deploy for `service_id` and return the new deploy id.
+    Required because env-var changes via the API don't auto-redeploy — pods
+    keep their old env until the next deploy."""
+    req = urllib.request.Request(
+        f"https://api.render.com/v1/services/{service_id}/deploys",
+        method="POST",
+        data=b'{"clearCache":"do_not_clear"}',
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+            return str(data.get("id", "?"))
+    except urllib.error.HTTPError as e:
+        body_preview = e.read()[:300].decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Render deploy POST failed (HTTP {e.code}) for {service_id}: {body_preview}"
+        ) from e
+
+
 def main() -> int:
     token = os.environ.get("RENDER_API_KEY")
     if not token:
@@ -185,6 +214,17 @@ def main() -> int:
 
         render_put_env(sid, token, merged)
         print(f"   ✓ PUT succeeded")
+
+    # Trigger fresh deploys — env-var changes via the API don't auto-redeploy.
+    # Service IDs come from SERVICES so the workflow / operator never has to
+    # repeat them.
+    if os.environ.get("SKIP_DEPLOY") == "1":
+        print("\n⏭  skipping deploys (SKIP_DEPLOY=1)")
+    else:
+        print("\nTriggering fresh deploys:")
+        for name, sid in SERVICES.items():
+            deploy_id = render_trigger_deploy(sid, token)
+            print(f"  → {name}: deploy {deploy_id} queued")
 
     print("\n✓ all services synced")
     return 0
