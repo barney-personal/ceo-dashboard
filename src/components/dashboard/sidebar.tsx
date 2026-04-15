@@ -71,7 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Engineering",
         href: "/dashboard/engineering",
-        requiredRole: "leadership",
+        requiredRole: "everyone",
         icon: GitPullRequest,
       },
     ],
@@ -122,7 +122,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Attrition",
         href: "/dashboard/people/attrition",
-        requiredRole: "ceo",
+        requiredRole: "leadership",
         icon: TrendingUp,
       },
       {
