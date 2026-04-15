@@ -19,7 +19,7 @@ import {
   type Y1AttritionRow,
   type Leaver,
 } from "@/lib/data/attrition-utils";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ChevronDown } from "lucide-react";
 
 interface AttritionPageClientProps {
   rollingAttrition: AttritionRow[];
@@ -226,15 +226,24 @@ export function AttritionPageClient({
         )}
       </section>
 
-      {/* First Year (Y1) Attrition Rate */}
-      <section className="space-y-6">
-        <SectionDivider
-          title="First Year (Y1) Attrition Rate"
-          subtitle="Number of employees leaving within Y1 since joining / number of new joiners within the last 12 months"
-        />
-
-        {hasY1Data ? (
-          <>
+      {/* First Year (Y1) Attrition Rate — collapsible */}
+      {hasY1Data && (
+        <details className="group">
+          <summary className="cursor-pointer list-none">
+            <div className="flex items-center gap-2 pt-2">
+              <div className="h-px flex-1 bg-border/50" />
+              <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                <span>First Year (Y1) Attrition Rate</span>
+                <span className="text-xs tabular-nums">({formatPercent(y1Metrics.currentRate)})</span>
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+              </div>
+              <div className="h-px flex-1 bg-border/50" />
+            </div>
+            <p className="mt-1 text-center text-xs text-muted-foreground/70">
+              Number of employees leaving within Y1 since joining / number of new joiners within the last 12 months
+            </p>
+          </summary>
+          <div className="mt-6 space-y-6">
             <div className="grid gap-4 sm:grid-cols-3">
               <MetricCard
                 label="Y1 Attrition Rate"
@@ -255,11 +264,9 @@ export function AttritionPageClient({
             </div>
 
             <AttritionChart series={y1Series} title="Y1 Attrition Rate" subtitle="12-month rolling, by leaver type" modeUrl={modeUrl} />
-          </>
-        ) : (
-          <ChartPlaceholder title="Y1 Attrition" reason={emptyReason ?? "No Y1 attrition data available"} />
-        )}
-      </section>
+          </div>
+        </details>
+      )}
 
       {/* Recent Leavers */}
       {recentLeavers.length > 0 && (
