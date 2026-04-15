@@ -99,17 +99,20 @@ function aggregateByPeriod(
   const map = new Map<string, { headcount: number; leavers: number; regretted: number; volNonReg: number; involuntary: number }>();
 
   for (const row of rows) {
-    // When no filter is applied, use the pre-aggregated "All" rows from Mode
-    // to avoid double-counting granular + aggregate rows.
+    // Filter by department/tenure when a filter is applied.
+    // When no filter is applied, include all granular rows and sum them
+    // (Mode no longer provides pre-aggregated "All" rows).
+    // Skip any "All" or blank aggregate rows if they happen to exist,
+    // to avoid double-counting.
     if (filterDepartment) {
       if (row.department !== filterDepartment) continue;
     } else {
-      if (row.department !== "All" && row.department !== "") continue;
+      if (row.department === "All" || row.department === "") continue;
     }
     if (filterTenure) {
       if (row.tenure !== filterTenure) continue;
     } else {
-      if (row.tenure !== "All" && row.tenure !== "") continue;
+      if (row.tenure === "All" || row.tenure === "") continue;
     }
 
     const key = row.reportingPeriod.slice(0, 10);
@@ -162,8 +165,8 @@ export function getAttritionByDepartment(rows: AttritionRow[]): ChartSeries[] {
   ];
 
   return departments.map((dept, i) => {
-    // Use tenure "All" rows to avoid double-counting tenure splits
-    const deptRows = rows.filter((r) => r.department === dept && (r.tenure === "All" || r.tenure === ""));
+    // Sum across all tenure splits for this department
+    const deptRows = rows.filter((r) => r.department === dept && r.tenure !== "All" && r.tenure !== "");
     const byPeriod = aggregateByPeriod(deptRows, dept);
     const sortedKeys = [...byPeriod.keys()].sort();
 
@@ -214,7 +217,12 @@ function aggregateY1ByPeriod(
   const map = new Map<string, { starters: number; leavers: number; regretted: number; volNonReg: number; involuntary: number }>();
 
   for (const row of rows) {
-    if (filterDepartment && row.department !== filterDepartment) continue;
+    if (filterDepartment) {
+      if (row.department !== filterDepartment) continue;
+    } else {
+      // Skip null/empty/All department rows to avoid double-counting
+      if (!row.department || row.department === "All") continue;
+    }
 
     const key = row.startMonth.slice(0, 10);
     const existing = map.get(key) ?? { starters: 0, leavers: 0, regretted: 0, volNonReg: 0, involuntary: 0 };
