@@ -46,6 +46,15 @@ RENDER_MANAGED = {
     "NODE_ENV",            # static value: production in render.yaml
 }
 
+# Operator credentials used by THIS script — must never become service env
+# vars. If they did, a compromised service container could bootstrap to full
+# Doppler/Render account access. Stripped from both the Doppler view and the
+# merged Render env so a re-sync also REMOVES any historical leak.
+NEVER_PUSH = {
+    "RENDER_API_KEY",
+    "DOPPLER_TOKEN",
+}
+
 
 def fetch_doppler_secrets() -> tuple[dict[str, str], list[str]]:
     """Return (non-empty secrets, names of skipped empty-string secrets).
@@ -131,7 +140,15 @@ def main() -> int:
         return 2
 
     doppler, skipped_empty = fetch_doppler_secrets()
+    # Strip NEVER_PUSH keys from the Doppler view so they don't reach Render.
+    stripped_from_doppler = sorted(k for k in NEVER_PUSH if k in doppler)
+    for k in stripped_from_doppler:
+        doppler.pop(k, None)
+
     print(f"Doppler {DOPPLER_PROJECT}/{DOPPLER_CONFIG}: {len(doppler)} secrets")
+    if stripped_from_doppler:
+        print(f"  ⊘ never-push (operator creds, kept in Doppler only): "
+              f"{', '.join(stripped_from_doppler)}")
     if skipped_empty:
         print(f"  ⚠ skipping {len(skipped_empty)} empty-string secrets "
               f"(set them in Doppler if needed): {', '.join(sorted(skipped_empty))}")
@@ -139,6 +156,14 @@ def main() -> int:
     for name, sid in SERVICES.items():
         current = render_get_env(sid, token)
         merged = dict(current)
+        # Strip NEVER_PUSH from merged BEFORE applying Doppler — this removes
+        # any historical leak (e.g. an earlier sync that pushed RENDER_API_KEY
+        # by mistake). Doppler view has already been stripped, so the Doppler
+        # loop won't re-add them.
+        removed = sorted(k for k in NEVER_PUSH if k in merged)
+        for k in removed:
+            merged.pop(k, None)
+
         added, updated, preserved = [], [], []
         for k, v in doppler.items():
             if k in RENDER_MANAGED:
@@ -154,6 +179,8 @@ def main() -> int:
         print(f"   current: {len(current)} vars | will push: {len(merged)} vars")
         if added:    print(f"   + adding   ({len(added)}): {', '.join(sorted(added))}")
         if updated:  print(f"   ↺ updating ({len(updated)}): {', '.join(sorted(updated))}")
+        if removed:  print(f"   - removing ({len(removed)}) never-push: "
+                          f"{', '.join(removed)}")
         if preserved:print(f"   ⊘ preserved Render-managed: {', '.join(sorted(preserved))}")
 
         render_put_env(sid, token, merged)
