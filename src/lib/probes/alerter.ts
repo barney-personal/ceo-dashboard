@@ -8,6 +8,19 @@ import {
 } from "./repo";
 import { sendTelegram } from "./telegram";
 
+/**
+ * Wrap sendTelegram and log when it fails so an operator can see it in the
+ * Render logs. "skipped" results (missing config) are not logged — that's
+ * the expected local-dev path. Only real errors from both primary + fallback
+ * bot tokens surface as console.error.
+ */
+async function sendAlert(text: string, context: string): Promise<void> {
+  const result = await sendTelegram(text);
+  if (!result.ok && !("skipped" in result)) {
+    console.error(`[alerter] Telegram send failed (${context}): ${result.error}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -165,25 +178,25 @@ export async function runAlerter(checkName: string): Promise<void> {
         // Concurrent caller already opened the incident — skip duplicate alert
         return;
       }
-      await sendTelegram(decision.message);
+      await sendAlert(decision.message, "open_incident");
       return;
     }
 
     case "escalate": {
       const changed = await escalateIncident(decision.incidentId, decision.level, now);
-      if (changed) await sendTelegram(decision.message);
+      if (changed) await sendAlert(decision.message, "escalate");
       return;
     }
 
     case "recover": {
       const changed = await closeIncident(decision.incidentId);
-      if (changed) await sendTelegram(decision.message);
+      if (changed) await sendAlert(decision.message, "recover");
       return;
     }
 
     case "remind": {
       const changed = await setLastAlertedAt(decision.incidentId, now);
-      if (changed) await sendTelegram(decision.message);
+      if (changed) await sendAlert(decision.message, "remind");
       return;
     }
   }

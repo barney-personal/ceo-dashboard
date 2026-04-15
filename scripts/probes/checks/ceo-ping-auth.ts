@@ -28,13 +28,19 @@ export const run: CheckHandler = async (ctx: CheckContext): Promise<CheckResult>
 
     const body = (await res.json()) as PingAuthResponse;
 
+    // Deploying is a known-degraded state, not a failure. Per the spec the
+    // probe should treat it as degraded-ok — we report green so the alerter
+    // doesn't fire during a 5-minute deploy window, but include the flag in
+    // details so the dashboard can surface it distinctly.
     if (body.deploying) {
       return {
         checkName,
-        status: "red",
+        status: "green",
         latencyMs,
-        error: "deploying: service is mid-deploy",
-        details: body as unknown as Record<string, unknown>,
+        details: {
+          ...(body as unknown as Record<string, unknown>),
+          note: "service is mid-deploy — downstream checks skipped",
+        },
       };
     }
 

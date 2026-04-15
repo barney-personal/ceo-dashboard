@@ -131,7 +131,10 @@ describe("ceo-ping-auth check", () => {
     expect(url).toBe("https://custom.example.com/api/probes/ping-auth");
   });
 
-  it("returns red when deploying is true", async () => {
+  it("returns green (degraded-ok) when deploying is true, skipping downstream checks", async () => {
+    // Deploying is a known-transient state; per spec the probe should NOT
+    // fire a red alert during a deploy window. Return green with a note so
+    // the alerter stays quiet but the dashboard can surface the state.
     (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       status: 200,
@@ -148,8 +151,9 @@ describe("ceo-ping-auth check", () => {
     const result = await run(makeCtx());
 
     expect(result.checkName).toBe("ceo-ping-auth");
-    expect(result.status).toBe("red");
-    expect(result.error).toMatch(/deploying/i);
+    expect(result.status).toBe("green");
+    expect(result.details).toMatchObject({ deploying: true });
+    expect((result.details as { note?: string }).note).toMatch(/mid-deploy/i);
   });
 
   it("returns red when version is null", async () => {

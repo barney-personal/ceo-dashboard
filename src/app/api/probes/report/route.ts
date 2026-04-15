@@ -72,7 +72,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     target: body.target,
   });
 
-  runAlerter(body.checkName).catch(() => {});
+  // Fire-and-forget alerter dispatch. We don't await (the insert response
+  // shouldn't block on Telegram I/O) but we do log failures so an operator
+  // tailing Render logs can see when alerting breaks.
+  runAlerter(body.checkName).catch((err) => {
+    console.error("[probes/report] runAlerter failed:", err);
+  });
 
   return NextResponse.json({ id: row.id, ts: row.ts }, { status: 201 });
 }

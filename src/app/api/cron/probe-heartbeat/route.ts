@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import {
   allHeartbeats,
   insertProbeRun,
@@ -12,11 +13,24 @@ function syntheticCheckName(probeId: string): string {
   return `heartbeat:${probeId}`;
 }
 
+/**
+ * Constant-time comparison of the `Authorization: Bearer …` header against
+ * the expected value. Plain `!==` leaks length and character-position
+ * timing; this matches the HMAC routes' timing-safe pattern.
+ */
+function verifyBearerAuth(authHeader: string | null, secret: string): boolean {
+  if (!authHeader) return false;
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const actual = Buffer.from(authHeader);
+  if (actual.length !== expected.length) return false;
+  return timingSafeEqual(actual, expected);
+}
+
 export async function GET(request: Request): Promise<NextResponse> {
   const secret = process.env.INTERNAL_CRON_SECRET;
   const authHeader = request.headers.get("authorization");
 
-  if (!secret || authHeader !== `Bearer ${secret}`) {
+  if (!secret || !verifyBearerAuth(authHeader, secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
