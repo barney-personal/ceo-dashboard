@@ -461,10 +461,11 @@ export async function fetchMergedPRRecords(
     let repoCount = 0;
     // Results are ordered by UPDATED_AT, not mergedAt, so a recently-updated
     // old PR can appear before newer ones. Instead of breaking on the first
-    // out-of-range PR, we filter and stop after 3 consecutive empty pages.
+    // out-of-range PR, we filter and stop after 5 consecutive empty pages
+    // (500 results) to avoid missing PRs while still bounding the scan.
     let consecutiveEmptyPages = 0;
 
-    while (consecutiveEmptyPages < 3) {
+    while (consecutiveEmptyPages < 5) {
       const gqlData: GraphQLPRResponse = await graphqlRequest(
         GRAPHQL_QUERY,
         { owner: config.org, repo: repoName, cursor },
