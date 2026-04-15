@@ -203,97 +203,141 @@ function ViewToggle({
   );
 }
 
-// ── Level 1: Pillar cards ──────────────────────────────────────────────────
+// ── Distribution table (Level 1 + Level 2) ───────────────────────────────
 
-function PillarCard({
-  group,
-  latestCycle,
+function DistributionTable({
+  rows,
+  cycle,
   onSelect,
 }: {
-  group: PillarGroup;
-  latestCycle: string;
+  rows: { name: string; people: PersonPerformance[] }[];
+  cycle: string;
   onSelect: (name: string) => void;
 }) {
-  const allPeople = group.squads.flatMap((s) => s.people);
+  // Compute distribution for each row
+  const rowData = rows.map((row) => {
+    const dist = cycleDistribution(row.people, cycle);
+    const distMap = new Map(dist.map((d) => [d.rating, d]));
+    const reviewed = dist.reduce((sum, d) => sum + d.count, 0);
+    return { ...row, distMap, reviewed };
+  });
+
+  // Compute totals
+  const totalPeople = rowData.reduce((sum, r) => sum + r.people.length, 0);
+  const totalReviewed = rowData.reduce((sum, r) => sum + r.reviewed, 0);
+  const totalDist = new Map<number | null, number>();
+  for (const r of rowData) {
+    for (const [rating, d] of r.distMap) {
+      totalDist.set(rating, (totalDist.get(rating) ?? 0) + d.count);
+    }
+  }
+
+  const ratingColumns = [5, 4, 3, 2, 1] as const;
+
+  function pct(count: number, total: number): string {
+    if (total === 0) return "—";
+    return `${Math.round((count / total) * 100)}%`;
+  }
+
+  function pctCell(count: number, total: number, rating: number | null) {
+    if (total === 0) return <span className="text-muted-foreground/30">—</span>;
+    const percentage = Math.round((count / total) * 100);
+    if (count === 0) return <span className="text-muted-foreground/30">—</span>;
+    return (
+      <span className="font-medium" style={{ color: ratingColour(rating) }}>
+        {percentage}%
+      </span>
+    );
+  }
+
   return (
-    <button
-      onClick={() => onSelect(group.name)}
-      className="group rounded-xl border border-border/60 bg-card p-5 shadow-warm text-left transition-all duration-200 hover:border-primary/30 hover:shadow-warm-lg"
-    >
-      <h4 className="text-base font-semibold text-foreground">{group.name}</h4>
-      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <Users className="h-3.5 w-3.5" />
-        {group.count} {group.count === 1 ? "person" : "people"}
-        <span className="text-muted-foreground/50">
-          · {group.squads.length} {group.squads.length === 1 ? "squad" : "squads"}
-        </span>
-      </div>
-      {latestCycle && allPeople.length > 0 && (
-        <div className="mt-3">
-          <DistributionBar people={allPeople} cycle={latestCycle} />
-        </div>
-      )}
-    </button>
-  );
-}
-
-// ── Level 1: Department cards ──────────────────────────────────────────────
-
-function DepartmentCard({
-  group,
-  latestCycle,
-  onSelect,
-}: {
-  group: FunctionGroup;
-  latestCycle: string;
-  onSelect: (name: string) => void;
-}) {
-  return (
-    <button
-      onClick={() => onSelect(group.name)}
-      className="group rounded-xl border border-border/60 bg-card p-5 shadow-warm text-left transition-all duration-200 hover:border-primary/30 hover:shadow-warm-lg"
-    >
-      <h4 className="text-base font-semibold text-foreground">{group.name}</h4>
-      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-        <Briefcase className="h-3.5 w-3.5" />
-        {group.people.length} {group.people.length === 1 ? "person" : "people"}
-      </div>
-      {latestCycle && group.people.length > 0 && (
-        <div className="mt-3">
-          <DistributionBar people={group.people} cycle={latestCycle} />
-        </div>
-      )}
-    </button>
-  );
-}
-
-// ── Level 2: Squad cards (within a pillar) ────────────────────────────────
-
-function SquadCard({
-  squad,
-  latestCycle,
-  onSelect,
-}: {
-  squad: { name: string; people: PersonPerformance[] };
-  latestCycle: string;
-  onSelect: (name: string) => void;
-}) {
-  return (
-    <button
-      onClick={() => onSelect(squad.name)}
-      className="rounded-xl border border-border/60 bg-card p-4 shadow-warm text-left transition-all duration-200 hover:border-primary/30 hover:shadow-warm-lg"
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-foreground">{squad.name}</span>
-        <span className="text-xs text-muted-foreground">{squad.people.length}</span>
-      </div>
-      {latestCycle && squad.people.length > 0 && (
-        <div className="mt-3">
-          <DistributionBar people={squad.people} cycle={latestCycle} />
-          <DistributionLegend people={squad.people} cycle={latestCycle} />
-        </div>
-      )}
-    </button>
+    <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-x-auto">
+      <table className="w-full min-w-[600px] text-sm">
+        <thead>
+          <tr className="border-b border-border/30">
+            <th className="px-5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+              Name
+            </th>
+            <th className="px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+              People
+            </th>
+            {ratingColumns.map((r) => (
+              <th
+                key={r}
+                className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ backgroundColor: ratingColour(r) }}
+                  />
+                  {r}
+                </span>
+              </th>
+            ))}
+            <th className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+              <span className="inline-flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{ backgroundColor: ratingColour(null) }}
+                />
+                Missed
+              </span>
+            </th>
+            <th className="w-40 px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+              Distribution
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/20">
+          {rowData.map((row) => {
+            const missed = row.distMap.get(null)?.count ?? 0;
+            return (
+              <tr
+                key={row.name}
+                onClick={() => onSelect(row.name)}
+                className="cursor-pointer transition-colors hover:bg-muted/30"
+              >
+                <td className="px-5 py-3 font-medium text-foreground">{row.name}</td>
+                <td className="px-3 py-3 text-right font-mono text-xs text-muted-foreground">
+                  {row.people.length}
+                </td>
+                {ratingColumns.map((r) => (
+                  <td key={r} className="px-3 py-3 text-center text-xs">
+                    {pctCell(row.distMap.get(r)?.count ?? 0, row.reviewed, r)}
+                  </td>
+                ))}
+                <td className="px-3 py-3 text-center text-xs">
+                  {pctCell(missed, row.reviewed, null)}
+                </td>
+                <td className="px-3 py-3">
+                  <DistributionBar people={row.people} cycle={cycle} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+        {rowData.length > 1 && (
+          <tfoot>
+            <tr className="border-t border-border/40 bg-muted/10">
+              <td className="px-5 py-3 text-xs font-semibold text-muted-foreground">Total</td>
+              <td className="px-3 py-3 text-right font-mono text-xs font-semibold text-muted-foreground">
+                {totalPeople}
+              </td>
+              {ratingColumns.map((r) => (
+                <td key={r} className="px-3 py-3 text-center text-xs">
+                  {pctCell(totalDist.get(r) ?? 0, totalReviewed, r)}
+                </td>
+              ))}
+              <td className="px-3 py-3 text-center text-xs">
+                {pctCell(totalDist.get(null) ?? 0, totalReviewed, null)}
+              </td>
+              <td className="px-3 py-3" />
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
   );
 }
 
@@ -697,45 +741,14 @@ export function PerformanceDrilldown({
             </div>
           </div>
 
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search squads..."
-              className="w-full rounded-xl border border-border/60 bg-card py-2.5 pl-10 pr-4 text-sm outline-none shadow-warm placeholder:text-muted-foreground/40 focus:border-primary/30"
-            />
-          </div>
-
-          {(() => {
-            const filtered = search.trim()
-              ? activePillar.squads.filter((s) =>
-                  s.name.toLowerCase().includes(search.toLowerCase())
-                )
-              : activePillar.squads;
-            return filtered.length > 0 ? (
-              <div className="grid gap-3 md:grid-cols-2">
-                {filtered.map((squad) => (
-                  <SquadCard
-                    key={squad.name}
-                    squad={squad}
-                    latestCycle={latestCycle}
-                    onSelect={(name) => {
-                      setSelectedSquad(name);
-                      setSearch("");
-                    }}
-                  />
-                ))}
-              </div>
-            ) : search.trim() ? (
-              <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
-                <p className="text-sm text-muted-foreground">
-                  No squads matching &ldquo;{search}&rdquo;
-                </p>
-              </div>
-            ) : null;
-          })()}
+          <DistributionTable
+            rows={activePillar.squads}
+            cycle={latestCycle}
+            onSelect={(name) => {
+              setSelectedSquad(name);
+              setSearch("");
+            }}
+          />
         </div>
       )}
 
@@ -743,35 +756,28 @@ export function PerformanceDrilldown({
       {atTopLevel && (
         <>
           {view === "pillar" && (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {pillarGroups.map((group) => (
-                <PillarCard
-                  key={group.name}
-                  group={group}
-                  latestCycle={latestCycle}
-                  onSelect={(name) => {
-                    setSelectedPillar(name);
-                    setSearch("");
-                  }}
-                />
-              ))}
-            </div>
+            <DistributionTable
+              rows={pillarGroups.map((g) => ({
+                name: g.name,
+                people: g.squads.flatMap((s) => s.people),
+              }))}
+              cycle={latestCycle}
+              onSelect={(name) => {
+                setSelectedPillar(name);
+                setSearch("");
+              }}
+            />
           )}
 
           {view === "department" && (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {functionGroups.map((group) => (
-                <DepartmentCard
-                  key={group.name}
-                  group={group}
-                  latestCycle={latestCycle}
-                  onSelect={(name) => {
-                    setSelectedFunction(name);
-                    setSearch("");
-                  }}
-                />
-              ))}
-            </div>
+            <DistributionTable
+              rows={functionGroups}
+              cycle={latestCycle}
+              onSelect={(name) => {
+                setSelectedFunction(name);
+                setSearch("");
+              }}
+            />
           )}
         </>
       )}
