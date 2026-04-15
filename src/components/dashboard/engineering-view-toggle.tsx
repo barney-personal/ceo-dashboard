@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Users, LayoutGrid, Layers } from "lucide-react";
 import { EngineeringTable } from "./engineering-table";
 import { EngineeringSquadView } from "./engineering-squad-view";
+import type { SquadPillarLookup } from "@/lib/data/swarmia";
 
 type ViewMode = "engineers" | "squads" | "pillars";
 
@@ -28,23 +29,29 @@ interface EngineerData {
   tenureMonths: number | null;
 }
 
-export function EngineeringViewToggle({ data }: { data: EngineerData[] }) {
-  const [view, setView] = useState<ViewMode>("engineers");
+export function EngineeringViewToggle({
+  data,
+  swarmiaMetrics,
+}: {
+  data: EngineerData[];
+  swarmiaMetrics?: SquadPillarLookup;
+}) {
+  const [view, setView] = useState<ViewMode>("pillars");
 
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5 w-fit">
         <button
-          onClick={() => setView("engineers")}
+          onClick={() => setView("pillars")}
           className={cn(
             "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-            view === "engineers"
+            view === "pillars"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <Users className="h-3.5 w-3.5" />
-          Engineers
+          <Layers className="h-3.5 w-3.5" />
+          Pillars
         </button>
         <button
           onClick={() => setView("squads")}
@@ -59,23 +66,27 @@ export function EngineeringViewToggle({ data }: { data: EngineerData[] }) {
           Squads
         </button>
         <button
-          onClick={() => setView("pillars")}
+          onClick={() => setView("engineers")}
           className={cn(
             "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-            view === "pillars"
+            view === "engineers"
               ? "bg-card text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
-          <Layers className="h-3.5 w-3.5" />
-          Pillars
+          <Users className="h-3.5 w-3.5" />
+          Engineers
         </button>
       </div>
 
       {view === "engineers" ? (
         <EngineeringTable data={data} />
       ) : (
-        <EngineeringSquadView data={data} groupBy={view === "pillars" ? "pillar" : "squad"} />
+        <EngineeringSquadView
+          data={data}
+          groupBy={view === "pillars" ? "pillar" : "squad"}
+          swarmiaMetrics={swarmiaMetrics}
+        />
       )}
     </div>
   );

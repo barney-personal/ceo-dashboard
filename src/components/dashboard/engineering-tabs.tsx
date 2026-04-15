@@ -1,0 +1,67 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
+import { cn } from "@/lib/utils";
+import { PeriodPicker } from "./period-picker";
+
+// Inlined to avoid pulling server-only deps (postgres) into the client bundle.
+// Keep in sync with PERIOD_OPTIONS in src/lib/data/engineering.ts.
+const PERIOD_OPTIONS = [
+  { label: "30 days", value: 30 },
+  { label: "90 days", value: 90 },
+  { label: "180 days", value: 180 },
+  { label: "360 days", value: 360 },
+] as const;
+
+const TABS = [
+  { label: "Delivery Health", href: "/dashboard/engineering/delivery-health" },
+  { label: "Pillars", href: "/dashboard/engineering/pillars" },
+  { label: "Squads", href: "/dashboard/engineering/squads" },
+  { label: "Engineers", href: "/dashboard/engineering/engineers" },
+] as const;
+
+/** Tabs where the period picker has no effect (trend/sparkline-based views). */
+const PERIODLESS_TABS = new Set<string>([
+  "/dashboard/engineering/delivery-health",
+]);
+
+export function EngineeringTabs() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // Preserve period (and any other query state) when switching tabs so the
+  // user doesn't lose their 90-day selection by navigating.
+  const qs = searchParams.toString();
+  const suffix = qs ? `?${qs}` : "";
+
+  const currentPeriod = Number(searchParams.get("period")) || 30;
+  const validPeriod = PERIOD_OPTIONS.find((p) => p.value === currentPeriod)?.value ?? 30;
+  const showPicker = !PERIODLESS_TABS.has(pathname);
+
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5 w-fit">
+        {TABS.map((tab) => {
+          const isActive = pathname === tab.href;
+          return (
+            <Link
+              key={tab.href}
+              href={`${tab.href}${suffix}`}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                isActive
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {tab.label}
+            </Link>
+          );
+        })}
+      </div>
+      {showPicker && (
+        <PeriodPicker periods={PERIOD_OPTIONS} current={validPeriod} />
+      )}
+    </div>
+  );
+}
