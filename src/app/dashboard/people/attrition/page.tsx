@@ -1,3 +1,6 @@
+import { redirect } from "next/navigation";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { AttritionPageClient } from "@/components/dashboard/attrition-page-client";
 import {
@@ -13,6 +16,10 @@ import {
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function AttritionPage() {
+  const role = await getCurrentUserRole();
+  if (!hasAccess(role, "ceo")) {
+    redirect("/dashboard");
+  }
   const [attritionData, latestSyncRun] = await Promise.all([
     getAttritionData(),
     getLatestTerminalSyncRun("mode"),

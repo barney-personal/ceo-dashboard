@@ -99,8 +99,18 @@ function aggregateByPeriod(
   const map = new Map<string, { headcount: number; leavers: number; regretted: number; volNonReg: number; involuntary: number }>();
 
   for (const row of rows) {
-    if (filterDepartment && row.department !== filterDepartment) continue;
-    if (filterTenure && row.tenure !== filterTenure) continue;
+    // When no filter is applied, use the pre-aggregated "All" rows from Mode
+    // to avoid double-counting granular + aggregate rows.
+    if (filterDepartment) {
+      if (row.department !== filterDepartment) continue;
+    } else {
+      if (row.department !== "All" && row.department !== "") continue;
+    }
+    if (filterTenure) {
+      if (row.tenure !== filterTenure) continue;
+    } else {
+      if (row.tenure !== "All" && row.tenure !== "") continue;
+    }
 
     const key = row.reportingPeriod.slice(0, 10);
     const existing = map.get(key) ?? { headcount: 0, leavers: 0, regretted: 0, volNonReg: 0, involuntary: 0 };
@@ -142,7 +152,9 @@ export function getRollingAttritionSeries(
 }
 
 export function getAttritionByDepartment(rows: AttritionRow[]): ChartSeries[] {
-  const departments = [...new Set(rows.map((r) => r.department))].sort();
+  const departments = [...new Set(rows.map((r) => r.department))]
+    .filter((d) => d !== "All" && d !== "")
+    .sort();
   const palette = [
     COLORS.total, COLORS.regretted, COLORS.voluntaryNonRegretted, COLORS.involuntary,
     "var(--chart-2)", "var(--chart-4)", "var(--chart-5)",
@@ -150,8 +162,9 @@ export function getAttritionByDepartment(rows: AttritionRow[]): ChartSeries[] {
   ];
 
   return departments.map((dept, i) => {
-    const deptRows = rows.filter((r) => r.department === dept);
-    const byPeriod = aggregateByPeriod(deptRows);
+    // Use tenure "All" rows to avoid double-counting tenure splits
+    const deptRows = rows.filter((r) => r.department === dept && (r.tenure === "All" || r.tenure === ""));
+    const byPeriod = aggregateByPeriod(deptRows, dept);
     const sortedKeys = [...byPeriod.keys()].sort();
 
     return {
@@ -265,11 +278,15 @@ export function getLatestY1Metrics(rows: Y1AttritionRow[]): Y1AttritionMetrics {
 // ── Helpers ──
 
 export function getDepartments(rows: AttritionRow[]): string[] {
-  return [...new Set(rows.map((r) => r.department))].sort();
+  return [...new Set(rows.map((r) => r.department))]
+    .filter((d) => d !== "All" && d !== "")
+    .sort();
 }
 
 export function getTenureBuckets(rows: AttritionRow[]): string[] {
-  return [...new Set(rows.map((r) => r.tenure))].sort();
+  return [...new Set(rows.map((r) => r.tenure))]
+    .filter((t) => t !== "All" && t !== "")
+    .sort();
 }
 
 export function getRecentLeavers(leavers: Leaver[]): Leaver[] {
