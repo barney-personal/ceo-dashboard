@@ -22,6 +22,7 @@ vi.mock("../people", () => ({
   getActiveEmployees: mockGetActiveEmployees,
 }));
 
+import type { Person } from "../people";
 import {
   getRatingDistribution,
   transformPerformanceData,
@@ -43,7 +44,7 @@ function makeRating(overrides: Partial<PerformanceRating> = {}): PerformanceRati
   };
 }
 
-function makePerson(overrides: Partial<Record<string, unknown>> = {}) {
+function makePerson(overrides: Partial<Person> = {}): Person {
   return {
     name: "Alice Test",
     email: "alice@meetcleo.com",
@@ -143,7 +144,7 @@ describe("transformPerformanceData", () => {
       },
     ];
     const employees = [makePerson({ email: "alice@meetcleo.com" })];
-    const { people, reviewCycles } = transformPerformanceData(modeRows, employees as any);
+    const { people, reviewCycles } = transformPerformanceData(modeRows, employees);
 
     expect(people).toHaveLength(1);
     expect(people[0].name).toBe("Alice Test");
@@ -197,7 +198,7 @@ describe("transformPerformanceData", () => {
       },
     ];
     const employees = [makePerson({ email: "alice@meetcleo.com" })];
-    const { people } = transformPerformanceData(modeRows, employees as any);
+    const { people } = transformPerformanceData(modeRows, employees);
 
     expect(people[0].ratings[0].rating).toBeNull();
     expect(people[0].ratings[0].missed).toBe(true);
@@ -229,7 +230,7 @@ describe("transformPerformanceData", () => {
       },
     ];
     const employees = [makePerson({ email: "alice@meetcleo.com" })];
-    const { reviewCycles } = transformPerformanceData(modeRows, employees as any);
+    const { reviewCycles } = transformPerformanceData(modeRows, employees);
 
     expect(reviewCycles).toEqual([
       "2025 H1-A Performance Check-In",
