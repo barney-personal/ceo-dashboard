@@ -52,4 +52,15 @@ describe("parseCsv", () => {
     expect(rows[0]["Team"]).toBe("Chat Pillar");
     expect(rows[0]["Count"]).toBe("20");
   });
+
+  it("skips blank body lines rather than producing empty-string rows", () => {
+    // Trailing newlines or blank rows between data would otherwise become
+    // rows where every value is "" (which toNumber would coerce to 0).
+    const csv = "a,b\n1,2\n\n3,4\n";
+    const rows = parseCsv(csv);
+    expect(rows).toEqual([
+      { a: "1", b: "2" },
+      { a: "3", b: "4" },
+    ]);
+  });
 });

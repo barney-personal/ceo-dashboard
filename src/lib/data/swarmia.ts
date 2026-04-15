@@ -36,9 +36,11 @@ async function safeLoad<T>(
     const data = await fn();
     return { status: "ok", data };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Send the full exception (including any upstream response body) to
+    // Sentry, but return a generic message to the caller — we don't want
+    // raw API responses bleeding into UI text.
     Sentry.captureException(err, { tags: { loader: `swarmia:${label}` } });
-    return { status: "error", data: null, errorMessage: message };
+    return { status: "error", data: null, errorMessage: `${label} unavailable` };
   }
 }
 

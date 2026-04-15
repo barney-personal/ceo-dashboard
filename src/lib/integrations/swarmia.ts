@@ -93,14 +93,19 @@ export function parseCsv(csv: string): Record<string, string>[] {
   const lines = csv.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
   const headers = splitCsvRow(lines[0]);
-  return lines.slice(1).map((line) => {
-    const cells = splitCsvRow(line);
-    const row: Record<string, string> = {};
-    headers.forEach((h, i) => {
-      row[h] = cells[i] ?? "";
+  return lines
+    .slice(1)
+    // Skip blank lines — some exporters emit a trailing \n that would
+    // otherwise become a row of empty strings.
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const cells = splitCsvRow(line);
+      const row: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        row[h] = cells[i] ?? "";
+      });
+      return row;
     });
-    return row;
-  });
 }
 
 function splitCsvRow(line: string): string[] {
@@ -272,8 +277,23 @@ export interface SwarmiaTeam {
   }>;
 }
 
+/**
+ * Fetch the Swarmia team roster. Not wired into any page yet — kept here
+ * because the members list contains authoritative GitHub↔email mappings
+ * that are useful for validating `githubEmployeeMap` (populated by the LLM
+ * matcher in #120). Any future caller should route through a leadership-
+ * gated page.
+ */
 export async function getTeams(): Promise<SwarmiaTeam[]> {
   const body = await fetchSwarmia("/teams");
-  const parsed = JSON.parse(body) as { teams: SwarmiaTeam[] };
-  return parsed.teams ?? [];
+  try {
+    const parsed = JSON.parse(body) as { teams?: SwarmiaTeam[] };
+    return parsed.teams ?? [];
+  } catch (err) {
+    throw new SwarmiaApiError(
+      `Swarmia /teams returned non-JSON: ${body.slice(0, 120)}`,
+      200,
+      "/teams"
+    );
+  }
 }
