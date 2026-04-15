@@ -817,22 +817,23 @@ describe("getWauRetentionCohorts", () => {
     expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
   });
 
-  it("drops the per-cohort observation that falls in the current incomplete week", async () => {
+  it("drops the newest weekly diagonals until retention is fully matured", async () => {
     // Freeze "now" to Tuesday 2026-04-14. The current incomplete
-    // (Monday-aligned) week starts on 2026-04-13, so every observation
-    // dated 2026-04-13 onwards must be dropped — one cell per cohort
-    // along the unmatured diagonal, not a fixed global tail.
+    // (Monday-aligned) week starts on 2026-04-13. Weekly retention is
+    // displayed one week more conservatively, so both diagonals that land
+    // on 2026-04-06 and 2026-04-13 must be dropped.
     vi.setSystemTime(new Date("2026-04-14T12:00:00Z"));
 
     mockGetReportData.mockResolvedValue([
       {
         queryName: "Query 1",
         rows: [
-          // Cohort Mar 2 (Monday). W0..W6 → W6 observation is Apr 13
-          // (current week). Expect periods W1..W5 to remain.
+          // Cohort Mar 2 (Monday). W0..W6 → W5 observation is Apr 6 and
+          // W6 observation is Apr 13. Expect periods W1..W4 to remain.
           ...rowsForCohort("2026-03-02", [100, 80, 70, 60, 55, 50, 40]),
-          // Cohort Mar 30 (Monday). W0..W2 → W2 observation is Apr 13
-          // (current week). Expect periods W1 only (W2 dropped).
+          // Cohort Mar 30 (Monday). W0..W2 → W1 observation is Apr 6 and
+          // W2 observation is Apr 13. Both are dropped, so the cohort
+          // disappears entirely.
           ...rowsForCohort("2026-03-30", [100, 70, 55]),
           // Cohort Apr 6 (Monday). W0..W1 → W1 observation is Apr 13
           // (current week). After dropping W1 there are no retention
@@ -844,18 +845,11 @@ describe("getWauRetentionCohorts", () => {
 
     const cohorts = await getWauRetentionCohorts();
 
-    expect(cohorts.map((c) => c.cohort)).toEqual([
-      "2026-03-02",
-      "2026-03-30",
-    ]);
+    expect(cohorts.map((c) => c.cohort)).toEqual(["2026-03-02"]);
 
     const mar2 = cohorts.find((c) => c.cohort === "2026-03-02")!;
-    // W1..W5 only — W6 (Apr 13) is in the current week and is dropped.
-    expect(mar2.periods).toEqual([0.8, 0.7, 0.6, 0.55, 0.5]);
-
-    const mar30 = cohorts.find((c) => c.cohort === "2026-03-30")!;
-    // W1 only — W2 (Apr 13) is in the current week and is dropped.
-    expect(mar30.periods).toEqual([0.7]);
+    // W1..W4 only — the diagonals on Apr 6 and Apr 13 are dropped.
+    expect(mar2.periods).toEqual([0.8, 0.7, 0.6, 0.55]);
   });
 });
 
