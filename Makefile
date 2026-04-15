@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio
+.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio probe probe-all
 
 setup:
 	./scripts/setup.sh
@@ -27,6 +27,13 @@ test:
 
 ensure-doppler:
 	@doppler run -- true 2>/dev/null || doppler setup --project ceo-dashboard --config dev --no-interactive
+
+probe:
+	@if [ -z "$(SUITE)" ]; then echo "Error: SUITE required. Usage: make probe SUITE=<name> [PROBE_FLAGS='--dry-run --target=staging']" >&2; exit 1; fi
+	@./scripts/probe.sh $(SUITE) $(PROBE_FLAGS)
+
+probe-all:
+	@./scripts/probe.sh --all $(PROBE_FLAGS)
 
 db-generate: ensure-doppler
 	doppler run -- npx drizzle-kit generate

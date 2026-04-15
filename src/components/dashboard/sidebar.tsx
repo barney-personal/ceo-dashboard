@@ -20,6 +20,7 @@ import {
   Calendar,
   AlertTriangle,
   GitPullRequest,
+  HeartPulse,
 } from "lucide-react";
 
 interface NavItem {
@@ -169,6 +170,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/admin/analytics",
         requiredRole: "ceo",
         icon: BarChart3,
+      },
+      {
+        label: "Probes",
+        href: "/dashboard/admin/probes",
+        requiredRole: "ceo",
+        icon: HeartPulse,
       },
     ],
   },
