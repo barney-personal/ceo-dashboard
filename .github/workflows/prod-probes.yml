@@ -87,13 +87,39 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps
 
+      # Clerk testing tokens expire 1 hour after issue, so we generate a
+      # fresh one every run from CLERK_SECRET_KEY (stable) instead of
+      # storing a static CLERK_TEST_TOKEN secret that would go stale.
+      # CLERK_SECRET_KEY is read from the env block (not interpolated into
+      # the run: script) to stay safe from injection.
+      - name: Generate Clerk testing token
+        id: clerk_token
+        env:
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        run: |
+          if [ -z "$CLERK_SECRET_KEY" ]; then
+            echo "::warning::CLERK_SECRET_KEY not set — Clerk-authed probe will fail"
+            echo "token=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TOKEN=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $CLERK_SECRET_KEY" \
+            https://api.clerk.com/v1/testing_tokens | jq -r .token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::warning::failed to generate Clerk testing token"
+            echo "token=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
       - name: Run 60-minute probe suite
         id: probe
         continue-on-error: true
         env:
           PROBE_SECRET: ${{ secrets.PROBE_SECRET }}
           CEO_DASHBOARD_URL: ${{ secrets.CEO_DASHBOARD_URL }}
-          CLERK_TEST_TOKEN: ${{ secrets.CLERK_TEST_TOKEN }}
+          CLERK_TEST_TOKEN: ${{ steps.clerk_token.outputs.token }}
           CANARY_EXPECTED_VALUE: ${{ secrets.CANARY_EXPECTED_VALUE }}
         run: ./scripts/probe.sh ceo-60m-suite
 
