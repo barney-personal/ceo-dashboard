@@ -212,7 +212,7 @@ Workflow:
 
 ```
 edit secret in Doppler dashboard (ceo-dashboard/prd)
-  → RENDER_API_KEY=rnd_... make sync-render-env
+  → doppler run -- make sync-render-env
   → script PUTs to Render web + sync-worker
   → Render redeploys with new values
 ```
@@ -227,9 +227,11 @@ exist in Doppler.
 overwritten on the next `make sync-render-env`. Add them to Doppler `prd`
 and re-sync.
 
-The `RENDER_API_KEY` itself can live in Doppler too — then run
-`doppler run -- make sync-render-env` to inject it. To get a fresh key:
-Render dashboard → Account Settings → API Keys → Generate.
+`RENDER_API_KEY` itself is stored in Doppler `ceo-dashboard/dev` (not
+`prd` — Render never calls its own API). `doppler run -- make sync-render-env`
+injects it automatically, so you never need to paste the key. To rotate:
+Render dashboard → Account Settings → API Keys → Generate, then
+`doppler secrets set RENDER_API_KEY=rnd_... --project ceo-dashboard --config dev`.
 
 ### What's NOT in Doppler (Render-managed only)
 
@@ -272,7 +274,7 @@ web service via `fromService:` refs — also no Doppler entry needed.
 1. `doppler secrets set NEW_KEY="value" --project ceo-dashboard --config dev` (for local)
 2. `doppler secrets set NEW_KEY="value" --project ceo-dashboard --config prd` (for prod)
 3. Reference it in code via `process.env.NEW_KEY`
-4. Run `RENDER_API_KEY=rnd_... make sync-render-env` to push to Render
+4. Run `doppler run -- make sync-render-env` to push to Render
 5. Optionally update the "Active integrations" list above if it's a new system
 
 ## Testing
