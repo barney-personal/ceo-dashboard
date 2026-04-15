@@ -7,7 +7,7 @@ import {
   rowNum,
   validateModeColumns,
 } from "./mode";
-import type { AttritionRow, Y1AttritionRow, Leaver, AttritionData } from "./attrition-utils";
+import type { AttritionRow, Y1AttritionRow, Leaver, Employee, AttritionData } from "./attrition-utils";
 
 // Re-export everything from the client-safe module so server consumers
 // can import from a single path.
@@ -15,6 +15,7 @@ export {
   type AttritionRow,
   type Y1AttritionRow,
   type Leaver,
+  type Employee,
   type AttritionData,
   type AttritionMetrics,
   type Y1AttritionMetrics,
@@ -26,6 +27,7 @@ export {
   getDepartments,
   getTenureBuckets,
   getRecentLeavers,
+  buildEmployeeRetentionCohorts,
 } from "./attrition-utils";
 
 // ── Column schemas ──
@@ -71,6 +73,12 @@ const LEAVER_COLUMNS = [
   "work_location",
 ] as const;
 
+const EMPLOYEE_COLUMNS = [
+  "start_date",
+  "termination_date",
+  "is_employee",
+] as const;
+
 // ── Data fetching ──
 
 type ModeQueryData = Awaited<ReturnType<typeof getReportData>>[number];
@@ -105,11 +113,13 @@ export async function getAttritionData(): Promise<AttritionData> {
     "attrition",
     "attrition_within_1y_joining",
     "Query 2",
+    "employees",
   ]);
 
   const attritionQuery = getValidatedQuery(data, "attrition", ATTRITION_COLUMNS);
   const y1Query = getValidatedQuery(data, "attrition_within_1y_joining", Y1_ATTRITION_COLUMNS);
   const leaverQuery = getValidatedQuery(data, "Query 2", LEAVER_COLUMNS);
+  const employeeQuery = getValidatedQuery(data, "employees", EMPLOYEE_COLUMNS);
 
   const rollingAttrition: AttritionRow[] = (attritionQuery?.rows ?? []).map((row) => ({
     reportingPeriod: rowStr(row, "reporting_period"),
@@ -157,5 +167,13 @@ export async function getAttritionData(): Promise<AttritionData> {
     };
   });
 
-  return { rollingAttrition, y1Attrition, recentLeavers };
+  const employees: Employee[] = (employeeQuery?.rows ?? [])
+    .filter((row) => rowStr(row, "is_employee") === "FTE")
+    .map((row) => ({
+      startDate: rowStr(row, "start_date"),
+      terminationDate: rowStr(row, "termination_date") || null,
+    }))
+    .filter((e) => e.startDate.length > 0);
+
+  return { rollingAttrition, y1Attrition, recentLeavers, employees };
 }

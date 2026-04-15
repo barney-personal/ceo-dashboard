@@ -1,9 +1,15 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import dynamic from "next/dynamic";
 import { LineChart } from "@/components/charts/line-chart";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
+
+const RetentionTriangle = dynamic(
+  () => import("@/components/charts/retention-triangle").then((m) => m.RetentionTriangle),
+  { loading: () => <div className="h-96 animate-pulse rounded-lg bg-muted/40" /> },
+);
 import {
   AttritionFilters,
   type AttritionFilterState,
@@ -18,6 +24,7 @@ import {
   type AttritionRow,
   type Y1AttritionRow,
   type Leaver,
+  type RetentionCohort,
 } from "@/lib/data/attrition-utils";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 
@@ -27,6 +34,7 @@ interface AttritionPageClientProps {
   recentLeavers: Leaver[];
   departments: string[];
   tenureBuckets: string[];
+  retentionCohorts: RetentionCohort[];
   modeUrl: string;
   emptyReason: string | null;
 }
@@ -134,6 +142,7 @@ export function AttritionPageClient({
   rollingAttrition,
   y1Attrition,
   recentLeavers,
+  retentionCohorts,
   departments,
   tenureBuckets,
   modeUrl,
@@ -225,6 +234,23 @@ export function AttritionPageClient({
           <ChartPlaceholder title="Rolling Attrition" reason={emptyReason ?? "No attrition data available"} />
         )}
       </section>
+
+      {/* Employee Retention Cohorts */}
+      {retentionCohorts.length > 0 && (
+        <section className="space-y-6">
+          <SectionDivider
+            title="Employee Retention"
+            subtitle="Quarterly cohort retention — what % of each cohort is still at the company after N quarters"
+          />
+          <RetentionTriangle
+            tiers={[{ key: "all", label: "All Employees", data: retentionCohorts }]}
+            periodLabel="Quarter"
+            title="Employee Retention"
+            subtitle="Quarterly cohort triangle"
+            modeUrl={modeUrl}
+          />
+        </section>
+      )}
 
       {/* First Year (Y1) Attrition Rate — collapsible */}
       {hasY1Data && (

@@ -342,6 +342,10 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
         name: "Query 2",
         storageWindow: { kind: "snapshot" },
       },
+      {
+        name: "employees",
+        storageWindow: { kind: "all" },
+      },
     ],
   },
 ];

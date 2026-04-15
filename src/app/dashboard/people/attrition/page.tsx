@@ -4,6 +4,7 @@ import {
   getAttritionData,
   getDepartments,
   getTenureBuckets,
+  buildEmployeeRetentionCohorts,
 } from "@/lib/data/attrition";
 import {
   getLatestTerminalSyncRun,
@@ -17,7 +18,7 @@ export default async function AttritionPage() {
     getLatestTerminalSyncRun("mode"),
   ]);
 
-  const { rollingAttrition, y1Attrition, recentLeavers } = attritionData;
+  const { rollingAttrition, y1Attrition, recentLeavers, employees } = attritionData;
 
   const isEmpty =
     rollingAttrition.length === 0 &&
@@ -32,6 +33,7 @@ export default async function AttritionPage() {
   const modeUrl = getModeReportLink("people", "attrition");
   const departments = getDepartments(rollingAttrition);
   const tenureBuckets = getTenureBuckets(rollingAttrition);
+  const retentionCohorts = buildEmployeeRetentionCohorts(employees);
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
@@ -46,6 +48,7 @@ export default async function AttritionPage() {
         recentLeavers={recentLeavers}
         departments={departments}
         tenureBuckets={tenureBuckets}
+        retentionCohorts={retentionCohorts}
         modeUrl={modeUrl}
         emptyReason={isEmpty ? emptyReason : null}
       />

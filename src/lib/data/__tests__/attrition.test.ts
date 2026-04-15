@@ -142,6 +142,7 @@ describe("getAttritionData", () => {
     expect(result.rollingAttrition).toEqual([]);
     expect(result.y1Attrition).toEqual([]);
     expect(result.recentLeavers).toEqual([]);
+    expect(result.employees).toEqual([]);
   });
 
   it("fetches data for section people, category attrition", async () => {
@@ -151,6 +152,7 @@ describe("getAttritionData", () => {
       "attrition",
       "attrition_within_1y_joining",
       "Query 2",
+      "employees",
     ]);
   });
 });
