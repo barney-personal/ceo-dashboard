@@ -12,7 +12,7 @@ import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function PeoplePerformancePage() {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
+  if (!hasAccess(role, "leadership")) {
     redirect("/dashboard");
   }
 
