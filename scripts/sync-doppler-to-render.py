@@ -16,17 +16,26 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 DOPPLER_PROJECT = "ceo-dashboard"
 DOPPLER_CONFIG = "prd"
 
-# Render service IDs — keep in sync with render.yaml service names.
+# Render service IDs.
+#
+# Each entry maps the `name:` declared in render.yaml to its Render service
+# ID (the `srv-...` slug). Find an ID via:
+#     curl -H "Authorization: Bearer $RENDER_API_KEY" \
+#       https://api.render.com/v1/services?limit=50 | jq '.[].service | {name, id}'
+# If a service is recreated (delete + new), update the ID here — the script
+# has no way to detect a stale ID; it'll silently sync to the wrong service.
+#
+# Cron services (ceo-dashboard-cron, ceo-dashboard-probe-heartbeat) inherit
+# their secrets via `fromService:` refs in render.yaml — no Doppler sync.
 SERVICES = {
-    "ceo-dashboard": "srv-d7b2ed94tr6s73c2m8ag",
-    "ceo-dashboard-sync-worker": "srv-d7b4qaudqaus73c8r3dg",
-    # cron service inherits CRON_SECRET / RENDER_EXTERNAL_URL via fromService;
-    # no Doppler sync needed.
+    "ceo-dashboard":             "srv-d7b2ed94tr6s73c2m8ag",  # web
+    "ceo-dashboard-sync-worker": "srv-d7b4qaudqaus73c8r3dg",  # worker
 }
 
 # Keys Render manages for itself — never overwrite.
@@ -38,21 +47,31 @@ RENDER_MANAGED = {
 }
 
 
-def fetch_doppler_secrets() -> dict[str, str]:
+def fetch_doppler_secrets() -> tuple[dict[str, str], list[str]]:
+    """Return (non-empty secrets, names of skipped empty-string secrets).
+
+    Empty-string values are skipped to avoid pushing them to Render and
+    overwriting real values, but they're surfaced in the returned list so
+    operators can spot misconfigured Doppler entries (e.g. a key created in
+    the dashboard but never given a value).
+    """
     raw = subprocess.check_output(
         ["doppler", "secrets", "--project", DOPPLER_PROJECT,
          "--config", DOPPLER_CONFIG, "--json"],
         text=True,
     )
     data = json.loads(raw)
-    out = {}
+    out: dict[str, str] = {}
+    skipped: list[str] = []
     for k, v in data.items():
         if k.startswith("DOPPLER_"):
             continue
         val = v.get("computed") if isinstance(v, dict) else v
         if val:
             out[k] = val
-    return out
+        else:
+            skipped.append(k)
+    return out, skipped
 
 
 def render_get_env(service_id: str, token: str) -> dict[str, str]:
@@ -81,6 +100,9 @@ def render_get_env(service_id: str, token: str) -> dict[str, str]:
 
 
 def render_put_env(service_id: str, token: str, env: dict[str, str]) -> None:
+    """PUT a complete env-var set to Render. Raises with a clean message on
+    HTTP error (urllib raises HTTPError for 4xx/5xx; without this wrapper
+    the traceback is noisy and hides the response body)."""
     body = json.dumps([{"key": k, "value": v} for k, v in env.items()]).encode()
     req = urllib.request.Request(
         f"https://api.render.com/v1/services/{service_id}/env-vars",
@@ -92,9 +114,14 @@ def render_put_env(service_id: str, token: str, env: dict[str, str]) -> None:
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        if r.status >= 300:
-            raise RuntimeError(f"Render PUT failed: {r.status} {r.read()[:200]}")
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except urllib.error.HTTPError as e:
+        body_preview = e.read()[:300].decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Render PUT failed (HTTP {e.code}) for {service_id}: {body_preview}"
+        ) from e
 
 
 def main() -> int:
@@ -103,8 +130,11 @@ def main() -> int:
         print("error: RENDER_API_KEY env var required", file=sys.stderr)
         return 2
 
-    doppler = fetch_doppler_secrets()
+    doppler, skipped_empty = fetch_doppler_secrets()
     print(f"Doppler {DOPPLER_PROJECT}/{DOPPLER_CONFIG}: {len(doppler)} secrets")
+    if skipped_empty:
+        print(f"  ⚠ skipping {len(skipped_empty)} empty-string secrets "
+              f"(set them in Doppler if needed): {', '.join(sorted(skipped_empty))}")
 
     for name, sid in SERVICES.items():
         current = render_get_env(sid, token)
