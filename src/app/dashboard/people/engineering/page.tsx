@@ -18,7 +18,7 @@ export default async function EngineeringPerformancePage({
   searchParams: Promise<{ period?: string }>;
 }) {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
+  if (!hasAccess(role, "everyone")) {
     redirect("/dashboard");
   }
 
