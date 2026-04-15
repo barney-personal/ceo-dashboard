@@ -55,14 +55,38 @@ function formatPpChange(current: number, previous: number): string {
   return `${sign}${diff.toFixed(1)}pp`;
 }
 
-function LeaversTable({ leavers, filters }: { leavers: Leaver[]; filters: AttritionFilterState }) {
+function trend(current: number, previous: number): "up" | "down" | "flat" {
+  if (current < previous) return "down";
+  if (current > previous) return "up";
+  return "flat";
+}
+
+function AttritionChart({ series, title, subtitle, modeUrl }: {
+  series: { label: string; color: string; data: { date: string; value: number }[]; dashed?: boolean }[];
+  title: string;
+  subtitle: string;
+  modeUrl: string;
+}) {
+  return (
+    <LineChart
+      series={series}
+      title={title}
+      subtitle={subtitle}
+      yLabel="%"
+      yFormatType="percent"
+      modeUrl={modeUrl}
+    />
+  );
+}
+
+function LeaversTable({ leavers, department }: { leavers: Leaver[]; department: string | null }) {
   const filtered = useMemo(() => {
     let result = getRecentLeavers(leavers);
-    if (filters.department) {
-      result = result.filter((l) => l.department === filters.department);
+    if (department) {
+      result = result.filter((l) => l.department === department);
     }
     return result;
-  }, [leavers, filters.department]);
+  }, [leavers, department]);
 
   if (filtered.length === 0) return null;
 
@@ -71,15 +95,9 @@ function LeaversTable({ leavers, filters }: { leavers: Leaver[]; filters: Attrit
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border/50 text-left">
-            <th className="px-4 py-3 font-medium text-muted-foreground">Name</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Department</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Squad</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Level</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Tenure</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Left</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Type</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Regretted</th>
-            <th className="px-4 py-3 font-medium text-muted-foreground">Manager</th>
+            {["Name", "Department", "Squad", "Level", "Tenure", "Left", "Type", "Regretted", "Manager"].map((h) => (
+              <th key={h} className="px-4 py-3 font-medium text-muted-foreground">{h}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -100,7 +118,7 @@ function LeaversTable({ leavers, filters }: { leavers: Leaver[]; filters: Attrit
               </td>
               <td className="px-4 py-2.5">
                 <span className={leaver.regretted === "Regrettable" ? "font-medium text-destructive" : "text-muted-foreground"}>
-                  {leaver.regretted || "—"}
+                  {leaver.regretted || "\u2014"}
                 </span>
               </td>
               <td className="px-4 py-2.5 text-muted-foreground">{leaver.managerName}</td>
@@ -126,52 +144,26 @@ export function AttritionPageClient({
     tenure: null,
   });
 
-  const rollingSeries = useMemo(
-    () => getRollingAttritionSeries(rollingAttrition, filters.department ?? undefined, filters.tenure ?? undefined),
-    [rollingAttrition, filters.department, filters.tenure],
-  );
+  const dept = filters.department ?? undefined;
+  const ten = filters.tenure ?? undefined;
 
-  const deptSeries = useMemo(
-    () => getAttritionByDepartment(rollingAttrition),
-    [rollingAttrition],
-  );
-
-  const rollingMetrics = useMemo(
-    () => getLatestAttritionMetrics(rollingAttrition),
-    [rollingAttrition],
-  );
-
-  const underOneYearSeries = useMemo(
-    () => getRollingAttritionSeries(rollingAttrition, filters.department ?? undefined, "< 1 Year"),
-    [rollingAttrition, filters.department],
-  );
-
-  const overOneYearSeries = useMemo(
-    () => getRollingAttritionSeries(rollingAttrition, filters.department ?? undefined, "1+ Year"),
-    [rollingAttrition, filters.department],
-  );
-
-  const y1Series = useMemo(
-    () => getY1AttritionSeries(y1Attrition, filters.department ?? undefined),
-    [y1Attrition, filters.department],
-  );
-
-  const y1Metrics = useMemo(
-    () => getLatestY1Metrics(y1Attrition),
-    [y1Attrition],
-  );
+  const rollingSeries = useMemo(() => getRollingAttritionSeries(rollingAttrition, dept, ten), [rollingAttrition, dept, ten]);
+  const deptSeries = useMemo(() => getAttritionByDepartment(rollingAttrition), [rollingAttrition]);
+  const rollingMetrics = useMemo(() => getLatestAttritionMetrics(rollingAttrition), [rollingAttrition]);
+  const underOneYearSeries = useMemo(() => getRollingAttritionSeries(rollingAttrition, dept, "< 1 Year"), [rollingAttrition, dept]);
+  const overOneYearSeries = useMemo(() => getRollingAttritionSeries(rollingAttrition, dept, "1+ Year"), [rollingAttrition, dept]);
+  const y1Series = useMemo(() => getY1AttritionSeries(y1Attrition, dept), [y1Attrition, dept]);
+  const y1Metrics = useMemo(() => getLatestY1Metrics(y1Attrition), [y1Attrition]);
 
   const hasRollingData = rollingAttrition.length > 0;
   const hasY1Data = y1Attrition.length > 0;
-  const noData = !hasRollingData && !hasY1Data;
 
-  if (noData && emptyReason) {
+  if (!hasRollingData && !hasY1Data && emptyReason) {
     return <ChartPlaceholder title="Attrition Tracker" reason={emptyReason} />;
   }
 
   return (
     <div className="space-y-10">
-      {/* Filters */}
       <AttritionFilters
         departments={departments}
         tenureBuckets={tenureBuckets}
@@ -179,7 +171,7 @@ export function AttritionPageClient({
         onFiltersChange={setFilters}
       />
 
-      {/* Section 1: Rolling Attrition Rate */}
+      {/* Rolling Attrition Rate */}
       <section className="space-y-6">
         <SectionDivider
           title="Rolling Attrition Rate (12M Average)"
@@ -188,13 +180,12 @@ export function AttritionPageClient({
 
         {hasRollingData ? (
           <>
-            {/* KPI Cards */}
             <div className="grid gap-4 sm:grid-cols-3">
               <MetricCard
                 label="Rolling 12M Attrition"
                 value={formatPercent(rollingMetrics.currentRate)}
                 change={formatPpChange(rollingMetrics.currentRate, rollingMetrics.previousRate)}
-                trend={rollingMetrics.currentRate < rollingMetrics.previousRate ? "down" : rollingMetrics.currentRate > rollingMetrics.previousRate ? "up" : "flat"}
+                trend={trend(rollingMetrics.currentRate, rollingMetrics.previousRate)}
                 subtitle={`${rollingMetrics.leaversL12m} leavers / ${Math.round(rollingMetrics.headcount)} avg HC`}
                 modeUrl={modeUrl}
                 delay={0}
@@ -203,7 +194,7 @@ export function AttritionPageClient({
                 label="Regretted Attrition"
                 value={formatPercent(rollingMetrics.regrettedRate)}
                 change={formatPpChange(rollingMetrics.regrettedRate, rollingMetrics.previousRegrettedRate)}
-                trend={rollingMetrics.regrettedRate < rollingMetrics.previousRegrettedRate ? "down" : rollingMetrics.regrettedRate > rollingMetrics.previousRegrettedRate ? "up" : "flat"}
+                trend={trend(rollingMetrics.regrettedRate, rollingMetrics.previousRegrettedRate)}
                 subtitle="Voluntary regretted leavers"
                 modeUrl={modeUrl}
                 delay={100}
@@ -217,59 +208,25 @@ export function AttritionPageClient({
               />
             </div>
 
-            {/* Overall trend line */}
-            <LineChart
-              series={rollingSeries}
-              title="Rolling Attrition Rate"
-              subtitle="12-month rolling, by leaver type"
-              yLabel="%"
-              yFormatType="percent"
-              modeUrl={modeUrl}
-            />
+            <AttritionChart series={rollingSeries} title="Rolling Attrition Rate" subtitle="12-month rolling, by leaver type" modeUrl={modeUrl} />
 
-            {/* Tenure split */}
             {!filters.tenure && (
               <div className="grid gap-6 lg:grid-cols-2">
-                <LineChart
-                  series={underOneYearSeries}
-                  title="< 1 Year Tenure"
-                  subtitle="Rolling 12M attrition, by leaver type"
-                  yLabel="%"
-                  yFormatType="percent"
-                  modeUrl={modeUrl}
-                />
-                <LineChart
-                  series={overOneYearSeries}
-                  title="1+ Year Tenure"
-                  subtitle="Rolling 12M attrition, by leaver type"
-                  yLabel="%"
-                  yFormatType="percent"
-                  modeUrl={modeUrl}
-                />
+                <AttritionChart series={underOneYearSeries} title="< 1 Year Tenure" subtitle="Rolling 12M attrition, by leaver type" modeUrl={modeUrl} />
+                <AttritionChart series={overOneYearSeries} title="1+ Year Tenure" subtitle="Rolling 12M attrition, by leaver type" modeUrl={modeUrl} />
               </div>
             )}
 
-            {/* Department breakdown */}
             {!filters.department && deptSeries.length > 0 && (
-              <LineChart
-                series={deptSeries}
-                title="Attrition by Department"
-                subtitle="12-month rolling total attrition rate"
-                yLabel="%"
-                yFormatType="percent"
-                modeUrl={modeUrl}
-              />
+              <AttritionChart series={deptSeries} title="Attrition by Department" subtitle="12-month rolling total attrition rate" modeUrl={modeUrl} />
             )}
           </>
         ) : (
-          <ChartPlaceholder
-            title="Rolling Attrition"
-            reason={emptyReason ?? "No attrition data available"}
-          />
+          <ChartPlaceholder title="Rolling Attrition" reason={emptyReason ?? "No attrition data available"} />
         )}
       </section>
 
-      {/* Section 2: First Year (Y1) Attrition Rate */}
+      {/* First Year (Y1) Attrition Rate */}
       <section className="space-y-6">
         <SectionDivider
           title="First Year (Y1) Attrition Rate"
@@ -278,13 +235,12 @@ export function AttritionPageClient({
 
         {hasY1Data ? (
           <>
-            {/* KPI Cards */}
             <div className="grid gap-4 sm:grid-cols-3">
               <MetricCard
                 label="Y1 Attrition Rate"
                 value={formatPercent(y1Metrics.currentRate)}
                 change={formatPpChange(y1Metrics.currentRate, y1Metrics.previousRate)}
-                trend={y1Metrics.currentRate < y1Metrics.previousRate ? "down" : y1Metrics.currentRate > y1Metrics.previousRate ? "up" : "flat"}
+                trend={trend(y1Metrics.currentRate, y1Metrics.previousRate)}
                 subtitle={`${y1Metrics.leavers} Y1 leavers / ${y1Metrics.starters} starters (L12M)`}
                 modeUrl={modeUrl}
                 delay={0}
@@ -298,32 +254,18 @@ export function AttritionPageClient({
               />
             </div>
 
-            {/* Y1 trend line */}
-            <LineChart
-              series={y1Series}
-              title="Y1 Attrition Rate"
-              subtitle="12-month rolling, by leaver type"
-              yLabel="%"
-              yFormatType="percent"
-              modeUrl={modeUrl}
-            />
+            <AttritionChart series={y1Series} title="Y1 Attrition Rate" subtitle="12-month rolling, by leaver type" modeUrl={modeUrl} />
           </>
         ) : (
-          <ChartPlaceholder
-            title="Y1 Attrition"
-            reason={emptyReason ?? "No Y1 attrition data available"}
-          />
+          <ChartPlaceholder title="Y1 Attrition" reason={emptyReason ?? "No Y1 attrition data available"} />
         )}
       </section>
 
-      {/* Section 3: Recent Leavers */}
+      {/* Recent Leavers */}
       {recentLeavers.length > 0 && (
         <section className="space-y-6">
-          <SectionDivider
-            title="Recent Leavers"
-            subtitle="Individual departures from the current leaver list"
-          />
-          <LeaversTable leavers={recentLeavers} filters={filters} />
+          <SectionDivider title="Recent Leavers" subtitle="Individual departures from the current leaver list" />
+          <LeaversTable leavers={recentLeavers} department={filters.department} />
         </section>
       )}
     </div>
