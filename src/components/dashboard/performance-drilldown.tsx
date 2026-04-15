@@ -230,9 +230,6 @@ function PillarCard({
       </div>
       {latestCycle && allPeople.length > 0 && (
         <div className="mt-3">
-          <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            {shortCycleLabel(latestCycle)} ratings
-          </span>
           <DistributionBar people={allPeople} cycle={latestCycle} />
         </div>
       )}
@@ -263,9 +260,6 @@ function DepartmentCard({
       </div>
       {latestCycle && group.people.length > 0 && (
         <div className="mt-3">
-          <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            {shortCycleLabel(latestCycle)} ratings
-          </span>
           <DistributionBar people={group.people} cycle={latestCycle} />
         </div>
       )}
@@ -550,7 +544,7 @@ export function PerformanceDrilldown({
   const [selectedPerson, setSelectedPerson] = useState<PersonPerformance | null>(null);
   const [search, setSearch] = useState("");
 
-  const latestCycle = reviewCycles[0] ?? "";
+  const latestCycle = reviewCycles[reviewCycles.length - 1] ?? "";
 
   const activePillar = pillarGroups.find((p) => p.name === selectedPillar);
   const activeSquad = activePillar?.squads.find((s) => s.name === selectedSquad);
@@ -598,9 +592,16 @@ export function PerformanceDrilldown({
     <div className="space-y-4">
       {/* Header + view toggle */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-          Performance Ratings
-        </h3>
+        <div>
+          <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+            Performance Ratings
+          </h3>
+          {atTopLevel && latestCycle && (
+            <p className="mt-0.5 text-xs text-muted-foreground/70">
+              Showing distributions from <span className="font-medium text-muted-foreground">{latestCycle}</span>
+            </p>
+          )}
+        </div>
         {atTopLevel && (
           <ViewToggle view={view} onChange={handleViewChange} />
         )}
