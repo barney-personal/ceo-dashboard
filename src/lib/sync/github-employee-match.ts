@@ -158,7 +158,10 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
       ],
     },
     {
-      signal: AbortSignal.timeout(LLM_MATCH_TIMEOUT_MS),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(LLM_MATCH_TIMEOUT_MS),
+        ...(opts.signal ? [opts.signal] : []),
+      ]),
     }
   );
 
