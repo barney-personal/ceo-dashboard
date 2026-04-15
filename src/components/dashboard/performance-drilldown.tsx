@@ -397,6 +397,15 @@ function DistributionTable({
 
 // ── Level 3: Individual table ──────────────────────────────────────────────
 
+type IndivSortCol = "name" | "level" | string; // string = cycle name
+type IndivSortDir = "asc" | "desc";
+
+function ratingForCycle(person: PersonPerformance, cycle: string): number {
+  const r = person.ratings.find((x) => x.reviewCycle === cycle);
+  if (!r || r.rating === null) return -1; // nulls sort last
+  return r.rating;
+}
+
 function IndividualTable({
   people,
   cycles,
@@ -406,29 +415,67 @@ function IndividualTable({
   cycles: string[];
   onSelect: (person: PersonPerformance) => void;
 }) {
+  const latestCycle = cycles[cycles.length - 1] ?? "";
+  const [sortCol, setSortCol] = useState<IndivSortCol>(latestCycle || "name");
+  const [sortDir, setSortDir] = useState<IndivSortDir>("desc");
+
+  const sorted = useMemo(() => {
+    return [...people].sort((a, b) => {
+      let cmp: number;
+      if (sortCol === "name") {
+        cmp = a.name.localeCompare(b.name);
+      } else if (sortCol === "level") {
+        cmp = a.level.localeCompare(b.level);
+      } else {
+        // Sort by rating for a specific cycle
+        const ar = ratingForCycle(a, sortCol);
+        const br = ratingForCycle(b, sortCol);
+        cmp = ar - br;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [people, sortCol, sortDir]);
+
+  function toggleSort(col: IndivSortCol) {
+    if (sortCol === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortCol(col);
+      setSortDir(col === "name" || col === "level" ? "asc" : "desc");
+    }
+  }
+
+  function sortIndicator(col: IndivSortCol) {
+    if (sortCol !== col) return null;
+    return <span className="ml-0.5 text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>;
+  }
+
+  const thClass = "px-3 py-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 cursor-pointer select-none hover:text-muted-foreground transition-colors";
+
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-x-auto">
       <table className="w-full min-w-[480px] text-sm">
         <thead>
           <tr className="border-b border-border/30">
-            <th className="px-5 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Name
+            <th onClick={() => toggleSort("name")} className={`px-5 ${thClass} text-left`}>
+              Name{sortIndicator("name")}
             </th>
-            <th className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-              Level
+            <th onClick={() => toggleSort("level")} className={`${thClass} text-left`}>
+              Level{sortIndicator("level")}
             </th>
             {cycles.map((c) => (
               <th
                 key={c}
-                className="px-3 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
+                onClick={() => toggleSort(c)}
+                className={`${thClass} text-center`}
               >
-                {shortCycleLabel(c)}
+                {shortCycleLabel(c)}{sortIndicator(c)}
               </th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-border/20">
-          {people.map((person) => (
+          {sorted.map((person) => (
             <tr
               key={person.email}
               onClick={() => onSelect(person)}
