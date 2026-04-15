@@ -92,6 +92,13 @@
       "when": 1776170835936,
       "tag": "0012_fine_dorian_gray",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1776441600000,
+      "tag": "0013_clerk_user_id_migration",
+      "breakpoints": true
     }
   ]
 }
