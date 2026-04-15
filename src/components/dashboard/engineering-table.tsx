@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import {
@@ -239,7 +240,10 @@ export function EngineeringTable({
                       {i + 1}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2.5">
+                      <Link
+                        href={`/dashboard/engineering/engineers/${row.login}`}
+                        className="flex items-center gap-2.5 group"
+                      >
                         {row.avatarUrl && (
                           <img
                             src={row.avatarUrl}
@@ -249,20 +253,9 @@ export function EngineeringTable({
                         )}
                         <div className="flex flex-col">
                           <div className="flex items-center gap-1.5">
-                            {row.employeeName ? (
-                              <span className="font-medium text-foreground">
-                                {row.employeeName}
-                              </span>
-                            ) : (
-                              <a
-                                href={`https://github.com/${row.login}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="font-medium text-foreground hover:text-primary transition-colors"
-                              >
-                                {row.login}
-                              </a>
-                            )}
+                            <span className="font-medium text-foreground group-hover:text-primary transition-colors">
+                              {row.employeeName ?? row.login}
+                            </span>
                             {row.level && (
                               <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-[9px] font-medium text-primary">
                                 {row.level}
@@ -274,18 +267,11 @@ export function EngineeringTable({
                               </span>
                             )}
                           </div>
-                          {row.employeeName && (
-                            <a
-                              href={`https://github.com/${row.login}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[11px] text-muted-foreground hover:text-primary transition-colors"
-                            >
-                              @{row.login}
-                            </a>
-                          )}
+                          <span className="text-[11px] text-muted-foreground group-hover:text-primary transition-colors">
+                            @{row.login}
+                          </span>
                         </div>
-                      </div>
+                      </Link>
                     </td>
                     <td className="hidden md:table-cell px-4 py-3 text-xs text-muted-foreground">
                       {row.jobTitle ?? "—"}
