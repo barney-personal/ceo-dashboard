@@ -46,6 +46,19 @@ RENDER_MANAGED = {
     "NODE_ENV",            # static value: production in render.yaml
 }
 
+# Operator credentials used by THIS script — must never become service env
+# vars. If they did, a compromised service container could bootstrap to full
+# Doppler/Render account access. Stripped from both the Doppler view and the
+# merged Render env so a re-sync also REMOVES any historical leak.
+#
+# DOPPLER_TOKEN is also caught by the `DOPPLER_*` prefix skip in
+# fetch_doppler_secrets(); listing it here is defence-in-depth in case the
+# Doppler CLI ever changes its naming convention.
+NEVER_PUSH = {
+    "RENDER_API_KEY",
+    "DOPPLER_TOKEN",
+}
+
 
 def fetch_doppler_secrets() -> tuple[dict[str, str], list[str]]:
     """Return (non-empty secrets, names of skipped empty-string secrets).
@@ -124,6 +137,31 @@ def render_put_env(service_id: str, token: str, env: dict[str, str]) -> None:
         ) from e
 
 
+def render_trigger_deploy(service_id: str, token: str) -> str:
+    """Trigger a fresh deploy for `service_id` and return the new deploy id.
+    Required because env-var changes via the API don't auto-redeploy — pods
+    keep their old env until the next deploy."""
+    req = urllib.request.Request(
+        f"https://api.render.com/v1/services/{service_id}/deploys",
+        method="POST",
+        data=b'{"clearCache":"do_not_clear"}',
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+            return str(data.get("id", "?"))
+    except urllib.error.HTTPError as e:
+        body_preview = e.read()[:300].decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Render deploy POST failed (HTTP {e.code}) for {service_id}: {body_preview}"
+        ) from e
+
+
 def main() -> int:
     token = os.environ.get("RENDER_API_KEY")
     if not token:
@@ -131,7 +169,15 @@ def main() -> int:
         return 2
 
     doppler, skipped_empty = fetch_doppler_secrets()
+    # Strip NEVER_PUSH keys from the Doppler view so they don't reach Render.
+    stripped_from_doppler = sorted(k for k in NEVER_PUSH if k in doppler)
+    for k in stripped_from_doppler:
+        doppler.pop(k, None)
+
     print(f"Doppler {DOPPLER_PROJECT}/{DOPPLER_CONFIG}: {len(doppler)} secrets")
+    if stripped_from_doppler:
+        print(f"  ⊘ never-push (operator creds, kept in Doppler only): "
+              f"{', '.join(stripped_from_doppler)}")
     if skipped_empty:
         print(f"  ⚠ skipping {len(skipped_empty)} empty-string secrets "
               f"(set them in Doppler if needed): {', '.join(sorted(skipped_empty))}")
@@ -139,6 +185,14 @@ def main() -> int:
     for name, sid in SERVICES.items():
         current = render_get_env(sid, token)
         merged = dict(current)
+        # Strip NEVER_PUSH from merged BEFORE applying Doppler — this removes
+        # any historical leak (e.g. an earlier sync that pushed RENDER_API_KEY
+        # by mistake). Doppler view has already been stripped, so the Doppler
+        # loop won't re-add them.
+        removed = sorted(k for k in NEVER_PUSH if k in merged)
+        for k in removed:
+            merged.pop(k, None)
+
         added, updated, preserved = [], [], []
         for k, v in doppler.items():
             if k in RENDER_MANAGED:
@@ -154,10 +208,23 @@ def main() -> int:
         print(f"   current: {len(current)} vars | will push: {len(merged)} vars")
         if added:    print(f"   + adding   ({len(added)}): {', '.join(sorted(added))}")
         if updated:  print(f"   ↺ updating ({len(updated)}): {', '.join(sorted(updated))}")
+        if removed:  print(f"   - removing ({len(removed)}) never-push: "
+                          f"{', '.join(removed)}")
         if preserved:print(f"   ⊘ preserved Render-managed: {', '.join(sorted(preserved))}")
 
         render_put_env(sid, token, merged)
         print(f"   ✓ PUT succeeded")
+
+    # Trigger fresh deploys — env-var changes via the API don't auto-redeploy.
+    # Service IDs come from SERVICES so the workflow / operator never has to
+    # repeat them.
+    if os.environ.get("SKIP_DEPLOY") == "1":
+        print("\n⏭  skipping deploys (SKIP_DEPLOY=1)")
+    else:
+        print("\nTriggering fresh deploys:")
+        for name, sid in SERVICES.items():
+            deploy_id = render_trigger_deploy(sid, token)
+            print(f"  → {name}: deploy {deploy_id} queued")
 
     print("\n✓ all services synced")
     return 0
