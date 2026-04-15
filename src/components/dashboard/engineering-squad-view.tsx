@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Users, ChevronRight } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { EngineeringTable } from "./engineering-table";
 
 interface EngineerRow {
@@ -24,17 +24,15 @@ interface EngineerRow {
   tenureMonths: number | null;
 }
 
-interface SquadSummary {
+interface SquadRow {
   name: string;
   pillar: string | null;
   engineers: number;
-  prsCount: number;
-  commitsCount: number;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-  impact: number;
-  levels: Map<string, number>;
+  avgImpact: number;
+  avgPrs: number;
+  avgCommits: number;
+  avgAdditions: number;
+  avgDeletions: number;
 }
 
 function computeImpact(prs: number, additions: number, deletions: number) {
@@ -42,60 +40,90 @@ function computeImpact(prs: number, additions: number, deletions: number) {
   return Math.round(prs * Math.log2(1 + (additions + deletions) / prs));
 }
 
-type SortField = "impact" | "engineers" | "prsCount" | "commitsCount";
+type SortField = keyof Omit<SquadRow, "name" | "pillar">;
+
+const COLUMNS: {
+  key: SortField;
+  label: string;
+  format: (v: number) => string;
+}[] = [
+  { key: "avgImpact", label: "Avg Impact", format: (v) => Math.round(v).toLocaleString() },
+  { key: "engineers", label: "Engineers", format: (v) => v.toLocaleString() },
+  { key: "avgPrs", label: "Avg PRs", format: (v) => v.toFixed(1) },
+  { key: "avgCommits", label: "Avg Commits", format: (v) => v.toFixed(1) },
+  { key: "avgAdditions", label: "Avg Lines +", format: (v) => Math.round(v).toLocaleString() },
+  { key: "avgDeletions", label: "Avg Lines −", format: (v) => Math.round(v).toLocaleString() },
+];
 
 export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
   const [selectedSquad, setSelectedSquad] = useState<string | null>(null);
-  const [sortBy, setSortBy] = useState<SortField>("impact");
+  const [sortKey, setSortKey] = useState<SortField>("avgImpact");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const humans = useMemo(
-    () => data.filter((r) => !r.isBot),
-    [data]
-  );
+  const humans = useMemo(() => data.filter((r) => !r.isBot), [data]);
 
   const squads = useMemo(() => {
-    const map = new Map<string, SquadSummary>();
+    const map = new Map<
+      string,
+      {
+        pillar: string | null;
+        engineers: number;
+        totalPrs: number;
+        totalCommits: number;
+        totalAdditions: number;
+        totalDeletions: number;
+      }
+    >();
 
     for (const eng of humans) {
       const squadName = eng.squad ?? "Unassigned";
       let squad = map.get(squadName);
       if (!squad) {
         squad = {
-          name: squadName,
           pillar: eng.pillar,
           engineers: 0,
-          prsCount: 0,
-          commitsCount: 0,
-          additions: 0,
-          deletions: 0,
-          changedFiles: 0,
-          impact: 0,
-          levels: new Map(),
+          totalPrs: 0,
+          totalCommits: 0,
+          totalAdditions: 0,
+          totalDeletions: 0,
         };
         map.set(squadName, squad);
       }
       squad.engineers++;
-      squad.prsCount += eng.prsCount;
-      squad.commitsCount += eng.commitsCount;
-      squad.additions += eng.additions;
-      squad.deletions += eng.deletions;
-      squad.changedFiles += eng.changedFiles;
-      if (eng.level) {
-        squad.levels.set(eng.level, (squad.levels.get(eng.level) ?? 0) + 1);
-      }
+      squad.totalPrs += eng.prsCount;
+      squad.totalCommits += eng.commitsCount;
+      squad.totalAdditions += eng.additions;
+      squad.totalDeletions += eng.deletions;
     }
 
-    // Compute impact at squad level
-    for (const squad of map.values()) {
-      squad.impact = computeImpact(
-        squad.prsCount,
-        squad.additions,
-        squad.deletions
-      );
-    }
+    const rows: SquadRow[] = [...map.entries()].map(([name, s]) => {
+      const n = s.engineers;
+      return {
+        name,
+        pillar: s.pillar,
+        engineers: n,
+        avgImpact: computeImpact(s.totalPrs, s.totalAdditions, s.totalDeletions) / n,
+        avgPrs: s.totalPrs / n,
+        avgCommits: s.totalCommits / n,
+        avgAdditions: s.totalAdditions / n,
+        avgDeletions: s.totalDeletions / n,
+      };
+    });
 
-    return [...map.values()].sort((a, b) => b[sortBy] - a[sortBy]);
-  }, [humans, sortBy]);
+    return rows.sort((a, b) => {
+      const diff = a[sortKey] - b[sortKey];
+      return sortDir === "desc" ? -diff : diff;
+    });
+  }, [humans, sortKey, sortDir]);
+
+  const handleSort = (key: SortField) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
 
   // Drill-down: show filtered table for selected squad
   if (selectedSquad) {
@@ -123,130 +151,89 @@ export function EngineeringSquadView({ data }: { data: EngineerRow[] }) {
     return (
       <div className="rounded-xl border border-border/60 bg-card p-12 text-center shadow-warm">
         <p className="text-sm text-muted-foreground">
-          No squad data available. Employee metadata is needed for squad grouping.
+          No squad data available. Employee metadata is needed for squad
+          grouping.
         </p>
       </div>
     );
   }
 
-  const sortOptions: { key: SortField; label: string }[] = [
-    { key: "impact", label: "Impact" },
-    { key: "prsCount", label: "PRs" },
-    { key: "commitsCount", label: "Commits" },
-    { key: "engineers", label: "Team size" },
-  ];
-
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground">Sort by</span>
-        <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
-          {sortOptions.map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => setSortBy(opt.key)}
-              className={cn(
-                "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-                sortBy === opt.key
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {squads.map((squad) => {
-          const sortedLevels = [...squad.levels.entries()].sort(
-            (a, b) => b[1] - a[1]
-          );
-          return (
-            <button
-              key={squad.name}
-              onClick={() => setSelectedSquad(squad.name)}
-              className="group rounded-xl border border-border/60 bg-card p-4 text-left shadow-warm transition-all hover:border-primary/30 hover:shadow-md"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h4 className="font-medium text-foreground group-hover:text-primary transition-colors">
-                    {squad.name}
-                  </h4>
-                  {squad.pillar && (
-                    <p className="text-[11px] text-muted-foreground">
-                      {squad.pillar}
-                    </p>
-                  )}
-                </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Impact</span>
-                  <span className="font-medium tabular-nums">
-                    {squad.impact.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Engineers</span>
-                  <span className="font-medium tabular-nums">
-                    {squad.engineers}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">PRs</span>
-                  <span className="font-medium tabular-nums">
-                    {squad.prsCount.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Commits</span>
-                  <span className="font-medium tabular-nums">
-                    {squad.commitsCount.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Lines +</span>
-                  <span className="font-medium tabular-nums">
-                    {squad.additions.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Lines −</span>
-                  <span className="font-medium tabular-nums text-negative/70">
-                    {squad.deletions.toLocaleString()}
-                  </span>
-                </div>
-              </div>
-
-              {sortedLevels.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-1">
-                  {sortedLevels.map(([level, count]) => (
-                    <span
-                      key={level}
-                      className="rounded-full bg-primary/10 px-1.5 py-px text-[9px] font-medium text-primary"
-                    >
-                      {level}
-                      {count > 1 && (
-                        <span className="ml-0.5 opacity-60">×{count}</span>
-                      )}
+    <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border/60 bg-muted/30">
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground w-8">
+                #
+              </th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                Squad
+              </th>
+              {COLUMNS.map((col) => {
+                const isActive = sortKey === col.key;
+                const SortIcon = isActive
+                  ? sortDir === "desc"
+                    ? ArrowDown
+                    : ArrowUp
+                  : ArrowUpDown;
+                return (
+                  <th
+                    key={col.key}
+                    className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors"
+                    onClick={() => handleSort(col.key)}
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      {col.label}
+                      <SortIcon
+                        className={cn(
+                          "h-3 w-3",
+                          isActive && "text-primary"
+                        )}
+                      />
+                    </div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {squads.map((squad, i) => (
+              <tr
+                key={squad.name}
+                onClick={() => setSelectedSquad(squad.name)}
+                className="border-b border-border/30 last:border-0 hover:bg-muted/20 transition-colors cursor-pointer"
+              >
+                <td className="px-4 py-3 text-muted-foreground font-medium tabular-nums">
+                  {i + 1}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-col">
+                    <span className="font-medium text-foreground">
+                      {squad.name}
                     </span>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-3 flex items-center gap-1 text-[10px] text-muted-foreground/60">
-                <Users className="h-3 w-3" />
-                <span>
-                  {squad.engineers} engineer{squad.engineers !== 1 ? "s" : ""}
-                </span>
-              </div>
-            </button>
-          );
-        })}
+                    {squad.pillar && (
+                      <span className="text-[11px] text-muted-foreground">
+                        {squad.pillar}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                {COLUMNS.map((col) => (
+                  <td
+                    key={col.key}
+                    className={cn(
+                      "px-4 py-3 text-right tabular-nums font-medium",
+                      col.key === "avgDeletions" && "text-negative/70"
+                    )}
+                  >
+                    {col.format(squad[col.key])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
