@@ -18,7 +18,7 @@ import {
   type AttritionRow,
   type Y1AttritionRow,
   type Leaver,
-} from "@/lib/data/attrition";
+} from "@/lib/data/attrition-utils";
 import { AlertTriangle } from "lucide-react";
 
 interface AttritionPageClientProps {
