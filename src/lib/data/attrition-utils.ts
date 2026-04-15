@@ -126,10 +126,10 @@ export function getRollingAttritionSeries(
     const agg = byPeriod.get(date)!;
     if (agg.headcount === 0) continue;
 
-    total.data.push({ date, value: agg.leavers / agg.headcount });
-    regretted.data.push({ date, value: agg.regretted / agg.headcount });
-    volNonReg.data.push({ date, value: agg.volNonReg / agg.headcount });
-    involuntary.data.push({ date, value: agg.involuntary / agg.headcount });
+    total.data.push({ date, value: (agg.leavers / agg.headcount) * 100 });
+    regretted.data.push({ date, value: (agg.regretted / agg.headcount) * 100 });
+    volNonReg.data.push({ date, value: (agg.volNonReg / agg.headcount) * 100 });
+    involuntary.data.push({ date, value: (agg.involuntary / agg.headcount) * 100 });
   }
 
   return [total, regretted, volNonReg, involuntary];
@@ -155,7 +155,7 @@ export function getAttritionByDepartment(rows: AttritionRow[]): ChartSeries[] {
         .filter((date) => byPeriod.get(date)!.headcount > 0)
         .map((date) => {
           const agg = byPeriod.get(date)!;
-          return { date, value: agg.leavers / agg.headcount };
+          return { date, value: (agg.leavers / agg.headcount) * 100 };
         }),
     };
   });
@@ -225,9 +225,9 @@ export function getY1AttritionSeries(
     const agg = byPeriod.get(date)!;
     if (agg.starters === 0) continue;
 
-    total.data.push({ date, value: agg.leavers / agg.starters });
-    regretted.data.push({ date, value: agg.regretted / agg.starters });
-    nonRegretted.data.push({ date, value: (agg.volNonReg + agg.involuntary) / agg.starters });
+    total.data.push({ date, value: (agg.leavers / agg.starters) * 100 });
+    regretted.data.push({ date, value: (agg.regretted / agg.starters) * 100 });
+    nonRegretted.data.push({ date, value: ((agg.volNonReg + agg.involuntary) / agg.starters) * 100 });
   }
 
   return [total, regretted, nonRegretted];

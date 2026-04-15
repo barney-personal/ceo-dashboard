@@ -186,8 +186,8 @@ describe("getRollingAttritionSeries", () => {
     const totalSeries = series.find((s) => s.label === "Total");
     expect(totalSeries).toBeDefined();
     expect(totalSeries!.data).toHaveLength(2);
-    expect(totalSeries!.data[0].value).toBeCloseTo(0.1);
-    expect(totalSeries!.data[1].value).toBeCloseTo(0.12);
+    expect(totalSeries!.data[0].value).toBeCloseTo(10);
+    expect(totalSeries!.data[1].value).toBeCloseTo(12);
   });
 
   it("returns separate series for regretted and non-regretted", async () => {
@@ -248,7 +248,7 @@ describe("getY1AttritionSeries", () => {
     const result = await getAttritionData();
     const series = getY1AttritionSeries(result.y1Attrition);
     const totalSeries = series.find((s) => s.label === "Total");
-    expect(totalSeries!.data[0].value).toBeCloseTo(0.2);
+    expect(totalSeries!.data[0].value).toBeCloseTo(20);
   });
 });
 
@@ -328,9 +328,9 @@ describe("getAttritionByDepartment", () => {
     expect(deptSeries).toHaveLength(2);
 
     const eng = deptSeries.find((s) => s.label === "Engineering");
-    expect(eng!.data[0].value).toBeCloseTo(0.1);
+    expect(eng!.data[0].value).toBeCloseTo(10);
 
     const prod = deptSeries.find((s) => s.label === "Product");
-    expect(prod!.data[0].value).toBeCloseTo(0.2);
+    expect(prod!.data[0].value).toBeCloseTo(20);
   });
 });
