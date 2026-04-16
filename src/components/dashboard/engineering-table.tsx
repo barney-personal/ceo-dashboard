@@ -105,11 +105,11 @@ export function EngineeringTable({
     if (filters.squad !== "all") {
       result = result.filter((r) => r.squad === filters.squad);
     }
-    if (filters.tenureBucket !== "all") {
+    if (filters.tenureBuckets.size > 0) {
       result = result.filter(
         (r) =>
           r.tenureMonths != null &&
-          getTenureBucket(r.tenureMonths) === filters.tenureBucket
+          filters.tenureBuckets.has(getTenureBucket(r.tenureMonths))
       );
     }
 
