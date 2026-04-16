@@ -44,7 +44,6 @@ interface ClerkUser {
   last_name: string | null;
   image_url: string;
   has_image: boolean;
-  profile_image_url: string;
   email_addresses: { email_address: string; id: string }[];
   primary_email_address_id: string | null;
   public_metadata: Record<string, unknown>;
@@ -131,7 +130,8 @@ async function syncProfileImage(
 
   const blob = await imageRes.blob();
   const formData = new FormData();
-  formData.append("file", blob, `${sourceUser.id}.jpg`);
+  const ext = blob.type.split("/")[1] ?? "jpg";
+  formData.append("file", blob, `${sourceUser.id}.${ext}`);
 
   const res = await fetch(`https://api.clerk.com/v1/users/${targetUserId}/profile_image`, {
     method: "POST",
