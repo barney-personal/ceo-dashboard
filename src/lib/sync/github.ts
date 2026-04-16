@@ -19,6 +19,12 @@ import * as Sentry from "@sentry/nextjs";
 const SYNC_WINDOW_DAYS = 360;
 /** Overlap buffer when doing incremental sync to catch late-merged PRs */
 const INCREMENTAL_OVERLAP_DAYS = 3;
+/**
+ * If the oldest stored PR is more than this many days newer than the
+ * full-window start, we assume a prior sync left a gap and do a full
+ * backfill pass instead of an incremental one.
+ */
+const BACKFILL_DETECT_GAP_DAYS = 14;
 
 interface SyncRun {
   id: number;
@@ -66,20 +72,33 @@ export async function runGitHubSync(
     fullWindowSince.setUTCDate(fullWindowSince.getUTCDate() - SYNC_WINDOW_DAYS);
     fullWindowSince.setUTCHours(0, 0, 0, 0);
 
-    // Check for existing data to enable incremental sync
-    const [latestPr] = await db
-      .select({ maxMergedAt: sql<Date | null>`MAX(${githubPrs.mergedAt})` })
+    // Check existing data to decide between incremental and full sync.
+    // We look at BOTH bounds: max(mergedAt) for the forward incremental
+    // watermark, and min(mergedAt) to detect if the backfill is incomplete.
+    const [prBounds] = await db
+      .select({
+        maxMergedAt: sql<Date | null>`MAX(${githubPrs.mergedAt})`,
+        minMergedAt: sql<Date | null>`MIN(${githubPrs.mergedAt})`,
+      })
       .from(githubPrs);
 
+    const gapThreshold = new Date(fullWindowSince);
+    gapThreshold.setUTCDate(
+      gapThreshold.getUTCDate() + BACKFILL_DETECT_GAP_DAYS
+    );
+    const hasBackfillGap =
+      !!prBounds?.minMergedAt && prBounds.minMergedAt > gapThreshold;
+
     let since = fullWindowSince;
-    if (latestPr?.maxMergedAt) {
-      const incrementalSince = new Date(latestPr.maxMergedAt);
+    let syncMode: "full" | "incremental" = "full";
+    if (!hasBackfillGap && prBounds?.maxMergedAt) {
+      const incrementalSince = new Date(prBounds.maxMergedAt);
       incrementalSince.setUTCDate(
         incrementalSince.getUTCDate() - INCREMENTAL_OVERLAP_DAYS
       );
-      // Use the more recent date (incremental) unless it's after now
       if (incrementalSince > fullWindowSince) {
         since = incrementalSince;
+        syncMode = "incremental";
       }
     }
 
@@ -130,7 +149,7 @@ export async function runGitHubSync(
     await tracker.endPhase(fetchPhaseId, {
       status: "success",
       itemsProcessed: prTotal,
-      detail: `Stored ${prTotal} PRs (since ${since.toISOString().slice(0, 10)})`,
+      detail: `Stored ${prTotal} PRs (${syncMode} since ${since.toISOString().slice(0, 10)}${hasBackfillGap ? ", backfill detected" : ""})`,
     });
   } catch (error) {
     if (
