@@ -5,11 +5,13 @@ import { SectionDivider } from "@/components/dashboard/section-divider";
 import { EngineerProfileCharts } from "@/components/dashboard/engineer-profile-charts";
 import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
 import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
+import { EditMappingDialog } from "@/components/dashboard/edit-mapping-dialog";
 import {
   getEngineerProfile,
   getEngineerTimeSeries,
   getSquadOkrs,
   getEngineerPerformanceRatings,
+  getEmployeeOptions,
 } from "@/lib/data/engineer-profile";
 import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
@@ -55,29 +57,39 @@ export default async function EngineerProfilePage({
     console.error("[engineer profile] role lookup failed", err);
   }
 
-  const [timeSeries, squadOkrs, performance] = await Promise.all([
-    getEngineerTimeSeries(login, periodDays).catch((err) => {
-      console.error("[engineer profile] time series failed", err);
-      return {
-        prSeries: [],
-        commitSeries: [],
-        additionsSeries: [],
-        deletionsSeries: [],
-      };
-    }),
-    profile.squad
-      ? getSquadOkrs(profile.squad).catch((err) => {
-          console.error("[engineer profile] squad OKRs failed", err);
-          return [];
-        })
-      : Promise.resolve([]),
-    isCeo
-      ? getEngineerPerformanceRatings(profile.employeeEmail).catch((err) => {
-          console.error("[engineer profile] performance ratings failed", err);
-          return null;
-        })
-      : Promise.resolve(null),
-  ]);
+  const [timeSeries, squadOkrs, performance, employeeOptions] =
+    await Promise.all([
+      getEngineerTimeSeries(login, periodDays).catch((err) => {
+        console.error("[engineer profile] time series failed", err);
+        return {
+          prSeries: [],
+          commitSeries: [],
+          additionsSeries: [],
+          deletionsSeries: [],
+        };
+      }),
+      profile.squad
+        ? getSquadOkrs(profile.squad).catch((err) => {
+            console.error("[engineer profile] squad OKRs failed", err);
+            return [];
+          })
+        : Promise.resolve([]),
+      isCeo
+        ? getEngineerPerformanceRatings(profile.employeeEmail).catch((err) => {
+            console.error(
+              "[engineer profile] performance ratings failed",
+              err
+            );
+            return null;
+          })
+        : Promise.resolve(null),
+      isCeo
+        ? getEmployeeOptions().catch((err) => {
+            console.error("[engineer profile] employee options failed", err);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
 
   const displayName = profile.employeeName ?? login;
 
@@ -93,49 +105,65 @@ export default async function EngineerProfilePage({
       </Link>
 
       {/* Profile header */}
-      <div className="flex items-center gap-4">
-        {profile.avatarUrl && (
-          <img
-            src={profile.avatarUrl}
-            alt={displayName}
-            className="h-14 w-14 rounded-full"
-          />
-        )}
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="font-display text-2xl italic text-foreground">
-              {displayName}
-            </h2>
-            {profile.level && (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                {profile.level}
-              </span>
-            )}
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <a
-              href={`https://github.com/${login}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 hover:text-primary transition-colors"
-            >
-              @{login}
-              <ExternalLink className="h-3 w-3" />
-            </a>
-            {profile.jobTitle && <span>{profile.jobTitle}</span>}
-            {profile.squad && <span>{profile.squad}</span>}
-            {profile.pillar && (
-              <span className="text-muted-foreground/60">
-                {profile.pillar}
-              </span>
-            )}
-            {profile.tenureMonths != null && (
-              <span className="text-muted-foreground/60">
-                {formatTenure(profile.tenureMonths)} tenure
-              </span>
-            )}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-4">
+          {profile.avatarUrl && (
+            <img
+              src={profile.avatarUrl}
+              alt={displayName}
+              className="h-14 w-14 rounded-full"
+            />
+          )}
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-display text-2xl italic text-foreground">
+                {displayName}
+              </h2>
+              {profile.level && (
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                  {profile.level}
+                </span>
+              )}
+              {!profile.employeeName && (
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                  Unmapped
+                </span>
+              )}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <a
+                href={`https://github.com/${login}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 hover:text-primary transition-colors"
+              >
+                @{login}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+              {profile.jobTitle && <span>{profile.jobTitle}</span>}
+              {profile.squad && <span>{profile.squad}</span>}
+              {profile.pillar && (
+                <span className="text-muted-foreground/60">
+                  {profile.pillar}
+                </span>
+              )}
+              {profile.tenureMonths != null && (
+                <span className="text-muted-foreground/60">
+                  {formatTenure(profile.tenureMonths)} tenure
+                </span>
+              )}
+            </div>
           </div>
         </div>
+
+        {isCeo && (
+          <EditMappingDialog
+            login={login}
+            currentEmployeeEmail={profile.employeeEmail}
+            currentEmployeeName={profile.employeeName}
+            employees={employeeOptions}
+          />
+        )}
       </div>
 
       {/* Period selector */}
