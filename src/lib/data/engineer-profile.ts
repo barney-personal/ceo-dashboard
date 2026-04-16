@@ -8,6 +8,7 @@ import {
 import { eq, gte, and, sql, desc } from "drizzle-orm";
 import { getActiveEmployees, type Person } from "./people";
 import { groupLatestOkrRows, type OkrSummary } from "./okrs";
+import { getPerformanceData, type PerformanceRating } from "./performance";
 import type { PeriodDays } from "./engineering";
 
 export interface EngineerProfile {
@@ -172,6 +173,33 @@ export async function getSquadOkrs(
 
   const grouped = groupLatestOkrRows(rows);
   return [...grouped.values()].flat();
+}
+
+export interface EngineerPerformance {
+  ratings: PerformanceRating[];
+  reviewCycles: string[];
+}
+
+/**
+ * Get an engineer's historical performance ratings by employee email.
+ * Returns null if email is missing, ratings data is unavailable, or the
+ * engineer has no matching record.
+ */
+export async function getEngineerPerformanceRatings(
+  email: string | null
+): Promise<EngineerPerformance | null> {
+  if (!email) return null;
+  try {
+    const { people, reviewCycles } = await getPerformanceData();
+    const person = people.find(
+      (p) => p.email.toLowerCase() === email.toLowerCase()
+    );
+    if (!person || person.ratings.length === 0) return null;
+    return { ratings: person.ratings, reviewCycles };
+  } catch {
+    // Mode data unavailable — render page without the performance section
+    return null;
+  }
 }
 
 /**
