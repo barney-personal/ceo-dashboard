@@ -41,8 +41,12 @@ export default async function EngineerProfilePage({
   const profile = await getEngineerProfile(login);
   if (!profile) notFound();
 
-  // CEO role check is non-critical for rendering — fall back to `false`
-  // so a Clerk hiccup doesn't break the whole profile page.
+  // CEO role check is non-critical for rendering. Other pages
+  // (e.g. /dashboard/people/performance) `redirect()` on auth failure
+  // because the entire page is role-gated — there's nothing to show
+  // without a role. Here the role only controls one supplementary
+  // section, so on a Clerk hiccup we prefer degrading to "no
+  // Performance section" over a broken profile for the whole team.
   let isCeo = false;
   try {
     const role = await getCurrentUserRole();

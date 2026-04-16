@@ -48,6 +48,21 @@ function cycleYear(cycle: string): string {
   return match ? match[1] : "";
 }
 
+/**
+ * Escape HTML for safe interpolation into a D3 `.html()` call.
+ * Performance reviewer names and cycle names come from the HR system via
+ * Mode — treat them as untrusted to avoid the "Mode compromise → XSS in
+ * the CEO's browser" path.
+ */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export interface EngineerPerformanceCardProps {
   ratings: PerformanceRating[];
   reviewCycles: string[];
@@ -189,15 +204,15 @@ export function EngineerPerformanceCard({
         const ratingText =
           d.rating !== null ? `${d.rating} — ${ratingLabel(d.rating)}` : "Missed";
         const reviewer = d.reviewerName
-          ? `<div style="font-size:11px;color:#666;margin-top:3px">reviewed by ${d.reviewerName}</div>`
+          ? `<div style="font-size:11px;color:#666;margin-top:3px">reviewed by ${escapeHtml(d.reviewerName)}</div>`
           : "";
         const flag = d.flagged
           ? `<div style="font-size:11px;color:#ea580c;margin-top:3px">⚑ Flagged</div>`
           : "";
         tooltip
           .html(
-            `<div style="font-size:11px;color:#999;margin-bottom:2px">${d.reviewCycle}</div>
-             <div style="font-size:13px;font-weight:600;color:${ratingColour(d.rating)}">${ratingText}</div>
+            `<div style="font-size:11px;color:#999;margin-bottom:2px">${escapeHtml(d.reviewCycle)}</div>
+             <div style="font-size:13px;font-weight:600;color:${ratingColour(d.rating)}">${escapeHtml(ratingText)}</div>
              ${reviewer}${flag}`
           )
           .style("opacity", 1)
@@ -286,6 +301,13 @@ export function EngineerPerformanceCard({
                 {r}
               </span>
             ))}
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <span
+                className="inline-block h-2 w-2 rounded-sm"
+                style={{ backgroundColor: RATING_COLOURS.null }}
+              />
+              Missed
+            </span>
           </div>
         </div>
         <div ref={containerRef} className="relative px-4 py-5">
