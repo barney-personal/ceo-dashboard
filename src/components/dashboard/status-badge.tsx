@@ -39,7 +39,9 @@ interface StatusBadgeProps {
 }
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {
-  const config = STATUS_CONFIG[status];
+  // Status strings can arrive from LLM-parsed Slack updates and may not
+  // match a known key. Fall back to `default` rather than crashing.
+  const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.default;
 
   return (
     <span
