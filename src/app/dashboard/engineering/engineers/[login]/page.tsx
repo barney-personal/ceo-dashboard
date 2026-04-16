@@ -41,14 +41,37 @@ export default async function EngineerProfilePage({
   const profile = await getEngineerProfile(login);
   if (!profile) notFound();
 
-  const role = await getCurrentUserRole();
-  const isCeo = hasAccess(role, "ceo");
+  // CEO role check is non-critical for rendering — fall back to `false`
+  // so a Clerk hiccup doesn't break the whole profile page.
+  let isCeo = false;
+  try {
+    const role = await getCurrentUserRole();
+    isCeo = hasAccess(role, "ceo");
+  } catch (err) {
+    console.error("[engineer profile] role lookup failed", err);
+  }
 
   const [timeSeries, squadOkrs, performance] = await Promise.all([
-    getEngineerTimeSeries(login, periodDays),
-    profile.squad ? getSquadOkrs(profile.squad) : Promise.resolve([]),
+    getEngineerTimeSeries(login, periodDays).catch((err) => {
+      console.error("[engineer profile] time series failed", err);
+      return {
+        prSeries: [],
+        commitSeries: [],
+        additionsSeries: [],
+        deletionsSeries: [],
+      };
+    }),
+    profile.squad
+      ? getSquadOkrs(profile.squad).catch((err) => {
+          console.error("[engineer profile] squad OKRs failed", err);
+          return [];
+        })
+      : Promise.resolve([]),
     isCeo
-      ? getEngineerPerformanceRatings(profile.employeeEmail)
+      ? getEngineerPerformanceRatings(profile.employeeEmail).catch((err) => {
+          console.error("[engineer profile] performance ratings failed", err);
+          return null;
+        })
       : Promise.resolve(null),
   ]);
 

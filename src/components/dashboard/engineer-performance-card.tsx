@@ -75,6 +75,7 @@ export function EngineerPerformanceCard({
   const draw = useCallback(() => {
     if (!svgRef.current || !containerRef.current || allRatings.length === 0) return;
 
+    try {
     const container = containerRef.current;
     const width = getContentBoxWidth(container);
     const height = 320;
@@ -237,6 +238,9 @@ export function EngineerPerformanceCard({
       .attr("fill", RATING_COLOURS.null)
       .attr("stroke", "white")
       .attr("stroke-width", 1);
+    } catch (err) {
+      console.error("[engineer-performance-card] draw failed", err);
+    }
   }, [allRatings]);
 
   useEffect(() => {
