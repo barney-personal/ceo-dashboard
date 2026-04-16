@@ -302,6 +302,12 @@ export interface MergedPRRecord {
 
 // Use GitHub GraphQL API to fetch merged PRs with stats in bulk
 // (avoids per-PR REST calls that exhaust the rate limit).
+//
+// Ordered by CREATED_AT DESC (not UPDATED_AT) so the walk is approximately
+// chronological by PR number. UPDATED_AT ordering is unstable because old
+// PRs bubble up whenever they get a comment / CI rerun / label change, which
+// previously caused the pagination loop to terminate early and miss
+// clean-merged historical PRs.
 const GRAPHQL_QUERY = `
 query($owner: String!, $repo: String!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
@@ -309,12 +315,13 @@ query($owner: String!, $repo: String!, $cursor: String) {
       states: MERGED
       first: 100
       after: $cursor
-      orderBy: { field: UPDATED_AT, direction: DESC }
+      orderBy: { field: CREATED_AT, direction: DESC }
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number
         title
+        createdAt
         mergedAt
         additions
         deletions
@@ -422,12 +429,21 @@ async function graphqlRequest<T>(
 interface GraphQLPRNode {
   number: number;
   title: string;
+  createdAt: string;
   mergedAt: string;
   additions: number;
   deletions: number;
   changedFiles: number;
   author: { login: string; avatarUrl: string } | null;
 }
+
+/**
+ * Safety margin (ms) for the CREATED_AT-based stop condition. A PR can be
+ * merged up to this many days after it was created, so we only terminate the
+ * walk once we're this far past `since`. 90 days covers the long tail of
+ * long-lived PRs without walking indefinitely.
+ */
+const CREATED_AT_STOP_MARGIN_MS = 90 * 24 * 60 * 60 * 1000;
 
 interface GraphQLPRResponse {
   repository: {
@@ -456,16 +472,17 @@ export async function fetchMergedPRRecords(
 
   let total = 0;
 
+  // PRs are ordered by CREATED_AT DESC. Since a PR can merge up to
+  // CREATED_AT_STOP_MARGIN_MS after creation, we stop once the newest PR on
+  // a page was created before `since - margin` — at that point no remaining
+  // page could contain a PR merged on or after `since`.
+  const stopCreatedAtMs = since.getTime() - CREATED_AT_STOP_MARGIN_MS;
+
   for (const repoName of repoNames) {
     let cursor: string | null = null;
     let repoCount = 0;
-    // Results are ordered by UPDATED_AT, not mergedAt, so a recently-updated
-    // old PR can appear before newer ones. Instead of breaking on the first
-    // out-of-range PR, we filter and stop after 5 consecutive empty pages
-    // (500 results) to avoid missing PRs while still bounding the scan.
-    let consecutiveEmptyPages = 0;
 
-    while (consecutiveEmptyPages < 5) {
+    while (true) {
       const gqlData: GraphQLPRResponse = await graphqlRequest(
         GRAPHQL_QUERY,
         { owner: config.org, repo: repoName, cursor },
@@ -474,11 +491,15 @@ export async function fetchMergedPRRecords(
 
       const { nodes, pageInfo } = gqlData.repository.pullRequests;
       const page: MergedPRRecord[] = [];
+      let maxCreatedAtMs = -Infinity;
 
       for (const pr of nodes) {
+        const createdAtMs = new Date(pr.createdAt).getTime();
+        if (createdAtMs > maxCreatedAtMs) maxCreatedAtMs = createdAtMs;
+
         if (!pr.author) continue;
         const mergedAt = new Date(pr.mergedAt);
-        if (mergedAt < since) continue; // skip but don't stop
+        if (mergedAt < since) continue; // skip but don't stop — keep walking to check older pages
 
         page.push({
           repo: repoName,
@@ -494,14 +515,14 @@ export async function fetchMergedPRRecords(
         repoCount++;
       }
 
-      if (page.length > 0) {
-        consecutiveEmptyPages = 0;
-        if (opts.onPage) await opts.onPage(page);
-      } else {
-        consecutiveEmptyPages++;
+      if (page.length > 0 && opts.onPage) {
+        await opts.onPage(page);
       }
       total += page.length;
 
+      // Stop once the entire page pre-dates (since - margin): no later page
+      // (older createdAt) can contain a PR merged on or after `since`.
+      if (nodes.length > 0 && maxCreatedAtMs < stopCreatedAtMs) break;
       if (!pageInfo.hasNextPage) break;
       cursor = pageInfo.endCursor;
     }
