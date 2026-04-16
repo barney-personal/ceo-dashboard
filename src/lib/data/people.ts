@@ -2,7 +2,6 @@ import { getReportData, rowStr, rowNum, validateModeColumns } from "./mode";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import {
   DAYS_PER_MONTH,
-  getPillarForSquad,
   isProductPillar,
   normalizeJobTitle,
   normalizeDepartment,
@@ -58,43 +57,37 @@ const HEADCOUNT_QUERY_COLUMNS = [
   "lifecycle_status",
   "is_cleo_headcount",
   "termination_date",
+  "headcount_label",
 ] as const;
 
+type HeadcountLabel = "FTE" | "CS" | "Contractor";
+
+function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 /**
- * Transform raw Mode headcount rows (old report) into typed Person objects.
- * Used as fallback when Current FTEs data is unavailable.
+ * Mode's canonical "active headcount" filter, ported from the SSoT report's
+ * `headcount_monthly` query at https://app.mode.com/cleoai/reports/c458b52ceb68
+ *
+ *   start_date <= asOf AND (termination_date IS NULL OR termination_date > asOf)
+ *
+ * The label argument selects FTE / CS / Contractor (Mode's own bucketing).
+ * Lex compare on YYYY-MM-DD prefixes is correct because all SSoT date columns
+ * are midnight-UTC ISO timestamps.
  */
-export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
-  const now = Date.now();
-  return rows
-    .map((r) => {
-      const startDate = rowStr(r, "start_date");
-      const startTs = startDate ? new Date(startDate).getTime() : NaN;
-      const startMs = Number.isFinite(startTs) ? startTs : now;
-      const tenureMonths = Math.max(
-        0,
-        Math.floor((now - startMs) / (DAYS_PER_MONTH * 24 * 60 * 60 * 1000)),
-      );
-      const rawLevel = rowStr(r, "hb_level");
-      const specialisation = rowStr(r, "rp_specialisation");
-      const jobTitle = resolveEngineerDiscipline(normalizeJobTitle(rowStr(r, "job_title")), rawLevel, specialisation);
-      const func = rowStr(r, "hb_function") || "Unassigned";
-      return {
-        name: rowStr(r, "preferred_name") || "Unknown",
-        email: rowStr(r, "email"),
-        jobTitle,
-        level: normalizeLevel(rawLevel, jobTitle),
-        squad: rowStr(r, "hb_squad") || func || "Unassigned",
-        pillar: getPillarForSquad(rowStr(r, "hb_squad") || func || "Unassigned"),
-        function: normalizeDepartment(func, jobTitle),
-        manager: rowStr(r, "manager"),
-        startDate,
-        location: rowStr(r, "work_location"),
-        tenureMonths,
-        employmentType: "",
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+export function selectModeFteActive(
+  rows: Record<string, unknown>[],
+  asOf: string = todayUtc(),
+  label: HeadcountLabel = "FTE",
+): Record<string, unknown>[] {
+  return rows.filter((r) => {
+    if (rowStr(r, "headcount_label") !== label) return false;
+    const start = rowStr(r, "start_date").slice(0, 10);
+    if (!start || start > asOf) return false;
+    const term = rowStr(r, "termination_date").slice(0, 10);
+    return !term || term > asOf;
+  });
 }
 
 function computeTenureMonths(startDate: string): number {
@@ -108,50 +101,65 @@ function computeTenureMonths(startDate: string): number {
 }
 
 /**
- * Merge Current FTEs (primary) with old Headcount SSoT (augmentation).
- * New report provides: name, email, squad, pillar, function, start_date, employment_type.
- * Old report augments with: job_title, level, location.
+ * Build a Person from a SSoT row, optionally augmented with the matching
+ * Current FTEs row (for canonical pillar/squad/employment_type).
+ *
+ * The SSoT is the spine: identity, dates, job title, level, manager, location
+ * all come from there. Current FTEs only contributes Rev's org structure —
+ * if a person isn't in Current FTEs, they end up "no pillar"/"no squad" and
+ * get bucketed as `unassigned` by the caller.
  */
-export function mergeEmployeeData(
+function ssotRowToPerson(
+  ssot: Record<string, unknown>,
+  fte?: Record<string, unknown>,
+): Person {
+  const startDate = rowStr(ssot, "start_date");
+  const rawLevel = rowStr(ssot, "hb_level");
+  const specialisation = rowStr(ssot, "rp_specialisation");
+  const jobTitle = resolveEngineerDiscipline(
+    normalizeJobTitle(rowStr(ssot, "job_title")),
+    rawLevel,
+    specialisation,
+  );
+  const fteFunction = fte ? rowStr(fte, "function_name") : "";
+  const func = fteFunction || rowStr(ssot, "hb_function") || "Unassigned";
+  const fteSquad = fte ? rowStr(fte, "squad_name") : "";
+  const ftePillar = fte ? rowStr(fte, "pillar_name") : "";
+  return {
+    name: rowStr(ssot, "preferred_name") || "Unknown",
+    email: rowStr(ssot, "email"),
+    jobTitle,
+    level: normalizeLevel(rawLevel, jobTitle),
+    squad: fteSquad || "no squad",
+    pillar: ftePillar || "no pillar",
+    function: normalizeDepartment(func, jobTitle),
+    manager: rowStr(ssot, "manager") || (fte ? rowStr(fte, "line_manager_email") : ""),
+    startDate,
+    location: rowStr(ssot, "work_location"),
+    tenureMonths: computeTenureMonths(startDate),
+    employmentType: fte ? rowStr(fte, "employment_type") : "",
+  };
+}
+
+/**
+ * Build Person objects for a set of SSoT-active rows, joining each by lowercased
+ * email to the Current FTEs report for org structure (pillar / squad).
+ *
+ * SSoT is the spine; Current FTEs is augmentation only. This intentionally
+ * reverses the old direction (Current FTEs as spine) so headcount totals match
+ * Mode's SSoT report rather than Rev's separate FTE list.
+ */
+export function buildPersonsFromSsot(
+  ssotActiveRows: Record<string, unknown>[],
   fteRows: Record<string, unknown>[],
-  headcountRows: Record<string, unknown>[],
 ): Person[] {
-  // Build email → old-report row lookup for augmentation (active employees only,
-  // so we don't merge stale data from terminated records sharing an email).
-  const oldByEmail = new Map<string, Record<string, unknown>>();
-  for (const r of headcountRows) {
-    if (String(r.lifecycle_status).toLowerCase() !== "employed") continue;
-    const email = rowStr(r, "email").toLowerCase();
-    if (email) oldByEmail.set(email, r);
+  const fteByEmail = new Map<string, Record<string, unknown>>();
+  for (const r of fteRows) {
+    const email = rowStr(r, "employee_email").toLowerCase();
+    if (email) fteByEmail.set(email, r);
   }
-
-  return fteRows
-    .map((r) => {
-      const email = rowStr(r, "employee_email");
-      const old = oldByEmail.get(email.toLowerCase());
-      const startDate = rowStr(r, "start_date");
-      const squadName = rowStr(r, "squad_name");
-      const functionName = rowStr(r, "function_name");
-
-      const rawLevel = old ? rowStr(old, "hb_level") : "";
-      const specialisation = old ? rowStr(old, "rp_specialisation") : "";
-      const jobTitle = old ? resolveEngineerDiscipline(normalizeJobTitle(rowStr(old, "job_title")), rawLevel, specialisation) : "";
-      const func = functionName || "Unassigned";
-      return {
-        name: rowStr(r, "preferred_name") || "Unknown",
-        email,
-        jobTitle,
-        level: normalizeLevel(rawLevel, jobTitle),
-        squad: squadName || functionName || "Unassigned",
-        pillar: rowStr(r, "pillar_name") || "Other",
-        function: normalizeDepartment(func, jobTitle),
-        manager: old ? rowStr(old, "manager") : rowStr(r, "line_manager_email"),
-        startDate,
-        location: old ? rowStr(old, "work_location") : "",
-        tenureMonths: computeTenureMonths(startDate),
-        employmentType: rowStr(r, "employment_type"),
-      };
-    })
+  return ssotActiveRows
+    .map((r) => ssotRowToPerson(r, fteByEmail.get(rowStr(r, "email").toLowerCase())))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -417,29 +425,6 @@ export function getMonthlyMovementPeople(
 }
 
 /**
- * Part-time Customer Champions appear as "no pillar" / "no squad" in the
- * Current FTEs report AND belong to Customer Operations. They are excluded
- * from all metrics and shown separately.
- */
-export function isPartTimeChampion(person: Person): boolean {
-  return (
-    (person.pillar === "no pillar" || person.squad === "no squad") &&
-    person.function === "Customer Operations"
-  );
-}
-
-/**
- * People with "no pillar" / "no squad" who are NOT in Customer Operations.
- * Shown in a separate "Unassigned" bucket above part-time champions.
- */
-export function isUnassigned(person: Person): boolean {
-  return (
-    (person.pillar === "no pillar" || person.squad === "no squad") &&
-    person.function !== "Customer Operations"
-  );
-}
-
-/**
  * Compute tenure in calendar days from a start date string.
  */
 export function computeTenureDays(startDate: string): number {
@@ -451,18 +436,20 @@ export function computeTenureDays(startDate: string): number {
 }
 
 /**
- * Fetch and transform active employees from Mode data.
+ * Fetch active employees from Mode data, aligned with the Mode SSoT report's
+ * `headcount_monthly` definition: `start_date <= today AND (term IS NULL OR term > today)`,
+ * bucketed by `headcount_label` (FTE / CS / Contractor).
  *
- * Primary source: Current FTEs report (Rev — canonical org structure).
- * Augmentation: Headcount SSoT report (job title, level, location, termination history).
- *
- * Falls back to Headcount SSoT alone when Current FTEs is unavailable.
- * Part-time Customer Champions ("no pillar"/"no squad") are returned separately.
+ * Source of truth: Headcount SSoT (Mode report c458b52ceb68).
+ * Augmentation: Current FTEs (Rev) provides Rev's pillar/squad/employment_type by
+ * email join. SSoT-active people not in Current FTEs are still counted but bucketed
+ * as `unassigned` ("no pillar" / "no squad").
  */
 export async function getActiveEmployees(): Promise<{
   employees: Person[];
   partTimeChampions: Person[];
   unassigned: Person[];
+  contractors: Person[];
   allRows: Record<string, unknown>[];
   lastSync: Date | null;
 }> {
@@ -474,25 +461,33 @@ export async function getActiveEmployees(): Promise<{
   const fteQuery = fteData.find((d) => d.queryName === "current_employees");
   const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
 
-  // Validate headcount schema upfront — allRows is used for attrition/departures
-  // metrics, so if the schema has drifted we clear it to avoid silent bad data.
-  let allRows: Record<string, unknown>[] = [];
-  if (headcountQuery && headcountQuery.rows.length > 0) {
-    const hcColumnSource = headcountQuery.columns?.length
-      ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
-      : headcountQuery.rows[0] ?? {};
-    const hcValidation = validateModeColumns({
-      row: hcColumnSource as Record<string, unknown>,
-      expectedColumns: HEADCOUNT_QUERY_COLUMNS,
-      reportName: headcountQuery.reportName,
-      queryName: headcountQuery.queryName,
-    });
-    if (hcValidation.isValid) {
-      allRows = headcountQuery.rows;
-    }
-  }
+  const empty = {
+    employees: [] as Person[],
+    partTimeChampions: [] as Person[],
+    unassigned: [] as Person[],
+    contractors: [] as Person[],
+    allRows: [] as Record<string, unknown>[],
+    lastSync: headcountQuery?.syncedAt ?? null,
+  };
 
-  // Primary path: Current FTEs available
+  // SSoT is the spine — every count comes from here. If it's missing or its
+  // schema has drifted, return empty buckets rather than silently bad data.
+  if (!headcountQuery || headcountQuery.rows.length === 0) return empty;
+  const hcColumnSource = headcountQuery.columns?.length
+    ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
+    : headcountQuery.rows[0] ?? {};
+  const hcValidation = validateModeColumns({
+    row: hcColumnSource as Record<string, unknown>,
+    expectedColumns: HEADCOUNT_QUERY_COLUMNS,
+    reportName: headcountQuery.reportName,
+    queryName: headcountQuery.queryName,
+  });
+  if (!hcValidation.isValid) return empty;
+  const allRows = headcountQuery.rows;
+
+  // Current FTEs is augmentation only. If it's missing or its schema has drifted,
+  // every FTE-active person becomes "unassigned" but the count still equals Mode.
+  let fteRows: Record<string, unknown>[] = [];
   if (fteQuery && fteQuery.rows.length > 0) {
     const fteColumnSource = fteQuery.columns?.length
       ? Object.fromEntries(fteQuery.columns.map((c) => [c.name, true]))
@@ -503,36 +498,20 @@ export async function getActiveEmployees(): Promise<{
       reportName: fteQuery.reportName,
       queryName: fteQuery.queryName,
     });
-
-    if (fteValidation.isValid) {
-      const all = mergeEmployeeData(fteQuery.rows, allRows);
-      return {
-        employees: all.filter((p) => !isPartTimeChampion(p) && !isUnassigned(p)),
-        partTimeChampions: all.filter(isPartTimeChampion),
-        unassigned: all.filter(isUnassigned),
-        allRows,
-        lastSync: fteQuery.syncedAt,
-      };
-    }
+    if (fteValidation.isValid) fteRows = fteQuery.rows;
   }
 
-  // Fallback: use Headcount SSoT alone (allRows already validated above)
-  if (allRows.length === 0) {
-    return { employees: [], partTimeChampions: [], unassigned: [], allRows: [], lastSync: null };
-  }
+  const asOf = todayUtc();
+  const ftePersons = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "FTE"), fteRows);
+  const partTimeChampions = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "CS"), fteRows);
+  const contractors = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "Contractor"), fteRows);
 
-  const activeRows = allRows.filter(
-    (r) =>
-      String(r.lifecycle_status).toLowerCase() === "employed" &&
-      rowNum(r, "is_cleo_headcount") === 1,
-  );
-
-  const all = transformToPersons(activeRows);
   return {
-    employees: all.filter((p) => !isPartTimeChampion(p) && !isUnassigned(p)),
-    partTimeChampions: all.filter(isPartTimeChampion),
-    unassigned: all.filter(isUnassigned),
+    employees: ftePersons.filter((p) => p.pillar !== "no pillar" && p.squad !== "no squad"),
+    unassigned: ftePersons.filter((p) => p.pillar === "no pillar" || p.squad === "no squad"),
+    partTimeChampions,
+    contractors,
     allRows,
-    lastSync: headcountQuery?.syncedAt ?? null,
+    lastSync: headcountQuery.syncedAt,
   };
 }

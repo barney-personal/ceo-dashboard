@@ -8,6 +8,12 @@ const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
   validateModeColumns: mockValidateModeColumns,
+  rowStr: (row: Record<string, unknown>, key: string) =>
+    typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
+  rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
+    typeof row[key] === "number" ? row[key] : fallback,
+  rowNumOrNull: (row: Record<string, unknown>, key: string) =>
+    typeof row[key] === "number" ? row[key] : null,
 }));
 
 import {
@@ -161,19 +167,27 @@ describe("getUnitEconomicsMetrics", () => {
 });
 
 describe("getHeadcountMetrics", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns the empty fallback when headcount columns drift", async () => {
     mockGetReportData.mockResolvedValue([
       {
         reportName: "Headcount SSoT",
         queryName: "headcount",
         syncedAt: new Date("2026-04-08T12:00:00Z"),
-        rows: [{ lifecycle_status: "employed" }],
+        rows: [{ start_date: "2025-01-01" }],
       },
     ]);
     mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["lifecycle_status", "is_cleo_headcount"],
-      presentColumns: ["lifecycle_status"],
-      missingColumns: ["is_cleo_headcount"],
+      expectedColumns: ["start_date", "termination_date", "headcount_label"],
+      presentColumns: ["start_date"],
+      missingColumns: ["termination_date", "headcount_label"],
       isValid: false,
     });
 
@@ -183,6 +197,40 @@ describe("getHeadcountMetrics", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
       "headcount",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockValidateModeColumns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedColumns: ["start_date", "termination_date", "headcount_label"],
+      }),
+    );
+  });
+
+  it("counts only FTE-active rows (Mode SSoT definition)", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        syncedAt: new Date("2026-04-08T12:00:00Z"),
+        rows: [
+          // ✓ FTE active
+          { headcount_label: "FTE", start_date: "2025-01-01", termination_date: null },
+          { headcount_label: "FTE", start_date: "2025-06-01", termination_date: null },
+          // ✗ FTE terminated yesterday
+          { headcount_label: "FTE", start_date: "2024-01-01", termination_date: "2026-04-07" },
+          // ✗ FTE not yet started
+          { headcount_label: "FTE", start_date: "2026-05-01", termination_date: null },
+          // ✗ CS active (different label)
+          { headcount_label: "CS", start_date: "2025-01-01", termination_date: null },
+          // ✗ Contractor active (different label)
+          { headcount_label: "Contractor", start_date: "2025-01-01", termination_date: null },
+        ],
+      },
+    ]);
+
+    const metrics = await getHeadcountMetrics();
+
+    expect(metrics).toEqual({
+      total: 2,
+      lastSync: new Date("2026-04-08T12:00:00Z"),
+    });
   });
 });

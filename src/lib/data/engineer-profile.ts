@@ -217,9 +217,9 @@ export interface EmployeeOption {
  */
 export async function getEmployeeOptions(): Promise<EmployeeOption[]> {
   try {
-    const { employees, unassigned, partTimeChampions } =
+    const { employees, unassigned, partTimeChampions, contractors } =
       await getActiveEmployees();
-    return [...employees, ...unassigned, ...partTimeChampions]
+    return [...employees, ...unassigned, ...partTimeChampions, ...contractors]
       .filter((p) => p.email)
       .map((p) => ({
         name: p.name,

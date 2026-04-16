@@ -22,9 +22,7 @@ import {
   getPeopleMetrics,
   getTenureDistribution,
   groupByPillarAndSquad,
-  isPartTimeChampion,
-  isUnassigned,
-  transformToPersons,
+  selectModeFteActive,
   type Person,
 } from "../people";
 
@@ -67,73 +65,62 @@ afterEach(() => {
   mockGetReportData.mockReset();
 });
 
-describe("transformToPersons", () => {
-  it("gives zero tenure when start_date is null or invalid", () => {
-    const people = transformToPersons([
-      { preferred_name: "NullDate", email: "a@example.com", start_date: null },
-      {
-        preferred_name: "InvalidDate",
-        email: "b@example.com",
-        start_date: "not-a-date",
-      },
-    ]);
-    expect(people.every((p) => Number.isFinite(p.tenureMonths))).toBe(true);
-    expect(people.every((p) => p.tenureMonths >= 0)).toBe(true);
+describe("selectModeFteActive", () => {
+  // System time is 2026-04-08T12:00:00Z, so today (UTC) = "2026-04-08".
+  const fte = (overrides: Record<string, unknown> = {}) => ({
+    headcount_label: "FTE",
+    start_date: "2025-01-01T00:00:00Z",
+    termination_date: null,
+    ...overrides,
   });
 
-  it("maps fields, fills fallbacks, calculates tenure, and sorts by name", () => {
-    const people = transformToPersons([
-      {
-        preferred_name: "Zed",
-        email: "zed@example.com",
-        job_title: "Engineer",
-        hb_level: "L4",
-        hb_squad: "Growth Conversion",
-        hb_function: "Growth",
-        manager: "Boss",
-        start_date: "2025-04-01T00:00:00Z",
-        work_location: "London",
-      },
-      {
-        email: "finance@example.com",
-        hb_function: "Finance",
-      },
-      {
-        preferred_name: "Amy",
-        email: "amy@example.com",
-        job_title: "PM",
-        hb_level: "L5",
-        hb_squad: "Chat 1: Chat Evaluations",
-        hb_function: "Product",
-        manager: "Lead",
-        start_date: "2025-10-01T00:00:00Z",
-        work_location: "Remote",
-      },
-    ]);
+  it("includes FTE rows whose start_date has passed and that have no termination", () => {
+    expect(selectModeFteActive([fte()])).toHaveLength(1);
+  });
 
-    expect(people.map((person) => person.name)).toEqual(["Amy", "Unknown", "Zed"]);
-    expect(people[0]).toMatchObject({
-      name: "Amy",
-      squad: "Chat 1: Chat Evaluations",
-      function: "Product",
-      location: "Remote",
-      tenureMonths: 6,
-    });
-    expect(people[1]).toMatchObject({
-      name: "Unknown",
-      squad: "Finance",
-      function: "Finance",
-      startDate: "",
-      tenureMonths: 0,
-    });
-    expect(people[2]).toMatchObject({
-      name: "Zed",
-      email: "zed@example.com",
-      jobTitle: "Software Engineer",
-      level: "L4",
-      manager: "Boss",
-      tenureMonths: 12,
-    });
+  it("excludes future-start FTE rows", () => {
+    expect(
+      selectModeFteActive([fte({ start_date: "2026-05-01T00:00:00Z" })]),
+    ).toHaveLength(0);
+  });
+
+  it("excludes FTE rows whose termination_date is on or before asOf", () => {
+    expect(
+      selectModeFteActive([fte({ termination_date: "2026-04-08T00:00:00Z" })]),
+    ).toHaveLength(0);
+    expect(
+      selectModeFteActive([fte({ termination_date: "2026-04-07T00:00:00Z" })]),
+    ).toHaveLength(0);
+  });
+
+  it("includes FTE rows whose termination_date is in the future", () => {
+    expect(
+      selectModeFteActive([fte({ termination_date: "2026-05-01T00:00:00Z" })]),
+    ).toHaveLength(1);
+  });
+
+  it("filters by headcount_label — defaults to FTE", () => {
+    const rows = [
+      fte(),
+      { ...fte(), headcount_label: "CS" },
+      { ...fte(), headcount_label: "Contractor" },
+    ];
+    expect(selectModeFteActive(rows)).toHaveLength(1);
+    expect(selectModeFteActive(rows, undefined, "CS")).toHaveLength(1);
+    expect(selectModeFteActive(rows, undefined, "Contractor")).toHaveLength(1);
+  });
+
+  it("respects an explicit asOf date", () => {
+    const rows = [
+      fte({
+        start_date: "2025-12-01T00:00:00Z",
+        termination_date: "2026-02-01T00:00:00Z",
+      }),
+    ];
+    // Active on 2026-01-15:
+    expect(selectModeFteActive(rows, "2026-01-15")).toHaveLength(1);
+    // Not active on 2026-03-01 (terminated):
+    expect(selectModeFteActive(rows, "2026-03-01")).toHaveLength(0);
   });
 });
 
@@ -311,12 +298,35 @@ describe("getMonthlyJoinersAndDepartures", () => {
 });
 
 describe("getActiveEmployees", () => {
-  it("returns empty people data when both reports are missing", async () => {
+  // Headcount SSoT is the spine; Current FTEs only contributes pillar/squad.
+  const ssotReport = (rows: Record<string, unknown>[]) => ({
+    reportName: "Headcount SSoT",
+    queryName: "headcount",
+    syncedAt: new Date("2026-04-08T12:00:00Z"),
+    columns: [],
+    rows,
+  });
+  const fteReport = (rows: Record<string, unknown>[]) => ({
+    reportName: "Current FTEs",
+    queryName: "current_employees",
+    syncedAt: new Date("2026-04-08T12:00:00Z"),
+    columns: [],
+    rows,
+  });
+
+  it("returns all-empty buckets when SSoT is missing", async () => {
     mockGetReportData.mockResolvedValue([]);
 
     const result = await getActiveEmployees();
 
-    expect(result).toEqual({ employees: [], partTimeChampions: [], unassigned: [], allRows: [], lastSync: null });
+    expect(result).toEqual({
+      employees: [],
+      partTimeChampions: [],
+      unassigned: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
     expect(mockGetReportData).toHaveBeenCalledWith("people", "org", [
       "current_employees",
     ]);
@@ -325,60 +335,111 @@ describe("getActiveEmployees", () => {
     ]);
   });
 
-  it("uses Current FTEs as primary and merges with Headcount SSoT", async () => {
-    mockGetReportData.mockImplementation(
-      (section: string, category: string) => {
-        if (category === "org") {
-          return Promise.resolve([
-            {
-              reportName: "Current FTEs",
-              queryName: "current_employees",
-              syncedAt: new Date("2026-04-08T12:00:00Z"),
-              columns: [
-                { name: "employee_email", type: "text" },
-                { name: "preferred_name", type: "text" },
-                { name: "employment_type", type: "text" },
-                { name: "start_date", type: "timestamp" },
-                { name: "line_manager_email", type: "text" },
-                { name: "pillar_name", type: "text" },
-                { name: "squad_name", type: "text" },
-                { name: "function_name", type: "text" },
-              ],
-              rows: [
-                {
-                  employee_email: "amy@example.com",
-                  preferred_name: "Amy",
-                  employment_type: "Permanent (UK)",
-                  start_date: "2025-10-01T00:00:00Z",
-                  line_manager_email: "lead@example.com",
-                  pillar_name: "Growth Pillar",
-                  squad_name: "Growth Marketing",
-                  function_name: "Product",
-                },
-              ],
-            },
-          ]);
-        }
-        return Promise.resolve([
-          {
-            reportName: "Headcount SSoT",
-            queryName: "headcount",
-            rows: [
-              {
-                email: "amy@example.com",
-                preferred_name: "Amy",
-                job_title: "PM",
-                hb_level: "L5",
-                work_location: "London",
-                lifecycle_status: "employed",
-                is_cleo_headcount: 1,
-                manager: "Lead",
-              },
-            ],
-          },
-        ]);
-      },
+  it("returns all-empty buckets when SSoT schema validation fails", async () => {
+    mockGetReportData.mockImplementation((_section: string, category: string) =>
+      Promise.resolve(
+        category === "headcount"
+          ? [ssotReport([{ headcount_label: "FTE", start_date: "2025-01-01" }])]
+          : [],
+      ),
     );
+    mockValidateModeColumns.mockReturnValue({
+      isValid: false,
+      expectedColumns: [],
+      presentColumns: [],
+      missingColumns: ["headcount_label"],
+    });
+
+    const result = await getActiveEmployees();
+
+    expect(result.employees).toEqual([]);
+    expect(result.partTimeChampions).toEqual([]);
+    expect(result.contractors).toEqual([]);
+    expect(result.allRows).toEqual([]);
+  });
+
+  it("buckets SSoT rows by headcount_label and Mode's date filter", async () => {
+    mockGetReportData.mockImplementation((_section: string, category: string) => {
+      if (category === "org") {
+        return Promise.resolve([
+          fteReport([
+            {
+              employee_email: "amy@example.com",
+              preferred_name: "Amy",
+              employment_type: "Permanent (UK)",
+              start_date: "2025-10-01T00:00:00Z",
+              line_manager_email: "lead@example.com",
+              pillar_name: "Growth Pillar",
+              squad_name: "Growth Marketing",
+              function_name: "Product",
+            },
+          ]),
+        ]);
+      }
+      return Promise.resolve([
+        ssotReport([
+          // FTE active — should appear in `employees` (has matching FTE row)
+          {
+            preferred_name: "Amy",
+            email: "amy@example.com",
+            job_title: "PM",
+            hb_level: "L5",
+            hb_squad: "Product",
+            hb_function: "Product",
+            manager: "Lead",
+            start_date: "2025-10-01T00:00:00Z",
+            work_location: "London",
+            lifecycle_status: "employed",
+            is_cleo_headcount: 1,
+            termination_date: null,
+            headcount_label: "FTE",
+          },
+          // FTE active but missing from Current FTEs — should be `unassigned`
+          {
+            preferred_name: "Drift",
+            email: "drift@example.com",
+            start_date: "2025-09-01T00:00:00Z",
+            termination_date: null,
+            headcount_label: "FTE",
+            hb_function: "Engineering",
+          },
+          // CS active — partTimeChampions
+          {
+            preferred_name: "Champ",
+            email: "champ@example.com",
+            start_date: "2025-05-01T00:00:00Z",
+            termination_date: null,
+            headcount_label: "CS",
+            hb_function: "Customer Operations",
+          },
+          // Contractor active — contractors
+          {
+            preferred_name: "Conn",
+            email: "conn@example.com",
+            start_date: "2025-08-01T00:00:00Z",
+            termination_date: null,
+            headcount_label: "Contractor",
+            hb_function: "Engineering",
+          },
+          // FTE terminated yesterday — excluded everywhere
+          {
+            preferred_name: "Gone",
+            email: "gone@example.com",
+            start_date: "2024-01-01T00:00:00Z",
+            termination_date: "2026-04-07T00:00:00Z",
+            headcount_label: "FTE",
+          },
+          // FTE future-start — excluded
+          {
+            preferred_name: "Future",
+            email: "future@example.com",
+            start_date: "2026-05-01T00:00:00Z",
+            termination_date: null,
+            headcount_label: "FTE",
+          },
+        ]),
+      ]);
+    });
 
     const result = await getActiveEmployees();
 
@@ -389,98 +450,64 @@ describe("getActiveEmployees", () => {
       squad: "Growth Marketing",
       pillar: "Growth Pillar",
       function: "Product",
-      jobTitle: "PM",
-      level: "L5",
-      location: "London",
       employmentType: "Permanent (UK)",
     });
+    expect(result.unassigned).toHaveLength(1);
+    expect(result.unassigned[0]).toMatchObject({
+      name: "Drift",
+      pillar: "no pillar",
+      squad: "no squad",
+    });
+    expect(result.partTimeChampions).toHaveLength(1);
+    expect(result.partTimeChampions[0].name).toBe("Champ");
+    expect(result.contractors).toHaveLength(1);
+    expect(result.contractors[0].name).toBe("Conn");
+    // Terminated and future-start FTEs are filtered out:
+    const allNames = [
+      ...result.employees,
+      ...result.unassigned,
+      ...result.partTimeChampions,
+      ...result.contractors,
+    ].map((p) => p.name);
+    expect(allNames).not.toContain("Gone");
+    expect(allNames).not.toContain("Future");
+    // allRows is the raw SSoT for downstream attrition/movement metrics:
+    expect(result.allRows).toHaveLength(6);
   });
 
-  it("falls back to Headcount SSoT when Current FTEs columns drift", async () => {
-    mockGetReportData.mockImplementation(
-      (section: string, category: string) => {
-        if (category === "org") {
-          return Promise.resolve([
-            {
-              reportName: "Current FTEs",
-              queryName: "current_employees",
-              syncedAt: new Date("2026-04-08T12:00:00Z"),
-              columns: [],
-              rows: [{ employee_email: "amy@example.com" }],
-            },
-          ]);
-        }
-        return Promise.resolve([
-          {
-            reportName: "Headcount SSoT",
-            queryName: "headcount",
-            syncedAt: new Date("2026-04-08T12:00:00Z"),
-            rows: [
-              {
-                preferred_name: "Amy",
-                email: "amy@example.com",
-                job_title: "PM",
-                hb_level: "L5",
-                hb_squad: "Product",
-                hb_function: "Product",
-                manager: "Lead",
-                start_date: "2025-10-01T00:00:00Z",
-                work_location: "London",
-                lifecycle_status: "employed",
-                is_cleo_headcount: 1,
-                termination_date: null,
-              },
+  it("treats Current FTEs as augmentation only — invalid Current FTEs leaves the FTE in `unassigned`", async () => {
+    mockGetReportData.mockImplementation((_section: string, category: string) =>
+      Promise.resolve(
+        category === "org"
+          ? [fteReport([{ employee_email: "amy@example.com" }])]
+          : [
+              ssotReport([
+                {
+                  preferred_name: "Amy",
+                  email: "amy@example.com",
+                  start_date: "2025-10-01T00:00:00Z",
+                  termination_date: null,
+                  headcount_label: "FTE",
+                  hb_function: "Product",
+                },
+              ]),
             ],
-          },
-        ]);
-      },
+      ),
     );
-    // First call (headcount validation) succeeds, second call (FTE validation) fails
+    // SSoT validates; Current FTEs validation fails.
     mockValidateModeColumns
       .mockReturnValueOnce({ isValid: true, expectedColumns: [], presentColumns: [], missingColumns: [] })
       .mockReturnValueOnce({ isValid: false, expectedColumns: [], presentColumns: [], missingColumns: ["squad_name"] });
 
     const result = await getActiveEmployees();
 
-    expect(result.employees).toHaveLength(1);
-    expect(result.employees[0].name).toBe("Amy");
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("isPartTimeChampion", () => {
-  it("returns true for Customer Operations with no pillar", () => {
-    expect(isPartTimeChampion(makePerson({ pillar: "no pillar", function: "Customer Operations" }))).toBe(true);
-  });
-
-  it("returns true for Customer Operations with no squad", () => {
-    expect(isPartTimeChampion(makePerson({ squad: "no squad", function: "Customer Operations" }))).toBe(true);
-  });
-
-  it("returns false for non-Customer Operations even with no pillar", () => {
-    expect(isPartTimeChampion(makePerson({ pillar: "no pillar", function: "Growth" }))).toBe(false);
-  });
-
-  it("returns false for Customer Operations with normal pillar and squad", () => {
-    expect(isPartTimeChampion(makePerson({ pillar: "Operations", squad: "Champs", function: "Customer Operations" }))).toBe(false);
-  });
-});
-
-describe("isUnassigned", () => {
-  it("returns true for non-Customer Operations with no pillar", () => {
-    expect(isUnassigned(makePerson({ pillar: "no pillar", function: "Growth" }))).toBe(true);
-  });
-
-  it("returns true for non-Customer Operations with no squad", () => {
-    expect(isUnassigned(makePerson({ squad: "no squad", function: "Engineering" }))).toBe(true);
-  });
-
-  it("returns false for Customer Operations with no pillar", () => {
-    expect(isUnassigned(makePerson({ pillar: "no pillar", function: "Customer Operations" }))).toBe(false);
-  });
-
-  it("returns false for people with normal pillar and squad", () => {
-    expect(isUnassigned(makePerson({ pillar: "Growth", squad: "Growth Marketing", function: "Growth" }))).toBe(false);
+    expect(result.employees).toEqual([]);
+    expect(result.unassigned).toHaveLength(1);
+    expect(result.unassigned[0]).toMatchObject({
+      name: "Amy",
+      pillar: "no pillar",
+      squad: "no squad",
+    });
   });
 });
 
