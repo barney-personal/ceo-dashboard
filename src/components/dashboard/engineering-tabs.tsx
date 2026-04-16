@@ -19,11 +19,13 @@ const TABS = [
   { label: "Pillars", href: "/dashboard/engineering/pillars" },
   { label: "Squads", href: "/dashboard/engineering/squads" },
   { label: "Engineers", href: "/dashboard/engineering/engineers" },
+  { label: "Impact", href: "/dashboard/engineering/impact" },
 ] as const;
 
 /** Tabs where the period picker has no effect (trend/sparkline-based views). */
 const PERIODLESS_TABS = new Set<string>([
   "/dashboard/engineering/delivery-health",
+  "/dashboard/engineering/impact",
 ]);
 
 export function EngineeringTabs() {
