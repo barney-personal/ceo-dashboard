@@ -20,7 +20,7 @@
 
 import { db } from "@/lib/db";
 import { githubPrs, githubEmployeeMap } from "@/lib/db/schema";
-import { gte, eq, sql, and } from "drizzle-orm";
+import { gte, eq, sql, and, inArray } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 
 const MS_PER_DAY = 86_400_000;
@@ -234,7 +234,7 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
     .from(githubPrs)
     .where(
       and(
-        sql`${githubPrs.authorLogin} = ANY(${logins})`,
+        inArray(githubPrs.authorLogin, logins),
         gte(githubPrs.mergedAt, dataStart),
       ),
     );

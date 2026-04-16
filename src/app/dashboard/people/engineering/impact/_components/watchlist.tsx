@@ -497,8 +497,8 @@ export function WatchlistTable({
       (s) =>
         s.tenureMonthsNow >= 6 &&
         s.severity !== "uncomparable" &&
-        (s.severity === "severe" ||
-          (s.severity === "moderate" && s.declining)),
+        s.severity !== "ok" &&
+        s.declining,
     );
   }, [engineers]);
 

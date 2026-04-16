@@ -241,7 +241,7 @@ export function computePeerStats(
     const peers = (groups.get(key) ?? []).filter((p) => p.email !== e.email);
     const trajectoryRatio =
       e.impact90d > 0 ? (e.impact30d * 3) / e.impact90d : null;
-    if (peers.length < 4) {
+    if (peers.length < 5) {
       out.push({
         ...e,
         peerKey: key,
