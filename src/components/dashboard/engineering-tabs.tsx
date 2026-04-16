@@ -14,21 +14,28 @@ const PERIOD_OPTIONS = [
   { label: "360 days", value: 360 },
 ] as const;
 
-const TABS = [
+const BASE_TABS = [
   { label: "Delivery Health", href: "/dashboard/engineering/delivery-health" },
   { label: "Pillars", href: "/dashboard/engineering/pillars" },
   { label: "Squads", href: "/dashboard/engineering/squads" },
   { label: "Engineers", href: "/dashboard/engineering/engineers" },
 ] as const;
 
+const IMPACT_TAB = {
+  label: "Impact",
+  href: "/dashboard/engineering/impact",
+} as const;
+
 /** Tabs where the period picker has no effect (trend/sparkline-based views). */
 const PERIODLESS_TABS = new Set<string>([
   "/dashboard/engineering/delivery-health",
+  "/dashboard/engineering/impact",
 ]);
 
-export function EngineeringTabs() {
+export function EngineeringTabs({ showImpact = false }: { showImpact?: boolean }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const TABS = showImpact ? [...BASE_TABS, IMPACT_TAB] : BASE_TABS;
   // Preserve period (and any other query state) when switching tabs so the
   // user doesn't lose their 90-day selection by navigating.
   const qs = searchParams.toString();
