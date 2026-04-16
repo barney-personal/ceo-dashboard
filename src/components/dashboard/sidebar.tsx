@@ -113,6 +113,12 @@ const NAV_GROUPS: NavGroup[] = [
         icon: GitPullRequest,
       },
       {
+        label: "Impact",
+        href: "/dashboard/people/engineering/impact",
+        requiredRole: "leadership",
+        icon: Activity,
+      },
+      {
         label: "Engagement",
         href: "/dashboard/people/engagement",
         requiredRole: "leadership",
