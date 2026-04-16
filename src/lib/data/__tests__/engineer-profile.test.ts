@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetPerformanceData } = vi.hoisted(() => ({
+const { mockGetPerformanceData, mockGetActiveEmployees } = vi.hoisted(() => ({
   mockGetPerformanceData: vi.fn(),
+  mockGetActiveEmployees: vi.fn(),
 }));
 
 vi.mock("../performance", async () => {
@@ -18,13 +19,17 @@ vi.mock("../performance", async () => {
 // stub the modules at the import boundary.
 vi.mock("@/lib/db", () => ({ db: {} }));
 vi.mock("../people", () => ({
-  getActiveEmployees: vi.fn(),
+  getActiveEmployees: mockGetActiveEmployees,
 }));
 vi.mock("../okrs", () => ({
   groupLatestOkrRows: vi.fn(() => new Map()),
 }));
 
-import { getEngineerPerformanceRatings } from "../engineer-profile";
+import {
+  getEmployeeOptions,
+  getEngineerPerformanceRatings,
+} from "../engineer-profile";
+import type { Person } from "../people";
 import type { PersonPerformance } from "../performance";
 
 function person(overrides: Partial<PersonPerformance> = {}): PersonPerformance {
@@ -105,5 +110,103 @@ describe("getEngineerPerformanceRatings", () => {
     mockGetPerformanceData.mockRejectedValue(new Error("Mode unavailable"));
     const result = await getEngineerPerformanceRatings("alice@meetcleo.com");
     expect(result).toBeNull();
+  });
+});
+
+function employee(overrides: Partial<Person> = {}): Person {
+  return {
+    name: "Alice",
+    email: "alice@meetcleo.com",
+    jobTitle: "Engineer",
+    level: "L4",
+    squad: "Squad A",
+    pillar: "Engineering",
+    function: "Engineering",
+    manager: "",
+    startDate: "2024-01-01",
+    location: "",
+    tenureMonths: 12,
+    employmentType: "full-time",
+    ...overrides,
+  };
+}
+
+describe("getEmployeeOptions", () => {
+  beforeEach(() => {
+    mockGetActiveEmployees.mockReset();
+  });
+
+  it("returns employees, unassigned, and part-time champions combined, sorted by name", async () => {
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [employee({ name: "Zoe", email: "zoe@meetcleo.com" })],
+      unassigned: [employee({ name: "Mike", email: "mike@meetcleo.com" })],
+      partTimeChampions: [
+        employee({ name: "Alice", email: "alice@meetcleo.com" }),
+      ],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEmployeeOptions();
+
+    expect(result.map((e) => e.name)).toEqual(["Alice", "Mike", "Zoe"]);
+  });
+
+  it("filters out employees with empty emails (can't be used as mapping keys)", async () => {
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [
+        employee({ name: "Alice", email: "alice@meetcleo.com" }),
+        employee({ name: "Bob", email: "" }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEmployeeOptions();
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("Alice");
+  });
+
+  it("maps falsy jobTitle/squad/pillar to null", async () => {
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [
+        employee({
+          name: "Alice",
+          email: "alice@meetcleo.com",
+          jobTitle: "",
+          squad: "",
+          pillar: "",
+        }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEmployeeOptions();
+
+    expect(result[0]).toMatchObject({
+      jobTitle: null,
+      squad: null,
+      pillar: null,
+    });
+  });
+
+  it("logs and returns [] when getActiveEmployees throws", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockGetActiveEmployees.mockRejectedValue(new Error("Mode unavailable"));
+
+    const result = await getEmployeeOptions();
+
+    expect(result).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("getEmployeeOptions"),
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
   });
 });

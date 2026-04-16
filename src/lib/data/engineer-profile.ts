@@ -202,6 +202,41 @@ export async function getEngineerPerformanceRatings(
   }
 }
 
+export interface EmployeeOption {
+  name: string;
+  email: string;
+  jobTitle: string | null;
+  squad: string | null;
+  pillar: string | null;
+}
+
+/**
+ * Fetch all active employees, formatted for the mapping picker.
+ * Sorted alphabetically by name. Empty emails are filtered out (they can't
+ * be used as a stable mapping key).
+ */
+export async function getEmployeeOptions(): Promise<EmployeeOption[]> {
+  try {
+    const { employees, unassigned, partTimeChampions } =
+      await getActiveEmployees();
+    return [...employees, ...unassigned, ...partTimeChampions]
+      .filter((p) => p.email)
+      .map((p) => ({
+        name: p.name,
+        email: p.email,
+        jobTitle: p.jobTitle || null,
+        squad: p.squad || null,
+        pillar: p.pillar || null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    // Surface the failure in Sentry/Render logs so "no employees to pick"
+    // isn't silently attributed to HiBob not being synced.
+    console.error("[getEmployeeOptions] failed to load employee directory", error);
+    return [];
+  }
+}
+
 /**
  * Generate ISO week start dates between two dates.
  */
