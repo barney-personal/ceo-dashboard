@@ -7,14 +7,14 @@ export interface EngineeringFilterState {
   roles: Set<string>;
   level: string;
   squad: string;
-  tenureBucket: string;
+  tenureBuckets: Set<string>;
 }
 
 export const EMPTY_FILTERS: EngineeringFilterState = {
   roles: new Set(),
   level: "all",
   squad: "all",
-  tenureBucket: "all",
+  tenureBuckets: new Set(),
 };
 
 const ROLE_CATEGORIES: { label: string; match: (title: string) => boolean }[] =
@@ -92,13 +92,20 @@ export function EngineeringFilters<T extends FilterableRow>({
     filters.roles.size > 0 ||
     filters.level !== "all" ||
     filters.squad !== "all" ||
-    filters.tenureBucket !== "all";
+    filters.tenureBuckets.size > 0;
 
   const toggleRole = (role: string) => {
     const next = new Set(filters.roles);
     if (next.has(role)) next.delete(role);
     else next.add(role);
     onFiltersChange({ ...filters, roles: next });
+  };
+
+  const toggleTenureBucket = (bucket: string) => {
+    const next = new Set(filters.tenureBuckets);
+    if (next.has(bucket)) next.delete(bucket);
+    else next.add(bucket);
+    onFiltersChange({ ...filters, tenureBuckets: next });
   };
 
   return (
@@ -166,16 +173,10 @@ export function EngineeringFilters<T extends FilterableRow>({
         {TENURE_BUCKETS.map((b) => (
           <button
             key={b.label}
-            onClick={() =>
-              onFiltersChange({
-                ...filters,
-                tenureBucket:
-                  filters.tenureBucket === b.label ? "all" : b.label,
-              })
-            }
+            onClick={() => toggleTenureBucket(b.label)}
             className={cn(
               "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-              filters.tenureBucket === b.label
+              filters.tenureBuckets.has(b.label)
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"
             )}
