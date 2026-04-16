@@ -25,6 +25,18 @@ const INCREMENTAL_OVERLAP_DAYS = 3;
  * backfill pass instead of an incremental one.
  */
 const BACKFILL_DETECT_GAP_DAYS = 14;
+/**
+ * Sparsity detection: compare PR count in the most recent 90 days against
+ * the oldest 90 days of the window. If the ratio is below this threshold
+ * (and we have enough data to be confident), assume a prior walk dropped
+ * historical PRs (e.g. the UPDATED_AT pagination bug) and do a full
+ * backfill to repair it. 0.2 = the old bucket must have at least 20% of
+ * the recent bucket's PR count — healthy data usually >50%, bug produced
+ * <5%.
+ */
+const BACKFILL_DETECT_SPARSITY_RATIO = 0.2;
+/** Min recent-bucket count before the sparsity check is meaningful */
+const BACKFILL_DETECT_MIN_RECENT = 100;
 
 interface SyncRun {
   id: number;
@@ -73,12 +85,17 @@ export async function runGitHubSync(
     fullWindowSince.setUTCHours(0, 0, 0, 0);
 
     // Check existing data to decide between incremental and full sync.
-    // We look at BOTH bounds: max(mergedAt) for the forward incremental
-    // watermark, and min(mergedAt) to detect if the backfill is incomplete.
+    // Three signals drive the decision:
+    //  - max(mergedAt)   → forward incremental watermark
+    //  - min(mergedAt)   → is the window covered at all?
+    //  - sparsity ratio  → are old weeks densely covered, or did a prior
+    //                      walk drop historical PRs (e.g. UPDATED_AT bug)?
     const [prBounds] = await db
       .select({
         maxMergedAt: sql<Date | null>`MAX(${githubPrs.mergedAt})`,
         minMergedAt: sql<Date | null>`MIN(${githubPrs.mergedAt})`,
+        recentCount: sql<number>`COUNT(*) FILTER (WHERE ${githubPrs.mergedAt} >= NOW() - INTERVAL '90 days')`,
+        oldCount: sql<number>`COUNT(*) FILTER (WHERE ${githubPrs.mergedAt} >= NOW() - INTERVAL '360 days' AND ${githubPrs.mergedAt} < NOW() - INTERVAL '270 days')`,
       })
       .from(githubPrs);
 
@@ -86,8 +103,16 @@ export async function runGitHubSync(
     gapThreshold.setUTCDate(
       gapThreshold.getUTCDate() + BACKFILL_DETECT_GAP_DAYS
     );
-    const hasBackfillGap =
+    const hasMinGap =
       !!prBounds?.minMergedAt && prBounds.minMergedAt > gapThreshold;
+
+    const recentCount = Number(prBounds?.recentCount ?? 0);
+    const oldCount = Number(prBounds?.oldCount ?? 0);
+    const hasSparsityGap =
+      recentCount >= BACKFILL_DETECT_MIN_RECENT &&
+      oldCount < recentCount * BACKFILL_DETECT_SPARSITY_RATIO;
+
+    const hasBackfillGap = hasMinGap || hasSparsityGap;
 
     let since = fullWindowSince;
     let syncMode: "full" | "incremental" = "full";
@@ -149,7 +174,7 @@ export async function runGitHubSync(
     await tracker.endPhase(fetchPhaseId, {
       status: "success",
       itemsProcessed: prTotal,
-      detail: `Stored ${prTotal} PRs (${syncMode} since ${since.toISOString().slice(0, 10)}${hasBackfillGap ? ", backfill detected" : ""})`,
+      detail: `Stored ${prTotal} PRs (${syncMode} since ${since.toISOString().slice(0, 10)}${hasBackfillGap ? ` — backfill: ${hasMinGap ? "min-date gap" : `sparsity ${oldCount}/${recentCount}`}` : ""})`,
     });
   } catch (error) {
     if (
