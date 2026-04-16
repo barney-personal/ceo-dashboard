@@ -1,4 +1,4 @@
-import { getReportData, rowStr, rowNum, validateModeColumns } from "./mode";
+import { getReportData, rowStr, validateModeColumns } from "./mode";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import {
   DAYS_PER_MONTH,
@@ -54,8 +54,6 @@ const HEADCOUNT_QUERY_COLUMNS = [
   "manager",
   "start_date",
   "work_location",
-  "lifecycle_status",
-  "is_cleo_headcount",
   "termination_date",
   "headcount_label",
 ] as const;
@@ -143,7 +141,7 @@ function ssotRowToPerson(
 
 /**
  * Build Person objects for a set of SSoT-active rows, joining each by lowercased
- * email to the Current FTEs report for org structure (pillar / squad).
+ * email to a pre-built Current FTEs lookup for org structure (pillar / squad).
  *
  * SSoT is the spine; Current FTEs is augmentation only. This intentionally
  * reverses the old direction (Current FTEs as spine) so headcount totals match
@@ -151,16 +149,22 @@ function ssotRowToPerson(
  */
 export function buildPersonsFromSsot(
   ssotActiveRows: Record<string, unknown>[],
-  fteRows: Record<string, unknown>[],
+  fteByEmail: ReadonlyMap<string, Record<string, unknown>>,
 ): Person[] {
-  const fteByEmail = new Map<string, Record<string, unknown>>();
-  for (const r of fteRows) {
-    const email = rowStr(r, "employee_email").toLowerCase();
-    if (email) fteByEmail.set(email, r);
-  }
   return ssotActiveRows
     .map((r) => ssotRowToPerson(r, fteByEmail.get(rowStr(r, "email").toLowerCase())))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function buildFteByEmail(
+  fteRows: Record<string, unknown>[],
+): Map<string, Record<string, unknown>> {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const r of fteRows) {
+    const email = rowStr(r, "employee_email").toLowerCase();
+    if (email) map.set(email, r);
+  }
+  return map;
 }
 
 /**
@@ -193,9 +197,10 @@ export function getPeopleMetrics(
 
   const departments = new Set(active.map((p) => p.function)).size;
 
+  // Attrition: FTE departures in the last 90 days (Mode SSoT definition —
+  // termination_date drives it, not lifecycle_status).
   const attritionLast90Days = allRows.filter((r) => {
-    if (String(r.lifecycle_status).toLowerCase() !== "terminated") return false;
-    if (rowNum(r, "is_cleo_headcount") !== 1) return false;
+    if (rowStr(r, "headcount_label") !== "FTE") return false;
     const termDate = rowStr(r, "termination_date");
     if (!termDate) return false;
     return new Date(termDate) >= ninetyDaysAgo;
@@ -305,25 +310,26 @@ export function getMonthlyJoinersAndDepartures(
     });
   }
 
-  // Count all Cleo employee joiners by start_date month
+  // FTE joiners by start_date month (Mode SSoT definition — label-driven).
   const joinerCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    if (rowStr(r, "headcount_label") !== "FTE") continue;
     const startDate = rowStr(r, "start_date");
     if (!startDate) continue;
     const d = new Date(startDate);
+    if (isNaN(d.getTime())) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     joinerCounts.set(key, (joinerCounts.get(key) ?? 0) + 1);
   }
 
-  // Count departures by termination_date month
+  // FTE departures by termination_date month.
   const departureCounts = new Map<string, number>();
   for (const r of allRows) {
-    if (String(r.lifecycle_status).toLowerCase() !== "terminated") continue;
-    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    if (rowStr(r, "headcount_label") !== "FTE") continue;
     const termDate = rowStr(r, "termination_date");
     if (!termDate) continue;
     const d = new Date(termDate);
+    if (isNaN(d.getTime())) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     departureCounts.set(key, (departureCounts.get(key) ?? 0) + 1);
   }
@@ -364,7 +370,8 @@ export function getMonthlyMovementPeople(
   const departures: MovementPerson[] = [];
 
   for (const r of allRows) {
-    if (rowNum(r, "is_cleo_headcount") !== 1) continue;
+    // FTE-only, to match the Mode SSoT report's headcount_monthly definition.
+    if (rowStr(r, "headcount_label") !== "FTE") continue;
     const name = rowStr(r, "preferred_name") || "Unknown";
     const email = rowStr(r, "email");
     const rawLevel = rowStr(r, "hb_level");
@@ -399,24 +406,22 @@ export function getMonthlyMovementPeople(
       }
     }
 
-    if (String(r.lifecycle_status).toLowerCase() === "terminated") {
-      const termDate = rowStr(r, "termination_date");
-      if (termDate) {
-        const d = new Date(termDate);
-        if (!isNaN(d.getTime())) {
-          departures.push({
-            name,
-            email,
-            jobTitle,
-            level,
-            function: func,
-            squad: rowStr(r, "hb_squad") || func,
-            location: rowStr(r, "work_location"),
-            startDate,
-            terminationDate: termDate,
-            monthKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-          });
-        }
+    const termDate = rowStr(r, "termination_date");
+    if (termDate) {
+      const d = new Date(termDate);
+      if (!isNaN(d.getTime())) {
+        departures.push({
+          name,
+          email,
+          jobTitle,
+          level,
+          function: func,
+          squad: rowStr(r, "hb_squad") || func,
+          location: rowStr(r, "work_location"),
+          startDate,
+          terminationDate: termDate,
+          monthKey: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        });
       }
     }
   }
@@ -502,9 +507,10 @@ export async function getActiveEmployees(): Promise<{
   }
 
   const asOf = todayUtc();
-  const ftePersons = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "FTE"), fteRows);
-  const partTimeChampions = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "CS"), fteRows);
-  const contractors = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "Contractor"), fteRows);
+  const fteByEmail = buildFteByEmail(fteRows);
+  const ftePersons = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "FTE"), fteByEmail);
+  const partTimeChampions = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "CS"), fteByEmail);
+  const contractors = buildPersonsFromSsot(selectModeFteActive(allRows, asOf, "Contractor"), fteByEmail);
 
   return {
     employees: ftePersons.filter((p) => p.pillar !== "no pillar" && p.squad !== "no squad"),

@@ -148,21 +148,12 @@ describe("getPeopleMetrics", () => {
     ];
 
     const metrics = getPeopleMetrics(active, [
-      {
-        lifecycle_status: "Terminated",
-        is_cleo_headcount: 1,
-        termination_date: "2026-02-15T12:00:00Z",
-      },
-      {
-        lifecycle_status: "terminated",
-        is_cleo_headcount: 1,
-        termination_date: "2025-11-15T12:00:00Z",
-      },
-      {
-        lifecycle_status: "Terminated",
-        is_cleo_headcount: 0,
-        termination_date: "2026-03-01T12:00:00Z",
-      },
+      // FTE terminated 53 days ago — counts
+      { headcount_label: "FTE", termination_date: "2026-02-15T12:00:00Z" },
+      // FTE terminated > 90 days ago — does not count
+      { headcount_label: "FTE", termination_date: "2025-11-15T12:00:00Z" },
+      // CS terminated within 90 days — does not count (FTE-only attrition)
+      { headcount_label: "CS", termination_date: "2026-03-01T12:00:00Z" },
     ]);
 
     expect(metrics).toEqual({
@@ -229,14 +220,14 @@ describe("getTenureDistribution", () => {
 });
 
 describe("getPeopleMetrics — null safety", () => {
-  it("excludes rows with null lifecycle_status or null is_cleo_headcount from attrition count", () => {
+  it("excludes rows with missing headcount_label or termination_date from attrition count", () => {
     const metrics = getPeopleMetrics([], [
-      // null lifecycle_status — should not count
-      { lifecycle_status: null, is_cleo_headcount: 1, termination_date: "2026-02-15T12:00:00Z" },
-      // null is_cleo_headcount — should not count
-      { lifecycle_status: "Terminated", is_cleo_headcount: null, termination_date: "2026-02-15T12:00:00Z" },
-      // valid terminated row — should count
-      { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: "2026-03-01T12:00:00Z" },
+      // missing headcount_label — should not count
+      { termination_date: "2026-02-15T12:00:00Z" },
+      // FTE but no termination_date — should not count
+      { headcount_label: "FTE", termination_date: null },
+      // valid FTE termination within 90d — should count
+      { headcount_label: "FTE", termination_date: "2026-03-01T12:00:00Z" },
     ]);
     expect(metrics.attritionLast90Days).toBe(1);
   });
@@ -246,12 +237,12 @@ describe("getMonthlyJoinersAndDepartures", () => {
   it("skips rows with null or invalid start_date or termination_date", () => {
     const result = getMonthlyJoinersAndDepartures(
       [
-        { is_cleo_headcount: 1, start_date: null },
-        { is_cleo_headcount: 1, start_date: "not-a-date" },
-        { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: null },
-        { lifecycle_status: "terminated", is_cleo_headcount: 1, termination_date: "bad-date" },
+        { headcount_label: "FTE", start_date: null },
+        { headcount_label: "FTE", start_date: "not-a-date" },
+        { headcount_label: "FTE", termination_date: null },
+        { headcount_label: "FTE", termination_date: "bad-date" },
         // one valid joiner in April 2026
-        { is_cleo_headcount: 1, start_date: "2026-04-01T12:00:00Z" },
+        { headcount_label: "FTE", start_date: "2026-04-01T12:00:00Z" },
       ],
       1,
     );
@@ -259,23 +250,17 @@ describe("getMonthlyJoinersAndDepartures", () => {
     expect(result.departures[0].value).toBe(0);
   });
 
-  it("builds monthly joiner and departure counts across the requested window", () => {
+  it("builds monthly joiner and departure counts across the requested window — FTE only", () => {
     const result = getMonthlyJoinersAndDepartures(
       [
-        { is_cleo_headcount: 1, start_date: "2026-01-05T12:00:00Z" },
-        { is_cleo_headcount: 1, start_date: "2026-02-10T12:00:00Z" },
-        { is_cleo_headcount: 1, start_date: "2026-04-01T12:00:00Z" },
-        { is_cleo_headcount: 0, start_date: "2026-04-02T12:00:00Z" },
-        {
-          lifecycle_status: "Terminated",
-          is_cleo_headcount: 1,
-          termination_date: "2026-02-20T12:00:00Z",
-        },
-        {
-          lifecycle_status: "terminated",
-          is_cleo_headcount: 1,
-          termination_date: "2026-04-07T12:00:00Z",
-        },
+        { headcount_label: "FTE", start_date: "2026-01-05T12:00:00Z" },
+        { headcount_label: "FTE", start_date: "2026-02-10T12:00:00Z" },
+        { headcount_label: "FTE", start_date: "2026-04-01T12:00:00Z" },
+        // CS — excluded
+        { headcount_label: "CS", start_date: "2026-04-02T12:00:00Z" },
+        // FTE departures
+        { headcount_label: "FTE", termination_date: "2026-02-20T12:00:00Z" },
+        { headcount_label: "FTE", termination_date: "2026-04-07T12:00:00Z" },
       ],
       4
     );
@@ -389,8 +374,6 @@ describe("getActiveEmployees", () => {
             manager: "Lead",
             start_date: "2025-10-01T00:00:00Z",
             work_location: "London",
-            lifecycle_status: "employed",
-            is_cleo_headcount: 1,
             termination_date: null,
             headcount_label: "FTE",
           },
@@ -539,8 +522,7 @@ describe("getMonthlyMovementPeople", () => {
         manager: "Bob",
         start_date: "2026-03-15",
         work_location: "London",
-        lifecycle_status: "employed",
-        is_cleo_headcount: 1,
+        headcount_label: "FTE",
       },
     ];
     const { joiners, departures } = getMonthlyMovementPeople(rows);
@@ -564,8 +546,7 @@ describe("getMonthlyMovementPeople", () => {
         start_date: "2024-01-10",
         termination_date: "2026-02-28",
         work_location: "Remote",
-        lifecycle_status: "terminated",
-        is_cleo_headcount: 1,
+        headcount_label: "FTE",
       },
     ];
     const { joiners, departures } = getMonthlyMovementPeople(rows);
@@ -577,7 +558,7 @@ describe("getMonthlyMovementPeople", () => {
     expect(departures[0].terminationDate).toBe("2026-02-28");
   });
 
-  it("skips non-headcount rows", () => {
+  it("skips non-FTE rows (CS, Contractor)", () => {
     const rows = [
       {
         preferred_name: "Contractor",
@@ -589,8 +570,13 @@ describe("getMonthlyMovementPeople", () => {
         manager: "",
         start_date: "2026-01-01",
         work_location: "",
-        lifecycle_status: "employed",
-        is_cleo_headcount: 0,
+        headcount_label: "Contractor",
+      },
+      {
+        preferred_name: "Champ",
+        email: "champ@co.com",
+        start_date: "2026-01-01",
+        headcount_label: "CS",
       },
     ];
     const { joiners, departures } = getMonthlyMovementPeople(rows);
@@ -611,8 +597,7 @@ describe("getMonthlyMovementPeople", () => {
         manager: "Frank",
         start_date: "2025-06-01",
         work_location: "Berlin",
-        lifecycle_status: "employed",
-        is_cleo_headcount: 1,
+        headcount_label: "FTE",
       },
     ];
     const { joiners } = getMonthlyMovementPeople(rows);
@@ -632,8 +617,7 @@ describe("getMonthlyMovementPeople", () => {
         manager: "Hank",
         start_date: "2025-09-01",
         work_location: "London",
-        lifecycle_status: "employed",
-        is_cleo_headcount: 1,
+        headcount_label: "FTE",
       },
     ];
     const { joiners } = getMonthlyMovementPeople(rows);
