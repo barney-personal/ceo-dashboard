@@ -384,10 +384,9 @@ export function RampUpSpaghetti({
         hideTooltip();
       });
 
-    const byEmail2 = new Map(engineers.map((e) => [e.email, e]));
     const rows = computeRampUp(
       buckets,
-      byEmail2,
+      byEmail,
       (e) => e.levelTrack === "IC",
       { maxMonth: 18 },
     );

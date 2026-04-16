@@ -2,7 +2,7 @@
  * Engineering impact analytics — data loader.
  *
  * Provides a single rich analysis object consumed by the
- * /dashboard/people/engineering/impact page. Combines:
+ * /dashboard/engineering/impact page. Combines:
  *   - active engineers from Mode's `headcount` query (richer than the
  *     Current FTEs feed - includes hb_level, rp_specialisation,
  *     rp_department_name, job_title)
@@ -109,7 +109,7 @@ function classifyLevel(raw: string | null): {
   const num = parseInt(numStr, 10);
   if (prefix === "EM") return { track: "EM", num, label: `EM${num}` };
   if (prefix === "QE") return { track: "QA", num, label: `QE${num}` };
-  if (["EG", "DS", "EXEC", "L"].includes(prefix)) {
+  if (["EG", "DS", "EXEC"].includes(prefix)) {
     return { track: "Other", num, label: raw };
   }
   return { track: "IC", num, label: `L${num}` };
@@ -221,23 +221,22 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
   }
 
   const logins = [...emailToLogin.values()];
-  if (!logins.length) {
-    throw new Error("No matched GitHub logins - impact analysis empty");
-  }
-  const allPrs = await db
-    .select({
-      authorLogin: githubPrs.authorLogin,
-      mergedAt: githubPrs.mergedAt,
-      additions: githubPrs.additions,
-      deletions: githubPrs.deletions,
-    })
-    .from(githubPrs)
-    .where(
-      and(
-        inArray(githubPrs.authorLogin, logins),
-        gte(githubPrs.mergedAt, dataStart),
-      ),
-    );
+  const allPrs = logins.length
+    ? await db
+        .select({
+          authorLogin: githubPrs.authorLogin,
+          mergedAt: githubPrs.mergedAt,
+          additions: githubPrs.additions,
+          deletions: githubPrs.deletions,
+        })
+        .from(githubPrs)
+        .where(
+          and(
+            inArray(githubPrs.authorLogin, logins),
+            gte(githubPrs.mergedAt, dataStart),
+          ),
+        )
+    : [];
 
   const prsByLogin = new Map<string, typeof allPrs>();
   for (const pr of allPrs) {
@@ -309,26 +308,30 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
       perBucket.set(m, b);
     }
 
-    const maxBucketByTenure = Math.min(
-      Math.floor(tenureDaysNow / BUCKET_DAYS),
-      60,
-    );
-    for (let m = 0; m <= maxBucketByTenure; m++) {
-      const bucketStart = startMs + m * BUCKET_DAYS * MS_PER_DAY;
-      const bucketEnd = bucketStart + BUCKET_DAYS * MS_PER_DAY;
-      const inWindow =
-        bucketStart >= startMsBounds && bucketEnd <= endMs;
-      const b = perBucket.get(m) ?? { prs: 0, additions: 0, deletions: 0 };
-      tenureBuckets.push({
-        email,
-        tenureMonth: m,
-        bucketStart: new Date(bucketStart).toISOString().slice(0, 10),
-        prs: b.prs,
-        additions: b.additions,
-        deletions: b.deletions,
-        impact: impactScore(b.prs, b.additions, b.deletions),
-        inWindow,
-      });
+    // Unmatched engineers have no PRs, so emitting zero-filled buckets
+     // for them would depress cohort medians and skew ramp-up curves.
+    if (login) {
+      const maxBucketByTenure = Math.min(
+        Math.floor(tenureDaysNow / BUCKET_DAYS),
+        60,
+      );
+      for (let m = 0; m <= maxBucketByTenure; m++) {
+        const bucketStart = startMs + m * BUCKET_DAYS * MS_PER_DAY;
+        const bucketEnd = bucketStart + BUCKET_DAYS * MS_PER_DAY;
+        const inWindow =
+          bucketStart >= startMsBounds && bucketEnd <= endMs;
+        const b = perBucket.get(m) ?? { prs: 0, additions: 0, deletions: 0 };
+        tenureBuckets.push({
+          email,
+          tenureMonth: m,
+          bucketStart: new Date(bucketStart).toISOString().slice(0, 10),
+          prs: b.prs,
+          additions: b.additions,
+          deletions: b.deletions,
+          impact: impactScore(b.prs, b.additions, b.deletions),
+          inWindow,
+        });
+      }
     }
 
     engineers.push({
