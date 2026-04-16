@@ -231,6 +231,17 @@ describe("getPeopleMetrics — null safety", () => {
     ]);
     expect(metrics.attritionLast90Days).toBe(1);
   });
+
+  it("excludes future termination_dates from attrition (garden-leave FTEs)", () => {
+    // System time is 2026-04-08; a term date in May/June is in the future.
+    const metrics = getPeopleMetrics([], [
+      { headcount_label: "FTE", termination_date: "2026-05-15T12:00:00Z" },
+      { headcount_label: "FTE", termination_date: "2026-06-30T12:00:00Z" },
+      // Today's termination counts (term <= now passes the upper bound).
+      { headcount_label: "FTE", termination_date: "2026-04-08T00:00:00Z" },
+    ]);
+    expect(metrics.attritionLast90Days).toBe(1);
+  });
 });
 
 describe("getMonthlyJoinersAndDepartures", () => {
@@ -248,6 +259,25 @@ describe("getMonthlyJoinersAndDepartures", () => {
     );
     expect(result.joiners[0].value).toBe(1);
     expect(result.departures[0].value).toBe(0);
+  });
+
+  it("excludes future start_date and termination_date (pre-employment / garden-leave FTEs)", () => {
+    // System time is 2026-04-08. Anything after is "future".
+    const result = getMonthlyJoinersAndDepartures(
+      [
+        // Future start — pre-employment; should not appear as a joiner
+        { headcount_label: "FTE", start_date: "2026-05-01T12:00:00Z" },
+        // Future termination — garden leave; should not appear as a departure
+        { headcount_label: "FTE", termination_date: "2026-06-15T12:00:00Z" },
+        // Past start in window — counts
+        { headcount_label: "FTE", start_date: "2026-04-01T12:00:00Z" },
+        // Past termination in window — counts
+        { headcount_label: "FTE", termination_date: "2026-04-05T12:00:00Z" },
+      ],
+      1,
+    );
+    expect(result.joiners[0].value).toBe(1);
+    expect(result.departures[0].value).toBe(1);
   });
 
   it("builds monthly joiner and departure counts across the requested window — FTE only", () => {
@@ -622,5 +652,30 @@ describe("getMonthlyMovementPeople", () => {
     ];
     const { joiners } = getMonthlyMovementPeople(rows);
     expect(joiners[0].function).toBe("Analytics");
+  });
+
+  it("excludes future start_date and termination_date", () => {
+    // System time is 2026-04-08.
+    const rows = [
+      // Pre-employment FTE (future start) — should not be a joiner
+      {
+        preferred_name: "Future Joiner",
+        email: "future-joiner@co.com",
+        start_date: "2026-05-15",
+        headcount_label: "FTE",
+      },
+      // Garden-leave FTE (future term) — should not be a departure (or joiner,
+      // their start is in the past and counts there)
+      {
+        preferred_name: "Garden Leave",
+        email: "gl@co.com",
+        start_date: "2024-01-01",
+        termination_date: "2026-06-30",
+        headcount_label: "FTE",
+      },
+    ];
+    const { joiners, departures } = getMonthlyMovementPeople(rows);
+    expect(joiners.map((p) => p.name)).toEqual(["Garden Leave"]);
+    expect(departures).toHaveLength(0);
   });
 });

@@ -197,13 +197,17 @@ export function getPeopleMetrics(
 
   const departments = new Set(active.map((p) => p.function)).size;
 
-  // Attrition: FTE departures in the last 90 days (Mode SSoT definition —
-  // termination_date drives it, not lifecycle_status).
+  // Attrition: FTE departures in the last 90 days. Bound on both sides —
+  // garden-leave FTEs carry a future termination_date and would otherwise
+  // inflate this count.
+  const nowMs = now.getTime();
+  const ninetyDaysAgoMs = ninetyDaysAgo.getTime();
   const attritionLast90Days = allRows.filter((r) => {
     if (rowStr(r, "headcount_label") !== "FTE") return false;
     const termDate = rowStr(r, "termination_date");
     if (!termDate) return false;
-    return new Date(termDate) >= ninetyDaysAgo;
+    const termMs = new Date(termDate).getTime();
+    return Number.isFinite(termMs) && termMs >= ninetyDaysAgoMs && termMs <= nowMs;
   }).length;
 
   return {
@@ -311,25 +315,32 @@ export function getMonthlyJoinersAndDepartures(
   }
 
   // FTE joiners by start_date month (Mode SSoT definition — label-driven).
+  // Past dates only — pre-employment FTEs would otherwise count as joiners
+  // in a future month they haven't started yet.
+  const nowMs = now.getTime();
   const joinerCounts = new Map<string, number>();
   for (const r of allRows) {
     if (rowStr(r, "headcount_label") !== "FTE") continue;
     const startDate = rowStr(r, "start_date");
     if (!startDate) continue;
     const d = new Date(startDate);
-    if (isNaN(d.getTime())) continue;
+    const ms = d.getTime();
+    if (!Number.isFinite(ms) || ms > nowMs) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     joinerCounts.set(key, (joinerCounts.get(key) ?? 0) + 1);
   }
 
-  // FTE departures by termination_date month.
+  // FTE departures by termination_date month. Past dates only — garden-leave
+  // FTEs carry a future termination_date and would otherwise show as already
+  // departed.
   const departureCounts = new Map<string, number>();
   for (const r of allRows) {
     if (rowStr(r, "headcount_label") !== "FTE") continue;
     const termDate = rowStr(r, "termination_date");
     if (!termDate) continue;
     const d = new Date(termDate);
-    if (isNaN(d.getTime())) continue;
+    const ms = d.getTime();
+    if (!Number.isFinite(ms) || ms > nowMs) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     departureCounts.set(key, (departureCounts.get(key) ?? 0) + 1);
   }
@@ -368,6 +379,7 @@ export function getMonthlyMovementPeople(
 ): { joiners: MovementPerson[]; departures: MovementPerson[] } {
   const joiners: MovementPerson[] = [];
   const departures: MovementPerson[] = [];
+  const nowMs = Date.now();
 
   for (const r of allRows) {
     // FTE-only, to match the Mode SSoT report's headcount_monthly definition.
@@ -387,10 +399,14 @@ export function getMonthlyMovementPeople(
       jobTitle,
     );
 
+    // Past dates only — pre-employment FTEs would otherwise show as joiners
+    // before they've started, and garden-leave FTEs would show as already
+    // departed.
     const startDate = rowStr(r, "start_date");
     if (startDate) {
       const d = new Date(startDate);
-      if (!isNaN(d.getTime())) {
+      const ms = d.getTime();
+      if (Number.isFinite(ms) && ms <= nowMs) {
         joiners.push({
           name,
           email,
@@ -409,7 +425,8 @@ export function getMonthlyMovementPeople(
     const termDate = rowStr(r, "termination_date");
     if (termDate) {
       const d = new Date(termDate);
-      if (!isNaN(d.getTime())) {
+      const ms = d.getTime();
+      if (Number.isFinite(ms) && ms <= nowMs) {
         departures.push({
           name,
           email,
