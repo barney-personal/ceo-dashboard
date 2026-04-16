@@ -130,7 +130,7 @@ async function syncProfileImage(
 
   const blob = await imageRes.blob();
   const formData = new FormData();
-  const ext = blob.type.split("/")[1] ?? "jpg";
+  const ext = blob.type.split("/")[1]?.split(";")[0] ?? "jpg";
   formData.append("file", blob, `${sourceUser.id}.${ext}`);
 
   const res = await fetch(`https://api.clerk.com/v1/users/${targetUserId}/profile_image`, {
