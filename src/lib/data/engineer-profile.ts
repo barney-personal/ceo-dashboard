@@ -229,7 +229,10 @@ export async function getEmployeeOptions(): Promise<EmployeeOption[]> {
         pillar: p.pillar || null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  } catch {
+  } catch (error) {
+    // Surface the failure in Sentry/Render logs so "no employees to pick"
+    // isn't silently attributed to HiBob not being synced.
+    console.error("[getEmployeeOptions] failed to load employee directory", error);
     return [];
   }
 }
