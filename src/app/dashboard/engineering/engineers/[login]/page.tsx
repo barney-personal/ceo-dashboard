@@ -4,12 +4,16 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { EngineerProfileCharts } from "@/components/dashboard/engineer-profile-charts";
 import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
+import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
 import {
   getEngineerProfile,
   getEngineerTimeSeries,
   getSquadOkrs,
+  getEngineerPerformanceRatings,
 } from "@/lib/data/engineer-profile";
 import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { hasAccess } from "@/lib/auth/roles";
 
 function formatTenure(months: number): string {
   const y = Math.floor(months / 12);
@@ -37,9 +41,15 @@ export default async function EngineerProfilePage({
   const profile = await getEngineerProfile(login);
   if (!profile) notFound();
 
-  const [timeSeries, squadOkrs] = await Promise.all([
+  const role = await getCurrentUserRole();
+  const isCeo = hasAccess(role, "ceo");
+
+  const [timeSeries, squadOkrs, performance] = await Promise.all([
     getEngineerTimeSeries(login, periodDays),
     profile.squad ? getSquadOkrs(profile.squad) : Promise.resolve([]),
+    isCeo
+      ? getEngineerPerformanceRatings(profile.employeeEmail)
+      : Promise.resolve(null),
   ]);
 
   const displayName = profile.employeeName ?? login;
@@ -131,6 +141,20 @@ export default async function EngineerProfilePage({
           deletionsSeries={timeSeries.deletionsSeries}
         />
       </section>
+
+      {/* Performance ratings — CEO only */}
+      {isCeo && performance && (
+        <section className="space-y-4">
+          <SectionDivider
+            title="Performance"
+            subtitle="Historical performance ratings across review cycles"
+          />
+          <EngineerPerformanceCard
+            ratings={performance.ratings}
+            reviewCycles={performance.reviewCycles}
+          />
+        </section>
+      )}
 
       {/* Squad OKRs */}
       {profile.squad && (

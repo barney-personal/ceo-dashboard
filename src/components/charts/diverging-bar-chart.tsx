@@ -117,8 +117,33 @@ export function DivergingBarChart({
       .attr("stroke", "#ccc")
       .attr("stroke-width", 1);
 
-    // X axis — month labels
-    const tickInterval = parsed.length > 24 ? 3 : parsed.length > 12 ? 2 : 1;
+    // X axis — adapt ticks/format to data granularity (daily / weekly / monthly)
+    const rangeMs =
+      parsed.length > 1
+        ? parsed[parsed.length - 1].date.getTime() - parsed[0].date.getTime()
+        : 0;
+    const avgGapDays = rangeMs / Math.max(parsed.length - 1, 1) / 86400000;
+    const granularity =
+      avgGapDays < 3 ? "daily" : avgGapDays < 14 ? "weekly" : "monthly";
+
+    const tickInterval =
+      granularity === "daily"
+        ? 7
+        : granularity === "weekly"
+          ? Math.max(1, Math.ceil(parsed.length / 8))
+          : parsed.length > 24
+            ? 3
+            : parsed.length > 12
+              ? 2
+              : 1;
+
+    const tickFormat = (d: string) => {
+      const date = new Date(d);
+      if (granularity !== "monthly") return timeFormat("%-d %b")(date);
+      return date.getMonth() === 0
+        ? timeFormat("%b '%y")(date)
+        : timeFormat("%b")(date);
+    };
 
     g.append("g")
       .attr("transform", `translate(0,${innerHeight})`)
@@ -129,12 +154,7 @@ export function DivergingBarChart({
               .filter((_, i) => i % tickInterval === 0)
               .map((d) => d.date.toISOString())
           )
-          .tickFormat((d) => {
-            const date = new Date(d as string);
-            return date.getMonth() === 0
-              ? timeFormat("%b '%y")(date)
-              : timeFormat("%b")(date);
-          })
+          .tickFormat((d) => tickFormat(d as string))
           .tickSizeOuter(0)
       )
       .call((sel) => sel.select(".domain").attr("stroke", "#ddd"))
@@ -249,9 +269,15 @@ export function DivergingBarChart({
 
         const net = d.positive - d.negative;
         const netSign = net >= 0 ? "+" : "";
+        const headerDate =
+          granularity === "daily"
+            ? timeFormat("%-d %B %Y")(d.date)
+            : granularity === "weekly"
+              ? "w/c " + timeFormat("%-d %b %Y")(d.date)
+              : timeFormat("%B %Y")(d.date);
         tooltip
           .html(
-            `<div style="font-size:11px;color:#999;margin-bottom:4px">${timeFormat("%B %Y")(d.date)}</div>
+            `<div style="font-size:11px;color:#999;margin-bottom:4px">${headerDate}</div>
              <div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:2px">
                <span style="width:8px;height:8px;border-radius:2px;background:${positiveColor}"></span>
                <span style="color:#666">${positiveLabel}:</span>
