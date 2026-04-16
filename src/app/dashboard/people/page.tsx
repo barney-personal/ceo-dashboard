@@ -24,7 +24,7 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, partTimeChampions, unassigned, allRows }, deptData, latestSyncRun] = await Promise.all([
+  const [{ employees, partTimeChampions, unassigned, contractors, allRows }, deptData, latestSyncRun] = await Promise.all([
     getActiveEmployees(),
     getHeadcountByDepartment(),
     getLatestTerminalSyncRun("mode"),
@@ -235,6 +235,39 @@ export default async function PeopleOrgPage() {
           </summary>
           <div className="divide-y divide-border/30 border-t border-border/30">
             {partTimeChampions.map((p) => (
+              <div
+                key={p.email}
+                className="flex items-center gap-3 px-5 py-2"
+              >
+                <span className="flex-1 min-w-0 text-sm text-foreground truncate">
+                  {p.name}
+                </span>
+                {(p.jobTitle || p.level) && (
+                  <span className="shrink-0 text-xs text-muted-foreground/60">
+                    {[p.jobTitle, p.level].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+                <span className="shrink-0 text-xs text-muted-foreground/60 tabular-nums">
+                  {p.tenureMonths}mo
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground/60">
+                  {p.function}
+                </span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Contractors — collapsible, excluded from metrics */}
+      {contractors.length > 0 && (
+        <details className="rounded-xl border border-border/60 bg-card shadow-warm">
+          <summary className="cursor-pointer select-none px-5 py-3 text-sm text-muted-foreground hover:text-foreground">
+            <span className="font-medium">{contractors.length} contractors</span>
+            <span className="ml-1.5 text-muted-foreground/50">— not included in headcount</span>
+          </summary>
+          <div className="divide-y divide-border/30 border-t border-border/30">
+            {contractors.map((p) => (
               <div
                 key={p.email}
                 className="flex items-center gap-3 px-5 py-2"

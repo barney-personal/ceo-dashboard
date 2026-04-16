@@ -859,13 +859,18 @@ describe("getHeadcountByDepartment", () => {
       {
         reportName: "Headcount SSoT",
         queryName: "headcount",
-        rows: [{ lifecycle_status: "employed", is_cleo_headcount: 1 }],
+        rows: [{ headcount_label: "FTE", start_date: "2025-01-01" }],
       },
     ]);
     mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["lifecycle_status", "is_cleo_headcount", "hb_function"],
-      presentColumns: ["lifecycle_status", "is_cleo_headcount"],
-      missingColumns: ["hb_function"],
+      expectedColumns: [
+        "start_date",
+        "termination_date",
+        "headcount_label",
+        "hb_function",
+      ],
+      presentColumns: ["start_date", "headcount_label"],
+      missingColumns: ["termination_date", "hb_function"],
       isValid: false,
     });
 
@@ -876,5 +881,39 @@ describe("getHeadcountByDepartment", () => {
       "headcount",
     ]);
     expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts FTE-active rows by hb_function", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        rows: [
+          { headcount_label: "FTE", start_date: "2025-01-01", termination_date: null, hb_function: "Engineering" },
+          { headcount_label: "FTE", start_date: "2025-06-01", termination_date: null, hb_function: "Engineering" },
+          { headcount_label: "FTE", start_date: "2025-01-01", termination_date: null, hb_function: "Product" },
+          // Excluded: terminated
+          { headcount_label: "FTE", start_date: "2024-01-01", termination_date: "2026-01-01", hb_function: "Engineering" },
+          // Excluded: CS label
+          { headcount_label: "CS", start_date: "2025-01-01", termination_date: null, hb_function: "Customer Operations" },
+        ],
+      },
+    ]);
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: [],
+      presentColumns: [],
+      missingColumns: [],
+      isValid: true,
+    });
+
+    const departments = await getHeadcountByDepartment();
+
+    expect(departments).toEqual([
+      { label: "Engineering", value: 2, color: "#3b3bba" },
+      { label: "Product", value: 1, color: "#3b3bba" },
+    ]);
+    vi.useRealTimers();
   });
 });

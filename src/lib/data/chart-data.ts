@@ -5,6 +5,7 @@ import {
   rowNumOrNull,
   validateModeColumns,
 } from "./mode";
+import { selectModeFteActive } from "./people";
 import {
   CHART_HISTORY_FIRST_FULL_WEEK,
   CHART_HISTORY_START_TS,
@@ -47,12 +48,10 @@ const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
   "pct_retained",
   "base",
 ] as const;
-const CURRENT_FTES_QUERY_COLUMNS = [
-  "function_name",
-] as const;
 const HEADCOUNT_QUERY_COLUMNS = [
-  "lifecycle_status",
-  "is_cleo_headcount",
+  "start_date",
+  "termination_date",
+  "headcount_label",
   "hb_function",
 ] as const;
 const CONVERSION_COHORT_COLUMNS = [
@@ -910,40 +909,15 @@ export async function getSubscriptionRetentionCohorts(): Promise<
 
 /**
  * Headcount by department for bar chart.
- * Primary: Current FTEs report (function_name). Fallback: Headcount SSoT (hb_function).
+ * Source: Headcount SSoT report, FTE-active rows (Mode definition), grouped by hb_function.
+ * Aligns with `getHeadcountMetrics` and the Org page tile.
  */
 export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
-  // Try Current FTEs first
-  const fteData = await getReportData("people", "org", ["current_employees"]);
-  const fteQuery = getValidatedQuery(
-    fteData,
-    "current_employees",
-    CURRENT_FTES_QUERY_COLUMNS,
-  );
-
-  if (fteQuery) {
-    const byDept = new Map<string, number>();
-    for (const emp of fteQuery.rows) {
-      // Exclude part-time Customer Champions ("no pillar"/"no squad")
-      if (rowStr(emp, "pillar_name") === "no pillar" || rowStr(emp, "squad_name") === "no squad") continue;
-      const dept = rowStr(emp, "function_name") || "Unknown";
-      byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
-    }
-    return [...byDept.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([label, value]) => ({ label, value, color: "#3b3bba" }));
-  }
-
-  // Fallback to old report
   const data = await getReportData("people", "headcount", ["headcount"]);
   const query = getValidatedQuery(data, "headcount", HEADCOUNT_QUERY_COLUMNS);
   if (!query) return [];
 
-  const active = query.rows.filter(
-    (r) =>
-      rowStr(r, "lifecycle_status").toLowerCase() === "employed" &&
-      rowNum(r, "is_cleo_headcount") === 1,
-  );
+  const active = selectModeFteActive(query.rows);
 
   const byDept = new Map<string, number>();
   for (const emp of active) {

@@ -317,6 +317,7 @@ describe("getPerformanceData", () => {
       employees: [makePerson({ email: "alice@meetcleo.com" })],
       partTimeChampions: [],
       unassigned: [],
+      contractors: [],
       allRows: [],
       lastSync: new Date(),
     });
@@ -340,6 +341,7 @@ describe("getPerformanceData", () => {
       employees: [],
       partTimeChampions: [],
       unassigned: [],
+      contractors: [],
       allRows: [],
       lastSync: null,
     });
