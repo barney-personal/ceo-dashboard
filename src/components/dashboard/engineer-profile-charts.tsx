@@ -1,6 +1,7 @@
 "use client";
 
-import { LineChart, type LineChartSeries } from "@/components/charts/line-chart";
+import { ColumnChart } from "@/components/charts/column-chart";
+import { DivergingBarChart } from "@/components/charts/diverging-bar-chart";
 
 interface EngineerProfileChartsProps {
   prSeries: { date: string; value: number }[];
@@ -15,22 +16,8 @@ export function EngineerProfileCharts({
   additionsSeries,
   deletionsSeries,
 }: EngineerProfileChartsProps) {
-  const prChartSeries: LineChartSeries[] = [
-    { label: "PRs Merged", color: "#3b3bba", data: prSeries },
-  ];
-
-  const commitChartSeries: LineChartSeries[] = [
-    { label: "Commits", color: "#6b5bbd", data: commitSeries },
-  ];
-
-  const linesChartSeries: LineChartSeries[] = [
-    { label: "Additions", color: "#16a34a", data: additionsSeries },
-    { label: "Deletions", color: "#dc2626", data: deletionsSeries },
-  ];
-
   const hasData =
-    prSeries.some((d) => d.value > 0) ||
-    commitSeries.some((d) => d.value > 0);
+    prSeries.some((d) => d.value > 0) || commitSeries.some((d) => d.value > 0);
 
   if (!hasData) {
     return (
@@ -42,28 +29,40 @@ export function EngineerProfileCharts({
     );
   }
 
+  // Join additions + deletions into the diverging-bar shape
+  const linesDiverging = additionsSeries.map((a, i) => ({
+    date: a.date,
+    positive: a.value,
+    negative: deletionsSeries[i]?.value ?? 0,
+  }));
+
   return (
     <div className="grid gap-6 lg:grid-cols-2">
-      <LineChart
-        series={prChartSeries}
+      <ColumnChart
+        data={prSeries}
         title="PRs Merged"
         subtitle="Per week"
         yLabel="PRs"
         yFormatType="number"
+        color="#3b3bba"
       />
-      <LineChart
-        series={commitChartSeries}
+      <ColumnChart
+        data={commitSeries}
         title="Commits"
         subtitle="Per week"
         yLabel="Commits"
         yFormatType="number"
+        color="#6b5bbd"
       />
-      <LineChart
-        series={linesChartSeries}
+      <DivergingBarChart
+        data={linesDiverging}
         title="Lines Changed"
-        subtitle="Per week"
-        yLabel="Lines"
-        yFormatType="number"
+        subtitle="Per week — additions above zero, deletions below"
+        positiveLabel="Additions"
+        negativeLabel="Deletions"
+        positiveColor="#16a34a"
+        negativeColor="#dc2626"
+        showNetLine={false}
         className="lg:col-span-2"
       />
     </div>
