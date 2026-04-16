@@ -705,11 +705,8 @@ const WAU_RETENTION_MIN_PERIODS = 1;
 const WAU_RETENTION_MAX_COHORTS = 52;
 
 /**
- * Monday 00:00 UTC of the current (incomplete) ISO week. Any retention
- * observation whose week starts at or after this cutoff still has days
- * left for users to be counted as active, so its retention % is
- * misleadingly low. Matches Redshift's `DATE_TRUNC('week', ...)` which
- * is Monday-aligned.
+ * Monday 00:00 UTC of the current (incomplete) ISO week. Matches
+ * Redshift's `DATE_TRUNC('week', ...)`, which is Monday-aligned.
  */
 function currentIncompleteWeekStart(now: Date = new Date()): Date {
   const d = new Date(
@@ -722,6 +719,21 @@ function currentIncompleteWeekStart(now: Date = new Date()): Date {
 }
 
 /**
+ * Weekly active-user retention is still noisy for the most recently
+ * completed ISO week, so the heatmap hides both:
+ *   1. the current incomplete week, and
+ *   2. the latest fully closed week
+ *
+ * That removes the newest visible diagonal from the triangle, which is
+ * the row users most often interpret as "unmatured".
+ */
+function wauRetentionMaturityCutoff(now: Date = new Date()): Date {
+  const d = currentIncompleteWeekStart(now);
+  d.setUTCDate(d.getUTCDate() - 7);
+  return d;
+}
+
+/**
  * Weekly WAU retention cohort triangle from the App Retention Weekly
  * dataset (4e4ed264ed7a, Query 1). Aggregates `active_users_weekly`
  * across segment dimensions, then expresses each cohort as a retention
@@ -729,12 +741,9 @@ function currentIncompleteWeekStart(now: Date = new Date()): Date {
  *
  * Returns at most {@link WAU_RETENTION_MAX_COHORTS} cohorts, newest last,
  * dropping W0 (always 100%) and any per-cohort observation that falls in
- * the current (incomplete) ISO week — the "unmatured diagonal". An
- * observation at `cohort_week + relative_moving_week * 7 days` that lands
- * on or after the current Monday still has days left for users to be
- * counted as active, so its retention % would be misleadingly low.
- * Filtering per observation (rather than a single global `max - 1` drop)
- * correctly trims only the diagonal that touches the current week.
+ * either the current ISO week or the latest fully closed ISO week. This
+ * removes the newest visible diagonal from the triangle so only matured
+ * weekly observations remain.
  */
 export async function getWauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
@@ -748,10 +757,10 @@ export async function getWauRetentionCohorts(): Promise<
   if (!query) return [];
 
   // Drop any (cohort, period) observation whose observation date lands in
-  // the current incomplete week — the "unmatured diagonal". This is
-  // applied per row so every cohort loses exactly the cell that maps to
-  // the current week, not a fixed global tail.
-  const cutoff = currentIncompleteWeekStart().getTime();
+  // the current ISO week or the latest fully closed ISO week. This is
+  // applied per row so every cohort loses the newest visible diagonal,
+  // not a fixed global tail.
+  const cutoff = wauRetentionMaturityCutoff().getTime();
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
   const maturedRows = query.rows.filter((row) => {
     const cohortStr = rowStr(row, "cohort_week");

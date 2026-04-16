@@ -42,6 +42,8 @@ interface ClerkUser {
   id: string;
   first_name: string | null;
   last_name: string | null;
+  image_url: string;
+  has_image: boolean;
   email_addresses: { email_address: string; id: string }[];
   primary_email_address_id: string | null;
   public_metadata: Record<string, unknown>;
@@ -112,6 +114,40 @@ async function findExistingUserByEmail(
   return users.length > 0 ? users[0] : null;
 }
 
+async function syncProfileImage(
+  secretKey: string,
+  targetUserId: string,
+  sourceUser: ClerkUser,
+): Promise<void> {
+  if (!sourceUser.has_image) return;
+
+  const imageRes = await fetch(sourceUser.image_url);
+  if (!imageRes.ok) {
+    throw new Error(
+      `Failed to fetch source profile image: ${imageRes.status} ${await imageRes.text()}`
+    );
+  }
+
+  const blob = await imageRes.blob();
+  const formData = new FormData();
+  const ext = blob.type.split("/")[1]?.split(";")[0] ?? "jpg";
+  formData.append("file", blob, `${sourceUser.id}.${ext}`);
+
+  const res = await fetch(`https://api.clerk.com/v1/users/${targetUserId}/profile_image`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `Failed to upload profile image: ${res.status} ${await res.text()}`
+    );
+  }
+}
+
 async function createUser(
   secretKey: string,
   sourceUser: ClerkUser
@@ -141,6 +177,11 @@ async function createUser(
       const body = await updateRes.text();
       console.warn(`  ⚠ Failed to update metadata for ${email}: ${body}`);
     }
+    try {
+      await syncProfileImage(secretKey, existing.id, sourceUser);
+    } catch (error) {
+      console.warn(`  ⚠ Failed to sync profile image for ${email}: ${String(error)}`);
+    }
     return { id: existing.id };
   }
 
@@ -163,6 +204,11 @@ async function createUser(
   }
 
   const created = await res.json();
+  try {
+    await syncProfileImage(secretKey, created.id, sourceUser);
+  } catch (error) {
+    console.warn(`  ⚠ Failed to sync profile image for ${email}: ${String(error)}`);
+  }
   return { id: created.id };
 }
 
