@@ -143,6 +143,7 @@ describe("getEmployeeOptions", () => {
       partTimeChampions: [
         employee({ name: "Alice", email: "alice@meetcleo.com" }),
       ],
+      contractors: [],
       allRows: [],
       lastSync: null,
     });
@@ -160,6 +161,7 @@ describe("getEmployeeOptions", () => {
       ],
       unassigned: [],
       partTimeChampions: [],
+      contractors: [],
       allRows: [],
       lastSync: null,
     });
@@ -183,6 +185,7 @@ describe("getEmployeeOptions", () => {
       ],
       unassigned: [],
       partTimeChampions: [],
+      contractors: [],
       allRows: [],
       lastSync: null,
     });

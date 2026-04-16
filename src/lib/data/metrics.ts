@@ -4,6 +4,7 @@ import {
   normalizeDatabaseError,
 } from "@/lib/db/errors";
 import { getReportData, validateModeColumns } from "./mode";
+import { selectModeFteActive } from "./people";
 import {
   formatCompact,
   formatCurrency,
@@ -179,7 +180,7 @@ export async function getHeadcountMetrics() {
 
       const validation = validateModeColumns({
         row: headcountData.rows[0],
-        expectedColumns: ["lifecycle_status", "is_cleo_headcount"],
+        expectedColumns: ["start_date", "termination_date", "headcount_label"],
         reportName: headcountData.reportName,
         queryName: headcountData.queryName,
       });
@@ -188,14 +189,10 @@ export async function getHeadcountMetrics() {
         return fallback;
       }
 
-      const activeEmployees = headcountData.rows.filter(
-        (r) =>
-          String(r.lifecycle_status).toLowerCase() === "employed" &&
-          r.is_cleo_headcount === 1,
-      );
-
+      // Match the Mode SSoT report's `headcount_monthly` definition exactly:
+      // FTE-labelled rows whose start date has passed and who haven't been terminated.
       return {
-        total: activeEmployees.length,
+        total: selectModeFteActive(headcountData.rows).length,
         lastSync: headcountData.syncedAt,
       };
     },
