@@ -6,7 +6,15 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { SpreadsheetTable } from "@/components/dashboard/spreadsheet-table";
+import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { getManagementAccountsData } from "@/lib/data/management-accounts";
+import { getLatestTerminalSyncRun } from "@/lib/data/mode";
+import { resolveDataState, safeLoad } from "@/lib/data/data-state";
+import { DatabaseUnavailableError } from "@/lib/db/errors";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 import { cn } from "@/lib/utils";
 import { ExternalLink, FileSpreadsheet } from "lucide-react";
@@ -23,13 +31,71 @@ export default async function FinancialPage({
 
   const { period } = await searchParams;
   const seasonalityCharts = getChartEmbeds("financial", "seasonality");
-  const data = await getManagementAccountsData(period);
+
+  const latestSyncRunResult = await safeLoad(
+    () => getLatestTerminalSyncRun("management-accounts"),
+    null,
+  );
+
+  let data: Awaited<ReturnType<typeof getManagementAccountsData>> = null;
+  let dbError: DatabaseUnavailableError | null = null;
+  try {
+    data = await getManagementAccountsData(period);
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      dbError = error;
+    } else {
+      // Slack/download/parse failures are not empty-state — let the route
+      // error boundary surface them instead of masking as "no files yet".
+      throw error;
+    }
+  }
+
+  const pageState = resolveDataState({
+    source: "management-accounts",
+    hasData: data !== null,
+    latestSyncRun: latestSyncRunResult.data,
+    error: latestSyncRunResult.error ?? dbError,
+  });
+
+  if (pageState.kind === "unavailable") {
+    return (
+      <UnavailablePage
+        title="Financial"
+        description="Management accounts and financial reporting"
+        dataTitle="Management accounts from Slack"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
+    );
+  }
+
+  if (data === null) {
+    return (
+      <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
+        <PageHeader
+          title="Financial"
+          description="Management accounts and financial reporting"
+        />
+        <DataStateCard
+          variant="empty"
+          title="Management accounts from Slack"
+          lastSyncedAt={pageState.lastSyncedAt}
+          description="No management accounts have been synced yet. Trigger a sync or drop a new xlsx into #fyi-management_accounts."
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
       <PageHeader
         title="Financial"
         description="Management accounts and financial reporting"
+      />
+
+      <DataStateBanner
+        pageState={pageState}
+        title="Management accounts from Slack"
       />
 
       {/* Period selector */}

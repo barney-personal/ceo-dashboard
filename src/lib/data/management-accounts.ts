@@ -41,13 +41,16 @@ export interface ManagementAccountsData {
 /**
  * Fetch management accounts data for the Financial page.
  * Downloads the selected (or latest) xlsx from Slack, parses key sheets.
+ * Returns `null` when no management account files have been synced yet —
+ * this is the explicit empty-state signal for the page. Slack/download/parse
+ * failures still throw so callers can distinguish real errors from emptiness.
  */
 export async function getManagementAccountsData(
   period?: string
-): Promise<ManagementAccountsData> {
+): Promise<ManagementAccountsData | null> {
   const rawFiles = await getManagementAccountFiles();
   if (rawFiles.length === 0) {
-    throw new Error("No management account files found");
+    return null;
   }
 
   const files = rawFiles.map(toFileInfo);

@@ -8,7 +8,11 @@ import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
 } from "@/lib/sync/response";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 import { validateModeReportSyncTarget } from "@/lib/sync/mode";
 
 export async function POST(request: NextRequest) {
@@ -44,16 +48,29 @@ export async function POST(request: NextRequest) {
       scope: { reportToken: validation.report.reportToken },
     });
 
+    const serialized = serializeEnqueueSyncResult(result);
+
     if (result.outcome === "queued" || result.outcome === "forced") {
       const workerId = createWorkerId("web-mode");
-      startBackgroundSyncDrain(workerId, {
+      const { started } = startBackgroundSyncDrain(workerId, {
         source: "mode",
         runIds: result.runId != null ? [result.runId] : [],
         triggerLabel: `${access} mode report sync request (${validation.report.reportToken})`,
       });
+      const drainState = await awaitDrainStarted(started);
+      if (drainState === "failed") {
+        return NextResponse.json(
+          { ...serialized, drain_started: false },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json({
+        ...serialized,
+        drain_started: drainState === "started" ? true : "pending",
+      });
     }
 
-    return NextResponse.json(serializeEnqueueSyncResult(result));
+    return NextResponse.json(serialized);
   } catch (error) {
     return unexpectedSyncRouteErrorResponse("mode/report", error);
   }

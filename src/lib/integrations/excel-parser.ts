@@ -1,5 +1,10 @@
 import * as XLSX from "xlsx";
 import Anthropic from "@anthropic-ai/sdk";
+import * as Sentry from "@sentry/nextjs";
+import {
+  financialExtractSchema,
+  summarizeZodIssues,
+} from "@/lib/validation/llm-output";
 
 // maxRetries: 1 — batch extraction rarely benefits from more retries, and extra
 // retries inflate wall-clock time before the AbortController timeout kicks in.
@@ -210,14 +215,6 @@ function parseJsonFromModelResponse(text: string): Record<string, unknown> {
   }
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
-
 /**
  * Parse management accounts Excel file into structured financial data.
  * Uses xlsx to read the file, then Claude to extract the numbers.
@@ -226,7 +223,7 @@ export async function parseManagementAccounts(
   buffer: Buffer,
   filenameHint?: string,
   opts: ParseManagementAccountsOptions = {}
-): Promise<FinancialData> {
+): Promise<FinancialData | null> {
   const { sheetNames, sheets } = readExcelSheets(buffer);
   const sheetText = formatSheetsForLLM(sheets);
 
@@ -277,24 +274,58 @@ export async function parseManagementAccounts(
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-  const parsed = parseJsonFromModelResponse(text);
 
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseJsonFromModelResponse(text);
+  } catch (error) {
+    Sentry.captureException(error, {
+      level: "warning",
+      tags: { integration: "excel-parser", llm_parse_invalid: "true" },
+      extra: {
+        operation: "parseManagementAccounts",
+        filenameHint,
+        rawResponse: text,
+      },
+    });
+    return null;
+  }
+
+  const validation = financialExtractSchema.safeParse(parsed);
+  if (!validation.success) {
+    Sentry.captureMessage(
+      "Management accounts extract failed zod validation",
+      {
+        level: "warning",
+        tags: { integration: "excel-parser", llm_parse_invalid: "true" },
+        extra: {
+          operation: "parseManagementAccounts",
+          filenameHint,
+          issues: summarizeZodIssues(validation.error),
+          rawResponse: text,
+        },
+      },
+    );
+    return null;
+  }
+
+  const v = validation.data;
   return {
-    period: asString(parsed.period),
-    periodLabel: asString(parsed.periodLabel),
-    revenue: asNumberOrNull(parsed.revenue),
-    grossProfit: asNumberOrNull(parsed.grossProfit),
-    grossMargin: asNumberOrNull(parsed.grossMargin),
-    contributionProfit: asNumberOrNull(parsed.contributionProfit),
-    contributionMargin: asNumberOrNull(parsed.contributionMargin),
-    ebitda: asNumberOrNull(parsed.ebitda),
-    ebitdaMargin: asNumberOrNull(parsed.ebitdaMargin),
-    netIncome: asNumberOrNull(parsed.netIncome),
-    cashPosition: asNumberOrNull(parsed.cashPosition),
-    cashBurn: asNumberOrNull(parsed.cashBurn),
-    opex: asNumberOrNull(parsed.opex),
-    headcountCost: asNumberOrNull(parsed.headcountCost),
-    marketingCost: asNumberOrNull(parsed.marketingCost),
+    period: v.period,
+    periodLabel: v.periodLabel,
+    revenue: v.revenue,
+    grossProfit: v.grossProfit,
+    grossMargin: v.grossMargin,
+    contributionProfit: v.contributionProfit,
+    contributionMargin: v.contributionMargin,
+    ebitda: v.ebitda,
+    ebitdaMargin: v.ebitdaMargin,
+    netIncome: v.netIncome,
+    cashPosition: v.cashPosition,
+    cashBurn: v.cashBurn,
+    opex: v.opex,
+    headcountCost: v.headcountCost,
+    marketingCost: v.marketingCost,
     rawSheets: sheets,
   };
 }

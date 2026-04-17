@@ -11,17 +11,41 @@ vi.mock("@/lib/sync/coordinator", () => ({
 vi.mock("@/lib/sync/runtime", () => ({
   createWorkerId: vi.fn(),
   startBackgroundSyncDrain: vi.fn(),
+  awaitDrainStarted: vi.fn(),
+}));
+
+vi.mock("@/lib/sync/health", () => ({
+  getSourceHealth: vi.fn(),
+  detectStalledSources: vi.fn(),
+  emitStalledSourceWarnings: vi.fn(),
+}));
+
+vi.mock("@/lib/debug-logger", () => ({
+  cleanupDebugLogs: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { isCronRequest } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
+import {
+  detectStalledSources,
+  emitStalledSourceWarnings,
+  getSourceHealth,
+} from "@/lib/sync/health";
 import { GET } from "../route";
 
 const mockIsCronRequest = vi.mocked(isCronRequest);
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
+const mockAwaitDrainStarted = vi.mocked(awaitDrainStarted);
+const mockGetSourceHealth = vi.mocked(getSourceHealth);
+const mockDetectStalledSources = vi.mocked(detectStalledSources);
+const mockEmitStalledSourceWarnings = vi.mocked(emitStalledSourceWarnings);
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 function makeRequest(authHeader?: string) {
@@ -30,10 +54,19 @@ function makeRequest(authHeader?: string) {
   }) as unknown as import("next/server").NextRequest;
 }
 
+function drainHandle(started: Promise<void> = Promise.resolve()) {
+  return { started };
+}
+
 describe("GET /api/cron", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    mockStartBackgroundSyncDrain.mockImplementation(() => drainHandle());
+    mockAwaitDrainStarted.mockResolvedValue("started");
+    mockGetSourceHealth.mockResolvedValue([]);
+    mockDetectStalledSources.mockReturnValue([]);
+    mockEmitStalledSourceWarnings.mockImplementation(() => {});
     consoleErrorSpy.mockImplementation(() => {});
   });
 
@@ -107,8 +140,15 @@ describe("GET /api/cron", () => {
       runIds: [1, 2, 3, 4],
       triggerLabel: "cron trigger",
     });
+    // Verify the route wires the drain handle's `started` promise into
+    // `awaitDrainStarted` — previously tested implicitly only.
+    const drainHandleReturn = mockStartBackgroundSyncDrain.mock.results[0]
+      ?.value as { started: Promise<void> } | undefined;
+    expect(mockAwaitDrainStarted).toHaveBeenCalledWith(drainHandleReturn?.started);
+    expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       status: "syncs enqueued",
+      drain_started: true,
       results: {
         mode: {
           outcome: "queued",
@@ -144,6 +184,42 @@ describe("GET /api/cron", () => {
     });
   });
 
+  it("returns drain_started:'pending' when the first claim does not settle before the timeout", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 1,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-08T08:00:00.000Z"),
+    });
+    mockAwaitDrainStarted.mockResolvedValue("pending");
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.drain_started).toBe("pending");
+  });
+
+  it("returns 503 with drain_started:false when the background drain fails to start", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 7,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-08T08:00:00.000Z"),
+    });
+    mockAwaitDrainStarted.mockResolvedValue("failed");
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.drain_started).toBe(false);
+    expect(body.status).toBe("sync drain failed to start");
+    expect(body.results).toBeTruthy();
+  });
+
   it("does not start the worker when every sync is skipped", async () => {
     mockIsCronRequest.mockResolvedValue(true);
     mockEnqueueSyncRun.mockResolvedValue({
@@ -157,6 +233,60 @@ describe("GET /api/cron", () => {
 
     expect(response.status).toBe(200);
     expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+    expect(mockAwaitDrainStarted).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.drain_started).toBeNull();
+  });
+
+  it("emits a Sentry warning for each stalled source before enqueueing", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 11,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-17T12:00:00.000Z"),
+    });
+    const stalled = [
+      {
+        source: "mode" as const,
+        lastSuccessAt: new Date("2026-04-16T10:00:00.000Z"),
+        thresholdMs: 20 * 60 * 60 * 1000,
+        ageMs: 26 * 60 * 60 * 1000,
+      },
+    ];
+    mockDetectStalledSources.mockReturnValue(stalled);
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(mockGetSourceHealth).toHaveBeenCalledTimes(1);
+    expect(mockDetectStalledSources).toHaveBeenCalledTimes(1);
+    expect(mockEmitStalledSourceWarnings).toHaveBeenCalledWith(stalled);
+    // Stalled detection runs BEFORE enqueue fan-out
+    const detectOrder = mockDetectStalledSources.mock.invocationCallOrder[0];
+    const enqueueOrder = mockEnqueueSyncRun.mock.invocationCallOrder[0];
+    expect(detectOrder).toBeLessThan(enqueueOrder);
+    expect(response.status).toBe(200);
+  });
+
+  it("proceeds with fan-out if stalled-source detection throws", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 12,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-17T12:00:00.000Z"),
+    });
+    mockGetSourceHealth.mockRejectedValue(new Error("db unavailable"));
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(200);
+    expect(mockEnqueueSyncRun).toHaveBeenCalled();
+    expect(mockEmitStalledSourceWarnings).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[sync-api] stalled-source detection failed",
+      expect.any(Error)
+    );
   });
 
   it("returns 500 when cron auth lookup throws unexpectedly", async () => {

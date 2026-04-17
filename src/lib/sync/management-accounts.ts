@@ -4,6 +4,7 @@ import {
   downloadSlackFile,
   listChannelFiles,
 } from "@/lib/integrations/slack-files";
+import type { FinancialData } from "@/lib/integrations/excel-parser";
 import {
   extractPeriodFromFilename,
   parseManagementAccounts,
@@ -42,7 +43,7 @@ const MANAGEMENT_ACCOUNT_NUMERIC_FIELDS = [
 ] as const;
 
 function getManagementAccountsValidationWarning(
-  data: Awaited<ReturnType<typeof parseManagementAccounts>>,
+  data: FinancialData,
 ): string | null {
   const allNumericFieldsNull = MANAGEMENT_ACCOUNT_NUMERIC_FIELDS.every(
     (field) => data[field] == null,
@@ -199,6 +200,16 @@ export async function runManagementAccountsSync(
         const data = await parseManagementAccounts(buffer, file.name, {
           signal: opts.signal,
         });
+
+        if (!data) {
+          const skipMsg = "LLM extraction returned invalid data (logged to Sentry)";
+          errors.push(`Skipped ${file.name}: ${skipMsg}`);
+          await tracker.endPhase(filePhaseId, {
+            status: "skipped",
+            detail: skipMsg,
+          });
+          continue;
+        }
 
         const period = data.period || periodFromName;
         if (!period) {

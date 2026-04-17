@@ -1,27 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { mockSelect } = vi.hoisted(() => ({
+  mockSelect: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   db: {
-    select: vi.fn(),
+    select: mockSelect,
   },
 }));
 
 vi.mock("@/lib/db/schema", () => ({
-  okrUpdates: { postedAt: "postedAt" },
+  okrUpdates: { postedAt: "postedAt", squadName: "squadName" },
   squads: { isActive: "isActive" },
 }));
 
 vi.mock("drizzle-orm", () => ({
-  desc: vi.fn(),
+  desc: vi.fn((v) => v),
   eq: vi.fn(),
   gte: vi.fn(),
 }));
 
 import {
+  getLatestOkrUpdates,
   getSlackMessageUrl,
   groupLatestOkrRows,
   type OkrUpdateRow,
 } from "../okrs";
+
+afterEach(() => {
+  mockSelect.mockReset();
+});
 
 describe("groupLatestOkrRows", () => {
   it("keeps only the latest Slack message per squad and groups by pillar", () => {
@@ -93,5 +102,21 @@ describe("getSlackMessageUrl", () => {
     expect(getSlackMessageUrl("C123456", "1712512345.6789")).toBe(
       "https://cleo-team.slack.com/archives/C123456/p17125123456789",
     );
+  });
+});
+
+describe("getLatestOkrUpdates", () => {
+  it("surfaces transient Postgres failures as DatabaseUnavailableError", async () => {
+    mockSelect.mockImplementation(() => ({
+      from: () => ({
+        orderBy: () => {
+          throw new Error("fetch failed");
+        },
+      }),
+    }));
+
+    await expect(getLatestOkrUpdates()).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
   });
 });

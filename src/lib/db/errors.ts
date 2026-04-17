@@ -148,3 +148,23 @@ export function normalizeDatabaseError(
 
   return error instanceof Error ? error : new Error(String(error));
 }
+
+/**
+ * Wrap a DB-reading loader so any Postgres failure surfaces as a typed
+ * error (DatabaseUnavailableError or a schema-compatibility Error) rather
+ * than a raw pg error. Already-normalized errors pass through unchanged
+ * so nested loaders don't double-wrap.
+ */
+export async function withDbErrorContext<T>(
+  context: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (error instanceof DatabaseUnavailableError) {
+      throw error;
+    }
+    throw normalizeDatabaseError(context, error);
+  }
+}

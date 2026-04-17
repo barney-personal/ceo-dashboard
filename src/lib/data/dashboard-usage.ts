@@ -1,15 +1,29 @@
 import { db } from "@/lib/db";
 import { pageViews } from "@/lib/db/schema";
 import { sql, gte, desc, count, countDistinct } from "drizzle-orm";
-import { isSchemaCompatibilityError } from "@/lib/db/errors";
+import {
+  DatabaseUnavailableError,
+  isSchemaCompatibilityError,
+  normalizeDatabaseError,
+} from "@/lib/db/errors";
 
-/** Return fallback value if the page_views table doesn't exist yet. */
-async function safeQuery<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+/**
+ * Return the fallback value when `page_views` has not been migrated yet
+ * (schema-compatibility case). Route every other pg/network failure through
+ * `normalizeDatabaseError` so the analytics page sees a typed
+ * `DatabaseUnavailableError` instead of a raw driver error.
+ */
+async function safeQuery<T>(
+  context: string,
+  fn: () => Promise<T>,
+  fallback: T
+): Promise<T> {
   try {
     return await fn();
   } catch (err) {
     if (isSchemaCompatibilityError(err)) return fallback;
-    throw err;
+    if (err instanceof DatabaseUnavailableError) throw err;
+    throw normalizeDatabaseError(context, err);
   }
 }
 
@@ -17,7 +31,7 @@ async function safeQuery<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
  * Dashboard DAU — distinct users per day, last 90 days.
  */
 export function getDashboardDAU(): Promise<{ date: string; value: number }[]> {
-  return safeQuery(async () => {
+  return safeQuery("getDashboardDAU", async () => {
     const since = new Date();
     since.setDate(since.getDate() - 90);
 
@@ -41,7 +55,7 @@ export function getDashboardDAU(): Promise<{ date: string; value: number }[]> {
  * Dashboard WAU — distinct users per ISO week, last 26 weeks.
  */
 export function getDashboardWAU(): Promise<{ date: string; value: number }[]> {
-  return safeQuery(async () => {
+  return safeQuery("getDashboardWAU", async () => {
     const since = new Date();
     since.setDate(since.getDate() - 26 * 7);
 
@@ -65,7 +79,7 @@ export function getDashboardWAU(): Promise<{ date: string; value: number }[]> {
  * Dashboard MAU — distinct users per month, last 12 months.
  */
 export function getDashboardMAU(): Promise<{ date: string; value: number }[]> {
-  return safeQuery(async () => {
+  return safeQuery("getDashboardMAU", async () => {
     const since = new Date();
     since.setMonth(since.getMonth() - 12);
 
@@ -93,7 +107,7 @@ export function getDashboardMAU(): Promise<{ date: string; value: number }[]> {
 export function getDashboardRetention(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
-  return safeQuery(async () => {
+  return safeQuery("getDashboardRetention", async () => {
   const result = await db.execute(sql`
     WITH user_first_week AS (
       SELECT
@@ -176,7 +190,7 @@ export const SECTION_LABELS: Record<string, string> = {
 export function getPageViewsBySection(): Promise<
   { section: string; label: string; views: number }[]
 > {
-  return safeQuery(async () => {
+  return safeQuery("getPageViewsBySection", async () => {
     const since = new Date();
     since.setDate(since.getDate() - 30);
 
@@ -210,7 +224,7 @@ export function getPageViewsBySection(): Promise<
 export function getDailyRetention(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
-  return safeQuery(async () => {
+  return safeQuery("getDailyRetention", async () => {
     const result = await db.execute(sql`
       WITH user_first_day AS (
         SELECT
@@ -284,7 +298,7 @@ export function getRecentPageViews(
   }[];
   total: number;
 }> {
-  return safeQuery(async () => {
+  return safeQuery("getRecentPageViews", async () => {
     const offset = (page - 1) * pageSize;
 
     const [rows, totalResult] = await Promise.all([

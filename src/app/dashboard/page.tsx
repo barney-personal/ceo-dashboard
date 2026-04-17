@@ -28,6 +28,8 @@ import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import { formatCompact } from "@/lib/format/number";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 import { getEffectiveSyncState } from "@/lib/sync/config";
+import { DataStateCard } from "@/components/dashboard/data-state-card";
+import { safeLoad } from "@/lib/data/data-state";
 
 function SectionLink({
   href,
@@ -76,18 +78,43 @@ export default async function DashboardOverview() {
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-  const [headcount, ltvCacRatio, latestARR, latestMAU, recentSyncs, todayMeetings] =
-    await Promise.all([
-      getHeadcountMetrics(),
-      getLatestLtvCacRatio(),
-      getLatestARR(),
-      getLatestMAU(),
-      getRecentSyncRuns(10),
-      getMeetingsForRange(todayStart, todayEnd, {
-        accessToken: accessToken ?? undefined,
-        userId: effectiveUserId ?? undefined,
-      }),
-    ]);
+  const [
+    headcountResult,
+    ltvCacRatioResult,
+    latestARRResult,
+    latestMAUResult,
+    recentSyncsResult,
+    todayMeetingsResult,
+  ] = await Promise.all([
+    safeLoad(() => getHeadcountMetrics(), null),
+    safeLoad(() => getLatestLtvCacRatio(), null),
+    safeLoad(() => getLatestARR(), null),
+    safeLoad(() => getLatestMAU(), null),
+    safeLoad(() => getRecentSyncRuns(10), []),
+    safeLoad(
+      () =>
+        getMeetingsForRange(todayStart, todayEnd, {
+          accessToken: accessToken ?? undefined,
+          userId: effectiveUserId ?? undefined,
+        }),
+      [],
+    ),
+  ]);
+
+  const headcount = headcountResult.data;
+  const ltvCacRatio = ltvCacRatioResult.data;
+  const latestARR = latestARRResult.data;
+  const latestMAU = latestMAUResult.data;
+  const recentSyncs = recentSyncsResult.data;
+  const todayMeetings = todayMeetingsResult.data;
+
+  const dbUnavailable =
+    headcountResult.error ??
+    ltvCacRatioResult.error ??
+    latestARRResult.error ??
+    latestMAUResult.error ??
+    recentSyncsResult.error ??
+    todayMeetingsResult.error;
 
   const todayData = todayMeetings[0] ?? null;
 
@@ -113,6 +140,14 @@ export default async function DashboardOverview() {
         title="Overview"
         description="Key metrics across the business"
       />
+
+      {dbUnavailable ? (
+        <DataStateCard
+          variant="unavailable"
+          title="Dashboard database"
+          description="Some overview metrics are temporarily unavailable while the database is unreachable. Retry the page or wait for the next sync cycle."
+        />
+      ) : null}
 
       {/* Hero metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

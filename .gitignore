@@ -43,3 +43,9 @@ Thumbs.db
 
 # Sentry Config File
 .env.sentry-build-plugin
+
+# build artifacts
+tsconfig.tsbuildinfo
+
+# remember skill state
+.remember/

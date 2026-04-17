@@ -349,6 +349,67 @@ describe("llmParseOkrUpdate timeout", () => {
     );
   });
 
+  it("logs the full batch payload and item index when one envelope fails zod validation", async () => {
+    const batchArray = [
+      {
+        squadName: "Growth",
+        tldr: "valid summary",
+        krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+      },
+      { squadName: "   ", tldr: "bad summary", krs: [] },
+      {
+        squadName: "Product",
+        tldr: "another valid summary",
+        krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+      },
+    ];
+    const rawBatchJson = JSON.stringify(batchArray);
+
+    mockMessages.create.mockResolvedValueOnce({
+      content: [{ type: "text", text: rawBatchJson }],
+    });
+
+    await expect(
+      llmParseOkrUpdates(
+        [
+          { messageText: "message-1", channelContext: "#growth\nAuthor: Alice" },
+          { messageText: "message-2", channelContext: "#growth\nAuthor: Bob" },
+          { messageText: "message-3", channelContext: "#product\nAuthor: Carol" },
+        ],
+        "system prompt"
+      )
+    ).resolves.toEqual([
+      {
+        squadName: "Growth",
+        tldr: "valid summary",
+        krs: [{ objective: "Objective 1", name: "KR1", rag: "green", metric: "100%" }],
+      },
+      null,
+      {
+        squadName: "Product",
+        tldr: "another valid summary",
+        krs: [{ objective: "Objective 3", name: "KR3", rag: "amber", metric: null }],
+      },
+    ]);
+
+    expect(mockMessages.create).toHaveBeenCalledTimes(1);
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "OKR envelope failed zod validation",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          integration: "llm-okr-parser",
+          llm_parse_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          operation: "validateParsedEnvelope",
+          itemIndex: 1,
+          rawResponse: rawBatchJson,
+        }),
+      })
+    );
+  });
+
   it("falls back to single-message parsing when the batch payload is unusable", async () => {
     mockMessages.create
       .mockResolvedValueOnce({
@@ -410,29 +471,45 @@ describe("llmParseOkrUpdate timeout", () => {
       "Falling back to single-message OKR parsing after unusable batch payload",
       expect.objectContaining({
         level: "warning",
+        tags: expect.objectContaining({
+          integration: "llm-okr-parser",
+          llm_parse_invalid: "true",
+        }),
         extra: expect.objectContaining({
           operation: "parseBatchResponse",
           reason: "wrong_top_level_shape",
           batchSize: 3,
+          rawResponse: expect.stringContaining("not"),
         }),
       })
     );
   });
 
-  it("returns null when the parsed envelope is missing a non-empty squad name", async () => {
+  it("returns null and emits Sentry when the parsed envelope has a whitespace-only squad name", async () => {
+    const rawResponse = JSON.stringify({
+      squadName: "   ",
+      tldr: "summary",
+      krs: [],
+    });
     mockMessages.create.mockResolvedValueOnce({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ squadName: "   ", tldr: "summary", krs: [] }),
-        },
-      ],
+      content: [{ type: "text", text: rawResponse }],
     });
 
     await expect(
       llmParseOkrUpdate("message", "#channel", "system prompt")
     ).resolves.toBeNull();
-    expect(mockSentry.captureMessage).not.toHaveBeenCalled();
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "OKR envelope failed zod validation",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          llm_parse_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          rawResponse,
+        }),
+      }),
+    );
   });
 
   it("drops invalid KRs, warns with failing fields, and preserves valid rows", async () => {

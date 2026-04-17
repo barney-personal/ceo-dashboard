@@ -15,6 +15,10 @@ const CohortHeatmap = dynamic(
     ),
   }
 );
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { formatCompact, formatPercent } from "@/lib/format/number";
 import {
   getActiveUsersSeries,
@@ -29,28 +33,72 @@ import {
   getLatestTerminalSyncRun,
   resolveModeStaleReason,
 } from "@/lib/data/mode";
+import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function ProductPage() {
   const [
-    activeUsers,
-    engagement,
-    retentionCohorts,
-    weeklyRetentionCohorts,
-    latestMAU,
-    latestWauMau,
-    latestM11,
-    latestSyncRun,
+    activeUsersResult,
+    engagementResult,
+    retentionCohortsResult,
+    weeklyRetentionCohortsResult,
+    latestMAUResult,
+    latestWauMauResult,
+    latestM11Result,
+    latestSyncRunResult,
   ] = await Promise.all([
-    getActiveUsersSeries(),
-    getEngagementSeries(),
-    getMauRetentionCohorts(),
-    getWauRetentionCohorts(),
-    getLatestMAU(),
-    getLatestWauMau(),
-    getLatestM11Retention(),
-    getLatestTerminalSyncRun("mode"),
+    safeLoad(() => getActiveUsersSeries(), { mau: [], wau: [], dau: [] }),
+    safeLoad(() => getEngagementSeries(), []),
+    safeLoad(() => getMauRetentionCohorts(), []),
+    safeLoad(() => getWauRetentionCohorts(), []),
+    safeLoad(() => getLatestMAU(), null),
+    safeLoad(() => getLatestWauMau(), null),
+    safeLoad(() => getLatestM11Retention(), null),
+    safeLoad(() => getLatestTerminalSyncRun("mode"), null),
   ]);
+
+  const firstUnavailable =
+    activeUsersResult.error ??
+    engagementResult.error ??
+    retentionCohortsResult.error ??
+    weeklyRetentionCohortsResult.error ??
+    latestMAUResult.error ??
+    latestWauMauResult.error ??
+    latestM11Result.error ??
+    latestSyncRunResult.error;
+
+  const activeUsers = activeUsersResult.data;
+  const engagement = engagementResult.data;
+  const retentionCohorts = retentionCohortsResult.data;
+  const weeklyRetentionCohorts = weeklyRetentionCohortsResult.data;
+  const latestMAU = latestMAUResult.data;
+  const latestWauMau = latestWauMauResult.data;
+  const latestM11 = latestM11Result.data;
+  const latestSyncRun = latestSyncRunResult.data;
+
+  const hasData =
+    activeUsers.mau.length > 0 ||
+    engagement.length > 0 ||
+    retentionCohorts.length > 0 ||
+    weeklyRetentionCohorts.length > 0;
+
+  const pageState = resolveDataState({
+    source: "mode",
+    hasData,
+    latestSyncRun,
+    error: firstUnavailable,
+  });
+
+  if (pageState.kind === "unavailable") {
+    return (
+      <UnavailablePage
+        title="Product"
+        description="Active users, engagement, and retention"
+        dataTitle="Product data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
+    );
+  }
 
   const activeUsersChartsEmptyReason = resolveModeStaleReason(
     activeUsers.mau.length === 0,
@@ -82,6 +130,11 @@ export default async function ProductPage() {
       <PageHeader
         title="Product"
         description="Active users, engagement, and retention"
+      />
+
+      <DataStateBanner
+        pageState={pageState}
+        title="Product data from Mode Analytics"
       />
 
       {/* Hero strip */}

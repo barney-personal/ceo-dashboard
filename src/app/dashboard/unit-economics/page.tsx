@@ -10,6 +10,10 @@ import { ConversionHeatmapToggle } from "@/components/charts/conversion-heatmap-
 import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
 import { SmallMultiplesCurveChart } from "@/components/charts/small-multiples-curve-chart";
 import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
+import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
   getQuery3Series,
@@ -23,6 +27,7 @@ import {
   getLatestTerminalSyncRun,
   resolveModeStaleReason,
 } from "@/lib/data/mode";
+import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -56,26 +61,47 @@ function ChartPlaceholder({ title, reason }: { title: string; reason: string }) 
 
 export default async function UnitEconomicsPage() {
   const [
-    ltvSeries,
-    ltvCacRatio,
-    q3,
-    retentionTiers,
-    latestSyncRun,
-    conversionHeatmap,
-    conversionCurves,
-    productCurves,
-    latestM6,
+    ltvResult,
+    ltvCacRatioResult,
+    q3Result,
+    retentionTiersResult,
+    latestSyncRunResult,
+    conversionHeatmapResult,
+    conversionCurvesResult,
+    productCurvesResult,
+    latestM6Result,
   ] = await Promise.all([
-    getLtvTimeSeries(),
-    getLtvCacRatioSeries(),
-    getQuery3Series(),
-    getSubscriptionRetentionCohorts(),
-    getLatestTerminalSyncRun("mode"),
-    getConversionCohortHeatmap(),
-    getConversionCurveSeries(),
-    getProductConversionCurves(),
-    getLatestM6ConversionRate(),
+    safeLoad(() => getLtvTimeSeries(), []),
+    safeLoad(() => getLtvCacRatioSeries(), []),
+    safeLoad(() => getQuery3Series(), { cpa: [], spend: [], users: [] }),
+    safeLoad(() => getSubscriptionRetentionCohorts(), []),
+    safeLoad(() => getLatestTerminalSyncRun("mode"), null),
+    safeLoad(() => getConversionCohortHeatmap(), {}),
+    safeLoad(() => getConversionCurveSeries(), []),
+    safeLoad(() => getProductConversionCurves(), []),
+    safeLoad(() => getLatestM6ConversionRate(), null),
   ]);
+
+  const firstUnavailable =
+    ltvResult.error ??
+    ltvCacRatioResult.error ??
+    q3Result.error ??
+    retentionTiersResult.error ??
+    latestSyncRunResult.error ??
+    conversionHeatmapResult.error ??
+    conversionCurvesResult.error ??
+    productCurvesResult.error ??
+    latestM6Result.error;
+
+  const ltvSeries = ltvResult.data;
+  const ltvCacRatio = ltvCacRatioResult.data;
+  const q3 = q3Result.data;
+  const retentionTiers = retentionTiersResult.data;
+  const latestSyncRun = latestSyncRunResult.data;
+  const conversionHeatmap = conversionHeatmapResult.data;
+  const conversionCurves = conversionCurvesResult.data;
+  const productCurves = productCurvesResult.data;
+  const latestM6 = latestM6Result.data;
 
   const anyKpisEmpty =
     ltvCacRatio.length === 0 ||
@@ -101,6 +127,24 @@ export default async function UnitEconomicsPage() {
     latestSyncRun,
     "No data — sync Mode 'Premium Conversion Dashboard' report",
   );
+
+  const pageState = resolveDataState({
+    source: "mode",
+    hasData: !anyKpisEmpty || hasConversionData || retentionTiers.length > 0,
+    latestSyncRun,
+    error: firstUnavailable,
+  });
+
+  if (pageState.kind === "unavailable") {
+    return (
+      <UnavailablePage
+        title="Unit Economics"
+        description="Customer lifetime value and acquisition costs"
+        dataTitle="Unit economics data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
+    );
+  }
 
   const allEmbeds = [
     {
@@ -130,6 +174,11 @@ export default async function UnitEconomicsPage() {
       <PageHeader
         title="Unit Economics"
         description="Customer lifetime value and acquisition costs"
+      />
+
+      <DataStateBanner
+        pageState={pageState}
+        title="Unit economics data from Mode Analytics"
       />
 
       {/* LTV:Paid CAC ratio */}
