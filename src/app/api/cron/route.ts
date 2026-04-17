@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 import { isCronRequest } from "@/lib/sync/request-auth";
 import {
   serializeEnqueueSyncResult,
@@ -30,26 +34,46 @@ export async function GET(request: NextRequest) {
     ]);
 
     const allResults = [mode, slack, managementAccounts, meetings, github];
+    const serializedResults = {
+      mode: serializeEnqueueSyncResult(mode),
+      slack: serializeEnqueueSyncResult(slack),
+      managementAccounts: serializeEnqueueSyncResult(managementAccounts),
+      meetings: serializeEnqueueSyncResult(meetings),
+      github: serializeEnqueueSyncResult(github),
+    };
+
     if (allResults.some((result) => result.outcome !== "skipped")) {
       const workerId = createWorkerId("web-cron");
       const runIds = allResults
         .map((r) => r.runId)
         .filter((runId): runId is number => runId != null);
-      startBackgroundSyncDrain(workerId, {
+      const { started } = startBackgroundSyncDrain(workerId, {
         runIds,
         triggerLabel: "cron trigger",
+      });
+
+      const drainState = await awaitDrainStarted(started);
+      if (drainState === "failed") {
+        return NextResponse.json(
+          {
+            status: "sync drain failed to start",
+            drain_started: false,
+            results: serializedResults,
+          },
+          { status: 503 }
+        );
+      }
+
+      return NextResponse.json({
+        status: "syncs enqueued",
+        drain_started: drainState === "started" ? true : "pending",
+        results: serializedResults,
       });
     }
 
     return NextResponse.json({
       status: "syncs enqueued",
-      results: {
-        mode: serializeEnqueueSyncResult(mode),
-        slack: serializeEnqueueSyncResult(slack),
-        managementAccounts: serializeEnqueueSyncResult(managementAccounts),
-        meetings: serializeEnqueueSyncResult(meetings),
-        github: serializeEnqueueSyncResult(github),
-      },
+      results: serializedResults,
     });
   } catch (error) {
     return unexpectedSyncRouteErrorResponse("cron", error);

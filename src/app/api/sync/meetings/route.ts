@@ -8,7 +8,11 @@ import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
 } from "@/lib/sync/response";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,16 +29,29 @@ export async function POST(request: NextRequest) {
       force,
     });
 
+    const serialized = serializeEnqueueSyncResult(result);
+
     if (result.outcome === "queued" || result.outcome === "forced") {
       const workerId = createWorkerId("web-meetings");
-      startBackgroundSyncDrain(workerId, {
+      const { started } = startBackgroundSyncDrain(workerId, {
         source: "meetings",
         runIds: result.runId != null ? [result.runId] : [],
         triggerLabel: `${access} meetings sync request`,
       });
+      const drainState = await awaitDrainStarted(started);
+      if (drainState === "failed") {
+        return NextResponse.json(
+          { ...serialized, drain_started: false },
+          { status: 503 }
+        );
+      }
+      return NextResponse.json({
+        ...serialized,
+        drain_started: drainState === "started" ? true : "pending",
+      });
     }
 
-    return NextResponse.json(serializeEnqueueSyncResult(result));
+    return NextResponse.json(serialized);
   } catch (error) {
     return unexpectedSyncRouteErrorResponse("meetings", error);
   }

@@ -13,6 +13,7 @@ vi.mock("@/lib/sync/coordinator", () => ({
 vi.mock("@/lib/sync/runtime", () => ({
   createWorkerId: vi.fn(),
   startBackgroundSyncDrain: vi.fn(),
+  awaitDrainStarted: vi.fn(),
 }));
 
 vi.mock("@/lib/sync/mode", () => ({
@@ -25,7 +26,11 @@ import {
 } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
 import { validateModeReportSyncTarget } from "@/lib/sync/mode";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 import { POST as postManagementAccounts } from "@/app/api/sync/management-accounts/route";
 import { POST as postMode } from "@/app/api/sync/mode/route";
 import { POST as postModeReport } from "@/app/api/sync/mode/report/route";
@@ -39,6 +44,11 @@ const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockValidateModeReportSyncTarget = vi.mocked(validateModeReportSyncTarget);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
+const mockAwaitDrainStarted = vi.mocked(awaitDrainStarted);
+
+function drainHandle() {
+  return { started: Promise.resolve() };
+}
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 const routes = [
@@ -82,6 +92,8 @@ describe("manual sync routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    mockStartBackgroundSyncDrain.mockImplementation(() => drainHandle());
+    mockAwaitDrainStarted.mockResolvedValue("started");
     mockValidateModeReportSyncTarget.mockResolvedValue({
       ok: true,
       report: {
@@ -151,12 +163,64 @@ describe("manual sync routes", () => {
         runIds: [17],
         triggerLabel: "manual " + source + " sync request",
       });
+      expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         outcome: "queued",
         runId: 17,
         reason: null,
         nextEligibleAt: "2026-04-08T09:00:00.000Z",
+        drain_started: true,
       });
+    }
+  );
+
+  it.each(routes)(
+    "returns drain_started:'pending' when $name's first claim cycle has not settled in time",
+    async ({ handler, source, url }) => {
+      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockEnqueueSyncRun.mockResolvedValue({
+        outcome: "queued",
+        runId: 71,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T09:00:00.000Z"),
+      });
+      mockAwaitDrainStarted.mockResolvedValue("pending");
+
+      const response = await handler(makeRequest(url));
+
+      expect(response.status).toBe(200);
+      expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ source }),
+      );
+      const body = await response.json();
+      expect(body.drain_started).toBe("pending");
+    }
+  );
+
+  it.each(routes)(
+    "returns 503 with drain_started:false when $name's first claim cycle throws",
+    async ({ handler, source, url }) => {
+      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockEnqueueSyncRun.mockResolvedValue({
+        outcome: "queued",
+        runId: 81,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T09:00:00.000Z"),
+      });
+      mockAwaitDrainStarted.mockResolvedValue("failed");
+
+      const response = await handler(makeRequest(url));
+
+      expect(response.status).toBe(503);
+      expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ source, runIds: [81] }),
+      );
+      const body = await response.json();
+      expect(body.drain_started).toBe(false);
+      expect(body.outcome).toBe("queued");
+      expect(body.runId).toBe(81);
     }
   );
 
@@ -246,11 +310,13 @@ describe("manual sync routes", () => {
       runIds: [44],
       triggerLabel: "manual mode report sync request (report-alpha)",
     });
+    expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       outcome: "queued",
       runId: 44,
       reason: null,
       nextEligibleAt: "2026-04-08T09:00:00.000Z",
+      drain_started: true,
     });
   });
 
@@ -330,11 +396,13 @@ describe("manual sync routes", () => {
         runIds: [23],
         triggerLabel: "manual " + source + " sync request",
       });
+      expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         outcome: "forced",
         runId: 23,
         reason: null,
         nextEligibleAt: "2026-04-08T10:30:00.000Z",
+        drain_started: true,
       });
     }
   );

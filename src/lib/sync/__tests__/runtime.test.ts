@@ -54,7 +54,11 @@ vi.mock("../config", async () => {
   };
 });
 
-import { runClaimedSync, startBackgroundSyncDrain } from "../runtime";
+import {
+  awaitDrainStarted,
+  runClaimedSync,
+  startBackgroundSyncDrain,
+} from "../runtime";
 
 describe("sync runtime resilience", () => {
   beforeEach(() => {
@@ -196,19 +200,73 @@ describe("sync runtime resilience", () => {
     mocks.claimQueuedSyncRun.mockRejectedValue(new Error("claim exploded"));
     mocks.markSyncRunsFailed.mockResolvedValue([91]);
 
-    startBackgroundSyncDrain("worker-1", {
+    const handle = startBackgroundSyncDrain("worker-1", {
       source: "slack",
       runIds: [91],
       triggerLabel: "manual slack sync request",
     });
+    // Silence the rejected `started` promise here; the route-level
+    // consumer awaits it via `awaitDrainStarted` in production.
+    handle.started.catch(() => {});
 
     await vi.runAllTicks();
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(mocks.markSyncRunsFailed).toHaveBeenCalledWith(
       [91],
       expect.stringContaining("manual slack sync request")
     );
+  });
+
+  it("exposes a started promise that resolves after the first claim settles with no queued run", async () => {
+    mocks.claimQueuedSyncRun.mockResolvedValue(null);
+
+    const { started } = startBackgroundSyncDrain("worker-ok", {
+      source: "slack",
+      runIds: [],
+      triggerLabel: "manual slack sync request",
+    });
+
+    await expect(awaitDrainStarted(started, 1_000)).resolves.toBe("started");
+  });
+
+  it("awaitDrainStarted resolves to 'failed' when the first claim attempt throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.claimQueuedSyncRun.mockRejectedValue(new Error("claim exploded"));
+    mocks.markSyncRunsFailed.mockResolvedValue([]);
+
+    const { started } = startBackgroundSyncDrain("worker-fail", {
+      source: "slack",
+      runIds: [],
+      triggerLabel: "manual slack sync request",
+    });
+
+    await expect(awaitDrainStarted(started, 1_000)).resolves.toBe("failed");
+  });
+
+  it("awaitDrainStarted resolves to 'pending' when the first claim has not settled before the timeout", async () => {
+    let resolveClaim: (value: null) => void = () => {};
+    mocks.claimQueuedSyncRun.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          resolveClaim = resolve;
+        })
+    );
+
+    const { started } = startBackgroundSyncDrain("worker-slow", {
+      source: "slack",
+      runIds: [],
+      triggerLabel: "manual slack sync request",
+    });
+
+    const racePromise = awaitDrainStarted(started, 100);
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(racePromise).resolves.toBe("pending");
+
+    // Let the hanging claim settle so the drain loop can finish.
+    resolveClaim(null);
+    await vi.runAllTicks();
   });
 
   it("keeps retrying finalization after the short recovery window is exhausted", async () => {

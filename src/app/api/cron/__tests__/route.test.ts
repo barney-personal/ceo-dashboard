@@ -11,17 +11,23 @@ vi.mock("@/lib/sync/coordinator", () => ({
 vi.mock("@/lib/sync/runtime", () => ({
   createWorkerId: vi.fn(),
   startBackgroundSyncDrain: vi.fn(),
+  awaitDrainStarted: vi.fn(),
 }));
 
 import { isCronRequest } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 import { GET } from "../route";
 
 const mockIsCronRequest = vi.mocked(isCronRequest);
 const mockEnqueueSyncRun = vi.mocked(enqueueSyncRun);
 const mockCreateWorkerId = vi.mocked(createWorkerId);
 const mockStartBackgroundSyncDrain = vi.mocked(startBackgroundSyncDrain);
+const mockAwaitDrainStarted = vi.mocked(awaitDrainStarted);
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
 function makeRequest(authHeader?: string) {
@@ -30,10 +36,16 @@ function makeRequest(authHeader?: string) {
   }) as unknown as import("next/server").NextRequest;
 }
 
+function drainHandle() {
+  return { started: Promise.resolve() };
+}
+
 describe("GET /api/cron", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockCreateWorkerId.mockImplementation((label) => label);
+    mockStartBackgroundSyncDrain.mockImplementation(() => drainHandle());
+    mockAwaitDrainStarted.mockResolvedValue("started");
     consoleErrorSpy.mockImplementation(() => {});
   });
 
@@ -107,8 +119,10 @@ describe("GET /api/cron", () => {
       runIds: [1, 2, 3, 4],
       triggerLabel: "cron trigger",
     });
+    expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       status: "syncs enqueued",
+      drain_started: true,
       results: {
         mode: {
           outcome: "queued",
@@ -144,6 +158,42 @@ describe("GET /api/cron", () => {
     });
   });
 
+  it("returns drain_started:'pending' when the first claim does not settle before the timeout", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 1,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-08T08:00:00.000Z"),
+    });
+    mockAwaitDrainStarted.mockResolvedValue("pending");
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.drain_started).toBe("pending");
+  });
+
+  it("returns 503 with drain_started:false when the background drain fails to start", async () => {
+    mockIsCronRequest.mockResolvedValue(true);
+    mockEnqueueSyncRun.mockResolvedValue({
+      outcome: "queued",
+      runId: 7,
+      reason: null,
+      nextEligibleAt: new Date("2026-04-08T08:00:00.000Z"),
+    });
+    mockAwaitDrainStarted.mockResolvedValue("failed");
+
+    const response = await GET(makeRequest("Bearer test-secret"));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.drain_started).toBe(false);
+    expect(body.status).toBe("sync drain failed to start");
+    expect(body.results).toBeTruthy();
+  });
+
   it("does not start the worker when every sync is skipped", async () => {
     mockIsCronRequest.mockResolvedValue(true);
     mockEnqueueSyncRun.mockResolvedValue({
@@ -157,6 +207,9 @@ describe("GET /api/cron", () => {
 
     expect(response.status).toBe(200);
     expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+    expect(mockAwaitDrainStarted).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.drain_started).toBeUndefined();
   });
 
   it("returns 500 when cron auth lookup throws unexpectedly", async () => {

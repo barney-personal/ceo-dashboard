@@ -409,6 +409,22 @@ export async function drainSyncQueue(
   return processed;
 }
 
+export const DRAIN_START_TIMEOUT_MS = 5_000;
+
+export type DrainStartOutcome = "started" | "failed" | "pending";
+
+export interface BackgroundSyncDrainHandle {
+  /**
+   * Resolves once the first `claimQueuedSyncRun` attempt settles
+   * (either returns a run, returns null, or throws). Rejects if that
+   * attempt throws. A silent `.catch` is attached internally so callers
+   * may choose not to await it without triggering an unhandled
+   * rejection — the background `.catch` still records the error and
+   * calls `markSyncRunsFailed` for queued run ids.
+   */
+  started: Promise<void>;
+}
+
 export function startBackgroundSyncDrain(
   workerId: string,
   opts: {
@@ -418,8 +434,47 @@ export function startBackgroundSyncDrain(
     runIds?: number[];
     triggerLabel: string;
   }
-): void {
-  void drainSyncQueue(workerId, opts).catch(async (error) => {
+): BackgroundSyncDrainHandle {
+  let firstClaimSettled = false;
+  let resolveStarted!: () => void;
+  let rejectStarted!: (error: unknown) => void;
+  const started = new Promise<void>((resolve, reject) => {
+    resolveStarted = resolve;
+    rejectStarted = reject;
+  });
+  // Keep unhandled-rejection tracking quiet when the caller opts not to
+  // await `started` — e.g. when the 5s route timeout races past it.
+  started.catch(() => {});
+
+  const settleStartedSuccess = () => {
+    if (firstClaimSettled) return;
+    firstClaimSettled = true;
+    resolveStarted();
+  };
+  const settleStartedFailure = (error: unknown) => {
+    if (firstClaimSettled) return;
+    firstClaimSettled = true;
+    rejectStarted(error);
+  };
+
+  const drainAll = async () => {
+    while (!opts.shouldStop?.()) {
+      let claimed;
+      try {
+        claimed = await claimQueuedSyncRun(workerId, opts.source);
+      } catch (error) {
+        settleStartedFailure(error);
+        throw error;
+      }
+      settleStartedSuccess();
+      if (!claimed) {
+        break;
+      }
+      await runClaimedSync(claimed, opts);
+    }
+  };
+
+  void drainAll().catch(async (error) => {
     const message = `Background sync drain failed for ${opts.triggerLabel} (${workerId}): ${formatSyncError(
       error
     )}`;
@@ -454,6 +509,39 @@ export function startBackgroundSyncDrain(
       });
     }
   });
+
+  return { started };
+}
+
+/**
+ * Race the `started` promise returned by `startBackgroundSyncDrain`
+ * against a short timeout. Returns:
+ *   - `"started"` when the first claim settled successfully in time
+ *   - `"failed"` when the first claim rejected in time
+ *   - `"pending"` when neither happened before the timeout elapsed
+ */
+export async function awaitDrainStarted(
+  started: Promise<void>,
+  timeoutMs: number = DRAIN_START_TIMEOUT_MS
+): Promise<DrainStartOutcome> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timer = new Promise<"pending">((resolve) => {
+    timeoutId = setTimeout(() => resolve("pending"), timeoutMs);
+    timeoutId.unref?.();
+  });
+
+  try {
+    return await Promise.race([
+      started.then((): "started" => "started"),
+      timer,
+    ]);
+  } catch {
+    return "failed";
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 export async function runSyncWorker(
