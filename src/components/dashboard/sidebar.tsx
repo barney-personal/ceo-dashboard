@@ -306,8 +306,9 @@ export function MobileSidebar({ role, isCeo = false, impersonation }: { role: Ro
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
-  // Close drawer on route change
+  // Close drawer on route change (URL is the external system being synced)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing UI to pathname (external system)
     setOpen(false);
   }, [pathname]);
 
@@ -332,6 +333,7 @@ export function MobileSidebar({ role, isCeo = false, impersonation }: { role: Ro
         type="button"
         aria-label="Open navigation"
         aria-expanded={open}
+        aria-controls="mobile-nav-drawer"
         onClick={() => setOpen(true)}
         className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
       >
@@ -339,7 +341,7 @@ export function MobileSidebar({ role, isCeo = false, impersonation }: { role: Ro
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
+        <div id="mobile-nav-drawer" className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
           <div
             className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
             onClick={() => setOpen(false)}
