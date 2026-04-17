@@ -312,8 +312,8 @@ export function LineChart({
         className
       )}
     >
-      <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-5 py-3">
+        <div className="min-w-0">
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {subtitle && (
             <span className="ml-2 text-xs text-muted-foreground">
@@ -321,8 +321,8 @@ export function LineChart({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             {series.map((s) => (
               <div key={s.label} className="flex items-center gap-1.5">
                 <div
