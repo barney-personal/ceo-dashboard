@@ -1,4 +1,9 @@
 import * as Sentry from "@sentry/nextjs";
+import { z } from "zod";
+import {
+  isExternalValidationError,
+  parseWithSchema,
+} from "@/lib/validation/external";
 import type { ModeRowAggregator } from "./mode-config";
 
 const MODE_BASE_URL = "https://app.mode.com/api";
@@ -437,6 +442,69 @@ export interface ModeQuery {
   name: string;
 }
 
+const ModeRunSchema = z.object({
+  token: z.string().min(1),
+  state: z.string().min(1),
+  created_at: z.string().min(1),
+});
+
+const ModeQueryRunSchema = z.object({
+  token: z.string().min(1),
+  state: z.string().min(1),
+  _links: z.object({
+    query: z.object({ href: z.string().min(1) }),
+    result: z.object({ href: z.string().min(1) }),
+  }),
+});
+
+const ModeQuerySchema = z.object({
+  token: z.string().min(1),
+  name: z.string().min(1),
+});
+
+const ModeReportRunsEnvelopeSchema = z.object({
+  _embedded: z.object({
+    report_runs: z.array(ModeRunSchema),
+  }),
+});
+
+const ModeQueryRunsEnvelopeSchema = z.object({
+  _embedded: z.object({
+    query_runs: z.array(ModeQueryRunSchema),
+  }),
+});
+
+const ModeReportQueriesEnvelopeSchema = z.object({
+  _embedded: z.object({
+    queries: z.array(ModeQuerySchema),
+  }),
+});
+
+const ModeQueryResultRowsSchema = z.array(z.record(z.string(), z.unknown()));
+
+function captureModeValidationError(
+  error: unknown,
+  input: { path: string; requestType: "metadata" | "query-result" }
+): void {
+  if (!isExternalValidationError(error)) {
+    return;
+  }
+
+  Sentry.captureException(error, {
+    tags: {
+      integration: "mode",
+      validation_boundary: error.boundary,
+      validation_source: error.source,
+    },
+    extra: {
+      path: input.path,
+      requestType: input.requestType,
+      issues: error.issues,
+      payloadPreview: error.payloadPreview,
+    },
+  });
+}
+
 // --- API Methods ---
 
 export async function getReport(
@@ -453,13 +521,26 @@ export async function getLatestRun(
   reportToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeRun | null> {
-  const result = await modeRequest<{
-    _embedded: { report_runs: ModeRun[] };
-  }>(`/reports/${reportToken}/runs`, opts);
+  const path = `/reports/${reportToken}/runs`;
 
-  const runs = result._embedded.report_runs;
-  const succeeded = runs.find((r) => r.state === "succeeded");
-  return succeeded ?? null;
+  try {
+    const result = parseWithSchema(
+      ModeReportRunsEnvelopeSchema,
+      await modeRequest(path, opts),
+      {
+        source: "mode",
+        boundary: "report_runs_envelope",
+      }
+    );
+
+    const succeeded = result._embedded.report_runs.find(
+      (run) => run.state === "succeeded"
+    );
+    return succeeded ?? null;
+  } catch (error) {
+    captureModeValidationError(error, { path, requestType: "metadata" });
+    throw error;
+  }
 }
 
 /**
@@ -470,10 +551,22 @@ export async function getQueryRuns(
   runToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeQueryRun[]> {
-  const result = await modeRequest<{
-    _embedded: { query_runs: ModeQueryRun[] };
-  }>(`/reports/${reportToken}/runs/${runToken}/query_runs`, opts);
-  return result._embedded.query_runs;
+  const path = `/reports/${reportToken}/runs/${runToken}/query_runs`;
+
+  try {
+    const result = parseWithSchema(
+      ModeQueryRunsEnvelopeSchema,
+      await modeRequest(path, opts),
+      {
+        source: "mode",
+        boundary: "query_runs_envelope",
+      }
+    );
+    return result._embedded.query_runs;
+  } catch (error) {
+    captureModeValidationError(error, { path, requestType: "metadata" });
+    throw error;
+  }
 }
 
 /**
@@ -483,10 +576,22 @@ export async function getReportQueries(
   reportToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeQuery[]> {
-  const result = await modeRequest<{
-    _embedded: { queries: ModeQuery[] };
-  }>(`/reports/${reportToken}/queries`, opts);
-  return result._embedded.queries;
+  const path = `/reports/${reportToken}/queries`;
+
+  try {
+    const result = parseWithSchema(
+      ModeReportQueriesEnvelopeSchema,
+      await modeRequest(path, opts),
+      {
+        source: "mode",
+        boundary: "report_queries_envelope",
+      }
+    );
+    return result._embedded.queries;
+  } catch (error) {
+    captureModeValidationError(error, { path, requestType: "metadata" });
+    throw error;
+  }
 }
 
 /**
@@ -500,15 +605,23 @@ export async function getQueryResultContent(
   maxRows: number = 1000,
   opts?: { signal?: AbortSignal; maxBytes?: number },
 ): Promise<{ rows: Record<string, unknown>[]; responseBytes: number }> {
-  const { data, bytesRead } = await modeRequestJson<Record<string, unknown>[]>(
-    `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`,
-    opts,
-  );
+  const path = `/reports/${reportToken}/runs/${runToken}/query_runs/${queryRunToken}/results/content.json?limit=${maxRows}`;
 
-  return {
-    rows: data,
-    responseBytes: bytesRead,
-  };
+  try {
+    const { data, bytesRead } = await modeRequestJson(path, opts);
+    const rows = parseWithSchema(ModeQueryResultRowsSchema, data, {
+      source: "mode",
+      boundary: "query_result_rows",
+    });
+
+    return {
+      rows,
+      responseBytes: bytesRead,
+    };
+  } catch (error) {
+    captureModeValidationError(error, { path, requestType: "query-result" });
+    throw error;
+  }
 }
 
 /**

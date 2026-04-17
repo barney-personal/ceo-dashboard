@@ -4,10 +4,12 @@ import type {
   Message as AnthropicMessage,
   MessageCreateParamsNonStreaming,
 } from "@anthropic-ai/sdk/resources/messages/messages";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { squads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import { safeParseWithSchema } from "@/lib/validation/external";
 
 const client = new Anthropic();
 
@@ -49,15 +51,9 @@ interface AnthropicFailureShape {
   };
 }
 
-interface ParsedEnvelopeShape {
-  squadName?: unknown;
-  tldr?: unknown;
-  krs?: unknown;
-}
-
 interface ValidParsedEnvelope {
   squadName: string;
-  tldr?: unknown;
+  tldr?: string | null;
   krs: unknown[];
 }
 
@@ -67,6 +63,21 @@ const VALID_RAGS: ParsedKr["rag"][] = [
   "red",
   "not_started",
 ];
+
+const ParsedKrSchema = z.object({
+  objective: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(200),
+  rag: z.enum(VALID_RAGS),
+  metric: z.string().nullable().optional(),
+});
+
+const ParsedOkrEnvelopeSchema = z.object({
+  squadName: z.string().trim().min(1),
+  tldr: z.string().trim().min(1).nullable().optional(),
+  krs: z.array(z.unknown()),
+});
+
+const ParsedOkrBatchSchema = z.array(z.unknown());
 
 function composeAbortSignal(
   timeoutMs: number,
@@ -243,87 +254,54 @@ function buildBatchMessagePromptContent(inputs: readonly OkrParseInput[]): strin
   ].join("\n\n");
 }
 
-function toShortPreview(value: unknown): string {
-  try {
-    return JSON.stringify(value).slice(0, 200);
-  } catch {
-    return String(value).slice(0, 200);
-  }
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function validateParsedKr(
   kr: unknown,
   index: number
 ): ParsedKr | null {
-  const invalidFields: string[] = [];
+  const result = safeParseWithSchema(ParsedKrSchema, kr, {
+    source: "anthropic",
+    boundary: "okr_key_result",
+    payload: kr,
+  });
 
-  if (!kr || typeof kr !== "object") {
-    invalidFields.push("kr");
-  }
-
-  const candidate = (kr ?? {}) as Record<string, unknown>;
-
-  if (!isNonEmptyString(candidate.objective)) {
-    invalidFields.push("objective");
-  }
-
-  if (!isNonEmptyString(candidate.name)) {
-    invalidFields.push("name");
-  }
-
-  if (!VALID_RAGS.includes(candidate.rag as ParsedKr["rag"])) {
-    invalidFields.push("rag");
-  }
-
-  if (
-    !(
-      candidate.metric == null ||
-      typeof candidate.metric === "string"
-    )
-  ) {
-    invalidFields.push("metric");
-  }
-
-  if (invalidFields.length > 0) {
+  if (!result.success) {
     Sentry.captureMessage("Dropped invalid OKR key result from Claude response", {
       level: "warning",
       tags: { integration: "llm-okr-parser" },
       extra: {
         operation: "validateParsedKr",
         krIndex: index,
-        invalidFields,
-        rawPayloadPreview: toShortPreview(kr),
+        invalidFields: result.error.issuePaths,
+        issues: result.error.issues,
+        rawPayloadPreview: result.error.payloadPreview,
       },
     });
     return null;
   }
 
   return {
-    objective: candidate.objective as string,
-    name: (candidate.name as string).slice(0, 200),
-    rag: candidate.rag as ParsedKr["rag"],
-    metric: (candidate.metric as string | null | undefined) ?? null,
+    objective: result.data.objective,
+    name: result.data.name,
+    rag: result.data.rag,
+    metric: result.data.metric ?? null,
   };
 }
 
 function validateParsedEnvelope(parsed: unknown): ValidParsedEnvelope | null {
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
+  const result = safeParseWithSchema(ParsedOkrEnvelopeSchema, parsed, {
+    source: "anthropic",
+    boundary: "okr_parse_envelope",
+    payload: parsed,
+  });
 
-  const envelope = parsed as ParsedEnvelopeShape;
-  if (!isNonEmptyString(envelope.squadName) || !Array.isArray(envelope.krs)) {
+  if (!result.success) {
     return null;
   }
 
   return {
-    squadName: envelope.squadName,
-    tldr: envelope.tldr,
-    krs: envelope.krs,
+    squadName: result.data.squadName,
+    tldr: result.data.tldr ?? null,
+    krs: result.data.krs,
   };
 }
 
@@ -345,7 +323,7 @@ function normalizeResponseText(response: AnthropicMessage): string | null {
 function toParsedOkrUpdate(envelope: ValidParsedEnvelope): ParsedOkrUpdate {
   return {
     squadName: envelope.squadName,
-    tldr: typeof envelope.tldr === "string" ? envelope.tldr : "",
+    tldr: envelope.tldr ?? "",
     krs: envelope.krs
       .map((kr, index) => validateParsedKr(kr, index))
       .filter((kr): kr is ParsedKr => kr !== null),
@@ -589,7 +567,12 @@ export async function llmParseOkrUpdates(
 
   try {
     const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed) || parsed.length !== inputs.length) {
+    const batch = safeParseWithSchema(ParsedOkrBatchSchema, parsed, {
+      source: "anthropic",
+      boundary: "okr_parse_batch",
+      payload: parsed,
+    });
+    if (!batch.success || batch.data.length !== inputs.length) {
       Sentry.captureMessage(
         "Falling back to single-message OKR parsing after unusable batch payload",
         {
@@ -597,9 +580,7 @@ export async function llmParseOkrUpdates(
           tags: { integration: "llm-okr-parser" },
           extra: {
             operation: "parseBatchResponse",
-            reason: Array.isArray(parsed)
-              ? "wrong_array_length"
-              : "wrong_top_level_shape",
+            reason: !batch.success ? "wrong_top_level_shape" : "wrong_array_length",
             batchSize: inputs.length,
             responsePreview: trimmed.slice(0, 200),
           },
@@ -608,7 +589,7 @@ export async function llmParseOkrUpdates(
       return fallbackToSingleMessageParses(inputs, prompt, opts);
     }
 
-    return parsed.map((item) => {
+    return batch.data.map((item) => {
       if (item == null) {
         return null;
       }

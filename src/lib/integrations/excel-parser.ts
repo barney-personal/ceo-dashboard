@@ -1,5 +1,11 @@
 import * as XLSX from "xlsx";
 import Anthropic from "@anthropic-ai/sdk";
+import * as Sentry from "@sentry/nextjs";
+import { z } from "zod";
+import {
+  isExternalValidationError,
+  parseWithSchema,
+} from "@/lib/validation/external";
 
 // maxRetries: 1 — batch extraction rarely benefits from more retries, and extra
 // retries inflate wall-clock time before the AbortController timeout kicks in.
@@ -33,6 +39,27 @@ export interface FinancialData {
 interface ParseManagementAccountsOptions {
   signal?: AbortSignal;
 }
+
+const PeriodSchema = z.string().regex(/^\d{4}-\d{2}$/);
+const NullableFiniteNumberSchema = z.number().finite().nullable().optional();
+
+const ManagementAccountsExtractionSchema = z.object({
+  period: PeriodSchema.nullable().optional(),
+  periodLabel: z.string().trim().min(1).nullable().optional(),
+  revenue: NullableFiniteNumberSchema,
+  grossProfit: NullableFiniteNumberSchema,
+  grossMargin: NullableFiniteNumberSchema,
+  contributionProfit: NullableFiniteNumberSchema,
+  contributionMargin: NullableFiniteNumberSchema,
+  ebitda: NullableFiniteNumberSchema,
+  ebitdaMargin: NullableFiniteNumberSchema,
+  netIncome: NullableFiniteNumberSchema,
+  cashPosition: NullableFiniteNumberSchema,
+  cashBurn: NullableFiniteNumberSchema,
+  opex: NullableFiniteNumberSchema,
+  headcountCost: NullableFiniteNumberSchema,
+  marketingCost: NullableFiniteNumberSchema,
+});
 
 function composeAbortSignal(
   timeoutMs: number,
@@ -189,7 +216,7 @@ If a value cannot be found, use null.
 
 Return ONLY valid JSON. No markdown code blocks.`;
 
-function parseJsonFromModelResponse(text: string): Record<string, unknown> {
+function parseJsonFromModelResponse(text: string): unknown {
   let trimmed = text.trim();
   if (trimmed.startsWith("```")) {
     trimmed = trimmed
@@ -199,23 +226,15 @@ function parseJsonFromModelResponse(text: string): Record<string, unknown> {
   }
 
   try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
+    return JSON.parse(trimmed);
   } catch {
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
     if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+      return JSON.parse(trimmed.slice(start, end + 1));
     }
     throw new Error("Model response did not contain valid JSON");
   }
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asNumberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
 }
 
 /**
@@ -277,26 +296,54 @@ export async function parseManagementAccounts(
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-  const parsed = parseJsonFromModelResponse(text);
+  const parsedJson = parseJsonFromModelResponse(text);
 
-  return {
-    period: asString(parsed.period),
-    periodLabel: asString(parsed.periodLabel),
-    revenue: asNumberOrNull(parsed.revenue),
-    grossProfit: asNumberOrNull(parsed.grossProfit),
-    grossMargin: asNumberOrNull(parsed.grossMargin),
-    contributionProfit: asNumberOrNull(parsed.contributionProfit),
-    contributionMargin: asNumberOrNull(parsed.contributionMargin),
-    ebitda: asNumberOrNull(parsed.ebitda),
-    ebitdaMargin: asNumberOrNull(parsed.ebitdaMargin),
-    netIncome: asNumberOrNull(parsed.netIncome),
-    cashPosition: asNumberOrNull(parsed.cashPosition),
-    cashBurn: asNumberOrNull(parsed.cashBurn),
-    opex: asNumberOrNull(parsed.opex),
-    headcountCost: asNumberOrNull(parsed.headcountCost),
-    marketingCost: asNumberOrNull(parsed.marketingCost),
-    rawSheets: sheets,
-  };
+  try {
+    const parsed = parseWithSchema(
+      ManagementAccountsExtractionSchema,
+      parsedJson,
+      {
+        source: "anthropic",
+        boundary: "management_accounts_extraction",
+        payload: parsedJson,
+      }
+    );
+
+    return {
+      period: parsed.period ?? "",
+      periodLabel: parsed.periodLabel ?? "",
+      revenue: parsed.revenue ?? null,
+      grossProfit: parsed.grossProfit ?? null,
+      grossMargin: parsed.grossMargin ?? null,
+      contributionProfit: parsed.contributionProfit ?? null,
+      contributionMargin: parsed.contributionMargin ?? null,
+      ebitda: parsed.ebitda ?? null,
+      ebitdaMargin: parsed.ebitdaMargin ?? null,
+      netIncome: parsed.netIncome ?? null,
+      cashPosition: parsed.cashPosition ?? null,
+      cashBurn: parsed.cashBurn ?? null,
+      opex: parsed.opex ?? null,
+      headcountCost: parsed.headcountCost ?? null,
+      marketingCost: parsed.marketingCost ?? null,
+      rawSheets: sheets,
+    };
+  } catch (error) {
+    if (isExternalValidationError(error)) {
+      Sentry.captureException(error, {
+        tags: {
+          integration: "management-accounts-extraction",
+          validation_boundary: error.boundary,
+          validation_source: error.source,
+        },
+        extra: {
+          filenameHint: filenameHint ?? null,
+          issues: error.issues,
+          payloadPreview: error.payloadPreview,
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 /**

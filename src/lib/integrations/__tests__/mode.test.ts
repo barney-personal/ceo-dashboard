@@ -222,6 +222,70 @@ describe("Mode transport resilience", () => {
     );
   });
 
+  it("rejects malformed report-run envelopes before they enter app logic", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ _embedded: { report_runs: {} } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getLatestRun("report-token")).rejects.toThrow(
+      /mode returned malformed report_runs_envelope/i,
+    );
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "report_runs_envelope",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "mode",
+          validation_boundary: "report_runs_envelope",
+          validation_source: "mode",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/runs",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed query result payloads before they reach sync storage", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ revenue: 42 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getQueryResultContent("report-token", "run-token", "query-run-token"),
+    ).rejects.toThrow(/mode returned malformed query_result_rows/i);
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "query_result_rows",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "mode",
+          validation_boundary: "query_result_rows",
+          validation_source: "mode",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/runs/run-token/query_runs/query-run-token/results/content.json?limit=1000",
+        }),
+      }),
+    );
+  });
+
   it("fails Mode health checks on timeout without retrying", async () => {
     const fetchMock = vi.fn((_input, init?: RequestInit) => {
       return new Promise((_, reject) => {
