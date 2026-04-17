@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type Role, hasAccess } from "@/lib/auth/roles";
@@ -21,6 +22,8 @@ import {
   AlertTriangle,
   GitPullRequest,
   HeartPulse,
+  Menu,
+  X,
 } from "lucide-react";
 
 interface NavItem {
@@ -205,7 +208,14 @@ export interface ImpersonationInfo {
   role: Role;
 }
 
-export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
+interface SidebarContentProps {
+  role: Role;
+  isCeo: boolean;
+  impersonation?: ImpersonationInfo | null;
+  onNavigate?: () => void;
+}
+
+function SidebarContent({ role, isCeo, impersonation, onNavigate }: SidebarContentProps) {
   const pathname = usePathname();
 
   const visibleGroups = NAV_GROUPS.map((group) => ({
@@ -214,7 +224,7 @@ export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; is
   })).filter((group) => group.items.length > 0);
 
   return (
-    <aside className="flex w-56 flex-col border-r border-sidebar-border bg-sidebar">
+    <>
       {/* Logo area */}
       <div className="flex h-14 items-center border-b border-sidebar-border px-5">
         <div className="flex items-center gap-2.5">
@@ -244,6 +254,7 @@ export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; is
                 <Link
                   key={item.href}
                   href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-all duration-150",
                     isActive
@@ -279,6 +290,80 @@ export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; is
           </span>
         </div>
       </div>
+    </>
+  );
+}
+
+export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
+  return (
+    <aside className="hidden w-56 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+      <SidebarContent role={role} isCeo={isCeo} impersonation={impersonation} />
     </aside>
+  );
+}
+
+export function MobileSidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
+  const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Close drawer on route change (URL is the external system being synced)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing UI to pathname (external system)
+    setOpen(false);
+  }, [pathname]);
+
+  // Lock body scroll + close on Escape when open
+  useEffect(() => {
+    if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Open navigation"
+        aria-expanded={open}
+        aria-controls="mobile-nav-drawer"
+        onClick={() => setOpen(true)}
+        className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+      >
+        <Menu className="h-4 w-4" />
+      </button>
+
+      {open && (
+        <div id="mobile-nav-drawer" className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
+          <div
+            className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
+            onClick={() => setOpen(false)}
+          />
+          <aside className="absolute left-0 top-0 flex h-full w-64 max-w-[80%] flex-col border-r border-sidebar-border bg-sidebar shadow-xl">
+            <button
+              type="button"
+              aria-label="Close navigation"
+              onClick={() => setOpen(false)}
+              className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <SidebarContent
+              role={role}
+              isCeo={isCeo}
+              impersonation={impersonation}
+              onNavigate={() => setOpen(false)}
+            />
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

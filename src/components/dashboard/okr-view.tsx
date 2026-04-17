@@ -103,7 +103,7 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
               <button
                 key={pillar.name}
                 onClick={() => setSelectedPillar(pillar.name)}
-                className="group rounded-xl border border-border/60 bg-card p-5 shadow-warm text-left transition-all duration-200 hover:border-primary/30 hover:shadow-warm-lg"
+                className="group min-w-0 overflow-hidden rounded-xl border border-border/60 bg-card p-5 shadow-warm text-left transition-all duration-200 hover:border-primary/30 hover:shadow-warm-lg"
               >
                 <h3 className="text-base font-semibold text-foreground">
                   {pillar.name}
@@ -147,7 +147,7 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
                       <span className="flex-1 truncate text-sm text-muted-foreground">
                         {squad}
                       </span>
-                      <div className="flex gap-1">
+                      <div className="flex flex-wrap justify-end gap-1">
                         {krs.map((kr, i) => (
                           <span
                             key={i}
