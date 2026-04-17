@@ -1,0 +1,25 @@
+# Probe manifest — defines all checks available in this repo.
+# Each check belongs to one or more suites. The CLI resolves
+# suite names to check lists at runtime.
+#
+# ceo-clerk-playwright was removed 2026-04-15: the probe navigated to
+# /dashboard with a __clerk_testing_token cookie expecting to be signed
+# in, but Clerk testing tokens only bypass bot detection — they are not
+# session tokens. Clerk's middleware redirected every run to /sign-in
+# and the canary element was never found. Reintroducing an authenticated
+# Playwright probe requires either a dedicated test user signed in via
+# Clerk sign-in tokens (POST /v1/sign_in_tokens → /sign-in?__clerk_ticket=)
+# or setupClerkTestingToken() from @clerk/testing with a real session.
+
+suites:
+  ceo-15m-suite:
+    description: "Cheap cloud checks — every 15 minutes"
+    checks:
+      - ceo-ping-auth
+
+checks:
+  ceo-ping-auth:
+    description: "Hit /api/probes/ping-auth and assert healthy response"
+    handler: "./checks/ceo-ping-auth.ts"
+    timeout_ms: 10000
+    tags: [cloud, cheap]

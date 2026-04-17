@@ -1,6 +1,6 @@
 {
-  "id": "b68a3f13-cc6c-4c81-9733-97057c0c238f",
-  "prevId": "ef12b252-551b-43c4-9956-2d4c1073e42e",
+  "id": "45362859-87e7-4257-9e9e-c84b2252187c",
+  "prevId": "294e3cc6-3212-43f1-a38c-125fd900e5a1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -222,83 +222,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.github_employee_map": {
-      "name": "github_employee_map",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "github_login": {
-          "name": "github_login",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "employee_name": {
-          "name": "employee_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "employee_email": {
-          "name": "employee_email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "github_name": {
-          "name": "github_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "match_method": {
-          "name": "match_method",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "match_confidence": {
-          "name": "match_confidence",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_bot": {
-          "name": "is_bot",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "github_employee_map_github_login_unique": {
-          "name": "github_employee_map_github_login_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "github_login"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.github_pr_metrics": {
       "name": "github_pr_metrics",
       "schema": "",
@@ -408,129 +331,6 @@
             "login",
             "period_start",
             "period_end"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.github_prs": {
-      "name": "github_prs",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "repo": {
-          "name": "repo",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "pr_number": {
-          "name": "pr_number",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "author_login": {
-          "name": "author_login",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "author_avatar_url": {
-          "name": "author_avatar_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "merged_at": {
-          "name": "merged_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "additions": {
-          "name": "additions",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "deletions": {
-          "name": "deletions",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "changed_files": {
-          "name": "changed_files",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "synced_at": {
-          "name": "synced_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "github_prs_merged_at_idx": {
-          "name": "github_prs_merged_at_idx",
-          "columns": [
-            {
-              "expression": "merged_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "github_prs_author_idx": {
-          "name": "github_prs_author_idx",
-          "columns": [
-            {
-              "expression": "author_login",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "github_prs_repo_pr_number_unique": {
-          "name": "github_prs_repo_pr_number_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "repo",
-            "pr_number"
           ]
         }
       },
@@ -1281,6 +1081,201 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.probe_heartbeats": {
+      "name": "probe_heartbeats",
+      "schema": "",
+      "columns": {
+        "probe_id": {
+          "name": "probe_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.probe_incidents": {
+      "name": "probe_incidents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "check_name": {
+          "name": "check_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "acked_at": {
+          "name": "acked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "escalation_level": {
+          "name": "escalation_level",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_alerted_at": {
+          "name": "last_alerted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "probe_incidents_open_uniq": {
+          "name": "probe_incidents_open_uniq",
+          "columns": [
+            {
+              "expression": "check_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"probe_incidents\".\"closed_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.probe_runs": {
+      "name": "probe_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "probe_id": {
+          "name": "probe_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "check_name": {
+          "name": "check_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "details_json": {
+          "name": "details_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target": {
+          "name": "target",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'prod'"
+        },
+        "ts": {
+          "name": "ts",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "probe_runs_check_name_ts_idx": {
+          "name": "probe_runs_check_name_ts_idx",
+          "columns": [
+            {
+              "expression": "check_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ts",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

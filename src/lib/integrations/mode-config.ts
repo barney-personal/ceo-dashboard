@@ -312,8 +312,46 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     name: "Performance Dashboard",
     section: "people",
     category: "performance",
-    syncEnabled: false,
-    queries: [],
+    syncEnabled: true,
+    queries: [
+      {
+        name: "manager_distributions_individual_ratings",
+        storageWindow: { kind: "snapshot" },
+      },
+    ],
+  },
+  {
+    reportToken: "47715a0cccf7",
+    name: "Attrition Tracker",
+    section: "people",
+    category: "attrition",
+    syncEnabled: true,
+    queries: [
+      {
+        name: "attrition",
+        storageWindow: {
+          kind: "last-months",
+          field: "reporting_period",
+          months: 36,
+        },
+      },
+      {
+        name: "attrition_within_1y_joining",
+        storageWindow: {
+          kind: "last-months",
+          field: "start_month",
+          months: 36,
+        },
+      },
+      {
+        name: "Query 2",
+        storageWindow: { kind: "snapshot" },
+      },
+      {
+        name: "employees",
+        storageWindow: { kind: "all" },
+      },
+    ],
   },
 ];
 
@@ -442,6 +480,13 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
     section: "people",
     category: "performance",
     height: 700,
+  },
+  {
+    url: buildModeReportUrl("47715a0cccf7"),
+    title: "Attrition Tracker",
+    section: "people",
+    category: "attrition",
+    height: 800,
   },
 ];
 

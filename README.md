@@ -38,12 +38,34 @@ Internal company dashboard aggregating data from multiple sources into a single,
 git clone git@github.com:barney-personal/ceo-dashboard.git
 cd ceo-dashboard
 ./scripts/setup.sh
-doppler setup
+doppler setup       # bind to ceo-dashboard/dev — needed for `make dev`
 npm install
 make dev
 ```
 
 The app runs on `http://localhost:3100`.
+
+### Secrets & deploys
+
+Secrets live in **Doppler** (`ceo-dashboard/dev` for local, `ceo-dashboard/prd`
+for Render). Render is downstream — pushed to from Doppler, never edited
+directly:
+
+```bash
+# After you change a secret in Doppler dashboard:
+RENDER_API_KEY=rnd_... make sync-render-env
+```
+
+That script (`scripts/sync-doppler-to-render.py`) reads Doppler `prd` and
+PUTs to Render web + sync-worker services. Idempotent — safe to re-run.
+Render-managed values (`DATABASE_URL`, `CRON_SECRET`) are preserved.
+
+The only env vars in `render.yaml` are the ones Render itself manages
+(`DATABASE_URL` from the DB ref, `CRON_SECRET` auto-generated, `NODE_ENV`
+static). Everything else flows from Doppler.
+
+See `CLAUDE.md` → "Environment Variables" for the full key list and the
+"add a new secret" workflow.
 
 ### Setting User Roles
 

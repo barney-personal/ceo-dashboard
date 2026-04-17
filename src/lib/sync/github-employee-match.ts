@@ -12,7 +12,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
-const BOT_PATTERNS = ["[bot]", "circleci"];
+const BOT_PATTERNS = ["[bot]", "circleci", "dependabot", "cursor", "github-actions"];
 
 interface Employee {
   preferred_name: string;
@@ -158,7 +158,10 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
       ],
     },
     {
-      signal: AbortSignal.timeout(LLM_MATCH_TIMEOUT_MS),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(LLM_MATCH_TIMEOUT_MS),
+        ...(opts.signal ? [opts.signal] : []),
+      ]),
     }
   );
 

@@ -1,17 +1,15 @@
-import { withDbErrorContext } from "@/lib/db/errors";
-import { getReportData, parseRows } from "./mode";
+import {
+  DatabaseUnavailableError,
+  isSchemaCompatibilityError,
+  normalizeDatabaseError,
+} from "@/lib/db/errors";
+import { getReportData, validateModeColumns } from "./mode";
+import { selectModeFteActive } from "./people";
 import {
   formatCompact,
   formatCurrency,
   formatPercent,
 } from "@/lib/format/number";
-import {
-  headcountSchema,
-  unitEcon36mLtvSchema,
-  unitEconArpuSchema,
-  unitEconCpaSchema,
-  unitEconCvrSchema,
-} from "@/lib/validation/mode-rows";
 
 /**
  * Get a row from a named query.
@@ -32,10 +30,57 @@ export function getQueryRow(
   );
 }
 
+function getValidatedQueryRow<TColumn extends string>(
+  data: Awaited<ReturnType<typeof getReportData>>,
+  queryName: string,
+  expectedColumns: readonly TColumn[],
+  match?: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const query = data.find((entry) => entry.queryName === queryName);
+  if (!query) {
+    return null;
+  }
+
+  const row = getQueryRow(data, queryName, match);
+  if (!row) {
+    return null;
+  }
+
+  const validation = validateModeColumns({
+    row,
+    expectedColumns,
+    reportName: query.reportName,
+    queryName: query.queryName,
+  });
+
+  return validation.isValid ? row : null;
+}
+
+async function withMetricsFallback<T>(
+  context: string,
+  fallback: T,
+  compute: () => Promise<T>
+): Promise<T> {
+  try {
+    return await compute();
+  } catch (error) {
+    const normalized = normalizeDatabaseError(context, error);
+    if (
+      normalized instanceof DatabaseUnavailableError ||
+      isSchemaCompatibilityError(error)
+    ) {
+      console.error(`[metrics] ${context} degraded to fallback`, normalized);
+      return fallback;
+    }
+
+    throw normalized;
+  }
+}
+
 // --- Unit Economics Metrics ---
 
 export async function getUnitEconomicsMetrics() {
-  const emptyResult = {
+  const fallback = {
     ltv: null,
     arpu: null,
     grossMargin: null,
@@ -48,8 +93,9 @@ export async function getUnitEconomicsMetrics() {
     subscribers: null as Record<string, unknown> | null,
   };
 
-  return withDbErrorContext(
+  return withMetricsFallback(
     "load unit economics metrics",
+    fallback,
     async () => {
       const kpis = await getReportData("unit-economics", "kpis", [
         "36M LTV",
@@ -59,46 +105,56 @@ export async function getUnitEconomicsMetrics() {
         "Subscribers at end of period: Growth accounting",
       ]);
 
-      const ltvRow = parseSingleRow(kpis, "36M LTV", unitEcon36mLtvSchema);
-      const arpuRow = parseSingleRow(
-        kpis,
-        "ARPU Annualized",
-        unitEconArpuSchema,
-      );
-      const cpaRow = parseSingleRow(
+      const ltv = getValidatedQueryRow(kpis, "36M LTV", ["user_pnl_36m"]);
+      const arpu = getValidatedQueryRow(kpis, "ARPU Annualized", [
+        "arpmau",
+        "gross_margin",
+        "contribution_margin",
+        "mau",
+        "monthly_revenue",
+      ]);
+      const cpa = getValidatedQueryRow(
         kpis,
         "CPA",
-        unitEconCpaSchema,
-        (r) => r.time_period === "Previous 365 days",
+        ["time_period", "avg_cpa"],
+        { time_period: "Previous 365 days" },
       );
-      const cvrRow = parseSingleRow(
-        kpis,
-        "M11 Plus CVR, past 7 days",
-        unitEconCvrSchema,
-      );
+      const cvr = getValidatedQueryRow(kpis, "M11 Plus CVR, past 7 days", [
+        "average_7d_plus_m11_cvr",
+      ]);
       const subscribers = getQueryRow(
         kpis,
         "Subscribers at end of period: Growth accounting",
       );
 
-      if (!ltvRow || !arpuRow || !cpaRow || !cvrRow) {
-        return emptyResult;
+      if (!ltv || !arpu || !cpa || !cvr) {
+        return fallback;
       }
 
+      const ltvValue = ltv?.user_pnl_36m as number | undefined;
+      const arpuValue = arpu?.arpmau as number | undefined;
+      const grossMargin = arpu?.gross_margin as number | undefined;
+      const contributionMargin = arpu?.contribution_margin as number | undefined;
+      const cpaValue = cpa?.avg_cpa as number | undefined;
+      const cvrValue = cvr?.average_7d_plus_m11_cvr as number | undefined;
+      const mau = arpu?.mau as number | undefined;
+      const revenue = arpu?.monthly_revenue as number | undefined;
+
       const ltvCac =
-        cpaRow.avg_cpa !== 0
-          ? (ltvRow.user_pnl_36m / cpaRow.avg_cpa).toFixed(1)
+        ltvValue != null && cpaValue != null
+          ? (ltvValue / cpaValue).toFixed(1)
           : null;
 
       return {
-        ltv: formatCurrency(ltvRow.user_pnl_36m),
-        arpu: formatCurrency(arpuRow.arpmau),
-        grossMargin: formatPercent(arpuRow.gross_margin),
-        contributionMargin: formatPercent(arpuRow.contribution_margin),
-        cpa: formatCurrency(cpaRow.avg_cpa),
-        cvr: formatPercent(cvrRow.average_7d_plus_m11_cvr),
-        mau: formatCompact(arpuRow.mau),
-        revenue: formatCurrency(arpuRow.monthly_revenue, 0),
+        ltv: ltvValue != null ? formatCurrency(ltvValue) : null,
+        arpu: arpuValue != null ? formatCurrency(arpuValue) : null,
+        grossMargin: grossMargin != null ? formatPercent(grossMargin) : null,
+        contributionMargin:
+          contributionMargin != null ? formatPercent(contributionMargin) : null,
+        cpa: cpaValue != null ? formatCurrency(cpaValue) : null,
+        cvr: cvrValue != null ? formatPercent(cvrValue) : null,
+        mau: mau != null ? formatCompact(mau) : null,
+        revenue: revenue != null ? formatCurrency(revenue, 0) : null,
         ltvCac: ltvCac != null ? `${ltvCac}x` : null,
         subscribers,
       };
@@ -106,89 +162,59 @@ export async function getUnitEconomicsMetrics() {
   );
 }
 
-/**
- * Pick a named query from a report-data payload, run it through the given
- * zod schema, and optionally filter to a single matching row. Returns the
- * parsed row or null when the query is missing / no row matched / the row
- * fails validation. Uses `parseRows` so validation failures are logged
- * once per batch.
- */
-function parseSingleRow<T>(
-  data: Awaited<ReturnType<typeof getReportData>>,
-  queryName: string,
-  schema: Parameters<typeof parseRows<T>>[0],
-  predicate?: (row: T) => boolean,
-): T | null {
-  const query = data.find((entry) => entry.queryName === queryName);
-  if (!query || query.rows.length === 0) return null;
-
-  const { valid } = parseRows(schema, query.rows, {
-    reportName: query.reportName,
-    queryName: query.queryName,
-  });
-  if (valid.length === 0) return null;
-
-  if (predicate) {
-    return valid.find(predicate) ?? null;
-  }
-  return valid[0];
-}
-
 // --- Headcount Metrics ---
 
 export async function getHeadcountMetrics() {
-  const emptyResult = {
-    total: null as number | null,
-    lastSync: null as Date | null,
-  };
+  const fallback = { total: null as number | null, lastSync: null as Date | null };
 
-  return withDbErrorContext("load headcount metrics", async () => {
-    const data = await getReportData("people", "headcount", ["headcount"]);
-    const headcountData = data.find((d) => d.queryName === "headcount");
+  return withMetricsFallback(
+    "load headcount metrics",
+    fallback,
+    async () => {
+      const data = await getReportData("people", "headcount", ["headcount"]);
+      const headcountData = data.find((d) => d.queryName === "headcount");
 
-    if (!headcountData || headcountData.rows.length === 0) {
-      return emptyResult;
-    }
+      if (!headcountData || headcountData.rows.length === 0) {
+        return fallback;
+      }
 
-    const { valid } = parseRows(headcountSchema, headcountData.rows, {
-      reportName: headcountData.reportName,
-      queryName: headcountData.queryName,
-    });
+      const validation = validateModeColumns({
+        row: headcountData.rows[0],
+        expectedColumns: ["start_date", "termination_date", "headcount_label"],
+        reportName: headcountData.reportName,
+        queryName: headcountData.queryName,
+      });
 
-    if (valid.length === 0) {
-      return emptyResult;
-    }
+      if (!validation.isValid) {
+        return fallback;
+      }
 
-    const activeEmployees = valid.filter(
-      (r) =>
-        (r.lifecycle_status ?? "").toLowerCase() === "employed" &&
-        r.is_cleo_headcount === 1,
-    );
-
-    return {
-      total: activeEmployees.length,
-      lastSync: headcountData.syncedAt,
-    };
-  });
+      // Match the Mode SSoT report's `headcount_monthly` definition exactly:
+      // FTE-labelled rows whose start date has passed and who haven't been terminated.
+      return {
+        total: selectModeFteActive(headcountData.rows).length,
+        lastSync: headcountData.syncedAt,
+      };
+    },
+  );
 }
 
 // --- OKR Metrics ---
 
 export async function getOkrMetrics() {
-  return withDbErrorContext("load OKR metrics", async () => {
-    const data = await getReportData("okrs", "company");
-    const okrData = data.find((d) => d.queryName === "OKR Reporting");
+  return withMetricsFallback(
+    "load OKR metrics",
+    { rows: [] as Record<string, unknown>[], lastSync: null as Date | null },
+    async () => {
+      const data = await getReportData("okrs", "company");
+      const okrData = data.find((d) => d.queryName === "OKR Reporting");
 
-    if (!okrData) {
+      if (!okrData) return { rows: [], lastSync: null };
+
       return {
-        rows: [] as Record<string, unknown>[],
-        lastSync: null as Date | null,
+        rows: okrData.rows,
+        lastSync: okrData.syncedAt,
       };
-    }
-
-    return {
-      rows: okrData.rows,
-      lastSync: okrData.syncedAt,
-    };
-  });
+    },
+  );
 }

@@ -78,6 +78,27 @@
       "when": 1776173298394,
       "tag": "0010_fantastic_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1776167956896,
+      "tag": "0011_last_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1776170835936,
+      "tag": "0012_fine_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1776441600000,
+      "tag": "0013_clerk_user_id_migration",
+      "breakpoints": true
     }
   ]
 }

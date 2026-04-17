@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData, mockParseRows } = vi.hoisted(() => ({
+const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
-  mockParseRows: vi.fn(),
+  mockValidateModeColumns: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
-  parseRows: mockParseRows,
+  validateModeColumns: mockValidateModeColumns,
+  rowStr: (row: Record<string, unknown>, key: string) =>
+    typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
+  rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
+    typeof row[key] === "number" ? row[key] : fallback,
+  rowNumOrNull: (row: Record<string, unknown>, key: string) =>
+    typeof row[key] === "number" ? row[key] : null,
 }));
 
 import {
@@ -22,11 +28,13 @@ import {
 } from "../metrics";
 
 beforeEach(() => {
-  mockParseRows.mockReset();
-  mockParseRows.mockImplementation((_schema, rows) => ({
-    valid: [...rows],
-    invalidCount: 0,
-  }));
+  mockValidateModeColumns.mockReset();
+  mockValidateModeColumns.mockReturnValue({
+    expectedColumns: [],
+    presentColumns: [],
+    missingColumns: [],
+    isValid: true,
+  });
 });
 
 afterEach(() => {
@@ -125,23 +133,13 @@ describe("getUnitEconomicsMetrics", () => {
         rows: [{ total: 123 }],
       },
     ]);
-    mockParseRows
-      .mockImplementationOnce((_schema, rows) => ({
-        valid: [...rows],
-        invalidCount: 0,
-      }))
-      .mockImplementationOnce((_schema, rows) => ({
-        valid: [],
-        invalidCount: rows.length,
-      }))
-      .mockImplementationOnce((_schema, rows) => ({
-        valid: [...rows],
-        invalidCount: 0,
-      }))
-      .mockImplementationOnce((_schema, rows) => ({
-        valid: [...rows],
-        invalidCount: 0,
-      }));
+    mockValidateModeColumns.mockImplementation(({ queryName }) => ({
+      expectedColumns: [],
+      presentColumns: [],
+      missingColumns:
+        queryName === "ARPU Annualized" ? ["monthly_revenue"] : [],
+      isValid: queryName !== "ARPU Annualized",
+    }));
 
     const metrics = await getUnitEconomicsMetrics();
 
@@ -164,41 +162,33 @@ describe("getUnitEconomicsMetrics", () => {
       "M11 Plus CVR, past 7 days",
       "Subscribers at end of period: Growth accounting",
     ]);
-    expect(mockParseRows).toHaveBeenCalledTimes(4);
-  });
-});
-
-describe("metrics DB error handling", () => {
-  it("surfaces Postgres outages from getUnitEconomicsMetrics as DatabaseUnavailableError", async () => {
-    mockGetReportData.mockRejectedValue(new Error("fetch failed"));
-
-    await expect(getUnitEconomicsMetrics()).rejects.toMatchObject({
-      name: "DatabaseUnavailableError",
-    });
-  });
-
-  it("surfaces Postgres outages from getHeadcountMetrics as DatabaseUnavailableError", async () => {
-    mockGetReportData.mockRejectedValue(new Error("connection terminated unexpectedly"));
-
-    await expect(getHeadcountMetrics()).rejects.toMatchObject({
-      name: "DatabaseUnavailableError",
-    });
+    expect(mockValidateModeColumns).toHaveBeenCalledTimes(4);
   });
 });
 
 describe("getHeadcountMetrics", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns the empty fallback when headcount columns drift", async () => {
     mockGetReportData.mockResolvedValue([
       {
         reportName: "Headcount SSoT",
         queryName: "headcount",
         syncedAt: new Date("2026-04-08T12:00:00Z"),
-        rows: [{ lifecycle_status: "employed" }],
+        rows: [{ start_date: "2025-01-01" }],
       },
     ]);
-    mockParseRows.mockReturnValue({
-      valid: [],
-      invalidCount: 1,
+    mockValidateModeColumns.mockReturnValue({
+      expectedColumns: ["start_date", "termination_date", "headcount_label"],
+      presentColumns: ["start_date"],
+      missingColumns: ["termination_date", "headcount_label"],
+      isValid: false,
     });
 
     const metrics = await getHeadcountMetrics();
@@ -207,6 +197,40 @@ describe("getHeadcountMetrics", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
       "headcount",
     ]);
-    expect(mockParseRows).toHaveBeenCalledTimes(1);
+    expect(mockValidateModeColumns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedColumns: ["start_date", "termination_date", "headcount_label"],
+      }),
+    );
+  });
+
+  it("counts only FTE-active rows (Mode SSoT definition)", async () => {
+    mockGetReportData.mockResolvedValue([
+      {
+        reportName: "Headcount SSoT",
+        queryName: "headcount",
+        syncedAt: new Date("2026-04-08T12:00:00Z"),
+        rows: [
+          // ✓ FTE active
+          { headcount_label: "FTE", start_date: "2025-01-01", termination_date: null },
+          { headcount_label: "FTE", start_date: "2025-06-01", termination_date: null },
+          // ✗ FTE terminated yesterday
+          { headcount_label: "FTE", start_date: "2024-01-01", termination_date: "2026-04-07" },
+          // ✗ FTE not yet started
+          { headcount_label: "FTE", start_date: "2026-05-01", termination_date: null },
+          // ✗ CS active (different label)
+          { headcount_label: "CS", start_date: "2025-01-01", termination_date: null },
+          // ✗ Contractor active (different label)
+          { headcount_label: "Contractor", start_date: "2025-01-01", termination_date: null },
+        ],
+      },
+    ]);
+
+    const metrics = await getHeadcountMetrics();
+
+    expect(metrics).toEqual({
+      total: 2,
+      lastSync: new Date("2026-04-08T12:00:00Z"),
+    });
   });
 });

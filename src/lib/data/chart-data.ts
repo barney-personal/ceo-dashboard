@@ -1,18 +1,11 @@
-import { getReportData, parseRows, rowStr, rowNumOrNull } from "./mode";
-import type { ZodType } from "zod";
 import {
-  type ConversionCohortRow,
-  ltvMonthlySchema,
-  kpiSpendQuerySchema,
-  activeUsersSchema,
-  monthlyRetentionSchema,
-  weeklyRetentionSchema,
-  subscriptionRetentionSchema,
-  conversionCohortSchema,
-  currentFteSchema,
-  headcountSchema,
-  userAcquisitionSchema,
-} from "@/lib/validation/mode-rows";
+  getReportData,
+  rowStr,
+  rowNum,
+  rowNumOrNull,
+  validateModeColumns,
+} from "./mode";
+import { selectModeFteActive } from "./people";
 import {
   CHART_HISTORY_FIRST_FULL_WEEK,
   CHART_HISTORY_START_TS,
@@ -28,6 +21,48 @@ type ChartSeries = {
   dashed?: boolean;
 };
 
+type ModeQueryData = Awaited<ReturnType<typeof getReportData>>[number];
+
+const KPI_LTV_QUERY_COLUMNS = ["month", "user_ltv_36m_actual"] as const;
+const KPI_QUERY3_COLUMNS = [
+  "day",
+  "actual_or_target",
+  "spend",
+  "new_bank_connected_users",
+] as const;
+const ACTIVE_USERS_QUERY_COLUMNS = ["date", "daus", "waus", "maus"] as const;
+const RETENTION_QUERY_COLUMNS = [
+  "cohort_month",
+  "activity_month",
+  "maus",
+] as const;
+const WEEKLY_RETENTION_QUERY_COLUMNS = [
+  "cohort_week",
+  "relative_moving_week",
+  "active_users_weekly",
+] as const;
+const SUBSCRIPTION_RETENTION_QUERY_COLUMNS = [
+  "subscription_type",
+  "subscriber_cohort",
+  "relative_month",
+  "pct_retained",
+  "base",
+] as const;
+const HEADCOUNT_QUERY_COLUMNS = [
+  "start_date",
+  "termination_date",
+  "headcount_label",
+  "hb_function",
+] as const;
+const CONVERSION_COHORT_COLUMNS = [
+  "cohort",
+  "metric_window",
+  "total_users",
+  "pct_premium",
+  "pct_plus",
+  "pct_nitro",
+] as const;
+
 /**
  * Returns true only if `str` is non-empty and parses to a finite timestamp.
  * Guards against invalid date strings that would cause RangeError on toISOString()
@@ -37,18 +72,24 @@ function isValidDateStr(str: string): boolean {
   return str.length > 0 && Number.isFinite(new Date(str).getTime());
 }
 
-function getValidatedRows<T>(
+function getValidatedQuery<TColumn extends string>(
   data: Awaited<ReturnType<typeof getReportData>>,
   queryName: string,
-  schema: ZodType<T>,
-): T[] | null {
+  expectedColumns: readonly TColumn[],
+): ModeQueryData | null {
   const query = data.find((entry) => entry.queryName === queryName);
-  if (!query || query.rows.length === 0) return null;
-  const { valid } = parseRows(schema, query.rows, {
+  if (!query || query.rows.length === 0) {
+    return null;
+  }
+
+  const validation = validateModeColumns({
+    row: query.rows[0],
+    expectedColumns,
     reportName: query.reportName,
     queryName: query.queryName,
   });
-  return valid.length > 0 ? valid : null;
+
+  return validation.isValid ? query : null;
 }
 
 export function getWeekStart(date: string | Date): string {
@@ -70,9 +111,9 @@ export function groupByWeek<T extends Record<string, unknown>>(
 
   for (const row of rows) {
     const date = row[dateField];
-    if (typeof date !== "string" && !(date instanceof Date)) continue;
+    if (!date) continue;
 
-    const key = getWeekStart(date);
+    const key = getWeekStart(date as string | Date);
     if (!key) continue;
     const bucket = weekMap.get(key) ?? [];
     bucket.push(row);
@@ -142,6 +183,7 @@ export function aggregateWeeklyCohortRows(
     const cohortDate = new Date(cohortStr);
     // Format as YYYY-MM-DD using UTC to avoid timezone shifts.
     const cohort = cohortDate.toISOString().slice(0, 10);
+
     const period = rowNumOrNull(row, "relative_moving_week");
     const wau = rowNumOrNull(row, "active_users_weekly");
     if (period == null || wau == null) continue;
@@ -166,14 +208,17 @@ export function aggregateWeeklyCohortRows(
  */
 export async function getLtvTimeSeries(): Promise<ColumnChartData[]> {
   const data = await getReportData("unit-economics", "kpis", ["Query 4"]);
-  const rows = getValidatedRows(data, "Query 4", ltvMonthlySchema);
-  if (!rows) return [];
+  const query = getValidatedQuery(data, "Query 4", KPI_LTV_QUERY_COLUMNS);
+  if (!query) return [];
 
-  return rows
-    .filter((r) => isValidDateStr(r.month) && r.user_ltv_36m_actual != null)
+  return query.rows
+    .filter((r) => {
+      const month = rowStr(r, "month");
+      return month && isValidDateStr(month) && r.user_ltv_36m_actual != null;
+    })
     .map((r) => ({
-      date: r.month,
-      value: r.user_ltv_36m_actual ?? 0,
+      date: rowStr(r, "month"),
+      value: rowNum(r, "user_ltv_36m_actual"),
     }))
     .filter((p) => Number.isFinite(p.value))
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -193,14 +238,15 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   ]);
 
   // 1. Build monthly LTV lookup from Query 4
-  const ltvRows = getValidatedRows(data, "Query 4", ltvMonthlySchema);
-  if (!ltvRows) return [];
+  const ltvQuery = getValidatedQuery(data, "Query 4", KPI_LTV_QUERY_COLUMNS);
+  if (!ltvQuery) return [];
 
   const ltvByMonth = new Map<string, number>();
-  for (const row of ltvRows) {
-    const ltv = row.user_ltv_36m_actual;
-    if (!isValidDateStr(row.month) || ltv == null) continue;
-    const d = new Date(row.month);
+  for (const row of ltvQuery.rows) {
+    const month = rowStr(row, "month");
+    const ltv = rowNumOrNull(row, "user_ltv_36m_actual");
+    if (!month || !isValidDateStr(month) || ltv == null) continue;
+    const d = new Date(month);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     ltvByMonth.set(key, ltv);
   }
@@ -220,8 +266,8 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
   }
 
   // 2. Aggregate Query 3 "actual" rows into weekly buckets
-  const q3Rows = getValidatedRows(data, "Query 3", kpiSpendQuerySchema);
-  if (!q3Rows) return [];
+  const q3 = getValidatedQuery(data, "Query 3", KPI_QUERY3_COLUMNS);
+  if (!q3) return [];
 
   const CHARTS_START = new Date("2023-01-01").getTime();
 
@@ -229,17 +275,18 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
     string,
     { spend: number; users: number; days: number }
   >();
-  for (const r of q3Rows) {
-    if (!isValidDateStr(r.day)) continue;
-    if (r.actual_or_target !== "actual") continue;
-    const d = new Date(r.day);
+  for (const r of q3.rows) {
+    const day = rowStr(r, "day");
+    if (!day || !isValidDateStr(day)) continue;
+    if (rowStr(r, "actual_or_target") !== "actual") continue;
+    const d = new Date(day);
     if (d.getTime() < CHARTS_START) continue;
 
     const key = getWeekStart(d);
     if (!key) continue;
 
-    const spend = r.spend;
-    const users = r.new_bank_connected_users;
+    const spend = rowNumOrNull(r, "spend");
+    const users = rowNumOrNull(r, "new_bank_connected_users");
     if (spend == null || users == null) continue;
 
     const b = weekMap.get(key) ?? { spend: 0, users: 0, days: 0 };
@@ -334,8 +381,8 @@ export async function getQuery3Series(): Promise<{
   cpa: ChartSeries[];
 }> {
   const data = await getReportData("unit-economics", "kpis", ["Query 3"]);
-  const validRows = getValidatedRows(data, "Query 3", kpiSpendQuerySchema);
-  if (!validRows)
+  const query = getValidatedQuery(data, "Query 3", KPI_QUERY3_COLUMNS);
+  if (!query)
     return { spend: [], users: [], cpa: [] };
 
   const colors: Record<string, string> = {
@@ -348,20 +395,21 @@ export async function getQuery3Series(): Promise<{
     string,
     { date: string; spend: number; users: number }[]
   >();
-  for (const r of validRows) {
-    if (!isValidDateStr(r.day)) continue;
-    if (new Date(r.day).getTime() < CHART_HISTORY_START_TS) continue;
-    const spend = r.spend;
-    const users = r.new_bank_connected_users;
+  for (const r of query.rows) {
+    const day = rowStr(r, "day");
+    if (!day || !isValidDateStr(day)) continue;
+    if (new Date(day).getTime() < CHART_HISTORY_START_TS) continue;
+    const spend = rowNumOrNull(r, "spend");
+    const users = rowNumOrNull(r, "new_bank_connected_users");
     if (spend == null || users == null) continue;
-    const type = r.actual_or_target;
+    const type = rowStr(r, "actual_or_target");
     let arr = byType.get(type);
     if (!arr) {
       arr = [];
       byType.set(type, arr);
     }
     arr.push({
-      date: r.day,
+      date: rowStr(r, "day"),
       spend,
       users,
     });
@@ -422,18 +470,21 @@ export async function getQuery3Series(): Promise<{
  */
 export async function getLatestMAU(): Promise<number | null> {
   const data = await getReportData("product", "active-users");
-  const rows = getValidatedRows(data, "dau-wau-mau query all time", activeUsersSchema);
-  if (!rows) return null;
+  const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
+  if (!query || query.rows.length === 0) return null;
 
-  const sorted = rows
-    .filter((r) => isValidDateStr(r.date) && r.maus != null)
+  const sorted = query.rows
+    .filter((r) => {
+      const dateStr = rowStr(r, "date");
+      return dateStr && isValidDateStr(dateStr) && r.maus != null;
+    })
     .sort(
       (a, b) =>
-        new Date(b.date).getTime() -
-        new Date(a.date).getTime(),
+        new Date(rowStr(b, "date")).getTime() -
+        new Date(rowStr(a, "date")).getTime(),
     );
 
-  return sorted[0]?.maus ?? null;
+  return sorted[0] ? rowNumOrNull(sorted[0], "maus") : null;
 }
 
 // --- Product ---
@@ -452,20 +503,23 @@ export async function getActiveUsersSeries(): Promise<{
   const data = await getReportData("product", "active-users", [
     "dau-wau-mau query all time",
   ]);
-  const validRows = getValidatedRows(
+  const query = getValidatedQuery(
     data,
     "dau-wau-mau query all time",
-    activeUsersSchema,
+    ACTIVE_USERS_QUERY_COLUMNS,
   );
-  if (!validRows) return { dau: [], wau: [], mau: [] };
+  if (!query) return { dau: [], wau: [], mau: [] };
 
-  const rows = validRows
-    .filter((r) => isValidDateStr(r.date))
+  const rows = query.rows
+    .filter((r) => {
+      const dateStr = rowStr(r, "date");
+      return dateStr && isValidDateStr(dateStr);
+    })
     .map((r) => ({
-      date: new Date(r.date),
-      daus: r.daus ?? null,
-      waus: r.waus ?? null,
-      maus: r.maus ?? null,
+      date: new Date(rowStr(r, "date")),
+      daus: rowNumOrNull(r, "daus"),
+      waus: rowNumOrNull(r, "waus"),
+      maus: rowNumOrNull(r, "maus"),
     }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
@@ -544,12 +598,12 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("product", "active-users", [
     "dau-wau-mau query all time",
   ]);
-  const validRows = getValidatedRows(
+  const query = getValidatedQuery(
     data,
     "dau-wau-mau query all time",
-    activeUsersSchema,
+    ACTIVE_USERS_QUERY_COLUMNS,
   );
-  if (!validRows) return [];
+  if (!query) return [];
 
   // Group by month, compute ratio of averages
   const byMonth = new Map<
@@ -557,18 +611,19 @@ export async function getEngagementSeries(): Promise<ChartSeries[]> {
     { daus: number[]; waus: number[]; maus: number[] }
   >();
 
-  for (const row of validRows) {
-    if (!isValidDateStr(row.date)) continue;
-    const d = new Date(row.date);
+  for (const row of query.rows) {
+    const dateStr = rowStr(row, "date");
+    if (!dateStr || !isValidDateStr(dateStr)) continue;
+    const d = new Date(dateStr);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     let bucket = byMonth.get(key);
     if (!bucket) {
       bucket = { daus: [], waus: [], maus: [] };
       byMonth.set(key, bucket);
     }
-    const daus = row.daus ?? null;
-    const waus = row.waus ?? null;
-    const maus = row.maus ?? null;
+    const daus = rowNumOrNull(row, "daus");
+    const waus = rowNumOrNull(row, "waus");
+    const maus = rowNumOrNull(row, "maus");
     if (daus != null) bucket.daus.push(daus);
     if (waus != null) bucket.waus.push(waus);
     if (maus != null) bucket.maus.push(maus);
@@ -606,10 +661,10 @@ export async function getMauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
   const data = await getReportData("product", "retention", ["Query 1"]);
-  const rows = getValidatedRows(data, "Query 1", monthlyRetentionSchema);
-  if (!rows) return [];
+  const query = getValidatedQuery(data, "Query 1", RETENTION_QUERY_COLUMNS);
+  if (!query) return [];
 
-  const byCohort = aggregateCohortRows(rows);
+  const byCohort = aggregateCohortRows(query.rows);
 
   const cohorts = [...byCohort.keys()].sort();
 
@@ -649,11 +704,8 @@ const WAU_RETENTION_MIN_PERIODS = 1;
 const WAU_RETENTION_MAX_COHORTS = 52;
 
 /**
- * Monday 00:00 UTC of the current (incomplete) ISO week. Any retention
- * observation whose week starts at or after this cutoff still has days
- * left for users to be counted as active, so its retention % is
- * misleadingly low. Matches Redshift's `DATE_TRUNC('week', ...)` which
- * is Monday-aligned.
+ * Monday 00:00 UTC of the current (incomplete) ISO week. Matches
+ * Redshift's `DATE_TRUNC('week', ...)`, which is Monday-aligned.
  */
 function currentIncompleteWeekStart(now: Date = new Date()): Date {
   const d = new Date(
@@ -666,6 +718,21 @@ function currentIncompleteWeekStart(now: Date = new Date()): Date {
 }
 
 /**
+ * Weekly active-user retention is still noisy for the most recently
+ * completed ISO week, so the heatmap hides both:
+ *   1. the current incomplete week, and
+ *   2. the latest fully closed week
+ *
+ * That removes the newest visible diagonal from the triangle, which is
+ * the row users most often interpret as "unmatured".
+ */
+function wauRetentionMaturityCutoff(now: Date = new Date()): Date {
+  const d = currentIncompleteWeekStart(now);
+  d.setUTCDate(d.getUTCDate() - 7);
+  return d;
+}
+
+/**
  * Weekly WAU retention cohort triangle from the App Retention Weekly
  * dataset (4e4ed264ed7a, Query 1). Aggregates `active_users_weekly`
  * across segment dimensions, then expresses each cohort as a retention
@@ -673,35 +740,38 @@ function currentIncompleteWeekStart(now: Date = new Date()): Date {
  *
  * Returns at most {@link WAU_RETENTION_MAX_COHORTS} cohorts, newest last,
  * dropping W0 (always 100%) and any per-cohort observation that falls in
- * the current (incomplete) ISO week — the "unmatured diagonal". An
- * observation at `cohort_week + relative_moving_week * 7 days` that lands
- * on or after the current Monday still has days left for users to be
- * counted as active, so its retention % would be misleadingly low.
- * Filtering per observation (rather than a single global `max - 1` drop)
- * correctly trims only the diagonal that touches the current week.
+ * either the current ISO week or the latest fully closed ISO week. This
+ * removes the newest visible diagonal from the triangle so only matured
+ * weekly observations remain.
  */
 export async function getWauRetentionCohorts(): Promise<
   { cohort: string; periods: (number | null)[] }[]
 > {
   const data = await getReportData("product", "retention-weekly", ["Query 1"]);
-  const validRows = getValidatedRows(
+  const query = getValidatedQuery(
     data,
     "Query 1",
-    weeklyRetentionSchema,
+    WEEKLY_RETENTION_QUERY_COLUMNS,
   );
-  if (!validRows) return [];
+  if (!query) return [];
 
   // Drop any (cohort, period) observation whose observation date lands in
-  // the current incomplete week — the "unmatured diagonal". This is
-  // applied per row so every cohort loses exactly the cell that maps to
-  // the current week, not a fixed global tail.
-  const cutoff = currentIncompleteWeekStart().getTime();
+  // the current ISO week or the latest fully closed ISO week. This is
+  // applied per row so every cohort loses the newest visible diagonal,
+  // not a fixed global tail.
+  const cutoff = wauRetentionMaturityCutoff().getTime();
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-  const maturedRows = validRows.filter((row) => {
-    if (!isValidDateStr(row.cohort_week)) return true;
-    const cohortMs = new Date(row.cohort_week).getTime();
+  const maturedRows = query.rows.filter((row) => {
+    const cohortStr = rowStr(row, "cohort_week");
+    const period = rowNumOrNull(row, "relative_moving_week");
+    if (!isValidDateStr(cohortStr) || period == null) {
+      // Keep malformed rows — aggregateWeeklyCohortRows will drop them
+      // with the same validity checks and produce consistent behaviour.
+      return true;
+    }
+    const cohortMs = new Date(cohortStr).getTime();
     if (!Number.isFinite(cohortMs)) return true;
-    const observationMs = cohortMs + row.relative_moving_week * WEEK_MS;
+    const observationMs = cohortMs + period * WEEK_MS;
     return observationMs < cutoff;
   });
 
@@ -746,12 +816,12 @@ export async function getSubscriptionRetentionCohorts(): Promise<
   RetentionTier[]
 > {
   const data = await getReportData("unit-economics", "retention", ["Query 1"]);
-  const validRows = getValidatedRows(
+  const query = getValidatedQuery(
     data,
     "Query 1",
-    subscriptionRetentionSchema,
+    SUBSCRIPTION_RETENTION_QUERY_COLUMNS,
   );
-  if (!validRows) return [];
+  if (!query) return [];
 
   // Group rows by subscription_type → cohort → period
   const byType = new Map<
@@ -759,13 +829,14 @@ export async function getSubscriptionRetentionCohorts(): Promise<
     Map<string, Map<number, { pctRetained: number; base: number }>>
   >();
 
-  for (const row of validRows) {
-    const type = row.subscription_type;
-    const cohortRaw = row.subscriber_cohort;
-    const period = row.relative_month;
-    const pctRetained = row.pct_retained;
-    const base = row.base ?? null;
+  for (const row of query.rows) {
+    const type = rowStr(row, "subscription_type");
+    const cohortRaw = rowStr(row, "subscriber_cohort");
+    const period = rowNumOrNull(row, "relative_month");
+    const pctRetained = rowNumOrNull(row, "pct_retained");
+    const base = rowNumOrNull(row, "base");
 
+    if (!type || !cohortRaw || period == null || pctRetained == null) continue;
     if (!isValidDateStr(cohortRaw)) continue;
 
     const cohortDate = new Date(cohortRaw);
@@ -838,39 +909,19 @@ export async function getSubscriptionRetentionCohorts(): Promise<
 
 /**
  * Headcount by department for bar chart.
- * Primary: Current FTEs report (function_name). Fallback: Headcount SSoT (hb_function).
+ * Source: Headcount SSoT report, FTE-active rows (Mode definition), grouped by hb_function.
+ * Aligns with `getHeadcountMetrics` and the Org page tile.
  */
 export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
-  // Try Current FTEs first
-  const fteData = await getReportData("people", "org", ["current_employees"]);
-  const fteRows = getValidatedRows(fteData, "current_employees", currentFteSchema);
-
-  if (fteRows) {
-    const byDept = new Map<string, number>();
-    for (const emp of fteRows) {
-      if (emp.pillar_name === "no pillar" || emp.squad_name === "no squad") continue;
-      const dept = emp.function_name || "Unknown";
-      byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
-    }
-    return [...byDept.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([label, value]) => ({ label, value, color: "#3b3bba" }));
-  }
-
-  // Fallback to old report
   const data = await getReportData("people", "headcount", ["headcount"]);
-  const hcRows = getValidatedRows(data, "headcount", headcountSchema);
-  if (!hcRows) return [];
+  const query = getValidatedQuery(data, "headcount", HEADCOUNT_QUERY_COLUMNS);
+  if (!query) return [];
 
-  const active = hcRows.filter(
-    (r) =>
-      (r.lifecycle_status ?? "").toLowerCase() === "employed" &&
-      r.is_cleo_headcount === 1,
-  );
+  const active = selectModeFteActive(query.rows);
 
   const byDept = new Map<string, number>();
   for (const emp of active) {
-    const dept = emp.hb_function || "Unknown";
+    const dept = rowStr(emp, "hb_function") || "Unknown";
     byDept.set(dept, (byDept.get(dept) ?? 0) + 1);
   }
 
@@ -884,31 +935,38 @@ export async function getHeadcountByDepartment(): Promise<BarChartData[]> {
  */
 export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
   const data = await getReportData("okrs", "company");
-  const validRows = getValidatedRows(data, "User Acquisition", userAcquisitionSchema);
-  if (!validRows) return [];
+  const query = data.find((d) => d.queryName === "User Acquisition");
+  if (!query) return [];
 
-  const rows = validRows
-    .filter((r) => isValidDateStr(r.month))
+  const rows = query.rows
+    .filter((r) => {
+      const month = rowStr(r, "month");
+      return month && isValidDateStr(month);
+    })
     .sort(
       (a, b) =>
-        new Date(a.month).getTime() -
-        new Date(b.month).getTime(),
+        new Date(rowStr(a, "month")).getTime() -
+        new Date(rowStr(b, "month")).getTime(),
     );
 
-  if (rows.length === 0) return [];
+  // Check what columns exist
+  const firstRow = rows[0];
+  if (!firstRow) return [];
 
   const series: ChartSeries[] = [];
 
-  series.push({
-    label: "New Users",
-    color: "#3b3bba",
-    data: rows
-      .map((r) => {
-        const value = r.new_bank_connected_users;
-        return value != null ? { date: r.month, value } : null;
-      })
-      .filter((p): p is { date: string; value: number } => p !== null),
-  });
+  if ("new_bank_connected_users" in firstRow) {
+    series.push({
+      label: "New Users",
+      color: "#3b3bba",
+      data: rows
+        .map((r) => {
+          const value = rowNumOrNull(r, "new_bank_connected_users");
+          return value != null ? { date: rowStr(r, "month"), value } : null;
+        })
+        .filter((p): p is { date: string; value: number } => p !== null),
+    });
+  }
 
   return series;
 }
@@ -922,15 +980,17 @@ export async function getUserAcquisitionSeries(): Promise<ChartSeries[]> {
 function loadCohortConversionRows(
   data: Awaited<ReturnType<typeof getReportData>>,
 ) {
-  const rows = getValidatedRows(
+  const query = getValidatedQuery(
     data,
     "agg_cohort_conversion_rate_by_window",
-    conversionCohortSchema,
+    CONVERSION_COHORT_COLUMNS,
   );
-  if (!rows) return [];
+  if (!query) return [];
 
-  return rows.filter((r) => {
-    return isValidDateStr(r.cohort) && r.total_users != null && r.total_users > 1000;
+  return query.rows.filter((r) => {
+    const cohort = rowStr(r, "cohort");
+    const users = rowNumOrNull(r, "total_users");
+    return cohort && isValidDateStr(cohort) && users != null && users > 1000;
   });
 }
 
@@ -962,14 +1022,14 @@ export async function getConversionByWindowSeries(): Promise<ChartSeries[]> {
     data: rows
       .filter(
         (r) =>
-          r.metric_window === window &&
-          r.cohort >= MIN_COHORT,
+          rowStr(r, "metric_window") === window &&
+          rowStr(r, "cohort") >= MIN_COHORT,
       )
       .map((r) => {
-        const cohort = new Date(r.cohort);
+        const cohort = new Date(rowStr(r, "cohort"));
         return {
           date: cohort.toISOString().slice(0, 10),
-          value: (r.pct_premium ?? 0) * 100,
+          value: rowNum(r, "pct_premium") * 100,
         };
       })
       .filter((p) => Number.isFinite(p.value))
@@ -981,30 +1041,12 @@ export type ConversionHeatmapData = {
   [product: string]: { cohort: string; periods: (number | null)[] }[];
 };
 
-type ConversionPctField = "pct_premium" | "pct_plus" | "pct_ai" | "pct_nitro";
-
-const HEATMAP_PRODUCTS: { key: string; field: ConversionPctField }[] = [
+const HEATMAP_PRODUCTS: { key: string; field: string }[] = [
   { key: "All", field: "pct_premium" },
   { key: "Plus", field: "pct_plus" },
   { key: "AI Pro", field: "pct_ai" },
   { key: "Builder", field: "pct_nitro" },
 ];
-
-function getConversionPct(
-  row: ConversionCohortRow,
-  field: ConversionPctField,
-): number | null {
-  switch (field) {
-    case "pct_ai":
-      return row.pct_ai ?? null;
-    case "pct_nitro":
-      return row.pct_nitro ?? null;
-    case "pct_plus":
-      return row.pct_plus ?? null;
-    case "pct_premium":
-      return row.pct_premium ?? null;
-  }
-}
 
 /**
  * Conversion cohort triangle for heatmap display.
@@ -1024,13 +1066,14 @@ export async function getConversionCohortHeatmap(): Promise<ConversionHeatmapDat
   for (const { key, field } of HEATMAP_PRODUCTS) {
     const byCohort = new Map<string, Map<string, number>>();
     for (const r of rows) {
-      const cohort = new Date(r.cohort).toISOString().slice(0, 7);
-      if (!MONTH_WINDOWS.includes(r.metric_window)) continue;
-      const pct = getConversionPct(r, field);
+      const cohort = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
+      const window = rowStr(r, "metric_window");
+      if (!MONTH_WINDOWS.includes(window)) continue;
+      const pct = rowNumOrNull(r, field);
       if (pct == null || !Number.isFinite(pct)) continue;
 
       if (!byCohort.has(cohort)) byCohort.set(cohort, new Map());
-      byCohort.get(cohort)!.set(r.metric_window, pct);
+      byCohort.get(cohort)!.set(window, pct);
     }
 
     const cohorts = [...byCohort.keys()].sort().slice(-24);
@@ -1061,10 +1104,10 @@ export type ConversionCurveData = {
  * taking the most recent ones. This keeps the curve charts evergreen
  * without needing manual updates when new cohorts appear.
  */
-function pickCohorts(rows: ConversionCohortRow[], maxCount = 5): string[] {
+function pickCohorts(rows: Record<string, unknown>[], maxCount = 5): string[] {
   const seen = new Set<string>();
   for (const r of rows) {
-    const key = new Date(r.cohort).toISOString().slice(0, 7);
+    const key = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
     seen.add(key);
   }
   // Keep only Jan + Jul cohorts, sorted chronologically, take the latest N
@@ -1086,13 +1129,13 @@ const MONTH_WINDOWS = [
  * Extracts the given pct field for each cohort pick across M0–M11.
  */
 function buildProductCurves(
-  rows: ConversionCohortRow[],
-  pctField: ConversionPctField,
+  rows: Record<string, unknown>[],
+  pctField: string,
   cohorts: string[],
 ): ConversionCurveData[] {
   return cohorts.map((cohortPrefix) => {
     const cohortRows = rows.filter((r) => {
-      const key = new Date(r.cohort).toISOString().slice(0, 7);
+      const key = new Date(rowStr(r, "cohort")).toISOString().slice(0, 7);
       return key === cohortPrefix;
     });
 
@@ -1100,9 +1143,9 @@ function buildProductCurves(
       label: cohortPrefix,
       color: "", // assigned by the chart component via sequential ramp
       data: MONTH_WINDOWS.map((w) => {
-        const row = cohortRows.find((r) => r.metric_window === w);
+        const row = cohortRows.find((r) => rowStr(r, "metric_window") === w);
         if (!row) return null;
-        const value = (getConversionPct(row, pctField) ?? 0) * 100;
+        const value = rowNum(row, pctField) * 100;
         if (!Number.isFinite(value) || value === 0) return null;
         return { step: w, value };
       }).filter((p): p is { step: string; value: number } => p !== null),
@@ -1129,7 +1172,7 @@ export async function getProductConversionCurves(): Promise<ProductConversionPan
 
   const cohorts = pickCohorts(rows);
 
-  const PRODUCTS: { product: string; field: ConversionPctField }[] = [
+  const PRODUCTS: { product: string; field: string }[] = [
     { product: "Plus", field: "pct_plus" },
     { product: "Builder", field: "pct_nitro" },
     { product: "AI Pro", field: "pct_ai" },
@@ -1169,10 +1212,10 @@ export async function getLatestM6ConversionRate(): Promise<{
   if (rows.length === 0) return null;
 
   const m6Rows = rows
-    .filter((r) => r.metric_window === "M6")
+    .filter((r) => rowStr(r, "metric_window") === "M6")
     .map((r) => ({
-      date: new Date(r.cohort),
-      pct: (r.pct_premium ?? 0) * 100,
+      date: new Date(rowStr(r, "cohort")),
+      pct: rowNum(r, "pct_premium") * 100,
     }))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
 
