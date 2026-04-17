@@ -76,3 +76,23 @@ export function summarizeZodIssues(error: z.ZodError): string {
     .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
     .join("; ");
 }
+
+// ----------------------------------------------------------------------------
+// GitHub → employee LLM match shape
+// ----------------------------------------------------------------------------
+
+export const githubEmployeeMatchSchema = z
+  .object({
+    login: z.string().trim().min(1),
+    employeeName: z.string().trim().min(1),
+    employeeEmail: z.string().trim().min(1),
+  })
+  .passthrough();
+
+export const githubEmployeeMatchArraySchema = z.array(
+  githubEmployeeMatchSchema,
+);
+
+export type GithubEmployeeMatchInput = z.infer<
+  typeof githubEmployeeMatchSchema
+>;

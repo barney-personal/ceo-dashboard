@@ -14,6 +14,8 @@ import {
   checkModeHealth,
   getLatestRun,
   getQueryResultContent,
+  getQueryRuns,
+  getReportQueries,
   streamQueryResultAndAggregate,
 } from "../mode";
 import type { ModeRowAggregator } from "../mode-config";
@@ -217,6 +219,82 @@ describe("Mode transport resilience", () => {
           requestType: "query-result",
           status: 403,
           responseBody: "forbidden",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed query_runs envelopes before they enter sync logic", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ _embedded: { query_runs: [{ token: "qr-1" }] } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      getQueryRuns("report-token", "run-token"),
+    ).rejects.toMatchObject({
+      name: "ModeEnvelopeValidationError",
+      envelope: "query_runs",
+    });
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ModeEnvelopeValidationError",
+        envelope: "query_runs",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "mode",
+          mode_envelope_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/runs/run-token/query_runs",
+          envelope: "query_runs",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed report-queries envelopes before they enter sync logic", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ _embedded: { queries: [{ token: "q-1" }] } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getReportQueries("report-token")).rejects.toMatchObject({
+      name: "ModeEnvelopeValidationError",
+      envelope: "queries",
+    });
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ModeEnvelopeValidationError",
+        envelope: "queries",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "mode",
+          mode_envelope_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/queries",
+          envelope: "queries",
         }),
       }),
     );
