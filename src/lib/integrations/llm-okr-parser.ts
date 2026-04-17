@@ -42,8 +42,24 @@ export interface OkrParseInput {
   channelContext: string;
 }
 
+export interface OkrEnvelopeValidationFailure {
+  reason: "envelope" | "batch_item";
+  issues: string;
+  rawPayloadPreview: string;
+  batchIndex?: number;
+}
+
 interface ParseOkrOptions {
   signal?: AbortSignal;
+  /**
+   * Fires when Claude returned a non-null JSON payload that failed envelope
+   * validation. Lets callers count malformed envelopes separately from true
+   * "not an OKR update" nulls — a response-shape drift is still a signal we
+   * need to see in sync metrics, not silent data loss.
+   */
+  onEnvelopeValidationFailure?: (
+    failure: OkrEnvelopeValidationFailure,
+  ) => void;
 }
 
 interface AnthropicFailureShape {
@@ -276,6 +292,7 @@ function validateParsedKr(
 
 function validateParsedEnvelope(
   parsed: unknown,
+  opts: ParseOkrOptions,
   rawResponse?: string,
   itemIndex?: number,
 ): ValidParsedEnvelope | null {
@@ -288,15 +305,25 @@ function validateParsedEnvelope(
     };
   }
 
+  const issues = summarizeZodIssues(result.error);
+  const preview = rawResponse ?? toShortPreview(parsed);
+
   Sentry.captureMessage("OKR envelope failed zod validation", {
     level: "warning",
     tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
     extra: {
       operation: "validateParsedEnvelope",
-      issues: summarizeZodIssues(result.error),
-      rawResponse: rawResponse ?? toShortPreview(parsed),
+      issues,
+      rawResponse: preview,
       ...(itemIndex !== undefined ? { itemIndex } : {}),
     },
+  });
+
+  opts.onEnvelopeValidationFailure?.({
+    reason: itemIndex === undefined ? "envelope" : "batch_item",
+    issues,
+    rawPayloadPreview: preview,
+    ...(itemIndex !== undefined ? { batchIndex: itemIndex } : {}),
   });
   return null;
 }
@@ -471,7 +498,7 @@ async function parseSingleOkrUpdate(
 
   try {
     const parsed = JSON.parse(trimmed);
-    const envelope = validateParsedEnvelope(parsed, trimmed);
+    const envelope = validateParsedEnvelope(parsed, opts, trimmed);
     if (!envelope) {
       return null;
     }
@@ -588,7 +615,7 @@ export async function llmParseOkrUpdates(
         return null;
       }
 
-      const envelope = validateParsedEnvelope(item, trimmed, index);
+      const envelope = validateParsedEnvelope(item, opts, trimmed, index);
       return envelope ? toParsedOkrUpdate(envelope) : null;
     });
   } catch {
