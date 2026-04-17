@@ -33,28 +33,25 @@ export default async function FinancialPage({
     null,
   );
 
-  let data: Awaited<ReturnType<typeof getManagementAccountsData>> | null = null;
-  let dataError: unknown = null;
+  let data: Awaited<ReturnType<typeof getManagementAccountsData>> = null;
+  let dbError: DatabaseUnavailableError | null = null;
   try {
     data = await getManagementAccountsData(period);
   } catch (error) {
     if (error instanceof DatabaseUnavailableError) {
-      dataError = error;
+      dbError = error;
     } else {
-      // Empty (no files yet) or Slack/parse errors — surface as empty state.
-      dataError = error;
+      // Slack/download/parse failures are not empty-state — let the route
+      // error boundary surface them instead of masking as "no files yet".
+      throw error;
     }
   }
-
-  const firstUnavailable =
-    latestSyncRunResult.error ??
-    (dataError instanceof DatabaseUnavailableError ? dataError : null);
 
   const pageState = resolveDataState({
     source: "management-accounts",
     hasData: data !== null,
     latestSyncRun: latestSyncRunResult.data,
-    error: firstUnavailable,
+    error: latestSyncRunResult.error ?? dbError,
   });
 
   if (pageState.kind === "unavailable") {
