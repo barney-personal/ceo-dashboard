@@ -349,6 +349,43 @@ describe("llmParseOkrUpdate timeout", () => {
     );
   });
 
+  it("surfaces non-null envelope validation failures distinctly from true nulls via onEnvelopeValidationFailure", async () => {
+    mockMessages.create
+      .mockResolvedValueOnce({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ squadName: "Growth", krs: "not-an-array" }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "null" }],
+      });
+
+    const onEnvelopeValidationFailure = vi.fn();
+
+    await expect(
+      llmParseOkrUpdate("message-1", "#channel", "system prompt", {
+        onEnvelopeValidationFailure,
+      }),
+    ).resolves.toBeNull();
+
+    await expect(
+      llmParseOkrUpdate("message-2", "#channel", "system prompt", {
+        onEnvelopeValidationFailure,
+      }),
+    ).resolves.toBeNull();
+
+    expect(onEnvelopeValidationFailure).toHaveBeenCalledTimes(1);
+    expect(onEnvelopeValidationFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "envelope",
+        issues: expect.stringContaining("krs"),
+      }),
+    );
+  });
+
   it("logs the full batch payload and item index when one envelope fails zod validation", async () => {
     const batchArray = [
       {

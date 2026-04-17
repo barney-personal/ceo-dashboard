@@ -1,5 +1,15 @@
 import * as Sentry from "@sentry/nextjs";
+import type { ZodType } from "zod";
 
+import {
+  conversationsHistoryEnvelopeSchema,
+  conversationsInfoEnvelopeSchema,
+  SlackEnvelopeValidationError,
+  usersInfoEnvelopeSchema,
+  type ConversationsHistoryEnvelope,
+  type ConversationsInfoEnvelope,
+  type UsersInfoEnvelope,
+} from "@/lib/validation/slack-envelope";
 import { acquireSlackRateLimitToken } from "./slack-rate-limit";
 
 export const SLACK_API = "https://slack.com/api";
@@ -466,21 +476,30 @@ export interface SlackMessage {
   reply_count?: number;
 }
 
-interface ConversationsHistoryResponse {
-  ok: boolean;
-  messages: SlackMessage[];
-  has_more: boolean;
-  response_metadata?: { next_cursor?: string };
-}
+export function validateSlackEnvelope<T>(
+  method: string,
+  schema: ZodType<T>,
+  raw: unknown,
+): T {
+  const result = schema.safeParse(raw);
+  if (result.success) {
+    return result.data;
+  }
 
-interface ConversationsInfoResponse {
-  ok: boolean;
-  channel: { name: string; id: string };
-}
+  const issues = result.error.issues
+    .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+    .join("; ");
 
-interface UsersInfoResponse {
-  ok: boolean;
-  user: { real_name: string; profile: { display_name: string } };
+  const error = new SlackEnvelopeValidationError(method, issues);
+  Sentry.captureException(error, {
+    level: "error",
+    tags: { integration: "slack", slack_envelope_invalid: "true" },
+    extra: {
+      method,
+      issues,
+    },
+  });
+  throw error;
 }
 
 /**
@@ -505,13 +524,18 @@ export async function getChannelHistory(
     if (latest) params.latest = latest;
     if (cursor) params.cursor = cursor;
 
-    const data = await slackApiRequest<ConversationsHistoryResponse>(
+    const raw = await slackApiRequest<unknown>(
       "conversations.history",
       params,
       { signal: opts.signal },
     );
+    const data: ConversationsHistoryEnvelope = validateSlackEnvelope(
+      "conversations.history",
+      conversationsHistoryEnvelopeSchema,
+      raw,
+    );
 
-    allMessages.push(...data.messages);
+    allMessages.push(...(data.messages as SlackMessage[]));
     cursor = data.has_more ? data.response_metadata?.next_cursor : undefined;
   } while (cursor);
 
@@ -538,13 +562,18 @@ export async function getThreadReplies(
     };
     if (cursor) params.cursor = cursor;
 
-    const data = await slackApiRequest<ConversationsHistoryResponse>(
+    const raw = await slackApiRequest<unknown>(
       "conversations.replies",
       params,
       { signal: opts.signal },
     );
+    const data: ConversationsHistoryEnvelope = validateSlackEnvelope(
+      "conversations.replies",
+      conversationsHistoryEnvelopeSchema,
+      raw,
+    );
 
-    allMessages.push(...data.messages);
+    allMessages.push(...(data.messages as SlackMessage[]));
     cursor = data.has_more ? data.response_metadata?.next_cursor : undefined;
   } while (cursor);
 
@@ -563,7 +592,7 @@ export async function getChannelName(
   channelId: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
-  const data = await slackApiRequest<ConversationsInfoResponse>(
+  const raw = await slackApiRequest<unknown>(
     "conversations.info",
     { channel: channelId },
     {
@@ -571,6 +600,11 @@ export async function getChannelName(
       suppressedStatuses: [404],
       suppressedCodes: ["channel_not_found"],
     },
+  );
+  const data: ConversationsInfoEnvelope = validateSlackEnvelope(
+    "conversations.info",
+    conversationsInfoEnvelopeSchema,
+    raw,
   );
   return data.channel.name;
 }
@@ -587,15 +621,20 @@ export async function getUserName(
   if (userNameCache.has(userId)) return userNameCache.get(userId)!;
 
   try {
-    const data = await slackApiRequest<UsersInfoResponse>(
+    const raw = await slackApiRequest<unknown>(
       "users.info",
       {
         user: userId,
       },
       { signal: opts.signal },
     );
+    const data: UsersInfoEnvelope = validateSlackEnvelope(
+      "users.info",
+      usersInfoEnvelopeSchema,
+      raw,
+    );
     const name =
-      data.user.profile.display_name || data.user.real_name || userId;
+      data.user.profile?.display_name || data.user.real_name || userId;
     userNameCache.set(userId, name);
     return name;
   } catch (error) {

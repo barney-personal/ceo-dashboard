@@ -313,6 +313,42 @@ describe("Slack transport resilience", () => {
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed conversations.info envelopes at the boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: true, channel: { id: "C123" } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getChannelName("C123")).rejects.toMatchObject({
+      name: "SlackEnvelopeValidationError",
+      method: "conversations.info",
+    });
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "SlackEnvelopeValidationError",
+        method: "conversations.info",
+      }),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({
+          integration: "slack",
+          slack_envelope_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          method: "conversations.info",
+        }),
+      }),
+    );
+  });
+
   it("fails Slack health checks on timeout without retrying", async () => {
     const fetchMock = vi.fn((_input, init?: RequestInit) => {
       return new Promise((_, reject) => {

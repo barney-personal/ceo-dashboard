@@ -10,6 +10,10 @@ import {
 import { eq } from "drizzle-orm";
 import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
+import {
+  githubEmployeeMatchArraySchema,
+  summarizeZodIssues,
+} from "@/lib/validation/llm-output";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
 const BOT_PATTERNS = ["[bot]", "circleci", "dependabot", "cursor", "github-actions"];
@@ -168,32 +172,43 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  let rawParsed: unknown;
   try {
-    // Extract JSON from response (handle markdown code blocks)
     const jsonStr = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(jsonStr) as unknown[];
-
-    // Validate and build a set of known employee emails for verification
-    const emailSet = new Set(employees.map((e) => e.employee_email.toLowerCase()));
-
-    return parsed
-      .filter((item): item is { login: string; employeeName: string; employeeEmail: string } => {
-        if (!item || typeof item !== "object") return false;
-        const obj = item as Record<string, unknown>;
-        return (
-          typeof obj.login === "string" &&
-          typeof obj.employeeName === "string" &&
-          typeof obj.employeeEmail === "string" &&
-          emailSet.has((obj.employeeEmail as string).toLowerCase())
-        );
-      });
+    rawParsed = JSON.parse(jsonStr);
   } catch {
     Sentry.captureMessage("Failed to parse LLM employee match response", {
       level: "warning",
-      extra: { responseText: text.slice(0, 500) },
+      tags: { integration: "github", llm_parse_invalid: "true" },
+      extra: {
+        operation: "llmMatchEmployees",
+        reason: "invalid_json",
+        responseText: text.slice(0, 500),
+      },
     });
     return [];
   }
+
+  const validation = githubEmployeeMatchArraySchema.safeParse(rawParsed);
+  if (!validation.success) {
+    Sentry.captureMessage("GitHub employee match LLM output failed validation", {
+      level: "warning",
+      tags: { integration: "github", llm_parse_invalid: "true" },
+      extra: {
+        operation: "llmMatchEmployees",
+        issues: summarizeZodIssues(validation.error),
+        responseText: text.slice(0, 500),
+      },
+    });
+    return [];
+  }
+
+  const emailSet = new Set(
+    employees.map((e) => e.employee_email.toLowerCase()),
+  );
+  return validation.data.filter((item) =>
+    emailSet.has(item.employeeEmail.toLowerCase()),
+  );
 }
 
 /**
