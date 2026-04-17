@@ -36,7 +36,7 @@ const VARIANT_STYLES: Record<
     iconClass: "text-destructive",
     borderClass: "border-destructive/30",
     defaultDescription:
-      "We could not reach the database for this section. Retry in a moment — queued background sync attempts will resume once the database is reachable.",
+      "We could not load this section. Retry in a moment — queued background sync attempts will resume once the upstream data source is reachable.",
   },
 };
 

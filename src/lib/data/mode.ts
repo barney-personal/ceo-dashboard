@@ -1,5 +1,4 @@
 import * as Sentry from "@sentry/nextjs";
-import type { ZodType } from "zod";
 import { db } from "@/lib/db";
 import { withDbErrorContext } from "@/lib/db/errors";
 import { modeReports, modeReportData, syncLog } from "@/lib/db/schema";
@@ -301,75 +300,6 @@ export async function getReportData(
 export function resetReportDataCacheForTests(): void {
   reportDataCache.clear();
   schemaDriftLastWarned.clear();
-}
-
-export interface ParseRowsResult<T> {
-  valid: T[];
-  invalidCount: number;
-}
-
-/**
- * Validate a batch of Mode rows against a zod schema. Invalid rows are
- * skipped and counted; a single Sentry breadcrumb is emitted per batch
- * (never per row) with a PII-safe preview of the first invalid row. Every
- * invalid batch emits — there is no cross-batch cooldown, so repeated
- * malformed batches from the same report/query remain observable.
- *
- * Use this at loader boundaries to replace ad-hoc `as number` / `as string`
- * casts on JSONB row data.
- */
-export function parseRows<T>(
-  schema: ZodType<T>,
-  rows: readonly Record<string, unknown>[],
-  context: {
-    reportName?: string;
-    queryName: string;
-  }
-): ParseRowsResult<T> {
-  const valid: T[] = [];
-  let invalidCount = 0;
-  let firstInvalidRow: Record<string, unknown> | null = null;
-  let firstInvalidMessage: string | null = null;
-
-  for (const row of rows) {
-    const result = schema.safeParse(row);
-    if (result.success) {
-      valid.push(result.data);
-      continue;
-    }
-
-    invalidCount += 1;
-    if (firstInvalidRow === null) {
-      firstInvalidRow = row;
-      firstInvalidMessage = result.error.issues
-        .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-        .join("; ");
-    }
-  }
-
-  if (invalidCount > 0) {
-    Sentry.captureMessage("Mode row validation failure", {
-      level: "warning",
-      tags: {
-        data_loader: "mode",
-        validation_failure: "true",
-        ...(context.reportName ? { reportName: context.reportName } : {}),
-        queryName: context.queryName,
-      },
-      extra: {
-        reportName: context.reportName ?? null,
-        queryName: context.queryName,
-        invalidCount,
-        totalRows: rows.length,
-        firstInvalidFieldNames: firstInvalidRow
-          ? Object.keys(firstInvalidRow)
-          : [],
-        firstInvalidIssues: firstInvalidMessage,
-      },
-    });
-  }
-
-  return { valid, invalidCount };
 }
 
 /**
