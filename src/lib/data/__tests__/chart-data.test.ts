@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
+const { mockGetReportData, mockParseRows } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
-  mockValidateModeColumns: vi.fn(),
+  mockParseRows: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
-  validateModeColumns: mockValidateModeColumns,
+  parseRows: mockParseRows,
   rowStr: (row: Record<string, unknown>, key: string) =>
     typeof row[key] === "string"
       ? row[key]
@@ -36,13 +36,13 @@ import {
 } from "../chart-data";
 
 beforeEach(() => {
-  mockValidateModeColumns.mockReset();
-  mockValidateModeColumns.mockReturnValue({
-    expectedColumns: [],
-    presentColumns: [],
-    missingColumns: [],
-    isValid: true,
-  });
+  mockParseRows.mockReset();
+  mockParseRows.mockImplementation(
+    (_schema: unknown, rows: Record<string, unknown>[]) => ({
+      valid: [...rows],
+      invalidCount: 0,
+    }),
+  );
 });
 
 afterEach(() => {
@@ -200,11 +200,9 @@ describe("getLtvTimeSeries", () => {
         rows: [{ month: "2023-01-01" }],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["month", "user_ltv_36m_actual"],
-      presentColumns: ["month"],
-      missingColumns: ["user_ltv_36m_actual"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 1,
     });
 
     const series = await getLtvTimeSeries();
@@ -213,7 +211,7 @@ describe("getLtvTimeSeries", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("unit-economics", "kpis", [
       "Query 4",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -448,11 +446,9 @@ describe("getEngagementSeries", () => {
         ],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["date", "daus", "waus", "maus"],
-      presentColumns: ["date", "daus", "waus"],
-      missingColumns: ["maus"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 2,
     });
 
     const series = await getEngagementSeries();
@@ -461,7 +457,7 @@ describe("getEngagementSeries", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("product", "active-users", [
       "dau-wau-mau query all time",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -475,7 +471,7 @@ describe("getActiveUsersSeries", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("product", "active-users", [
       "dau-wau-mau query all time",
     ]);
-    expect(mockValidateModeColumns).not.toHaveBeenCalled();
+    expect(mockParseRows).not.toHaveBeenCalled();
   });
 });
 
@@ -554,17 +550,15 @@ describe("getMauRetentionCohorts", () => {
         rows: [{ cohort_month: "2026-01-01", activity_month: 0 }],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["cohort_month", "activity_month", "maus"],
-      presentColumns: ["cohort_month", "activity_month"],
-      missingColumns: ["maus"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 1,
     });
 
     const cohorts = await getMauRetentionCohorts();
 
     expect(cohorts).toEqual([]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -795,15 +789,9 @@ describe("getWauRetentionCohorts", () => {
         rows: [{ cohort_week: "2026-01-05", relative_moving_week: 0 }],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: [
-        "cohort_week",
-        "relative_moving_week",
-        "active_users_weekly",
-      ],
-      presentColumns: ["cohort_week", "relative_moving_week"],
-      missingColumns: ["active_users_weekly"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 1,
     });
 
     const cohorts = await getWauRetentionCohorts();
@@ -814,7 +802,7 @@ describe("getWauRetentionCohorts", () => {
       "retention-weekly",
       ["Query 1"],
     );
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 
   it("drops the per-cohort observation that falls in the current incomplete week", async () => {
@@ -868,11 +856,9 @@ describe("getHeadcountByDepartment", () => {
         rows: [{ lifecycle_status: "employed", is_cleo_headcount: 1 }],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["lifecycle_status", "is_cleo_headcount", "hb_function"],
-      presentColumns: ["lifecycle_status", "is_cleo_headcount"],
-      missingColumns: ["hb_function"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 1,
     });
 
     const departments = await getHeadcountByDepartment();
@@ -881,6 +867,6 @@ describe("getHeadcountByDepartment", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
       "headcount",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 });

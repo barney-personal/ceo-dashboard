@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
+const { mockGetReportData, mockParseRows } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
-  mockValidateModeColumns: vi.fn(),
+  mockParseRows: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
-  validateModeColumns: mockValidateModeColumns,
+  parseRows: mockParseRows,
 }));
 
 import {
@@ -22,13 +22,11 @@ import {
 } from "../metrics";
 
 beforeEach(() => {
-  mockValidateModeColumns.mockReset();
-  mockValidateModeColumns.mockReturnValue({
-    expectedColumns: [],
-    presentColumns: [],
-    missingColumns: [],
-    isValid: true,
-  });
+  mockParseRows.mockReset();
+  mockParseRows.mockImplementation((_schema, rows) => ({
+    valid: [...rows],
+    invalidCount: 0,
+  }));
 });
 
 afterEach(() => {
@@ -127,13 +125,23 @@ describe("getUnitEconomicsMetrics", () => {
         rows: [{ total: 123 }],
       },
     ]);
-    mockValidateModeColumns.mockImplementation(({ queryName }) => ({
-      expectedColumns: [],
-      presentColumns: [],
-      missingColumns:
-        queryName === "ARPU Annualized" ? ["monthly_revenue"] : [],
-      isValid: queryName !== "ARPU Annualized",
-    }));
+    mockParseRows
+      .mockImplementationOnce((_schema, rows) => ({
+        valid: [...rows],
+        invalidCount: 0,
+      }))
+      .mockImplementationOnce((_schema, rows) => ({
+        valid: [],
+        invalidCount: rows.length,
+      }))
+      .mockImplementationOnce((_schema, rows) => ({
+        valid: [...rows],
+        invalidCount: 0,
+      }))
+      .mockImplementationOnce((_schema, rows) => ({
+        valid: [...rows],
+        invalidCount: 0,
+      }));
 
     const metrics = await getUnitEconomicsMetrics();
 
@@ -156,7 +164,7 @@ describe("getUnitEconomicsMetrics", () => {
       "M11 Plus CVR, past 7 days",
       "Subscribers at end of period: Growth accounting",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(4);
+    expect(mockParseRows).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -170,11 +178,9 @@ describe("getHeadcountMetrics", () => {
         rows: [{ lifecycle_status: "employed" }],
       },
     ]);
-    mockValidateModeColumns.mockReturnValue({
-      expectedColumns: ["lifecycle_status", "is_cleo_headcount"],
-      presentColumns: ["lifecycle_status"],
-      missingColumns: ["is_cleo_headcount"],
-      isValid: false,
+    mockParseRows.mockReturnValue({
+      valid: [],
+      invalidCount: 1,
     });
 
     const metrics = await getHeadcountMetrics();
@@ -183,6 +189,6 @@ describe("getHeadcountMetrics", () => {
     expect(mockGetReportData).toHaveBeenCalledWith("people", "headcount", [
       "headcount",
     ]);
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(1);
+    expect(mockParseRows).toHaveBeenCalledTimes(1);
   });
 });

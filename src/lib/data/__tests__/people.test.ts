@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetReportData, mockValidateModeColumns } = vi.hoisted(() => ({
+const { mockGetReportData, mockParseRows } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
-  mockValidateModeColumns: vi.fn(),
+  mockParseRows: vi.fn(),
 }));
 
 vi.mock("../mode", () => ({
   getReportData: mockGetReportData,
-  validateModeColumns: mockValidateModeColumns,
+  parseRows: mockParseRows,
   rowStr: (row: Record<string, unknown>, key: string) =>
     typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
   rowNum: (row: Record<string, unknown>, key: string, fallback = 0) =>
@@ -53,13 +53,13 @@ function makePerson(overrides: Partial<Person> = {}): Person {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-04-08T12:00:00Z"));
-  mockValidateModeColumns.mockReset();
-  mockValidateModeColumns.mockReturnValue({
-    expectedColumns: [],
-    presentColumns: [],
-    missingColumns: [],
-    isValid: true,
-  });
+  mockParseRows.mockReset();
+  // Default: pass rows through unchanged so default test flow matches
+  // the real schema behavior on happy-path fixtures.
+  mockParseRows.mockImplementation((_schema, rows) => ({
+    valid: [...rows],
+    invalidCount: 0,
+  }));
 });
 
 afterEach(() => {
@@ -435,16 +435,16 @@ describe("getActiveEmployees", () => {
         ]);
       },
     );
-    // First call (headcount validation) succeeds, second call (FTE validation) fails
-    mockValidateModeColumns
-      .mockReturnValueOnce({ isValid: true, expectedColumns: [], presentColumns: [], missingColumns: [] })
-      .mockReturnValueOnce({ isValid: false, expectedColumns: [], presentColumns: [], missingColumns: ["squad_name"] });
+    // First parseRows call (headcount) passes rows through; second call (FTE) drops all rows.
+    mockParseRows
+      .mockImplementationOnce((_schema, rows) => ({ valid: [...rows], invalidCount: 0 }))
+      .mockImplementationOnce((_schema, rows) => ({ valid: [], invalidCount: rows.length }));
 
     const result = await getActiveEmployees();
 
     expect(result.employees).toHaveLength(1);
     expect(result.employees[0].name).toBe("Amy");
-    expect(mockValidateModeColumns).toHaveBeenCalledTimes(2);
+    expect(mockParseRows).toHaveBeenCalledTimes(2);
   });
 });
 

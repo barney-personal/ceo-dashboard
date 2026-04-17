@@ -1,4 +1,6 @@
-import { getReportData, rowStr, rowNum, validateModeColumns } from "./mode";
+import { getReportData, parseRows, rowStr, rowNum } from "./mode";
+import type { HeadcountRow } from "@/lib/validation/mode-rows";
+import { currentFteSchema, headcountSchema } from "@/lib/validation/mode-rows";
 import type { BarChartData } from "@/components/charts/bar-chart";
 import {
   DAYS_PER_MONTH,
@@ -34,32 +36,6 @@ export interface PeopleMetrics {
   attritionLast90Days: number;
 }
 
-const CURRENT_FTES_QUERY_COLUMNS = [
-  "employee_email",
-  "preferred_name",
-  "employment_type",
-  "start_date",
-  "line_manager_email",
-  "pillar_name",
-  "squad_name",
-  "function_name",
-] as const;
-
-const HEADCOUNT_QUERY_COLUMNS = [
-  "preferred_name",
-  "email",
-  "job_title",
-  "hb_level",
-  "hb_squad",
-  "hb_function",
-  "manager",
-  "start_date",
-  "work_location",
-  "lifecycle_status",
-  "is_cleo_headcount",
-  "termination_date",
-] as const;
-
 /**
  * Transform raw Mode headcount rows (old report) into typed Person objects.
  * Used as fallback when Current FTEs data is unavailable.
@@ -77,15 +53,20 @@ export function transformToPersons(rows: Record<string, unknown>[]): Person[] {
       );
       const rawLevel = rowStr(r, "hb_level");
       const specialisation = rowStr(r, "rp_specialisation");
-      const jobTitle = resolveEngineerDiscipline(normalizeJobTitle(rowStr(r, "job_title")), rawLevel, specialisation);
+      const jobTitle = resolveEngineerDiscipline(
+        normalizeJobTitle(rowStr(r, "job_title")),
+        rawLevel,
+        specialisation,
+      );
       const func = rowStr(r, "hb_function") || "Unassigned";
+      const squad = rowStr(r, "hb_squad") || func || "Unassigned";
       return {
         name: rowStr(r, "preferred_name") || "Unknown",
         email: rowStr(r, "email"),
         jobTitle,
         level: normalizeLevel(rawLevel, jobTitle),
-        squad: rowStr(r, "hb_squad") || func || "Unassigned",
-        pillar: getPillarForSquad(rowStr(r, "hb_squad") || func || "Unassigned"),
+        squad,
+        pillar: getPillarForSquad(squad),
         function: normalizeDepartment(func, jobTitle),
         manager: rowStr(r, "manager"),
         startDate,
@@ -135,7 +116,13 @@ export function mergeEmployeeData(
 
       const rawLevel = old ? rowStr(old, "hb_level") : "";
       const specialisation = old ? rowStr(old, "rp_specialisation") : "";
-      const jobTitle = old ? resolveEngineerDiscipline(normalizeJobTitle(rowStr(old, "job_title")), rawLevel, specialisation) : "";
+      const jobTitle = old
+        ? resolveEngineerDiscipline(
+            normalizeJobTitle(rowStr(old, "job_title")),
+            rawLevel,
+            specialisation,
+          )
+        : "";
       const func = functionName || "Unassigned";
       return {
         name: rowStr(r, "preferred_name") || "Unknown",
@@ -463,7 +450,7 @@ export async function getActiveEmployees(): Promise<{
   employees: Person[];
   partTimeChampions: Person[];
   unassigned: Person[];
-  allRows: Record<string, unknown>[];
+  allRows: HeadcountRow[];
   lastSync: Date | null;
 }> {
   const [fteData, headcountData] = await Promise.all([
@@ -474,38 +461,27 @@ export async function getActiveEmployees(): Promise<{
   const fteQuery = fteData.find((d) => d.queryName === "current_employees");
   const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
 
-  // Validate headcount schema upfront — allRows is used for attrition/departures
-  // metrics, so if the schema has drifted we clear it to avoid silent bad data.
-  let allRows: Record<string, unknown>[] = [];
+  // Validate headcount rows — allRows is used for attrition/departures
+  // metrics, so rows that fail field-level validation are dropped and
+  // counted once per batch via `parseRows`.
+  let allRows: HeadcountRow[] = [];
   if (headcountQuery && headcountQuery.rows.length > 0) {
-    const hcColumnSource = headcountQuery.columns?.length
-      ? Object.fromEntries(headcountQuery.columns.map((c) => [c.name, true]))
-      : headcountQuery.rows[0] ?? {};
-    const hcValidation = validateModeColumns({
-      row: hcColumnSource as Record<string, unknown>,
-      expectedColumns: HEADCOUNT_QUERY_COLUMNS,
+    const { valid: hcValid } = parseRows(headcountSchema, headcountQuery.rows, {
       reportName: headcountQuery.reportName,
       queryName: headcountQuery.queryName,
     });
-    if (hcValidation.isValid) {
-      allRows = headcountQuery.rows;
-    }
+    allRows = hcValid;
   }
 
   // Primary path: Current FTEs available
   if (fteQuery && fteQuery.rows.length > 0) {
-    const fteColumnSource = fteQuery.columns?.length
-      ? Object.fromEntries(fteQuery.columns.map((c) => [c.name, true]))
-      : fteQuery.rows[0] ?? {};
-    const fteValidation = validateModeColumns({
-      row: fteColumnSource as Record<string, unknown>,
-      expectedColumns: CURRENT_FTES_QUERY_COLUMNS,
+    const { valid: fteValid } = parseRows(currentFteSchema, fteQuery.rows, {
       reportName: fteQuery.reportName,
       queryName: fteQuery.queryName,
     });
 
-    if (fteValidation.isValid) {
-      const all = mergeEmployeeData(fteQuery.rows, allRows);
+    if (fteValid.length > 0) {
+      const all = mergeEmployeeData(fteValid, allRows);
       return {
         employees: all.filter((p) => !isPartTimeChampion(p) && !isUnassigned(p)),
         partTimeChampions: all.filter(isPartTimeChampion),
@@ -522,9 +498,7 @@ export async function getActiveEmployees(): Promise<{
   }
 
   const activeRows = allRows.filter(
-    (r) =>
-      String(r.lifecycle_status).toLowerCase() === "employed" &&
-      rowNum(r, "is_cleo_headcount") === 1,
+    (r) => r.lifecycle_status.toLowerCase() === "employed" && r.is_cleo_headcount === 1,
   );
 
   const all = transformToPersons(activeRows);

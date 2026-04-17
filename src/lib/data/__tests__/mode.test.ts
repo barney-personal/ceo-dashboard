@@ -78,11 +78,14 @@ import {
   getReportData,
   getLatestTerminalSyncRun,
   getModeEmptyStateReason,
+  parseRows,
   resolveModeStaleReason,
   resetReportDataCacheForTests,
+  resetRowValidationWarnCacheForTests,
   REPORT_DATA_CACHE_MAX_ENTRIES,
   validateModeColumns,
 } from "../mode";
+import { z } from "zod";
 
 function createReportRows(rowValue: number) {
   return [
@@ -129,6 +132,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetReportDataCacheForTests();
+  resetRowValidationWarnCacheForTests();
   mockCaptureException.mockClear();
   mockCaptureMessage.mockClear();
   mockAnd.mockClear();
@@ -139,6 +143,63 @@ afterEach(() => {
   mockOrderBy.mockReset();
   mockSelect.mockClear();
   mockWhere.mockClear();
+});
+
+describe("parseRows", () => {
+  const sampleSchema = z
+    .object({
+      day: z.string().min(1),
+      value: z.number().finite(),
+    })
+    .passthrough();
+
+  it("returns all valid rows when every row matches the schema", () => {
+    const rows = [
+      { day: "2025-01-01", value: 1 },
+      { day: "2025-01-02", value: 2 },
+    ];
+    const result = parseRows(sampleSchema, rows, {
+      reportName: "R",
+      queryName: "Q",
+    });
+    expect(result.valid).toHaveLength(2);
+    expect(result.invalidCount).toBe(0);
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it("skips invalid rows and emits a single Sentry breadcrumb per batch", () => {
+    const rows = [
+      { day: "2025-01-01", value: 1 },
+      { day: "", value: 2 },
+      { day: "2025-01-03", value: "oops" },
+      { value: 3 },
+    ];
+    const result = parseRows(sampleSchema, rows, {
+      reportName: "R",
+      queryName: "Q",
+    });
+    expect(result.valid).toHaveLength(1);
+    expect(result.invalidCount).toBe(3);
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    const [message, options] = mockCaptureMessage.mock.calls[0];
+    expect(message).toBe("Mode row validation failure");
+    expect(options.level).toBe("warning");
+    expect(options.tags.validation_failure).toBe("true");
+    expect(options.tags.queryName).toBe("Q");
+    expect(options.extra.invalidCount).toBe(3);
+    expect(options.extra.totalRows).toBe(4);
+    // PII-safe: only field *names*, not values
+    expect(options.extra.firstInvalidFieldNames).toEqual(["day", "value"]);
+    expect(typeof options.extra.firstInvalidIssues).toBe("string");
+  });
+
+  it("applies a cooldown so repeated failures only warn once per hour", () => {
+    const rows = [{ day: "", value: 1 }];
+    parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
+    parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
+    parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("validateModeColumns", () => {
