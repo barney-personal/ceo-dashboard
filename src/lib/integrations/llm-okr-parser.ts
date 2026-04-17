@@ -277,6 +277,7 @@ function validateParsedKr(
 function validateParsedEnvelope(
   parsed: unknown,
   rawResponse?: string,
+  itemIndex?: number,
 ): ValidParsedEnvelope | null {
   const result = parsedOkrUpdateSchema.safeParse(parsed);
   if (result.success) {
@@ -294,6 +295,7 @@ function validateParsedEnvelope(
       operation: "validateParsedEnvelope",
       issues: summarizeZodIssues(result.error),
       rawResponse: rawResponse ?? toShortPreview(parsed),
+      ...(itemIndex !== undefined ? { itemIndex } : {}),
     },
   });
   return null;
@@ -581,12 +583,12 @@ export async function llmParseOkrUpdates(
       return fallbackToSingleMessageParses(inputs, prompt, opts);
     }
 
-    return parsed.map((item) => {
+    return parsed.map((item, index) => {
       if (item == null) {
         return null;
       }
 
-      const envelope = validateParsedEnvelope(item);
+      const envelope = validateParsedEnvelope(item, trimmed, index);
       return envelope ? toParsedOkrUpdate(envelope) : null;
     });
   } catch {
