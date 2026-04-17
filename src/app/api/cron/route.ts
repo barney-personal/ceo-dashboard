@@ -87,8 +87,12 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // All sources skipped: no drain started. Emit drain_started: null
+    // explicitly so monitoring clients pattern-matching on that field can
+    // distinguish "nothing to do" from "drain is still pending".
     return NextResponse.json({
       status: "syncs enqueued",
+      drain_started: null,
       results: serializedResults,
     });
   } catch (error) {

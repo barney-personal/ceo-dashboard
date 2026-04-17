@@ -56,6 +56,26 @@ describe("validateMetricRow", () => {
     expect(typeof options.extra.issues).toBe("string");
   });
 
+  it("reports only the offending field when other columns are valid", () => {
+    // arpmau is correct; gross_margin is a string (the only bad field).
+    // invalidFieldNames must not list arpmau/mau/etc.
+    const result = validateMetricRow(
+      arpuRowSchema,
+      {
+        arpmau: 10,
+        gross_margin: "bad",
+        contribution_margin: 0.2,
+        mau: 100,
+        monthly_revenue: 1000,
+      },
+      { queryName: "ARPU Annualized" },
+    );
+
+    expect(result).toBeNull();
+    const [, options] = mockCaptureMessage.mock.calls[0];
+    expect(options.extra.invalidFieldNames).toEqual(["gross_margin"]);
+  });
+
   it("allows extra columns via passthrough", () => {
     const row = {
       average_7d_plus_m11_cvr: 0.12,

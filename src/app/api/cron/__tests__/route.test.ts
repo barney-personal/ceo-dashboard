@@ -235,7 +235,7 @@ describe("GET /api/cron", () => {
     expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
     expect(mockAwaitDrainStarted).not.toHaveBeenCalled();
     const body = await response.json();
-    expect(body.drain_started).toBeUndefined();
+    expect(body.drain_started).toBeNull();
   });
 
   it("emits a Sentry warning for each stalled source before enqueueing", async () => {

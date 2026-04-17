@@ -35,12 +35,16 @@ export const parsedOkrUpdateSchema = z
 export type ParsedOkrKrInput = z.infer<typeof parsedOkrKrSchema>;
 export type ParsedOkrEnvelopeInput = z.infer<typeof parsedOkrUpdateSchema>;
 
-const marginSchema = z
-  .number()
-  .finite()
-  .min(-1)
-  .max(1)
-  .nullable();
+// Gross / contribution margins are revenue-proportional ratios — always in
+// [-1, 1] by construction, so a value outside that range is almost certainly
+// an extraction error.
+const boundedMarginSchema = z.number().finite().min(-1).max(1).nullable();
+
+// EBITDA margin (and similar P&L-as-%-of-revenue ratios) can legitimately
+// exceed ±100% for burn-stage startups — e.g. £1M revenue / £3M EBITDA burn
+// is -300%. Only require finiteness.
+const unboundedMarginSchema = z.number().finite().nullable();
+
 const financialNumberSchema = z.number().finite().nullable();
 
 export const financialExtractSchema = z
@@ -51,11 +55,11 @@ export const financialExtractSchema = z
     periodLabel: z.string().default(""),
     revenue: financialNumberSchema.default(null),
     grossProfit: financialNumberSchema.default(null),
-    grossMargin: marginSchema.default(null),
+    grossMargin: boundedMarginSchema.default(null),
     contributionProfit: financialNumberSchema.default(null),
-    contributionMargin: marginSchema.default(null),
+    contributionMargin: boundedMarginSchema.default(null),
     ebitda: financialNumberSchema.default(null),
-    ebitdaMargin: marginSchema.default(null),
+    ebitdaMargin: unboundedMarginSchema.default(null),
     netIncome: financialNumberSchema.default(null),
     cashPosition: financialNumberSchema.default(null),
     cashBurn: financialNumberSchema.default(null),

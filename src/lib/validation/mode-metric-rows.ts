@@ -64,7 +64,9 @@ export function validateMetricRow<T>(
     extra: {
       reportName: context.reportName ?? null,
       queryName: context.queryName,
-      invalidFieldNames: Object.keys(row),
+      invalidFieldNames: result.error.issues.map((issue) =>
+        String(issue.path[0] ?? "<root>"),
+      ),
       issues: summarizeZodIssues(result.error),
     },
   });

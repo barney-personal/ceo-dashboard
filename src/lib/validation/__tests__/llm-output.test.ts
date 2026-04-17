@@ -229,13 +229,28 @@ describe("financialExtractSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects negative margin outside bounds", () => {
+  it("rejects gross margin outside [-1, 1] (revenue-proportional ratio)", () => {
     const result = financialExtractSchema.safeParse({
       period: "2026-02",
       periodLabel: "February 2026",
-      ebitdaMargin: -1.5,
+      grossMargin: -1.5,
     });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts large negative ebitdaMargin (burn-stage startups can be below -100%)", () => {
+    // £1M revenue / £3M EBITDA burn = -300% is legitimate, not an extraction
+    // error. Clamping ebitdaMargin to [-1, 1] would drop the real data and
+    // flip the page to its empty-onboarding CTA.
+    const result = financialExtractSchema.safeParse({
+      period: "2026-02",
+      periodLabel: "February 2026",
+      ebitdaMargin: -3.0,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ebitdaMargin).toBe(-3.0);
+    }
   });
 });
 
