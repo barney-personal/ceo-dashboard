@@ -61,6 +61,7 @@ describe("Slack transport resilience", () => {
     const promise = getChannelName("C123");
 
     await Promise.resolve();
+    await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockAddBreadcrumb).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -113,6 +114,7 @@ describe("Slack transport resilience", () => {
 
     const promise = getChannelName("C123");
 
+    await Promise.resolve();
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockAddBreadcrumb).toHaveBeenCalledWith(

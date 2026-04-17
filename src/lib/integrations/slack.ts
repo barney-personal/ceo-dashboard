@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { acquireSlackRateLimitToken } from "./slack-rate-limit";
+
 export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
 const SLACK_DOWNLOAD_TIMEOUT_MS = 45_000;
@@ -327,6 +329,8 @@ export async function slackApiRequest<T>(
 
   const suppressedStatuses = new Set(opts.suppressedStatuses ?? []);
   const suppressedCodes = new Set(opts.suppressedCodes ?? []);
+
+  await acquireSlackRateLimitToken(method);
 
   let lastEnvelopeError: Error | null = null;
   const maxRetries = opts.maxRetries ?? SLACK_MAX_RETRIES;
