@@ -306,8 +306,8 @@ export function ConversionCurveChart({
         className,
       )}
     >
-      <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-5 py-3">
+        <div className="min-w-0">
           <span className="text-sm font-semibold text-foreground">{title}</span>
           {subtitle && (
             <span className="ml-2 text-xs text-muted-foreground">
@@ -315,7 +315,7 @@ export function ConversionCurveChart({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-[10px] text-muted-foreground/50">
             light = older · dark = newer
           </span>

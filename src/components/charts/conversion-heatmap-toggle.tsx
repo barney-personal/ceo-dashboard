@@ -30,8 +30,8 @@ export function ConversionHeatmapToggle({
 
   return (
     <div className="rounded-xl border border-border/60 bg-card shadow-warm">
-      <div className="flex items-center justify-between border-b border-border/50 px-5 py-3">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 px-5 py-3">
+        <div className="min-w-0">
           <span className="text-sm font-semibold text-foreground">
             Conversion to Paid
           </span>
