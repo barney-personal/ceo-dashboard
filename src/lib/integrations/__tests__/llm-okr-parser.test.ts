@@ -410,23 +410,28 @@ describe("llmParseOkrUpdate timeout", () => {
       "Falling back to single-message OKR parsing after unusable batch payload",
       expect.objectContaining({
         level: "warning",
+        tags: expect.objectContaining({
+          integration: "llm-okr-parser",
+          llm_parse_invalid: "true",
+        }),
         extra: expect.objectContaining({
           operation: "parseBatchResponse",
           reason: "wrong_top_level_shape",
           batchSize: 3,
+          rawResponse: expect.stringContaining("not"),
         }),
       })
     );
   });
 
   it("returns null and emits Sentry when the parsed envelope has a whitespace-only squad name", async () => {
+    const rawResponse = JSON.stringify({
+      squadName: "   ",
+      tldr: "summary",
+      krs: [],
+    });
     mockMessages.create.mockResolvedValueOnce({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ squadName: "   ", tldr: "summary", krs: [] }),
-        },
-      ],
+      content: [{ type: "text", text: rawResponse }],
     });
 
     await expect(
@@ -438,6 +443,9 @@ describe("llmParseOkrUpdate timeout", () => {
         level: "warning",
         tags: expect.objectContaining({
           llm_parse_invalid: "true",
+        }),
+        extra: expect.objectContaining({
+          rawResponse,
         }),
       }),
     );

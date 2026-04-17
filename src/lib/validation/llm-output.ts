@@ -47,9 +47,7 @@ export const financialExtractSchema = z
   .object({
     period: z
       .string()
-      .regex(/^\d{4}-\d{2}$/, "period must match YYYY-MM")
-      .or(z.literal(""))
-      .default(""),
+      .regex(/^\d{4}-\d{2}$/, "period must match YYYY-MM"),
     periodLabel: z.string().default(""),
     revenue: financialNumberSchema.default(null),
     grossProfit: financialNumberSchema.default(null),

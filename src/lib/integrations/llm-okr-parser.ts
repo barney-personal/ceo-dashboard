@@ -276,7 +276,7 @@ function validateParsedKr(
 
 function validateParsedEnvelope(
   parsed: unknown,
-  responsePreview?: string,
+  rawResponse?: string,
 ): ValidParsedEnvelope | null {
   const result = parsedOkrUpdateSchema.safeParse(parsed);
   if (result.success) {
@@ -293,7 +293,7 @@ function validateParsedEnvelope(
     extra: {
       operation: "validateParsedEnvelope",
       issues: summarizeZodIssues(result.error),
-      rawPayloadPreview: responsePreview ?? toShortPreview(parsed),
+      rawResponse: rawResponse ?? toShortPreview(parsed),
     },
   });
   return null;
@@ -469,7 +469,7 @@ async function parseSingleOkrUpdate(
 
   try {
     const parsed = JSON.parse(trimmed);
-    const envelope = validateParsedEnvelope(parsed, trimmed.slice(0, 200));
+    const envelope = validateParsedEnvelope(parsed, trimmed);
     if (!envelope) {
       return null;
     }
@@ -480,7 +480,7 @@ async function parseSingleOkrUpdate(
       tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
       extra: {
         operation: "parseResponse",
-        responsePreview: trimmed.slice(0, 200),
+        rawResponse: trimmed,
       },
     });
     console.warn("Failed to parse LLM response:", trimmed.slice(0, 200));
@@ -548,11 +548,12 @@ export async function llmParseOkrUpdates(
       "Falling back to single-message OKR parsing after unusable batch payload",
       {
         level: "warning",
-        tags: { integration: "llm-okr-parser" },
+        tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
         extra: {
           operation: "parseBatchResponse",
           reason: "null_or_empty_response",
           batchSize: inputs.length,
+          rawResponse: null,
         },
       }
     );
@@ -566,14 +567,14 @@ export async function llmParseOkrUpdates(
         "Falling back to single-message OKR parsing after unusable batch payload",
         {
           level: "warning",
-          tags: { integration: "llm-okr-parser" },
+          tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
           extra: {
             operation: "parseBatchResponse",
             reason: Array.isArray(parsed)
               ? "wrong_array_length"
               : "wrong_top_level_shape",
             batchSize: inputs.length,
-            responsePreview: trimmed.slice(0, 200),
+            rawResponse: trimmed,
           },
         }
       );
@@ -593,12 +594,12 @@ export async function llmParseOkrUpdates(
       "Falling back to single-message OKR parsing after unusable batch payload",
       {
         level: "warning",
-        tags: { integration: "llm-okr-parser" },
+        tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
         extra: {
           operation: "parseBatchResponse",
           reason: "invalid_json",
           batchSize: inputs.length,
-          responsePreview: trimmed.slice(0, 200),
+          rawResponse: trimmed,
         },
       }
     );

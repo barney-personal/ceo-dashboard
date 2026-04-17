@@ -76,8 +76,9 @@ describe("parseManagementAccounts", () => {
   });
 
   it("returns null and emits Sentry on invalid JSON from LLM", async () => {
+    const rawResponse = "This is not JSON at all";
     mockMessages.create.mockResolvedValueOnce({
-      content: [{ type: "text", text: "This is not JSON at all" }],
+      content: [{ type: "text", text: rawResponse }],
     });
 
     const result = await parseManagementAccounts(makeExcelBuffer(), "test.xlsx");
@@ -86,23 +87,20 @@ describe("parseManagementAccounts", () => {
       expect.any(Error),
       expect.objectContaining({
         tags: expect.objectContaining({ llm_parse_invalid: "true" }),
+        extra: expect.objectContaining({ rawResponse }),
       }),
     );
   });
 
   it("returns null and emits Sentry when LLM returns out-of-bound margins", async () => {
+    const rawResponse = JSON.stringify({
+      period: "2026-01",
+      periodLabel: "January 2026",
+      revenue: 28.5,
+      grossMargin: 5.0,
+    });
     mockMessages.create.mockResolvedValueOnce({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            period: "2026-01",
-            periodLabel: "January 2026",
-            revenue: 28.5,
-            grossMargin: 5.0,
-          }),
-        },
-      ],
+      content: [{ type: "text", text: rawResponse }],
     });
 
     const result = await parseManagementAccounts(makeExcelBuffer(), "test.xlsx");
@@ -116,6 +114,7 @@ describe("parseManagementAccounts", () => {
         }),
         extra: expect.objectContaining({
           operation: "parseManagementAccounts",
+          rawResponse,
         }),
       }),
     );
@@ -137,6 +136,29 @@ describe("parseManagementAccounts", () => {
 
     const result = await parseManagementAccounts(makeExcelBuffer(), "test.xlsx");
     expect(result).toBeNull();
+  });
+
+  it("returns null and emits Sentry when LLM omits the period entirely", async () => {
+    const rawResponse = JSON.stringify({
+      periodLabel: "January 2026",
+      revenue: 28.5,
+    });
+    mockMessages.create.mockResolvedValueOnce({
+      content: [{ type: "text", text: rawResponse }],
+    });
+
+    const result = await parseManagementAccounts(makeExcelBuffer(), "test.xlsx");
+    expect(result).toBeNull();
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "Management accounts extract failed zod validation",
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "excel-parser",
+          llm_parse_invalid: "true",
+        }),
+        extra: expect.objectContaining({ rawResponse }),
+      }),
+    );
   });
 });
 

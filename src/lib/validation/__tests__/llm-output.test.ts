@@ -169,13 +169,29 @@ describe("financialExtractSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("defaults missing fields to null", () => {
-    const result = financialExtractSchema.safeParse({});
+  it("defaults missing numeric fields to null when period is valid", () => {
+    const result = financialExtractSchema.safeParse({ period: "2026-02" });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.period).toBe("");
+      expect(result.data.period).toBe("2026-02");
+      expect(result.data.periodLabel).toBe("");
       expect(result.data.revenue).toBeNull();
     }
+  });
+
+  it("rejects a missing period", () => {
+    const result = financialExtractSchema.safeParse({
+      periodLabel: "February 2026",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a blank period", () => {
+    const result = financialExtractSchema.safeParse({
+      period: "",
+      periodLabel: "February 2026",
+    });
+    expect(result.success).toBe(false);
   });
 
   it("rejects period that doesn't match YYYY-MM", () => {

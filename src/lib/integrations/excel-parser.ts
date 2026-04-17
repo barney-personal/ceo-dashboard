@@ -285,7 +285,7 @@ export async function parseManagementAccounts(
       extra: {
         operation: "parseManagementAccounts",
         filenameHint,
-        responsePreview: text.slice(0, 300),
+        rawResponse: text,
       },
     });
     return null;
@@ -302,7 +302,7 @@ export async function parseManagementAccounts(
           operation: "parseManagementAccounts",
           filenameHint,
           issues: summarizeZodIssues(validation.error),
-          responsePreview: text.slice(0, 300),
+          rawResponse: text,
         },
       },
     );
