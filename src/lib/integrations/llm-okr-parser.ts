@@ -8,6 +8,11 @@ import { db } from "@/lib/db";
 import { normalizeDatabaseError } from "@/lib/db/errors";
 import { squads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
+import {
+  parsedOkrUpdateSchema,
+  parsedOkrKrSchema,
+  summarizeZodIssues,
+} from "@/lib/validation/llm-output";
 
 const client = new Anthropic();
 
@@ -49,24 +54,11 @@ interface AnthropicFailureShape {
   };
 }
 
-interface ParsedEnvelopeShape {
-  squadName?: unknown;
-  tldr?: unknown;
-  krs?: unknown;
-}
-
 interface ValidParsedEnvelope {
   squadName: string;
   tldr?: unknown;
   krs: unknown[];
 }
-
-const VALID_RAGS: ParsedKr["rag"][] = [
-  "green",
-  "amber",
-  "red",
-  "not_started",
-];
 
 function composeAbortSignal(
   timeoutMs: number,
@@ -251,80 +243,60 @@ function toShortPreview(value: unknown): string {
   }
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function validateParsedKr(
   kr: unknown,
   index: number
 ): ParsedKr | null {
-  const invalidFields: string[] = [];
-
-  if (!kr || typeof kr !== "object") {
-    invalidFields.push("kr");
+  const result = parsedOkrKrSchema.safeParse(kr);
+  if (result.success) {
+    return {
+      objective: result.data.objective,
+      name: result.data.name.slice(0, 200),
+      rag: result.data.rag,
+      metric: result.data.metric ?? null,
+    };
   }
 
-  const candidate = (kr ?? {}) as Record<string, unknown>;
+  const invalidFields = result.error.issues.map(
+    (issue) => issue.path.join(".") || "<root>",
+  );
 
-  if (!isNonEmptyString(candidate.objective)) {
-    invalidFields.push("objective");
-  }
-
-  if (!isNonEmptyString(candidate.name)) {
-    invalidFields.push("name");
-  }
-
-  if (!VALID_RAGS.includes(candidate.rag as ParsedKr["rag"])) {
-    invalidFields.push("rag");
-  }
-
-  if (
-    !(
-      candidate.metric == null ||
-      typeof candidate.metric === "string"
-    )
-  ) {
-    invalidFields.push("metric");
-  }
-
-  if (invalidFields.length > 0) {
-    Sentry.captureMessage("Dropped invalid OKR key result from Claude response", {
-      level: "warning",
-      tags: { integration: "llm-okr-parser" },
-      extra: {
-        operation: "validateParsedKr",
-        krIndex: index,
-        invalidFields,
-        rawPayloadPreview: toShortPreview(kr),
-      },
-    });
-    return null;
-  }
-
-  return {
-    objective: candidate.objective as string,
-    name: (candidate.name as string).slice(0, 200),
-    rag: candidate.rag as ParsedKr["rag"],
-    metric: (candidate.metric as string | null | undefined) ?? null,
-  };
+  Sentry.captureMessage("Dropped invalid OKR key result from Claude response", {
+    level: "warning",
+    tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
+    extra: {
+      operation: "validateParsedKr",
+      krIndex: index,
+      invalidFields,
+      rawPayloadPreview: toShortPreview(kr),
+    },
+  });
+  return null;
 }
 
-function validateParsedEnvelope(parsed: unknown): ValidParsedEnvelope | null {
-  if (!parsed || typeof parsed !== "object") {
-    return null;
+function validateParsedEnvelope(
+  parsed: unknown,
+  responsePreview?: string,
+): ValidParsedEnvelope | null {
+  const result = parsedOkrUpdateSchema.safeParse(parsed);
+  if (result.success) {
+    return {
+      squadName: result.data.squadName,
+      tldr: result.data.tldr,
+      krs: result.data.krs,
+    };
   }
 
-  const envelope = parsed as ParsedEnvelopeShape;
-  if (!isNonEmptyString(envelope.squadName) || !Array.isArray(envelope.krs)) {
-    return null;
-  }
-
-  return {
-    squadName: envelope.squadName,
-    tldr: envelope.tldr,
-    krs: envelope.krs,
-  };
+  Sentry.captureMessage("OKR envelope failed zod validation", {
+    level: "warning",
+    tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
+    extra: {
+      operation: "validateParsedEnvelope",
+      issues: summarizeZodIssues(result.error),
+      rawPayloadPreview: responsePreview ?? toShortPreview(parsed),
+    },
+  });
+  return null;
 }
 
 function normalizeResponseText(response: AnthropicMessage): string | null {
@@ -497,7 +469,7 @@ async function parseSingleOkrUpdate(
 
   try {
     const parsed = JSON.parse(trimmed);
-    const envelope = validateParsedEnvelope(parsed);
+    const envelope = validateParsedEnvelope(parsed, trimmed.slice(0, 200));
     if (!envelope) {
       return null;
     }
@@ -505,7 +477,7 @@ async function parseSingleOkrUpdate(
     return toParsedOkrUpdate(envelope);
   } catch (error) {
     Sentry.captureException(error, {
-      tags: { integration: "llm-okr-parser" },
+      tags: { integration: "llm-okr-parser", llm_parse_invalid: "true" },
       extra: {
         operation: "parseResponse",
         responsePreview: trimmed.slice(0, 200),

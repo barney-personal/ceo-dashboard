@@ -419,7 +419,7 @@ describe("llmParseOkrUpdate timeout", () => {
     );
   });
 
-  it("returns null when the parsed envelope is missing a non-empty squad name", async () => {
+  it("returns null and emits Sentry when the parsed envelope has a whitespace-only squad name", async () => {
     mockMessages.create.mockResolvedValueOnce({
       content: [
         {
@@ -432,7 +432,15 @@ describe("llmParseOkrUpdate timeout", () => {
     await expect(
       llmParseOkrUpdate("message", "#channel", "system prompt")
     ).resolves.toBeNull();
-    expect(mockSentry.captureMessage).not.toHaveBeenCalled();
+    expect(mockSentry.captureMessage).toHaveBeenCalledWith(
+      "OKR envelope failed zod validation",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          llm_parse_invalid: "true",
+        }),
+      }),
+    );
   });
 
   it("drops invalid KRs, warns with failing fields, and preserves valid rows", async () => {
