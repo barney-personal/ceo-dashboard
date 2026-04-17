@@ -10,6 +10,11 @@ import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
 } from "@/lib/sync/response";
+import {
+  detectStalledSources,
+  emitStalledSourceWarnings,
+  getSourceHealth,
+} from "@/lib/sync/health";
 import { cleanupDebugLogs } from "@/lib/debug-logger";
 
 export async function GET(request: NextRequest) {
@@ -23,6 +28,17 @@ export async function GET(request: NextRequest) {
       await cleanupDebugLogs();
     } catch (error) {
       console.error("Failed to clean up debug logs", error);
+    }
+
+    // Detect sources whose last success is older than 5x their normal interval
+    // and emit one Sentry warning per source before fan-out. Stalled detection
+    // must never block the cron — swallow its own errors.
+    try {
+      const healths = await getSourceHealth();
+      const stalled = detectStalledSources(healths);
+      emitStalledSourceWarnings(stalled);
+    } catch (error) {
+      console.error("[sync-api] stalled-source detection failed", error);
     }
 
     const [mode, slack, managementAccounts, meetings, github] = await Promise.all([
