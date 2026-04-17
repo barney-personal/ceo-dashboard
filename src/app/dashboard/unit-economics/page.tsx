@@ -9,7 +9,10 @@ import { AlertTriangle } from "lucide-react";
 import { ConversionHeatmapToggle } from "@/components/charts/conversion-heatmap-toggle";
 import { ConversionCurveChart } from "@/components/charts/conversion-curve-chart";
 import { SmallMultiplesCurveChart } from "@/components/charts/small-multiples-curve-chart";
-import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import {
   getLtvTimeSeries,
   getLtvCacRatioSeries,
@@ -134,17 +137,12 @@ export default async function UnitEconomicsPage() {
 
   if (pageState.kind === "unavailable") {
     return (
-      <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
-        <PageHeader
-          title="Unit Economics"
-          description="Customer lifetime value and acquisition costs"
-        />
-        <DataStateCard
-          variant="unavailable"
-          title="Unit economics data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      </div>
+      <UnavailablePage
+        title="Unit Economics"
+        description="Customer lifetime value and acquisition costs"
+        dataTitle="Unit economics data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
     );
   }
 
@@ -178,13 +176,10 @@ export default async function UnitEconomicsPage() {
         description="Customer lifetime value and acquisition costs"
       />
 
-      {pageState.kind === "stale" ? (
-        <DataStateCard
-          variant="stale"
-          title="Unit economics data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      ) : null}
+      <DataStateBanner
+        pageState={pageState}
+        title="Unit economics data from Mode Analytics"
+      />
 
       {/* LTV:Paid CAC ratio */}
       {ltvCacRatio.length > 0 ? (

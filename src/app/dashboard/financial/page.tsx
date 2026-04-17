@@ -7,6 +7,10 @@ import { SectionCard } from "@/components/dashboard/section-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { SpreadsheetTable } from "@/components/dashboard/spreadsheet-table";
 import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { getManagementAccountsData } from "@/lib/data/management-accounts";
 import { getLatestTerminalSyncRun } from "@/lib/data/mode";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
@@ -56,17 +60,12 @@ export default async function FinancialPage({
 
   if (pageState.kind === "unavailable") {
     return (
-      <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
-        <PageHeader
-          title="Financial"
-          description="Management accounts and financial reporting"
-        />
-        <DataStateCard
-          variant="unavailable"
-          title="Management accounts from Slack"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      </div>
+      <UnavailablePage
+        title="Financial"
+        description="Management accounts and financial reporting"
+        dataTitle="Management accounts from Slack"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
     );
   }
 
@@ -94,13 +93,10 @@ export default async function FinancialPage({
         description="Management accounts and financial reporting"
       />
 
-      {pageState.kind === "stale" ? (
-        <DataStateCard
-          variant="stale"
-          title="Management accounts from Slack"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      ) : null}
+      <DataStateBanner
+        pageState={pageState}
+        title="Management accounts from Slack"
+      />
 
       {/* Period selector */}
       <div className="space-y-2">

@@ -54,8 +54,8 @@ function makeRequest(authHeader?: string) {
   }) as unknown as import("next/server").NextRequest;
 }
 
-function drainHandle() {
-  return { started: Promise.resolve() };
+function drainHandle(started: Promise<void> = Promise.resolve()) {
+  return { started };
 }
 
 describe("GET /api/cron", () => {
@@ -140,6 +140,11 @@ describe("GET /api/cron", () => {
       runIds: [1, 2, 3, 4],
       triggerLabel: "cron trigger",
     });
+    // Verify the route wires the drain handle's `started` promise into
+    // `awaitDrainStarted` — previously tested implicitly only.
+    const drainHandleReturn = mockStartBackgroundSyncDrain.mock.results[0]
+      ?.value as { started: Promise<void> } | undefined;
+    expect(mockAwaitDrainStarted).toHaveBeenCalledWith(drainHandleReturn?.started);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       status: "syncs enqueued",

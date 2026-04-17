@@ -15,7 +15,10 @@ const CohortHeatmap = dynamic(
     ),
   }
 );
-import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { formatCompact, formatPercent } from "@/lib/format/number";
 import {
   getActiveUsersSeries,
@@ -88,17 +91,12 @@ export default async function ProductPage() {
 
   if (pageState.kind === "unavailable") {
     return (
-      <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
-        <PageHeader
-          title="Product"
-          description="Active users, engagement, and retention"
-        />
-        <DataStateCard
-          variant="unavailable"
-          title="Product data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      </div>
+      <UnavailablePage
+        title="Product"
+        description="Active users, engagement, and retention"
+        dataTitle="Product data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
     );
   }
 
@@ -134,13 +132,10 @@ export default async function ProductPage() {
         description="Active users, engagement, and retention"
       />
 
-      {pageState.kind === "stale" ? (
-        <DataStateCard
-          variant="stale"
-          title="Product data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      ) : null}
+      <DataStateBanner
+        pageState={pageState}
+        title="Product data from Mode Analytics"
+      />
 
       {/* Hero strip */}
       <div className="grid gap-4 sm:grid-cols-3">

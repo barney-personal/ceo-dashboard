@@ -1,7 +1,10 @@
 import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { OkrView } from "@/components/dashboard/okr-view";
-import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import {
   getLatestOkrUpdates,
   getOkrStatusCounts,
@@ -46,17 +49,12 @@ export default async function OKRsPage() {
 
   if (pageState.kind === "unavailable") {
     return (
-      <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
-        <PageHeader
-          title="OKRs"
-          description="Company objectives and key results"
-        />
-        <DataStateCard
-          variant="unavailable"
-          title="OKR updates from Slack"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      </div>
+      <UnavailablePage
+        title="OKRs"
+        description="Company objectives and key results"
+        dataTitle="OKR updates from Slack"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
     );
   }
 
@@ -85,13 +83,10 @@ export default async function OKRsPage() {
         description="Company objectives and key results"
       />
 
-      {pageState.kind === "stale" ? (
-        <DataStateCard
-          variant="stale"
-          title="OKR updates from Slack"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      ) : null}
+      <DataStateBanner
+        pageState={pageState}
+        title="OKR updates from Slack"
+      />
 
       {hasData ? (
         <OkrView pillars={pillars} counts={counts} />

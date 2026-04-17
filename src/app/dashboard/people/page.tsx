@@ -5,7 +5,10 @@ import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown
 import { JoinersLeaversDrilldown } from "@/components/dashboard/joiners-leavers-drilldown";
 import { TenureDrilldown } from "@/components/dashboard/tenure-drilldown";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
-import { DataStateCard } from "@/components/dashboard/data-state-card";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import {
   getLatestTerminalSyncRun,
@@ -57,17 +60,13 @@ export default async function PeopleOrgPage() {
 
   if (pageState.kind === "unavailable") {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Org"
-          description="Headcount, team structure, and workforce metrics"
-        />
-        <DataStateCard
-          variant="unavailable"
-          title="Org data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      </div>
+      <UnavailablePage
+        title="Org"
+        description="Headcount, team structure, and workforce metrics"
+        dataTitle="Org data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+        containerClassName="space-y-6"
+      />
     );
   }
 
@@ -121,13 +120,10 @@ export default async function PeopleOrgPage() {
         description="Headcount, team structure, and workforce metrics"
       />
 
-      {pageState.kind === "stale" ? (
-        <DataStateCard
-          variant="stale"
-          title="Org data from Mode Analytics"
-          lastSyncedAt={pageState.lastSyncedAt}
-        />
-      ) : null}
+      <DataStateBanner
+        pageState={pageState}
+        title="Org data from Mode Analytics"
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
