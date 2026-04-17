@@ -2,20 +2,61 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { OkrView } from "@/components/dashboard/okr-view";
 import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
+import {
   getLatestOkrUpdates,
   getOkrStatusCounts,
   getSlackMessageUrl,
 } from "@/lib/data/okrs";
+import { getLatestTerminalSyncRun } from "@/lib/data/mode";
+import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function OKRsPage() {
-  const [okrsByPillar, counts] = await Promise.all([
-    getLatestOkrUpdates(),
-    getOkrStatusCounts(),
-  ]);
+  const [okrsByPillarResult, countsResult, latestSyncRunResult] =
+    await Promise.all([
+      safeLoad(
+        () => getLatestOkrUpdates(),
+        new Map() as Awaited<ReturnType<typeof getLatestOkrUpdates>>,
+      ),
+      safeLoad(() => getOkrStatusCounts(), {
+        onTrack: 0,
+        atRisk: 0,
+        behind: 0,
+        total: 0,
+      }),
+      safeLoad(() => getLatestTerminalSyncRun("slack"), null),
+    ]);
+
+  const firstUnavailable =
+    okrsByPillarResult.error ?? countsResult.error ?? latestSyncRunResult.error;
+
+  const okrsByPillar = okrsByPillarResult.data;
+  const counts = countsResult.data;
+  const latestSyncRun = latestSyncRunResult.data;
 
   const okrCharts = getChartEmbeds("okrs", "company");
   const hasData = counts.total > 0;
+
+  const pageState = resolveDataState({
+    source: "slack",
+    hasData,
+    latestSyncRun,
+    error: firstUnavailable,
+  });
+
+  if (pageState.kind === "unavailable") {
+    return (
+      <UnavailablePage
+        title="OKRs"
+        description="Company objectives and key results"
+        dataTitle="OKR updates from Slack"
+        lastSyncedAt={pageState.lastSyncedAt}
+      />
+    );
+  }
 
   // Serialize for client component
   const pillars = [...okrsByPillar.entries()]
@@ -40,6 +81,11 @@ export default async function OKRsPage() {
       <PageHeader
         title="OKRs"
         description="Company objectives and key results"
+      />
+
+      <DataStateBanner
+        pageState={pageState}
+        title="OKR updates from Slack"
       />
 
       {hasData ? (

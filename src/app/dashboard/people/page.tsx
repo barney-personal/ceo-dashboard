@@ -5,11 +5,16 @@ import { DepartmentDrilldown } from "@/components/dashboard/department-drilldown
 import { JoinersLeaversDrilldown } from "@/components/dashboard/joiners-leavers-drilldown";
 import { TenureDrilldown } from "@/components/dashboard/tenure-drilldown";
 import { PeopleDirectory } from "@/components/dashboard/people-directory";
+import {
+  DataStateBanner,
+  UnavailablePage,
+} from "@/components/dashboard/page-data-boundary";
 import { getHeadcountByDepartment } from "@/lib/data/chart-data";
 import {
   getLatestTerminalSyncRun,
   resolveModeStaleReason,
 } from "@/lib/data/mode";
+import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import {
   getChartEmbeds,
   getModeReportLink,
@@ -24,11 +29,46 @@ import {
 } from "@/lib/data/people";
 
 export default async function PeopleOrgPage() {
-  const [{ employees, partTimeChampions, unassigned, contractors, allRows }, deptData, latestSyncRun] = await Promise.all([
-    getActiveEmployees(),
-    getHeadcountByDepartment(),
-    getLatestTerminalSyncRun("mode"),
-  ]);
+  const [employeesResult, deptDataResult, latestSyncRunResult] =
+    await Promise.all([
+      safeLoad(() => getActiveEmployees(), {
+        employees: [],
+        partTimeChampions: [],
+        unassigned: [],
+        contractors: [],
+        allRows: [],
+        lastSync: null,
+      }),
+      safeLoad(() => getHeadcountByDepartment(), []),
+      safeLoad(() => getLatestTerminalSyncRun("mode"), null),
+    ]);
+
+  const firstUnavailable =
+    employeesResult.error ?? deptDataResult.error ?? latestSyncRunResult.error;
+
+  const { employees, partTimeChampions, unassigned, contractors, allRows } =
+    employeesResult.data;
+  const deptData = deptDataResult.data;
+  const latestSyncRun = latestSyncRunResult.data;
+
+  const pageState = resolveDataState({
+    source: "mode",
+    hasData: employees.length > 0 || unassigned.length > 0 || deptData.length > 0,
+    latestSyncRun,
+    error: firstUnavailable,
+  });
+
+  if (pageState.kind === "unavailable") {
+    return (
+      <UnavailablePage
+        title="Org"
+        description="Headcount, team structure, and workforce metrics"
+        dataTitle="Org data from Mode Analytics"
+        lastSyncedAt={pageState.lastSyncedAt}
+        containerClassName="space-y-6"
+      />
+    );
+  }
 
   const allActive = [...employees, ...unassigned];
   const metrics = getPeopleMetrics(allActive, allRows);
@@ -78,6 +118,11 @@ export default async function PeopleOrgPage() {
       <PageHeader
         title="Org"
         description="Headcount, team structure, and workforce metrics"
+      />
+
+      <DataStateBanner
+        pageState={pageState}
+        title="Org data from Mode Analytics"
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

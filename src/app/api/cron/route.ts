@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
-import { createWorkerId, startBackgroundSyncDrain } from "@/lib/sync/runtime";
+import {
+  awaitDrainStarted,
+  createWorkerId,
+  startBackgroundSyncDrain,
+} from "@/lib/sync/runtime";
 import { isCronRequest } from "@/lib/sync/request-auth";
 import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
 } from "@/lib/sync/response";
+import {
+  detectStalledSources,
+  emitStalledSourceWarnings,
+  getSourceHealth,
+} from "@/lib/sync/health";
 import { cleanupDebugLogs } from "@/lib/debug-logger";
 
 export async function GET(request: NextRequest) {
@@ -21,6 +30,17 @@ export async function GET(request: NextRequest) {
       console.error("Failed to clean up debug logs", error);
     }
 
+    // Detect sources whose last success is older than 5x their normal interval
+    // and emit one Sentry warning per source before fan-out. Stalled detection
+    // must never block the cron — swallow its own errors.
+    try {
+      const healths = await getSourceHealth();
+      const stalled = detectStalledSources(healths);
+      emitStalledSourceWarnings(stalled);
+    } catch (error) {
+      console.error("[sync-api] stalled-source detection failed", error);
+    }
+
     const [mode, slack, managementAccounts, meetings, github] = await Promise.all([
       enqueueSyncRun("mode", { trigger: "cron" }),
       enqueueSyncRun("slack", { trigger: "cron" }),
@@ -30,26 +50,50 @@ export async function GET(request: NextRequest) {
     ]);
 
     const allResults = [mode, slack, managementAccounts, meetings, github];
+    const serializedResults = {
+      mode: serializeEnqueueSyncResult(mode),
+      slack: serializeEnqueueSyncResult(slack),
+      managementAccounts: serializeEnqueueSyncResult(managementAccounts),
+      meetings: serializeEnqueueSyncResult(meetings),
+      github: serializeEnqueueSyncResult(github),
+    };
+
     if (allResults.some((result) => result.outcome !== "skipped")) {
       const workerId = createWorkerId("web-cron");
       const runIds = allResults
         .map((r) => r.runId)
         .filter((runId): runId is number => runId != null);
-      startBackgroundSyncDrain(workerId, {
+      const { started } = startBackgroundSyncDrain(workerId, {
         runIds,
         triggerLabel: "cron trigger",
       });
+
+      const drainState = await awaitDrainStarted(started);
+      if (drainState === "failed") {
+        return NextResponse.json(
+          {
+            status: "sync drain failed to start",
+            drain_started: false,
+            results: serializedResults,
+          },
+          { status: 503 }
+        );
+      }
+
+      return NextResponse.json({
+        status: "syncs enqueued",
+        drain_started: drainState === "started" ? true : "pending",
+        results: serializedResults,
+      });
     }
 
+    // All sources skipped: no drain started. Emit drain_started: null
+    // explicitly so monitoring clients pattern-matching on that field can
+    // distinguish "nothing to do" from "drain is still pending".
     return NextResponse.json({
       status: "syncs enqueued",
-      results: {
-        mode: serializeEnqueueSyncResult(mode),
-        slack: serializeEnqueueSyncResult(slack),
-        managementAccounts: serializeEnqueueSyncResult(managementAccounts),
-        meetings: serializeEnqueueSyncResult(meetings),
-        github: serializeEnqueueSyncResult(github),
-      },
+      drain_started: null,
+      results: serializedResults,
     });
   } catch (error) {
     return unexpectedSyncRouteErrorResponse("cron", error);

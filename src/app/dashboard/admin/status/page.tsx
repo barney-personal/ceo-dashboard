@@ -18,6 +18,7 @@ import {
 } from "@/lib/db/schema";
 import { desc, count, inArray } from "drizzle-orm";
 import { getEffectiveSyncState } from "@/lib/sync/config";
+import { getSourceHealth, type SourceHealth } from "@/lib/sync/health";
 import {
   getSyncEnabledModeReportControls,
   getModeReportNamesByToken,
@@ -26,6 +27,7 @@ import {
   getSchemaCompatibilityMessage,
   isSchemaCompatibilityError,
 } from "@/lib/db/errors";
+import { LastSyncedAt } from "@/components/dashboard/last-synced-at";
 import {
   Database,
   CheckCircle2,
@@ -45,8 +47,11 @@ export default async function DataStatusPage() {
   let recentRuns: (typeof syncLog.$inferSelect)[] = [];
   let phases: (typeof syncPhases.$inferSelect)[] = [];
   let modeSyncReports: (typeof modeReports.$inferSelect)[] = [];
+  let sourceHealths: SourceHealth[] = [];
 
   try {
+    sourceHealths = await getSourceHealth();
+
     recentRuns = await db
       .select()
       .from(syncLog)
@@ -257,6 +262,8 @@ export default async function DataStatusPage() {
         </SectionCard>
       )}
 
+      <SourceHealthSection healths={sourceHealths} />
+
       {/* Sync Run Log — the main feature */}
       <SyncRunLog runs={enrichedRuns} avgDurations={avgDurations} />
 
@@ -320,6 +327,81 @@ export default async function DataStatusPage() {
           </div>
         </SectionCard>
       </div>
+    </div>
+  );
+}
+
+function formatPercent(rate: number | null): string {
+  if (rate == null) return "—";
+  return `${Math.round(rate * 1000) / 10}%`;
+}
+
+function formatDurationMs(ms: number | null): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = Math.round(seconds - minutes * 60);
+  return `${minutes}m ${remSeconds}s`;
+}
+
+function successRateTone(rate: number | null): string {
+  if (rate == null) return "text-muted-foreground";
+  if (rate >= 0.95) return "text-positive";
+  if (rate >= 0.8) return "text-warning";
+  return "text-destructive";
+}
+
+function SourceHealthSection({ healths }: { healths: SourceHealth[] }) {
+  if (healths.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+        Source Health
+      </h3>
+      <SectionCard
+        title="Per-source sync health"
+        description="Last success and failure are all-time; success rate and p95 duration are rolling 7-day"
+      >
+        <div className="divide-y divide-border/30">
+          {healths.map((health) => (
+            <div
+              key={health.source}
+              className="grid grid-cols-1 gap-3 py-3 first:pt-0 last:pb-0 sm:grid-cols-5 sm:items-center"
+            >
+              <div className="text-sm font-medium">{health.source}</div>
+              <div className="text-xs text-muted-foreground">
+                <LastSyncedAt
+                  at={health.lastSuccessAt}
+                  prefix="Last success"
+                />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                <LastSyncedAt
+                  at={health.lastFailureAt}
+                  prefix="Last failure"
+                />
+              </div>
+              <div
+                className={`text-xs font-mono tabular-nums ${successRateTone(health.successRate7d)}`}
+                title={`${health.successRuns7d}/${health.totalRuns7d} runs succeeded in the last 7 days`}
+              >
+                {formatPercent(health.successRate7d)}
+                <span className="ml-1 text-[0.65rem] text-muted-foreground">
+                  ({health.successRuns7d}/{health.totalRuns7d})
+                </span>
+              </div>
+              <div className="text-xs font-mono tabular-nums text-muted-foreground">
+                p95 {formatDurationMs(health.p95DurationMs)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
     </div>
   );
 }

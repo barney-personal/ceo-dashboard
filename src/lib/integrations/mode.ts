@@ -1,4 +1,11 @@
 import * as Sentry from "@sentry/nextjs";
+import type { ZodType } from "zod";
+import {
+  ModeEnvelopeValidationError,
+  modeQueriesEnvelopeSchema,
+  modeQueryRunsEnvelopeSchema,
+  modeReportRunsEnvelopeSchema,
+} from "@/lib/validation/mode-envelope";
 import type { ModeRowAggregator } from "./mode-config";
 
 const MODE_BASE_URL = "https://app.mode.com/api";
@@ -437,6 +444,34 @@ export interface ModeQuery {
   name: string;
 }
 
+function validateModeEnvelope<T>(
+  schema: ZodType<T>,
+  envelope: string,
+  path: string,
+  raw: unknown,
+): T {
+  const result = schema.safeParse(raw);
+  if (result.success) {
+    return result.data;
+  }
+
+  const issues = result.error.issues
+    .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+    .join("; ");
+
+  const error = new ModeEnvelopeValidationError(envelope, issues);
+  Sentry.captureException(error, {
+    level: "error",
+    tags: { integration: "mode", mode_envelope_invalid: "true" },
+    extra: {
+      path,
+      envelope,
+      issues,
+    },
+  });
+  throw error;
+}
+
 // --- API Methods ---
 
 export async function getReport(
@@ -453,9 +488,14 @@ export async function getLatestRun(
   reportToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeRun | null> {
-  const result = await modeRequest<{
-    _embedded: { report_runs: ModeRun[] };
-  }>(`/reports/${reportToken}/runs`, opts);
+  const path = `/reports/${reportToken}/runs`;
+  const raw = await modeRequest<unknown>(path, opts);
+  const result = validateModeEnvelope(
+    modeReportRunsEnvelopeSchema,
+    "report_runs",
+    path,
+    raw,
+  );
 
   const runs = result._embedded.report_runs;
   const succeeded = runs.find((r) => r.state === "succeeded");
@@ -470,9 +510,14 @@ export async function getQueryRuns(
   runToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeQueryRun[]> {
-  const result = await modeRequest<{
-    _embedded: { query_runs: ModeQueryRun[] };
-  }>(`/reports/${reportToken}/runs/${runToken}/query_runs`, opts);
+  const path = `/reports/${reportToken}/runs/${runToken}/query_runs`;
+  const raw = await modeRequest<unknown>(path, opts);
+  const result = validateModeEnvelope(
+    modeQueryRunsEnvelopeSchema,
+    "query_runs",
+    path,
+    raw,
+  );
   return result._embedded.query_runs;
 }
 
@@ -483,9 +528,14 @@ export async function getReportQueries(
   reportToken: string,
   opts?: { signal?: AbortSignal },
 ): Promise<ModeQuery[]> {
-  const result = await modeRequest<{
-    _embedded: { queries: ModeQuery[] };
-  }>(`/reports/${reportToken}/queries`, opts);
+  const path = `/reports/${reportToken}/queries`;
+  const raw = await modeRequest<unknown>(path, opts);
+  const result = validateModeEnvelope(
+    modeQueriesEnvelopeSchema,
+    "queries",
+    path,
+    raw,
+  );
   return result._embedded.queries;
 }
 

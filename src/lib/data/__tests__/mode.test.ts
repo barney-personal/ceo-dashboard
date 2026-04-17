@@ -272,9 +272,7 @@ describe("getReportData cache", () => {
     expect(mockSelect).toHaveBeenCalledTimes(3);
   });
 
-  it("does not cache degraded fallback responses", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("surfaces Postgres outages as a typed DatabaseUnavailableError and does not cache the failure", async () => {
     mockOrderBy
       .mockRejectedValueOnce({
         code: "57P01",
@@ -282,15 +280,17 @@ describe("getReportData cache", () => {
       })
       .mockResolvedValueOnce(createReportRows(55));
 
-    await expect(getReportData("unit-economics", "kpis")).resolves.toEqual([]);
+    await expect(
+      getReportData("unit-economics", "kpis")
+    ).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
     await expect(getReportData("unit-economics", "kpis")).resolves.toEqual([
       expect.objectContaining({
         rows: [{ value: 55 }],
       }),
     ]);
 
-    expect(consoleError).toHaveBeenCalledTimes(1);
-    expect(mockCaptureException).toHaveBeenCalledTimes(1);
     expect(mockSelect).toHaveBeenCalledTimes(2);
   });
 

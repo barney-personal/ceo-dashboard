@@ -6,6 +6,13 @@ import {
 import { getReportData, validateModeColumns } from "./mode";
 import { selectModeFteActive } from "./people";
 import {
+  arpuRowSchema,
+  cpaRowSchema,
+  cvrRowSchema,
+  ltvRowSchema,
+  validateMetricRow,
+} from "@/lib/validation/mode-metric-rows";
+import {
   formatCompact,
   formatCurrency,
   formatPercent,
@@ -105,21 +112,21 @@ export async function getUnitEconomicsMetrics() {
         "Subscribers at end of period: Growth accounting",
       ]);
 
-      const ltv = getValidatedQueryRow(kpis, "36M LTV", ["user_pnl_36m"]);
-      const arpu = getValidatedQueryRow(kpis, "ARPU Annualized", [
+      const ltvRow = getValidatedQueryRow(kpis, "36M LTV", ["user_pnl_36m"]);
+      const arpuRow = getValidatedQueryRow(kpis, "ARPU Annualized", [
         "arpmau",
         "gross_margin",
         "contribution_margin",
         "mau",
         "monthly_revenue",
       ]);
-      const cpa = getValidatedQueryRow(
+      const cpaRow = getValidatedQueryRow(
         kpis,
         "CPA",
         ["time_period", "avg_cpa"],
         { time_period: "Previous 365 days" },
       );
-      const cvr = getValidatedQueryRow(kpis, "M11 Plus CVR, past 7 days", [
+      const cvrRow = getValidatedQueryRow(kpis, "M11 Plus CVR, past 7 days", [
         "average_7d_plus_m11_cvr",
       ]);
       const subscribers = getQueryRow(
@@ -127,18 +134,30 @@ export async function getUnitEconomicsMetrics() {
         "Subscribers at end of period: Growth accounting",
       );
 
+      if (!ltvRow || !arpuRow || !cpaRow || !cvrRow) {
+        return fallback;
+      }
+
+      // Row-level zod validation. Column presence is already checked above;
+      // this catches value-type drift (e.g. numeric field returned as string)
+      // and emits a tagged Sentry warning instead of silently casting garbage.
+      const ltv = validateMetricRow(ltvRowSchema, ltvRow, { queryName: "36M LTV" });
+      const arpu = validateMetricRow(arpuRowSchema, arpuRow, { queryName: "ARPU Annualized" });
+      const cpa = validateMetricRow(cpaRowSchema, cpaRow, { queryName: "CPA" });
+      const cvr = validateMetricRow(cvrRowSchema, cvrRow, { queryName: "M11 Plus CVR, past 7 days" });
+
       if (!ltv || !arpu || !cpa || !cvr) {
         return fallback;
       }
 
-      const ltvValue = ltv?.user_pnl_36m as number | undefined;
-      const arpuValue = arpu?.arpmau as number | undefined;
-      const grossMargin = arpu?.gross_margin as number | undefined;
-      const contributionMargin = arpu?.contribution_margin as number | undefined;
-      const cpaValue = cpa?.avg_cpa as number | undefined;
-      const cvrValue = cvr?.average_7d_plus_m11_cvr as number | undefined;
-      const mau = arpu?.mau as number | undefined;
-      const revenue = arpu?.monthly_revenue as number | undefined;
+      const ltvValue = ltv.user_pnl_36m ?? undefined;
+      const arpuValue = arpu.arpmau ?? undefined;
+      const grossMargin = arpu.gross_margin ?? undefined;
+      const contributionMargin = arpu.contribution_margin ?? undefined;
+      const cpaValue = cpa.avg_cpa ?? undefined;
+      const cvrValue = cvr.average_7d_plus_m11_cvr ?? undefined;
+      const mau = arpu.mau ?? undefined;
+      const revenue = arpu.monthly_revenue ?? undefined;
 
       const ltvCac =
         ltvValue != null && cpaValue != null
