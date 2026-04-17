@@ -81,7 +81,6 @@ import {
   parseRows,
   resolveModeStaleReason,
   resetReportDataCacheForTests,
-  resetRowValidationWarnCacheForTests,
   REPORT_DATA_CACHE_MAX_ENTRIES,
   validateModeColumns,
 } from "../mode";
@@ -132,7 +131,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   resetReportDataCacheForTests();
-  resetRowValidationWarnCacheForTests();
   mockCaptureException.mockClear();
   mockCaptureMessage.mockClear();
   mockAnd.mockClear();
@@ -193,12 +191,27 @@ describe("parseRows", () => {
     expect(typeof options.extra.firstInvalidIssues).toBe("string");
   });
 
-  it("applies a cooldown so repeated failures only warn once per hour", () => {
+  it("emits one batch-level signal per invalid batch without suppressing repeats", () => {
     const rows = [{ day: "", value: 1 }];
     parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
     parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+    for (const call of mockCaptureMessage.mock.calls) {
+      expect(call[0]).toBe("Mode row validation failure");
+      expect(call[1].extra.invalidCount).toBe(1);
+      expect(call[1].extra.totalRows).toBe(1);
+    }
+  });
+
+  it("emits exactly once per batch even when the batch contains many invalid rows", () => {
+    const rows = [
+      { day: "", value: 1 },
+      { day: "", value: 2 },
+      { day: "", value: 3 },
+    ];
     parseRows(sampleSchema, rows, { reportName: "R", queryName: "Q" });
     expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+    expect(mockCaptureMessage.mock.calls[0][1].extra.invalidCount).toBe(3);
   });
 });
 

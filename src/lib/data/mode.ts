@@ -333,9 +333,6 @@ export function resetReportDataCacheForTests(): void {
   schemaDriftLastWarned.clear();
 }
 
-const ROW_VALIDATION_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
-const rowValidationLastWarned = new Map<string, number>();
-
 export interface ParseRowsResult<T> {
   valid: T[];
   invalidCount: number;
@@ -344,7 +341,9 @@ export interface ParseRowsResult<T> {
 /**
  * Validate a batch of Mode rows against a zod schema. Invalid rows are
  * skipped and counted; a single Sentry breadcrumb is emitted per batch
- * (not per row) with a PII-safe preview of the first invalid row.
+ * (never per row) with a PII-safe preview of the first invalid row. Every
+ * invalid batch emits — there is no cross-batch cooldown, so repeated
+ * malformed batches from the same report/query remain observable.
  *
  * Use this at loader boundaries to replace ad-hoc `as number` / `as string`
  * casts on JSONB row data.
@@ -379,37 +378,28 @@ export function parseRows<T>(
   }
 
   if (invalidCount > 0) {
-    const cooldownKey = `${context.reportName ?? ""}::${context.queryName}`;
-    const lastWarned = rowValidationLastWarned.get(cooldownKey) ?? 0;
-    if (Date.now() - lastWarned >= ROW_VALIDATION_COOLDOWN_MS) {
-      rowValidationLastWarned.set(cooldownKey, Date.now());
-      Sentry.captureMessage("Mode row validation failure", {
-        level: "warning",
-        tags: {
-          data_loader: "mode",
-          validation_failure: "true",
-          ...(context.reportName ? { reportName: context.reportName } : {}),
-          queryName: context.queryName,
-        },
-        extra: {
-          reportName: context.reportName ?? null,
-          queryName: context.queryName,
-          invalidCount,
-          totalRows: rows.length,
-          firstInvalidFieldNames: firstInvalidRow
-            ? Object.keys(firstInvalidRow)
-            : [],
-          firstInvalidIssues: firstInvalidMessage,
-        },
-      });
-    }
+    Sentry.captureMessage("Mode row validation failure", {
+      level: "warning",
+      tags: {
+        data_loader: "mode",
+        validation_failure: "true",
+        ...(context.reportName ? { reportName: context.reportName } : {}),
+        queryName: context.queryName,
+      },
+      extra: {
+        reportName: context.reportName ?? null,
+        queryName: context.queryName,
+        invalidCount,
+        totalRows: rows.length,
+        firstInvalidFieldNames: firstInvalidRow
+          ? Object.keys(firstInvalidRow)
+          : [],
+        firstInvalidIssues: firstInvalidMessage,
+      },
+    });
   }
 
   return { valid, invalidCount };
-}
-
-export function resetRowValidationWarnCacheForTests(): void {
-  rowValidationLastWarned.clear();
 }
 
 /**
