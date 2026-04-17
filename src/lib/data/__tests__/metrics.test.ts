@@ -168,6 +168,24 @@ describe("getUnitEconomicsMetrics", () => {
   });
 });
 
+describe("metrics DB error handling", () => {
+  it("surfaces Postgres outages from getUnitEconomicsMetrics as DatabaseUnavailableError", async () => {
+    mockGetReportData.mockRejectedValue(new Error("fetch failed"));
+
+    await expect(getUnitEconomicsMetrics()).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
+  });
+
+  it("surfaces Postgres outages from getHeadcountMetrics as DatabaseUnavailableError", async () => {
+    mockGetReportData.mockRejectedValue(new Error("connection terminated unexpectedly"));
+
+    await expect(getHeadcountMetrics()).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
+  });
+});
+
 describe("getHeadcountMetrics", () => {
   it("returns the empty fallback when headcount columns drift", async () => {
     mockGetReportData.mockResolvedValue([

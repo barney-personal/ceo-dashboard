@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { githubPrs, githubCommits, githubEmployeeMap } from "@/lib/db/schema";
 import { gte, desc, eq, sql, count, sum } from "drizzle-orm";
 
@@ -29,6 +30,7 @@ export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["value"];
 export async function getEngineeringRankings(
   days: PeriodDays = 30
 ): Promise<EngineerRanking[]> {
+  return withDbErrorContext("load engineering rankings", async () => {
   const since = new Date();
   since.setUTCDate(since.getUTCDate() - days);
   since.setUTCHours(0, 0, 0, 0);
@@ -95,4 +97,5 @@ export async function getEngineeringRankings(
     employeeEmail: row.employeeEmail,
     isBot: row.isBot ?? false,
   }));
+  });
 }

@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { financialPeriods } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 
@@ -54,23 +55,27 @@ function mapRow(row: typeof financialPeriods.$inferSelect): FinancialPeriod {
  * Get all financial periods, ordered newest first.
  */
 export async function getFinancialPeriods(): Promise<FinancialPeriod[]> {
-  const rows = await db
-    .select()
-    .from(financialPeriods)
-    .orderBy(desc(financialPeriods.period));
+  return withDbErrorContext("load financial periods", async () => {
+    const rows = await db
+      .select()
+      .from(financialPeriods)
+      .orderBy(desc(financialPeriods.period));
 
-  return rows.map(mapRow);
+    return rows.map(mapRow);
+  });
 }
 
 /**
  * Get the latest financial period.
  */
 export async function getLatestFinancialPeriod(): Promise<FinancialPeriod | null> {
-  const rows = await db
-    .select()
-    .from(financialPeriods)
-    .orderBy(desc(financialPeriods.period))
-    .limit(1);
+  return withDbErrorContext("load latest financial period", async () => {
+    const rows = await db
+      .select()
+      .from(financialPeriods)
+      .orderBy(desc(financialPeriods.period))
+      .limit(1);
 
-  return rows.length > 0 ? mapRow(rows[0]) : null;
+    return rows.length > 0 ? mapRow(rows[0]) : null;
+  });
 }

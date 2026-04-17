@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { meetingNotes, preReads } from "@/lib/db/schema";
 import { and, gte, lte, desc, like, or, inArray, sql, isNull, eq } from "drizzle-orm";
 import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
@@ -174,33 +175,37 @@ export async function getMeetingsForRange(
     opts.accessToken
       ? fetchLiveCalendarMeetings(startDate, endDate, opts.accessToken, minAttendees)
       : Promise.resolve([] as MeetingRow[]),
-    db
-      .select()
-      .from(preReads)
-      .where(
-        and(
-          gte(preReads.postedAt, preReadStart),
-          lte(preReads.postedAt, endDate)
+    withDbErrorContext("load meeting pre-reads", () =>
+      db
+        .select()
+        .from(preReads)
+        .where(
+          and(
+            gte(preReads.postedAt, preReadStart),
+            lte(preReads.postedAt, endDate)
+          )
         )
-      )
-      .orderBy(desc(preReads.postedAt)),
-    db
-      .select()
-      .from(meetingNotes)
-      .where(
-        and(
-          gte(meetingNotes.meetingDate, startDate),
-          lte(meetingNotes.meetingDate, endDate),
-          // Only show notes owned by this user or enterprise (null)
-          opts.userId
-            ? or(
-                eq(meetingNotes.syncedByUserId, opts.userId),
-                isNull(meetingNotes.syncedByUserId)
-              )
-            : isNull(meetingNotes.syncedByUserId)
+        .orderBy(desc(preReads.postedAt))
+    ),
+    withDbErrorContext("load meeting notes", () =>
+      db
+        .select()
+        .from(meetingNotes)
+        .where(
+          and(
+            gte(meetingNotes.meetingDate, startDate),
+            lte(meetingNotes.meetingDate, endDate),
+            // Only show notes owned by this user or enterprise (null)
+            opts.userId
+              ? or(
+                  eq(meetingNotes.syncedByUserId, opts.userId),
+                  isNull(meetingNotes.syncedByUserId)
+                )
+              : isNull(meetingNotes.syncedByUserId)
+          )
         )
-      )
-      .orderBy(desc(meetingNotes.meetingDate)),
+        .orderBy(desc(meetingNotes.meetingDate))
+    ),
   ]);
 
   const serializedPreReads: PreReadRow[] = preReadRows.map((p) => ({
@@ -361,22 +366,26 @@ export async function getMeetingsForRange(
     const likeConditions = recurringBaseIds.map((baseId) =>
       like(meetingNotes.calendarEventId, `${baseId}%`)
     );
-    const historicalRows = await db
-      .select()
-      .from(meetingNotes)
-      .where(
-        and(
-          or(...likeConditions),
-          lte(meetingNotes.meetingDate, startDate), // only past notes
-          opts.userId
-            ? or(
-                eq(meetingNotes.syncedByUserId, opts.userId),
-                isNull(meetingNotes.syncedByUserId)
-              )
-            : isNull(meetingNotes.syncedByUserId)
-        )
-      )
-      .orderBy(desc(meetingNotes.meetingDate));
+    const historicalRows = await withDbErrorContext(
+      "load historical meeting notes",
+      () =>
+        db
+          .select()
+          .from(meetingNotes)
+          .where(
+            and(
+              or(...likeConditions),
+              lte(meetingNotes.meetingDate, startDate), // only past notes
+              opts.userId
+                ? or(
+                    eq(meetingNotes.syncedByUserId, opts.userId),
+                    isNull(meetingNotes.syncedByUserId)
+                  )
+                : isNull(meetingNotes.syncedByUserId)
+            )
+          )
+          .orderBy(desc(meetingNotes.meetingDate))
+    );
 
     for (const row of historicalRows) {
       if (!row.calendarEventId) continue;
@@ -400,23 +409,27 @@ export async function getMeetingsForRange(
     const titleConditions = titleKeys.map((t) =>
       sql`LOWER(TRIM(${meetingNotes.title})) = ${t}`
     );
-    const titleMatchRows = await db
-      .select()
-      .from(meetingNotes)
-      .where(
-        and(
-          or(...titleConditions),
-          lte(meetingNotes.meetingDate, startDate),
-          opts.userId
-            ? or(
-                eq(meetingNotes.syncedByUserId, opts.userId),
-                isNull(meetingNotes.syncedByUserId)
-              )
-            : isNull(meetingNotes.syncedByUserId)
-        )
-      )
-      .orderBy(desc(meetingNotes.meetingDate))
-      .limit(50);
+    const titleMatchRows = await withDbErrorContext(
+      "load meeting notes by title",
+      () =>
+        db
+          .select()
+          .from(meetingNotes)
+          .where(
+            and(
+              or(...titleConditions),
+              lte(meetingNotes.meetingDate, startDate),
+              opts.userId
+                ? or(
+                    eq(meetingNotes.syncedByUserId, opts.userId),
+                    isNull(meetingNotes.syncedByUserId)
+                  )
+                : isNull(meetingNotes.syncedByUserId)
+            )
+          )
+          .orderBy(desc(meetingNotes.meetingDate))
+          .limit(50)
+    );
 
     for (const row of titleMatchRows) {
       const key = (row.title ?? "").toLowerCase().trim();

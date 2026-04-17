@@ -1,11 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 import type { ZodType } from "zod";
 import { db } from "@/lib/db";
-import {
-  DatabaseUnavailableError,
-  isSchemaCompatibilityError,
-  normalizeDatabaseError,
-} from "@/lib/db/errors";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { modeReports, modeReportData, syncLog } from "@/lib/db/schema";
 import { eq, and, desc } from "drizzle-orm";
 import type { DashboardSection } from "@/lib/integrations/mode-config";
@@ -76,31 +72,6 @@ function evictOneEntry(): void {
   }
 }
 
-async function withDatabaseReadFallback<T>(
-  context: string,
-  fallback: T,
-  read: () => Promise<T>
-): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    const normalized = normalizeDatabaseError(context, error);
-    if (
-      normalized instanceof DatabaseUnavailableError ||
-      isSchemaCompatibilityError(error)
-    ) {
-      Sentry.captureException(normalized, {
-        tags: { data_loader: "mode" },
-        extra: { context, fallbackUsed: true },
-      });
-      console.error(`[data] ${context} degraded to fallback`, normalized);
-      return fallback;
-    }
-
-    throw normalized;
-  }
-}
-
 function getReportDataCacheKey(
   section: DashboardSection,
   category?: string
@@ -112,37 +83,42 @@ async function loadReportDataFromDatabase(
   section: DashboardSection,
   category?: string
 ): Promise<ReportData[]> {
-  const conditions = [eq(modeReports.section, section)];
-  if (category) {
-    conditions.push(eq(modeReports.category, category));
-  }
+  return withDbErrorContext(
+    `load report data for ${section}${category ? `/${category}` : ""}`,
+    async () => {
+      const conditions = [eq(modeReports.section, section)];
+      if (category) {
+        conditions.push(eq(modeReports.category, category));
+      }
 
-  const results = await db
-    .select({
-      reportName: modeReports.name,
-      section: modeReports.section,
-      category: modeReports.category,
-      queryName: modeReportData.queryName,
-      columns: modeReportData.columns,
-      data: modeReportData.data,
-      rowCount: modeReportData.rowCount,
-      syncedAt: modeReportData.syncedAt,
-    })
-    .from(modeReportData)
-    .innerJoin(modeReports, eq(modeReportData.reportId, modeReports.id))
-    .where(and(...conditions))
-    .orderBy(desc(modeReportData.syncedAt));
+      const results = await db
+        .select({
+          reportName: modeReports.name,
+          section: modeReports.section,
+          category: modeReports.category,
+          queryName: modeReportData.queryName,
+          columns: modeReportData.columns,
+          data: modeReportData.data,
+          rowCount: modeReportData.rowCount,
+          syncedAt: modeReportData.syncedAt,
+        })
+        .from(modeReportData)
+        .innerJoin(modeReports, eq(modeReportData.reportId, modeReports.id))
+        .where(and(...conditions))
+        .orderBy(desc(modeReportData.syncedAt));
 
-  return results.map((r) => ({
-    reportName: r.reportName,
-    section: r.section,
-    category: r.category,
-    queryName: r.queryName,
-    columns: r.columns as Array<{ name: string; type: string }>,
-    rows: r.data as Record<string, unknown>[],
-    rowCount: r.rowCount,
-    syncedAt: r.syncedAt,
-  }));
+      return results.map((r) => ({
+        reportName: r.reportName,
+        section: r.section,
+        category: r.category,
+        queryName: r.queryName,
+        columns: r.columns as Array<{ name: string; type: string }>,
+        rows: r.data as Record<string, unknown>[],
+        rowCount: r.rowCount,
+        syncedAt: r.syncedAt,
+      }));
+    }
+  );
 }
 
 async function getCachedReportData(
@@ -312,20 +288,14 @@ export async function getReportData(
   category?: string,
   expectedQueries: readonly string[] = []
 ): Promise<ReportData[]> {
-  return withDatabaseReadFallback(
-    `load report data for ${section}${category ? `/${category}` : ""}`,
-    [],
-    async () => {
-      const reportData = await getCachedReportData(section, category);
-      validateExpectedQueries({
-        reportData,
-        expectedQueries,
-        section,
-        category,
-      });
-      return reportData;
-    }
-  );
+  const reportData = await getCachedReportData(section, category);
+  validateExpectedQueries({
+    reportData,
+    expectedQueries,
+    section,
+    category,
+  });
+  return reportData;
 }
 
 export function resetReportDataCacheForTests(): void {
@@ -442,7 +412,7 @@ export function rowNumOrNull(
 export async function getLastSyncTime(
   source: string = "mode"
 ): Promise<Date | null> {
-  return withDatabaseReadFallback(`load last sync time for ${source}`, null, async () => {
+  return withDbErrorContext(`load last sync time for ${source}`, async () => {
     const result = await db
       .select({ completedAt: syncLog.completedAt })
       .from(syncLog)
@@ -457,9 +427,8 @@ export async function getLastSyncTime(
 export async function getLatestTerminalSyncRun(
   source: string = "mode"
 ): Promise<LatestTerminalSyncRun | null> {
-  return withDatabaseReadFallback(
+  return withDbErrorContext(
     `load latest terminal sync run for ${source}`,
-    null,
     async () => {
       const result = await db
         .select({

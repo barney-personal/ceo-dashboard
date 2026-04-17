@@ -56,4 +56,12 @@ describe("getRecentSyncRuns", () => {
     expect(mockOrderBy).toHaveBeenCalledWith("startedAt");
     expect(mockLimit).toHaveBeenCalledWith(10);
   });
+
+  it("surfaces Postgres outages as DatabaseUnavailableError", async () => {
+    mockLimit.mockRejectedValue(new Error("fetch failed"));
+
+    await expect(getRecentSyncRuns(10)).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
+  });
 });

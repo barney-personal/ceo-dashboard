@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { okrUpdates, squads } from "@/lib/db/schema";
 import { buildSlackMessageUrl } from "@/lib/config/slack";
 import { desc, eq, gte } from "drizzle-orm";
@@ -79,12 +80,14 @@ export function groupLatestOkrRows(
 export async function getLatestOkrUpdates(): Promise<
   Map<string, OkrSummary[]>
 > {
-  const rows = await db
-    .select()
-    .from(okrUpdates)
-    .orderBy(desc(okrUpdates.postedAt));
+  return withDbErrorContext("load latest OKR updates", async () => {
+    const rows = await db
+      .select()
+      .from(okrUpdates)
+      .orderBy(desc(okrUpdates.postedAt));
 
-  return groupLatestOkrRows(rows);
+    return groupLatestOkrRows(rows);
+  });
 }
 
 /**
@@ -120,34 +123,36 @@ export interface SquadInfo {
 export async function getSquadsWithCoverage(): Promise<
   Map<string, SquadInfo[]>
 > {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  return withDbErrorContext("load squads with coverage", async () => {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const allSquads = await db
-    .select()
-    .from(squads)
-    .where(eq(squads.isActive, true));
+    const allSquads = await db
+      .select()
+      .from(squads)
+      .where(eq(squads.isActive, true));
 
-  // Get squads that have recent updates
-  const recentUpdates = await db
-    .select({ squadName: okrUpdates.squadName })
-    .from(okrUpdates)
-    .where(gte(okrUpdates.postedAt, sevenDaysAgo));
+    // Get squads that have recent updates
+    const recentUpdates = await db
+      .select({ squadName: okrUpdates.squadName })
+      .from(okrUpdates)
+      .where(gte(okrUpdates.postedAt, sevenDaysAgo));
 
-  const recentSquadNames = new Set(recentUpdates.map((r) => r.squadName));
+    const recentSquadNames = new Set(recentUpdates.map((r) => r.squadName));
 
-  const grouped = new Map<string, SquadInfo[]>();
-  for (const squad of allSquads) {
-    const existing = grouped.get(squad.pillar) ?? [];
-    existing.push({
-      name: squad.name,
-      pillar: squad.pillar,
-      pmName: squad.pmName,
-      hasRecentUpdate: recentSquadNames.has(squad.name),
-    });
-    grouped.set(squad.pillar, existing);
-  }
+    const grouped = new Map<string, SquadInfo[]>();
+    for (const squad of allSquads) {
+      const existing = grouped.get(squad.pillar) ?? [];
+      existing.push({
+        name: squad.name,
+        pillar: squad.pillar,
+        pmName: squad.pmName,
+        hasRecentUpdate: recentSquadNames.has(squad.name),
+      });
+      grouped.set(squad.pillar, existing);
+    }
 
-  return grouped;
+    return grouped;
+  });
 }
 
 /**

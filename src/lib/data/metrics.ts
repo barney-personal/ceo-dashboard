@@ -1,8 +1,4 @@
-import {
-  DatabaseUnavailableError,
-  isSchemaCompatibilityError,
-  normalizeDatabaseError,
-} from "@/lib/db/errors";
+import { withDbErrorContext } from "@/lib/db/errors";
 import { getReportData, parseRows } from "./mode";
 import {
   formatCompact,
@@ -36,31 +32,10 @@ export function getQueryRow(
   );
 }
 
-async function withMetricsFallback<T>(
-  context: string,
-  fallback: T,
-  compute: () => Promise<T>
-): Promise<T> {
-  try {
-    return await compute();
-  } catch (error) {
-    const normalized = normalizeDatabaseError(context, error);
-    if (
-      normalized instanceof DatabaseUnavailableError ||
-      isSchemaCompatibilityError(error)
-    ) {
-      console.error(`[metrics] ${context} degraded to fallback`, normalized);
-      return fallback;
-    }
-
-    throw normalized;
-  }
-}
-
 // --- Unit Economics Metrics ---
 
 export async function getUnitEconomicsMetrics() {
-  const fallback = {
+  const emptyResult = {
     ltv: null,
     arpu: null,
     grossMargin: null,
@@ -73,9 +48,8 @@ export async function getUnitEconomicsMetrics() {
     subscribers: null as Record<string, unknown> | null,
   };
 
-  return withMetricsFallback(
+  return withDbErrorContext(
     "load unit economics metrics",
-    fallback,
     async () => {
       const kpis = await getReportData("unit-economics", "kpis", [
         "36M LTV",
@@ -108,7 +82,7 @@ export async function getUnitEconomicsMetrics() {
       );
 
       if (!ltvRow || !arpuRow || !cpaRow || !cvrRow) {
-        return fallback;
+        return emptyResult;
       }
 
       const ltvCac =
@@ -163,58 +137,58 @@ function parseSingleRow<T>(
 // --- Headcount Metrics ---
 
 export async function getHeadcountMetrics() {
-  const fallback = { total: null as number | null, lastSync: null as Date | null };
+  const emptyResult = {
+    total: null as number | null,
+    lastSync: null as Date | null,
+  };
 
-  return withMetricsFallback(
-    "load headcount metrics",
-    fallback,
-    async () => {
-      const data = await getReportData("people", "headcount", ["headcount"]);
-      const headcountData = data.find((d) => d.queryName === "headcount");
+  return withDbErrorContext("load headcount metrics", async () => {
+    const data = await getReportData("people", "headcount", ["headcount"]);
+    const headcountData = data.find((d) => d.queryName === "headcount");
 
-      if (!headcountData || headcountData.rows.length === 0) {
-        return fallback;
-      }
+    if (!headcountData || headcountData.rows.length === 0) {
+      return emptyResult;
+    }
 
-      const { valid } = parseRows(headcountSchema, headcountData.rows, {
-        reportName: headcountData.reportName,
-        queryName: headcountData.queryName,
-      });
+    const { valid } = parseRows(headcountSchema, headcountData.rows, {
+      reportName: headcountData.reportName,
+      queryName: headcountData.queryName,
+    });
 
-      if (valid.length === 0) {
-        return fallback;
-      }
+    if (valid.length === 0) {
+      return emptyResult;
+    }
 
-      const activeEmployees = valid.filter(
-        (r) =>
-          (r.lifecycle_status ?? "").toLowerCase() === "employed" &&
-          r.is_cleo_headcount === 1,
-      );
+    const activeEmployees = valid.filter(
+      (r) =>
+        (r.lifecycle_status ?? "").toLowerCase() === "employed" &&
+        r.is_cleo_headcount === 1,
+    );
 
-      return {
-        total: activeEmployees.length,
-        lastSync: headcountData.syncedAt,
-      };
-    },
-  );
+    return {
+      total: activeEmployees.length,
+      lastSync: headcountData.syncedAt,
+    };
+  });
 }
 
 // --- OKR Metrics ---
 
 export async function getOkrMetrics() {
-  return withMetricsFallback(
-    "load OKR metrics",
-    { rows: [] as Record<string, unknown>[], lastSync: null as Date | null },
-    async () => {
-      const data = await getReportData("okrs", "company");
-      const okrData = data.find((d) => d.queryName === "OKR Reporting");
+  return withDbErrorContext("load OKR metrics", async () => {
+    const data = await getReportData("okrs", "company");
+    const okrData = data.find((d) => d.queryName === "OKR Reporting");
 
-      if (!okrData) return { rows: [], lastSync: null };
-
+    if (!okrData) {
       return {
-        rows: okrData.rows,
-        lastSync: okrData.syncedAt,
+        rows: [] as Record<string, unknown>[],
+        lastSync: null as Date | null,
       };
-    },
-  );
+    }
+
+    return {
+      rows: okrData.rows,
+      lastSync: okrData.syncedAt,
+    };
+  });
 }

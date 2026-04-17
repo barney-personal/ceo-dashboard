@@ -5,6 +5,7 @@ import {
   isDatabaseUnavailableError,
   isSchemaCompatibilityError,
   normalizeDatabaseError,
+  withDbErrorContext,
 } from "../errors";
 
 describe("isSchemaCompatibilityError", () => {
@@ -80,5 +81,51 @@ describe("normalizeDatabaseError", () => {
 
     expect(error).not.toBeInstanceOf(DatabaseUnavailableError);
     expect(error.message).toContain("Render migration");
+  });
+});
+
+describe("withDbErrorContext", () => {
+  it("returns the resolved value when the loader succeeds", async () => {
+    await expect(
+      withDbErrorContext("load foo", async () => 42)
+    ).resolves.toBe(42);
+  });
+
+  it("wraps transient Postgres failures in DatabaseUnavailableError", async () => {
+    await expect(
+      withDbErrorContext("load widgets", async () => {
+        throw new Error("fetch failed");
+      })
+    ).rejects.toMatchObject({
+      name: "DatabaseUnavailableError",
+    });
+  });
+
+  it("rewrites schema rollout failures with the compatibility message", async () => {
+    await expect(
+      withDbErrorContext("load widgets", async () => {
+        throw new Error('column "foo" does not exist');
+      })
+    ).rejects.toThrow(/Render migration/);
+  });
+
+  it("passes DatabaseUnavailableError through without re-wrapping", async () => {
+    const original = new DatabaseUnavailableError(
+      "inner loader could not reach Postgres"
+    );
+    await expect(
+      withDbErrorContext("outer loader", async () => {
+        throw original;
+      })
+    ).rejects.toBe(original);
+  });
+
+  it("passes non-DB errors through unchanged", async () => {
+    const domainError = new Error("application logic failed");
+    await expect(
+      withDbErrorContext("load widgets", async () => {
+        throw domainError;
+      })
+    ).rejects.toBe(domainError);
   });
 });
