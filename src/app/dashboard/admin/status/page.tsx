@@ -364,8 +364,8 @@ function SourceHealthSection({ healths }: { healths: SourceHealth[] }) {
         Source Health
       </h3>
       <SectionCard
-        title="Per-source sync health (last 7 days)"
-        description="Last success, last failure, rolling 7-day success rate, and p95 duration"
+        title="Per-source sync health"
+        description="Last success and failure are all-time; success rate and p95 duration are rolling 7-day"
       >
         <div className="divide-y divide-border/30">
           {healths.map((health) => (

@@ -96,6 +96,31 @@ describe("getSourceHealth", () => {
     expect(boundWindowStart!.toISOString()).toBe("2026-04-10T12:00:00.000Z");
   });
 
+  it("returns lastSuccessAt / lastFailureAt even when they are older than the 7-day window", async () => {
+    // Source broke 10 days ago — no runs in the 7-day window but the historical
+    // last_success_at must still be surfaced so the UI doesn't say "never".
+    mockExecute.mockResolvedValue([
+      {
+        source: "mode",
+        last_success_at: "2026-04-07T09:00:00.000Z", // 10 days before `now`
+        last_failure_at: "2026-04-08T09:00:00.000Z", // 9 days before `now`
+        total_runs: 0,
+        success_runs: 0,
+        p95_duration_ms: null,
+      },
+    ]);
+
+    const healths = await getSourceHealth(new Date("2026-04-17T12:00:00.000Z"));
+    const mode = healths.find((h) => h.source === "mode")!;
+
+    expect(mode.lastSuccessAt).toEqual(new Date("2026-04-07T09:00:00.000Z"));
+    expect(mode.lastFailureAt).toEqual(new Date("2026-04-08T09:00:00.000Z"));
+    expect(mode.totalRuns7d).toBe(0);
+    expect(mode.successRuns7d).toBe(0);
+    expect(mode.successRate7d).toBeNull();
+    expect(mode.p95DurationMs).toBeNull();
+  });
+
   it("ignores rows with unknown source names", async () => {
     mockExecute.mockResolvedValue([
       {
@@ -178,6 +203,31 @@ describe("detectStalledSources", () => {
     const modeEntry = stalled.find((s) => s.source === "mode")!;
     expect(modeEntry.thresholdMs).toBe(5 * 4 * 60 * 60 * 1000);
     expect(modeEntry.ageMs).toBeGreaterThan(modeEntry.thresholdMs);
+  });
+
+  it("still flags a source whose last success is older than the 7-day stats window", () => {
+    // Regression guard: M8 originally scoped `lastSuccessAt` to the last 7 days,
+    // which silently dropped stalled-source warnings past day 7. The stalled
+    // detector must keep firing as long as the historical last success is stale.
+    const now = new Date("2026-04-17T12:00:00.000Z");
+    const healths: SourceHealth[] = [
+      {
+        source: "mode",
+        // last success 10 days ago — well past the 7-day stats window AND
+        // well past the 20h stalled threshold for mode.
+        lastSuccessAt: new Date("2026-04-07T12:00:00.000Z"),
+        lastFailureAt: new Date("2026-04-16T12:00:00.000Z"),
+        totalRuns7d: 0,
+        successRuns7d: 0,
+        successRate7d: null,
+        p95DurationMs: null,
+      },
+    ];
+
+    const stalled = detectStalledSources(healths, now);
+    expect(stalled).toHaveLength(1);
+    expect(stalled[0]?.source).toBe("mode");
+    expect(stalled[0]?.ageMs).toBeGreaterThan(stalled[0]!.thresholdMs);
   });
 
   it("never flags a source that has never succeeded", () => {
