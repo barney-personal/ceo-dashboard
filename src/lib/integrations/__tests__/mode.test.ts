@@ -14,6 +14,8 @@ import {
   checkModeHealth,
   getLatestRun,
   getQueryResultContent,
+  getQueryRuns,
+  getReportQueries,
   streamQueryResultAndAggregate,
 } from "../mode";
 import type { ModeRowAggregator } from "../mode-config";
@@ -249,6 +251,76 @@ describe("Mode transport resilience", () => {
         }),
         extra: expect.objectContaining({
           path: "/reports/report-token/runs",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed query_runs envelopes before they enter sync logic", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ _embedded: { query_runs: [{ token: "qr-1" }] } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getQueryRuns("report-token", "run-token")).rejects.toThrow(
+      /mode returned malformed query_runs_envelope/i,
+    );
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "query_runs_envelope",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "mode",
+          validation_boundary: "query_runs_envelope",
+          validation_source: "mode",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/runs/run-token/query_runs",
+        }),
+      }),
+    );
+  });
+
+  it("rejects malformed report_queries envelopes before they reach sync logic", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ _embedded: { queries: [{ token: "q-1" }] } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getReportQueries("report-token")).rejects.toThrow(
+      /mode returned malformed report_queries_envelope/i,
+    );
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "report_queries_envelope",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "mode",
+          validation_boundary: "report_queries_envelope",
+          validation_source: "mode",
+        }),
+        extra: expect.objectContaining({
+          path: "/reports/report-token/queries",
         }),
       }),
     );

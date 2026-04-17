@@ -78,6 +78,38 @@ describe("management accounts extraction validation", () => {
     });
   });
 
+  it("tags non-JSON Anthropic output with the validation_boundary Sentry path", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: "I could not extract the financials from this spreadsheet.",
+        },
+      ],
+    });
+
+    await expect(
+      parseManagementAccounts(buildWorkbookBuffer(), "0226 - management accounts.xlsx"),
+    ).rejects.toThrow(/anthropic returned malformed management_accounts_extraction/i);
+
+    expect(mockSentry.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "management_accounts_extraction",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "management-accounts-extraction",
+          validation_boundary: "management_accounts_extraction",
+          validation_source: "anthropic",
+        }),
+        extra: expect.objectContaining({
+          filenameHint: "0226 - management accounts.xlsx",
+        }),
+      }),
+    );
+  });
+
   it("rejects malformed management-accounts extraction JSON", async () => {
     mockMessages.create.mockResolvedValueOnce({
       content: [

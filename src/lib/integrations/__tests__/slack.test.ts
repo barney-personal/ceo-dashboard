@@ -311,6 +311,41 @@ describe("Slack transport resilience", () => {
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed conversations.info envelopes at the boundary", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: true, channel: { id: "C123" } }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getChannelName("C123")).rejects.toThrow(
+      /slack returned malformed conversations_info_response/i,
+    );
+
+    expect(mockCaptureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "conversations_info_response",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "slack",
+          validation_boundary: "conversations_info_response",
+          validation_source: "slack",
+        }),
+        extra: expect.objectContaining({
+          method: "conversations.info",
+        }),
+      }),
+    );
+  });
+
   it("fails Slack health checks on timeout without retrying", async () => {
     const fetchMock = vi.fn((_input, init?: RequestInit) => {
       return new Promise((_, reject) => {

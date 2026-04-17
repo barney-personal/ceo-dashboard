@@ -3,8 +3,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
 import {
+  ExternalValidationError,
   isExternalValidationError,
   parseWithSchema,
+  toPayloadPreview,
 } from "@/lib/validation/external";
 
 // maxRetries: 1 — batch extraction rarely benefits from more retries, and extra
@@ -231,9 +233,32 @@ function parseJsonFromModelResponse(text: string): unknown {
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
     if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1));
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch (innerError) {
+        throw new ExternalValidationError(
+          "anthropic returned malformed management_accounts_extraction: response did not parse as JSON",
+          {
+            source: "anthropic",
+            boundary: "management_accounts_extraction",
+            issues: ["(root): response did not parse as JSON"],
+            issuePaths: [],
+            payloadPreview: toPayloadPreview(trimmed),
+            cause: innerError,
+          }
+        );
+      }
     }
-    throw new Error("Model response did not contain valid JSON");
+    throw new ExternalValidationError(
+      "anthropic returned malformed management_accounts_extraction: response did not contain JSON",
+      {
+        source: "anthropic",
+        boundary: "management_accounts_extraction",
+        issues: ["(root): response did not contain JSON"],
+        issuePaths: [],
+        payloadPreview: toPayloadPreview(trimmed),
+      }
+    );
   }
 }
 
@@ -296,9 +321,9 @@ export async function parseManagementAccounts(
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
-  const parsedJson = parseJsonFromModelResponse(text);
 
   try {
+    const parsedJson = parseJsonFromModelResponse(text);
     const parsed = parseWithSchema(
       ManagementAccountsExtractionSchema,
       parsedJson,

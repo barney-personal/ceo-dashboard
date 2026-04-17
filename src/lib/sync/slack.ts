@@ -38,6 +38,7 @@ type SyncChannelResult = {
   parsedMessageCount: number;
   skippedByFilterCount: number;
   llmNullCount: number;
+  llmInvalidEnvelopeCount: number;
   emptyAfterValidationCount: number;
   latestMessageTs: string | undefined;
 };
@@ -232,6 +233,7 @@ async function syncChannel(
   let parsedMessageCount = 0;
   let skippedByFilterCount = 0;
   let llmNullCount = 0;
+  let llmInvalidEnvelopeCount = 0;
   let emptyAfterValidationCount = 0;
   let latestMessageTs: string | undefined;
   const authorNameCache = new Map<string, string>();
@@ -284,7 +286,12 @@ async function syncChannel(
         channelContext,
       })),
       systemPrompt,
-      { signal: opts.signal }
+      {
+        signal: opts.signal,
+        onEnvelopeValidationFailure: () => {
+          llmInvalidEnvelopeCount += 1;
+        },
+      }
     );
     parsedMessageCount += batch.length;
 
@@ -367,6 +374,7 @@ async function syncChannel(
       parsedMessageCount,
       skippedByFilterCount,
       llmNullCount,
+      llmInvalidEnvelopeCount,
       emptyAfterValidationCount,
     },
   });
@@ -376,6 +384,7 @@ async function syncChannel(
     parsedMessageCount,
     skippedByFilterCount,
     llmNullCount,
+    llmInvalidEnvelopeCount,
     emptyAfterValidationCount,
     latestMessageTs,
   };
@@ -387,9 +396,15 @@ function formatChannelPhaseDetail(
 ): string {
   const base = `#${channelName}: Parsed ${result.krCount} KRs from ${result.parsedMessageCount} messages (${result.skippedByFilterCount} filtered, ${result.llmNullCount} LLM null`;
 
-  return result.emptyAfterValidationCount > 0
-    ? `${base}, ${result.emptyAfterValidationCount} empty after validation)`
-    : `${base})`;
+  const extras: string[] = [];
+  if (result.emptyAfterValidationCount > 0) {
+    extras.push(`${result.emptyAfterValidationCount} empty after validation`);
+  }
+  if (result.llmInvalidEnvelopeCount > 0) {
+    extras.push(`${result.llmInvalidEnvelopeCount} invalid envelope`);
+  }
+
+  return extras.length > 0 ? `${base}, ${extras.join(", ")})` : `${base})`;
 }
 
 async function validateSlackChannels(

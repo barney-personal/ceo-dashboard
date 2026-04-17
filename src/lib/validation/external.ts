@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
 
-export type ValidationSource = "mode" | "anthropic";
+export type ValidationSource = "mode" | "anthropic" | "slack";
 
 type ValidationContext = {
   source: ValidationSource;

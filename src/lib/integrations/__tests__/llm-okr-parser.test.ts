@@ -435,6 +435,63 @@ describe("llmParseOkrUpdate timeout", () => {
     expect(mockSentry.captureMessage).not.toHaveBeenCalled();
   });
 
+  it("distinguishes malformed non-null envelopes from true nulls via the callback and Sentry", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ squadName: "Growth", krs: "not-an-array" }),
+        },
+      ],
+    });
+
+    const onEnvelopeValidationFailure = vi.fn();
+
+    await expect(
+      llmParseOkrUpdate("message", "#channel", "system prompt", {
+        onEnvelopeValidationFailure,
+      })
+    ).resolves.toBeNull();
+
+    expect(onEnvelopeValidationFailure).toHaveBeenCalledTimes(1);
+    expect(onEnvelopeValidationFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boundary: "okr_parse_envelope",
+        issuePaths: expect.arrayContaining(["krs"]),
+      })
+    );
+    expect(mockSentry.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "ExternalValidationError",
+        boundary: "okr_parse_envelope",
+      }),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          integration: "llm-okr-parser",
+          validation_boundary: "okr_parse_envelope",
+          validation_source: "anthropic",
+        }),
+      })
+    );
+  });
+
+  it("does not fire onEnvelopeValidationFailure when Claude returns a literal JSON null", async () => {
+    mockMessages.create.mockResolvedValueOnce({
+      content: [{ type: "text", text: "null" }],
+    });
+
+    const onEnvelopeValidationFailure = vi.fn();
+
+    await expect(
+      llmParseOkrUpdate("message", "#channel", "system prompt", {
+        onEnvelopeValidationFailure,
+      })
+    ).resolves.toBeNull();
+
+    expect(onEnvelopeValidationFailure).not.toHaveBeenCalled();
+    expect(mockSentry.captureException).not.toHaveBeenCalled();
+  });
+
   it("drops invalid KRs, warns with failing fields, and preserves valid rows", async () => {
     mockMessages.create.mockResolvedValueOnce({
       content: [

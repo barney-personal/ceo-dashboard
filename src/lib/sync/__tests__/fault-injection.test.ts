@@ -1459,6 +1459,7 @@ describe("sync runner fault injection", () => {
         parsedMessageCount: 3,
         skippedByFilterCount: 2,
         llmNullCount: 1,
+        llmInvalidEnvelopeCount: 0,
         emptyAfterValidationCount: 1,
       },
     });

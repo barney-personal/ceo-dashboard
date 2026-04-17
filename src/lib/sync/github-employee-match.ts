@@ -10,6 +10,8 @@ import {
 import { eq } from "drizzle-orm";
 import Anthropic from "@anthropic-ai/sdk";
 import * as Sentry from "@sentry/nextjs";
+import { z } from "zod";
+import { safeParseWithSchema } from "@/lib/validation/external";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
 const BOT_PATTERNS = ["[bot]", "circleci", "dependabot", "cursor", "github-actions"];
@@ -103,6 +105,14 @@ interface LlmMatch {
   employeeEmail: string;
 }
 
+const LlmMatchSchema = z.object({
+  login: z.string().min(1),
+  employeeName: z.string().min(1),
+  employeeEmail: z.string().min(1),
+});
+
+const LlmMatchArraySchema = z.array(LlmMatchSchema);
+
 const LLM_MATCH_TIMEOUT_MS = 60_000;
 
 /**
@@ -168,32 +178,53 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  let rawParsed: unknown;
   try {
-    // Extract JSON from response (handle markdown code blocks)
     const jsonStr = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
-    const parsed = JSON.parse(jsonStr) as unknown[];
-
-    // Validate and build a set of known employee emails for verification
-    const emailSet = new Set(employees.map((e) => e.employee_email.toLowerCase()));
-
-    return parsed
-      .filter((item): item is { login: string; employeeName: string; employeeEmail: string } => {
-        if (!item || typeof item !== "object") return false;
-        const obj = item as Record<string, unknown>;
-        return (
-          typeof obj.login === "string" &&
-          typeof obj.employeeName === "string" &&
-          typeof obj.employeeEmail === "string" &&
-          emailSet.has((obj.employeeEmail as string).toLowerCase())
-        );
-      });
+    rawParsed = JSON.parse(jsonStr);
   } catch {
     Sentry.captureMessage("Failed to parse LLM employee match response", {
       level: "warning",
-      extra: { responseText: text.slice(0, 500) },
+      tags: { integration: "github" },
+      extra: {
+        operation: "llmMatchEmployees",
+        reason: "invalid_json",
+        responseText: text.slice(0, 500),
+      },
     });
     return [];
   }
+
+  const result = safeParseWithSchema(LlmMatchArraySchema, rawParsed, {
+    source: "anthropic",
+    boundary: "github_employee_match",
+    payload: rawParsed,
+  });
+
+  if (!result.success) {
+    Sentry.captureException(result.error, {
+      tags: {
+        integration: "github",
+        validation_boundary: result.error.boundary,
+        validation_source: result.error.source,
+      },
+      extra: {
+        operation: "llmMatchEmployees",
+        issues: result.error.issues,
+        issuePaths: result.error.issuePaths,
+        payloadPreview: result.error.payloadPreview,
+      },
+    });
+    return [];
+  }
+
+  const emailSet = new Set(
+    employees.map((e) => e.employee_email.toLowerCase())
+  );
+
+  return result.data.filter((item) =>
+    emailSet.has(item.employeeEmail.toLowerCase())
+  );
 }
 
 /**

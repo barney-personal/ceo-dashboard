@@ -1,4 +1,9 @@
 import * as Sentry from "@sentry/nextjs";
+import { z, type ZodType } from "zod";
+import {
+  isExternalValidationError,
+  parseWithSchema,
+} from "@/lib/validation/external";
 
 export const SLACK_API = "https://slack.com/api";
 const SLACK_REQUEST_TIMEOUT_MS = 15_000;
@@ -462,21 +467,75 @@ export interface SlackMessage {
   reply_count?: number;
 }
 
-interface ConversationsHistoryResponse {
-  ok: boolean;
-  messages: SlackMessage[];
-  has_more: boolean;
-  response_metadata?: { next_cursor?: string };
+const SlackMessageSchema: ZodType<SlackMessage> = z.object({
+  ts: z.string().min(1),
+  user: z.string().optional(),
+  text: z.string(),
+  type: z.string().min(1),
+  subtype: z.string().optional(),
+  thread_ts: z.string().optional(),
+  reply_count: z.number().int().nonnegative().optional(),
+});
+
+const ConversationsHistoryResponseSchema = z.object({
+  messages: z.array(SlackMessageSchema),
+  has_more: z.boolean().optional(),
+  response_metadata: z
+    .object({ next_cursor: z.string().optional() })
+    .optional(),
+});
+
+const ConversationsInfoResponseSchema = z.object({
+  channel: z.object({ id: z.string().min(1), name: z.string().min(1) }),
+});
+
+const UsersInfoResponseSchema = z.object({
+  user: z.object({
+    real_name: z.string().optional(),
+    profile: z
+      .object({ display_name: z.string().optional() })
+      .optional(),
+  }),
+});
+
+function captureSlackValidationError(
+  error: unknown,
+  input: { method: string }
+): void {
+  if (!isExternalValidationError(error)) {
+    return;
+  }
+
+  Sentry.captureException(error, {
+    tags: {
+      integration: "slack",
+      validation_boundary: error.boundary,
+      validation_source: error.source,
+    },
+    extra: {
+      method: input.method,
+      issues: error.issues,
+      payloadPreview: error.payloadPreview,
+    },
+  });
 }
 
-interface ConversationsInfoResponse {
-  ok: boolean;
-  channel: { name: string; id: string };
-}
-
-interface UsersInfoResponse {
-  ok: boolean;
-  user: { real_name: string; profile: { display_name: string } };
+function parseSlackResponse<T>(
+  method: string,
+  boundary: string,
+  schema: ZodType<T>,
+  payload: unknown
+): T {
+  try {
+    return parseWithSchema(schema, payload, {
+      source: "slack",
+      boundary,
+      payload,
+    });
+  } catch (error) {
+    captureSlackValidationError(error, { method });
+    throw error;
+  }
 }
 
 /**
@@ -501,10 +560,16 @@ export async function getChannelHistory(
     if (latest) params.latest = latest;
     if (cursor) params.cursor = cursor;
 
-    const data = await slackApiRequest<ConversationsHistoryResponse>(
+    const raw = await slackApiRequest<unknown>(
       "conversations.history",
       params,
       { signal: opts.signal },
+    );
+    const data = parseSlackResponse(
+      "conversations.history",
+      "conversations_history_response",
+      ConversationsHistoryResponseSchema,
+      raw,
     );
 
     allMessages.push(...data.messages);
@@ -534,10 +599,16 @@ export async function getThreadReplies(
     };
     if (cursor) params.cursor = cursor;
 
-    const data = await slackApiRequest<ConversationsHistoryResponse>(
+    const raw = await slackApiRequest<unknown>(
       "conversations.replies",
       params,
       { signal: opts.signal },
+    );
+    const data = parseSlackResponse(
+      "conversations.replies",
+      "conversations_replies_response",
+      ConversationsHistoryResponseSchema,
+      raw,
     );
 
     allMessages.push(...data.messages);
@@ -559,7 +630,7 @@ export async function getChannelName(
   channelId: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<string> {
-  const data = await slackApiRequest<ConversationsInfoResponse>(
+  const raw = await slackApiRequest<unknown>(
     "conversations.info",
     { channel: channelId },
     {
@@ -567,6 +638,12 @@ export async function getChannelName(
       suppressedStatuses: [404],
       suppressedCodes: ["channel_not_found"],
     },
+  );
+  const data = parseSlackResponse(
+    "conversations.info",
+    "conversations_info_response",
+    ConversationsInfoResponseSchema,
+    raw,
   );
   return data.channel.name;
 }
@@ -583,15 +660,21 @@ export async function getUserName(
   if (userNameCache.has(userId)) return userNameCache.get(userId)!;
 
   try {
-    const data = await slackApiRequest<UsersInfoResponse>(
+    const raw = await slackApiRequest<unknown>(
       "users.info",
       {
         user: userId,
       },
       { signal: opts.signal },
     );
+    const data = parseSlackResponse(
+      "users.info",
+      "users_info_response",
+      UsersInfoResponseSchema,
+      raw,
+    );
     const name =
-      data.user.profile.display_name || data.user.real_name || userId;
+      data.user.profile?.display_name || data.user.real_name || userId;
     userNameCache.set(userId, name);
     return name;
   } catch (error) {
