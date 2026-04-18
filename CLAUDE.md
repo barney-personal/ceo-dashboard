@@ -24,33 +24,47 @@ make dev                    # Start dev server on port 3100
 
 ### Dashboard Sections
 
+Role gates follow `NAV_GROUPS` in `src/components/dashboard/sidebar.tsx`. See the "Permission Model" section for the full route-level map.
+
 ```
 Dashboard
-├── Overview                    ← role-aware summary of all sections (everyone)
-├── Unit Economics              ← Leadership+ (Mode API)
+├── Overview                    ← role-aware summary (everyone)
+├── Unit Economics              ← everyone (Mode API)
 │   ├── LTV:Paid CAC ratio (weekly, 3x guardrail)
 │   ├── 36-Month LTV by cohort (column chart)
 │   ├── Paid CPA actual vs targets (weekly)
 │   ├── Marketing Spend actual vs targets (weekly)
 │   └── New Bank Connected Users actual vs targets (weekly)
-├── Financial                   ← CEO only (Slack Excel uploads + Mode)
+├── Financial                   ← leadership+ (Slack Excel uploads + Mode)
 │   ├── Management Accounts (P&L by period)
 │   └── Seasonality (Mode embed)
-├── Product                     ← Leadership+ (Mode API)
+├── Product                     ← everyone (Mode API)
 │   ├── DAU / WAU / MAU (toggle cadence)
 │   ├── Engagement ratios (WAU/MAU, DAU/MAU)
 │   └── Retention cohort heatmap
-├── OKRs                        ← Everyone (Slack + Claude LLM parsing)
-│   ├── Company level
-│   ├── Pillar level (Engineering, Product, Growth, etc.)
-│   └── Squad level
-├── People                      ← Leadership+ (Mode headcount data)
+├── OKRs                        ← everyone (Slack + Claude LLM parsing)
+│   ├── Company / pillar / squad views
+│   └── Latest updates feed
+├── Meetings                    ← everyone (Google Calendar + Granola notes)
+├── People                      ← everyone (Mode headcount SSoT)
 │   ├── Org (headcount, departments, tenure, joiners/departures)
-│   ├── Performance
-│   └── Engagement
-└── Admin                       ← CEO only
+│   ├── Performance             ← leadership+
+│   ├── Engagement              ← leadership+ (Culture Amp planned)
+│   ├── Attrition               ← leadership+
+│   └── Data cleanup            ← everyone (HR rows with gaps)
+├── Engineering                 ← everyone (GitHub PRs/commits + Mode)
+│   ├── Engineers (profiles)
+│   ├── Squads / Pillars
+│   ├── Delivery health
+│   └── Impact
+├── Settings                    ← everyone (per-user OAuth integrations)
+└── Admin                       ← ceo
+    ├── Users (Clerk user admin)
+    ├── Squads (registry management)
     ├── Data Status (sync pipelines, DB tables, env config)
-    └── Squads (squad registry management)
+    ├── Mode Explorer (ad-hoc report preview)
+    ├── Analytics (internal page-view counts)
+    └── Probes (probe run / incident history)
 ```
 
 ### Key Directories
@@ -109,8 +123,9 @@ The sync pipeline is split across focused modules in `src/lib/sync/`:
 
 ### Database Schema
 
-Seven tables in `src/lib/db/schema.ts`:
+Tables live in `src/lib/db/schema.ts`, grouped by domain:
 
+**Core content**
 | Table | Purpose |
 |-------|---------|
 | `squads` | Canonical squad registry (name, pillar, PM, channel) |
@@ -118,37 +133,84 @@ Seven tables in `src/lib/db/schema.ts`:
 | `modeReportData` | Synced query results from Mode (JSONB rows) |
 | `okrUpdates` | Parsed OKR updates from Slack (status, metrics, squad) |
 | `financialPeriods` | Monthly P&L from Slack Excel files |
+
+**Sync orchestration**
+| Table | Purpose |
+|-------|---------|
 | `syncLog` | Audit trail of all sync runs (status, lease, heartbeat, worker ID) |
 | `syncPhases` | Named phase steps within a sync run (phase, status, items processed, error) |
+| `debugLogs` | Optional structured logs emitted during sync (correlated to `syncLog.id`) |
+
+**Meetings and pre-reads**
+| Table | Purpose |
+|-------|---------|
+| `meetings` | Synced calendar events with attendees and metadata |
+| `meetingNotes` | Granola-sourced meeting notes by meeting id |
+| `preReads` | Slack-sourced pre-read documents surfaced on Overview |
+| `userIntegrations` | Per-user OAuth tokens (Granola, Google) |
+
+**Engineering**
+| Table | Purpose |
+|-------|---------|
+| `githubPrMetrics` | PR-level metrics (review time, cycle time) by author/squad |
+| `githubPrs` | GitHub PR records for analytics |
+| `githubCommits` | GitHub commit records |
+| `githubEmployeeMap` | GitHub login ↔ Clerk user id mapping |
+
+**Observability**
+| Table | Purpose |
+|-------|---------|
+| `probeRuns` | External probe run results (cloud probe from CI) |
+| `probeHeartbeats` | Heartbeat watchdog entries for stale-probe detection |
+| `probeIncidents` | Open/closed incident records derived from probe state |
+| `pageViews` | Authenticated-user page-view analytics (for `/dashboard/admin/analytics`) |
+
+To regenerate a fresh count or list, run `scripts/doc-status.sh` or inspect `src/lib/db/schema.ts` directly.
 
 ### Permission Model
+
+Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUPS`). Snapshot:
 
 | Route | Minimum Role | Data Sources |
 |-------|-------------|--------------|
 | `/dashboard` | everyone | Summary of visible sections |
-| `/dashboard/unit-economics` | leadership | Mode API (Strategic Finance KPIs, Growth Marketing) |
-| `/dashboard/financial` | ceo | Slack Excel uploads + Mode |
-| `/dashboard/product` | leadership | Mode API (Active Users, Retention) |
+| `/dashboard/unit-economics` | everyone | Mode API (Strategic Finance KPIs, Growth Marketing) |
+| `/dashboard/financial` | leadership | Slack Excel uploads + Mode |
+| `/dashboard/product` | everyone | Mode API (Active Users, Retention) |
 | `/dashboard/okrs` | everyone | Slack + Claude LLM |
-| `/dashboard/people` | leadership | Mode (Headcount SSoT) |
-| `/dashboard/admin/status` | ceo | Internal sync status |
+| `/dashboard/meetings` | everyone | Google Calendar + Granola |
+| `/dashboard/people` | everyone | Mode (Headcount SSoT) |
+| `/dashboard/people/performance` | leadership | Mode + Clerk metadata |
+| `/dashboard/people/engagement` | leadership | Culture Amp (planned) |
+| `/dashboard/people/attrition` | leadership | Mode attrition signal |
+| `/dashboard/people/data-cleanup` | everyone | Mode HR rows with gaps |
+| `/dashboard/engineering` | everyone | GitHub PRs / commits / Mode engineering |
+| `/dashboard/settings` | everyone | Per-user integrations |
+| `/dashboard/admin/users` | ceo | Clerk user admin |
 | `/dashboard/admin/squads` | ceo | Squad registry |
+| `/dashboard/admin/status` | ceo | Internal sync status |
+| `/dashboard/admin/mode-explorer` | ceo | Ad-hoc Mode report preview |
+| `/dashboard/admin/analytics` | ceo | Internal page-view analytics |
+| `/dashboard/admin/probes` | ceo | Probe run / incident history |
 
 Role is stored in Clerk `publicMetadata.role`, read via `currentUser()` in server components. Default is `everyone`.
+
+Role handling is bounded: `getCurrentUserWithTimeout` in `src/lib/auth/current-user.server.ts` wraps every Clerk call in a 5-second ceiling that maps timeouts to a `/sign-in` redirect rather than hanging the request.
 
 **Important:** `roles.ts` contains pure functions safe for client components. `roles.server.ts` contains `getCurrentUserRole()` which uses Clerk's `currentUser()` and must only be imported from server components.
 
 ### Sidebar Navigation
 
-Grouped by domain with role-based visibility:
+Grouped by domain with role-based visibility (declared in `src/components/dashboard/sidebar.tsx` as `NAV_GROUPS`):
 
 1. **Overview** — Dashboard (everyone)
-2. **Performance** — Unit Economics (leadership+), Financial (ceo), Product (leadership+)
-3. **Goals** — OKRs (everyone)
-4. **Team** — Org (leadership+), Performance (leadership+), Engagement (leadership+)
-5. **Admin** — Squads (ceo), Data Status (ceo)
+2. **Performance** — Unit Economics (everyone), Financial (leadership+), Product (everyone)
+3. **Goals** — OKRs (everyone), Meetings (everyone)
+4. **Team** — Org (everyone), Performance (leadership+), Engineering (everyone), Engagement (leadership+), Attrition (leadership+), Data cleanup (everyone)
+5. **Settings** — Integrations (everyone)
+6. **Admin** — Users, Squads, Data Status, Mode Explorer, Analytics, Probes (all ceo)
 
-Groups with no visible items for the user's role are hidden entirely.
+Groups with no visible items for the user's role are hidden entirely. Mobile uses `MobileSidebar` (a shadcn `Sheet` drawer) below the `lg` breakpoint.
 
 ### Chart Components
 

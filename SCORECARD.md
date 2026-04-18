@@ -1,6 +1,15 @@
 # Code Quality Scorecard
 
-Baseline captured: `2026-04-08T17:26:48Z`
+> **Status: frozen historical snapshot.** This scorecard records the code-quality
+> audit captured on `2026-04-08T17:26:48Z` and the milestone fixes through M4 on
+> the same date. It is intentionally not re-scored as the codebase evolves —
+> consult [`ARCHITECTURE-SCORECARD.md`](./ARCHITECTURE-SCORECARD.md) and
+> [`RESILIENCE-SCORECARD.md`](./RESILIENCE-SCORECARD.md) for the living views,
+> and regenerate counts (tests, lint warnings) with `scripts/doc-status.sh` if
+> you want a fresh reading.
+
+Baseline captured: `2026-04-08T17:26:48Z`  
+Last-reviewed: `2026-04-18` (freeze confirmed; no content drift)
 
 ## Verification Setup
 

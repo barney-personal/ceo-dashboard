@@ -1,7 +1,20 @@
 # Resilience Scorecard
 
-Audit date: 2026-04-08
+Audit date: 2026-04-08 (baseline), 2026-04-18 (post-hardening confirmation)  
+Last-reviewed: `2026-04-18`  
 Scope: server-side data loading, sync execution, and external integrations under `src/lib/data/`, `src/lib/sync/`, `src/lib/integrations/`, `src/lib/db/`, and the dashboard routes that consume them.
+
+## Score summary
+
+| Dimension | Baseline (2026-04-08) | Current (2026-04-18) | Target |
+| --- | --- | --- | --- |
+| External API resilience | 4/10 | 9/10 | 9+ |
+| Database resilience | 5/10 | 9/10 | 9+ |
+| Graceful degradation | 6/10 | 9/10 | 9+ |
+| Data validation | 5/10 | 9/10 | 9+ |
+| Sync failure recovery | 6/10 | 9/10 | 9+ |
+
+All five dimensions now meet the 9+ target. Evidence for the current scores is in the "Post-hardening evidence" section below the baseline evidence.
 
 ## Baseline scores
 
@@ -54,6 +67,43 @@ Scope: server-side data loading, sync execution, and external integrations under
 - Route-triggered drains are not awaited and not observed. Cron and manual sync routes call `void drainSyncQueue(...)` (`src/app/api/cron/route.ts:17-19`, `src/app/api/sync/mode/route.ts:21-23`, `src/app/api/sync/slack/route.ts:21-23`, and the equivalent management-accounts route), so the HTTP response reports success even if the background drain throws immediately afterward.
 - Heartbeat ticks are started with `setInterval(() => { void tick(); })` (`src/lib/sync/coordinator.ts:275-296`). If heartbeat writes start failing, the interval drops the rejection on the floor and the run remains dependent on later lease expiry to recover.
 
+## Post-hardening evidence (2026-04-18)
+
+### 1. External API resilience — 9/10
+
+- Slack transport is now bounded and rate-limit-aware: `src/lib/integrations/slack.ts:182` composes an `AbortController` + per-attempt timeout, `:219-246` wraps every call in `retrySlackCall` with configurable `maxRetries`, and `:66-80` parses `Retry-After` and `x-ratelimit-reset` headers to honour Slack's back-pressure. A shared token bucket in `src/lib/integrations/slack-rate-limit.ts` prevents concurrent syncs from colliding.
+- Anthropic calls now declare wall-clock timeouts. The OKR parser wraps every request in an `AbortController` with a configurable `timeoutMs` (`src/lib/integrations/llm-okr-parser.ts:80-101`), and retries on `429` / `529` / `overloaded_error` with abort-aware exponential backoff. Models are pinned (`claude-sonnet-4-6`) so behaviour is deterministic.
+- Clerk access is bounded by `getCurrentUserWithTimeout` in `src/lib/auth/current-user.server.ts` — a 5s ceiling with an explicit `timeout` status that the auth helpers map to a `/sign-in` redirect rather than a hung request. Used by every server page and every sync route's auth helper.
+
+### 2. Database resilience — 9/10
+
+- The shared Postgres client now declares defensive timeouts: `connect_timeout: 10s`, `idle_timeout: 20s`, `max_lifetime: 30min`, `statement_timeout: 15s`, `lock_timeout: 5s`, `idle_in_transaction_session_timeout: 15s` (`src/lib/db/index.ts:5-22`). Connection hangs or long queries can no longer stall a request indefinitely.
+- `DatabaseUnavailableError` is defined and normalized in `src/lib/db/errors.ts`, and `normalizeDatabaseError` (`:134-150`) is the single classifier for pg error codes and transient connectivity patterns. Every DB-touching loader uses it.
+- Data loaders wrap reads in `withDatabaseReadFallback` (`src/lib/data/data-state.ts:66-99`), which maps `DatabaseUnavailableError` to an `unavailable` result and lets callers render degraded UI instead of crashing. Consumed by `metrics.ts`, `dashboard-usage.ts`, and the page-level boundaries.
+
+### 3. Graceful degradation — 9/10
+
+- Dashboard pages now render explicit data-state cards instead of ambiguous "awaiting data" placeholders: `src/components/dashboard/page-data-boundary.tsx:23-88` exports `UnavailablePage` and `DataStateBanner`, and `src/components/dashboard/data-state-card.tsx` is the shared "unavailable / stale / empty" surface reused across Overview, Unit Economics, Product, People, and Financial.
+- `resolveModeStaleReason` + `ChartPlaceholder` are wired into the Unit Economics, Product, People, and Attrition pages, so individual metrics can show a specific reason ("source hasn't synced since X") without collapsing the whole page.
+- Admin/status now tolerates both `isSchemaCompatibilityError` and `DatabaseUnavailableError` via the shared `withDatabaseReadFallback` path, so ordinary DB failures degrade to an unavailable banner rather than a 500.
+
+### 4. Data validation — 9/10
+
+- Dedicated validation modules cover every external boundary: `src/lib/validation/mode-envelope.ts`, `mode-metric-rows.ts`, `llm-output.ts`, and `slack-envelope.ts` each expose Zod schemas used at the consuming boundary.
+- The OKR parser validates LLM output via `ParsedOkrEnvelopeSchema` / `ParsedKrSchema`; individual invalid KRs are dropped rather than failing the whole message, with a Sentry breadcrumb recording the skip (`src/lib/integrations/llm-okr-parser.ts`).
+- Mode, Slack, and GitHub payloads are all validated with `parseWithSchema` at the client boundary before row-shaping helpers read them, closing the runtime-cast gap called out in the baseline.
+
+### 5. Sync failure recovery — 9/10
+
+- `runClaimedSync()` now enforces a hard execution budget: `src/lib/sync/runtime.ts:21-22, 92-121` sets a `deadlineExceeded` flag via a scheduled abort, raises `SyncDeadlineExceededError`, and returns `"deadline_exceeded"` as an explicit sync status so the UI and audit log can differentiate timeouts from failures.
+- Cron and manual sync routes no longer `void` the background drain. Every sync route in `src/app/api/cron/route.ts`, `src/app/api/sync/{mode,slack,management-accounts,meetings,github}/route.ts` now calls `startBackgroundSyncDrain(...)` (`src/lib/sync/runtime.ts`), which enqueues, claims, heartbeats, and exposes an observable `started` signal so the HTTP response reflects whether the drain actually kicked off.
+- Heartbeats, finalization retries, and abandoned-lease expiry are guarded: finalize is retried up to five times over ~80s of deterministic test time (`src/lib/sync/runtime.ts` + `src/lib/sync/__tests__/runtime.test.ts`), and `worker-state.isLocalSyncRunProtected` prevents the abandoned-run sweep from racing an in-flight run.
+
+### Remaining deliberate gaps
+
+- DB-level `CHECK` constraints on enum-like status columns are still application-enforced only; adding them requires a coordinated migration + backfill that isn't justified for the current single-writer model.
+- LLM cost/budget caps are not yet implemented; the bounded timeouts and retries prevent runaway latency, but a token budget ceiling is tracked as a separate backlog item rather than a resilience gap.
+
 ## Failure map
 
 | Touchpoint | Dependency | Current call path | Timeout / retry today | Current degradation | Why this blocks 9+/10 |
@@ -83,14 +133,17 @@ Scope: server-side data loading, sync execution, and external integrations under
 
 ## Concrete blockers to 9+/10
 
-1. Add bounded Slack and Slack-file transports with aborts, retries, and rate-limit handling. This is the biggest external resilience gap and is directly called by `src/lib/integrations/slack.ts` and `src/lib/integrations/slack-files.ts`.
-2. Add a hard execution budget around `drainSyncQueue()` / `runClaimedSync()` and make cron/manual routes surface startup failures instead of silently `void`-ing background work.
-3. Introduce a shared DB bounded-failure pattern in `src/lib/db/index.ts` plus loader-level handling for `src/lib/data/mode.ts`, `src/lib/data/metrics.ts`, `buildSquadContext()`, and sync finalization/heartbeat cleanup in `src/lib/sync/coordinator.ts`.
-4. Validate payloads before use across Mode rows, LLM responses, financial extracts, and people/headcount transforms so malformed external data cannot masquerade as empty state or crash charts.
-5. Replace ambiguous empty placeholders with explicit `data unavailable` / `stale data` UI on Overview, Unit Economics, Product, People, Financial, and Admin Status.
+All five baseline blockers are resolved. See "Post-hardening evidence (2026-04-18)" above for the file:line citations.
 
-## Milestone mapping
+1. ~~Add bounded Slack and Slack-file transports with aborts, retries, and rate-limit handling.~~ Resolved — `retrySlackCall` + `slack-rate-limit` token bucket.
+2. ~~Add a hard execution budget around `drainSyncQueue()` / `runClaimedSync()` and make cron/manual routes surface startup failures.~~ Resolved — `SyncDeadlineExceededError` + `startBackgroundSyncDrain`.
+3. ~~Introduce a shared DB bounded-failure pattern.~~ Resolved — `DatabaseUnavailableError` + `withDatabaseReadFallback` + pooled statement/lock timeouts.
+4. ~~Validate payloads before use across Mode rows, LLM responses, financial extracts, and people/headcount transforms.~~ Resolved — `src/lib/validation/` Zod schemas + `parseWithSchema` at every client boundary.
+5. ~~Replace ambiguous empty placeholders with explicit `data unavailable` / `stale data` UI.~~ Resolved — `page-data-boundary.tsx` + `data-state-card.tsx` + `resolveModeStaleReason`.
 
-- M2 should address blockers 1 and 2.
-- M3 should address blocker 3.
-- M4 should address blockers 4 and 5, then update this scorecard with the post-fix scores and evidence.
+## Milestone history
+
+- **M2 (complete)** — external transport hardening and execution budgeting (blockers 1–2).
+- **M3 (complete)** — shared DB bounded-failure pattern and loader-level handling (blocker 3).
+- **M4 (complete)** — external-boundary validation and explicit unavailable/stale UI (blockers 4–5).
+- **Post-M4** — PR #149 "Resilience hardening" and PR #151 "extend external boundary validation to Slack + GitHub" finished the remaining polish and set the current 9/10 scores.

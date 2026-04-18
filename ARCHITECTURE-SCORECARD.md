@@ -2,6 +2,8 @@
 
 _Final scorecard after M1-M4 implementation_
 
+Last-reviewed: `2026-04-18`
+
 ---
 
 ## Score Summary
