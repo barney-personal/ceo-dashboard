@@ -356,6 +356,15 @@ Tests are co-located with their modules in `__tests__/` subdirectories. Current 
 | Sync | `src/lib/sync/__tests__/config.test.ts`, `coordinator.test.ts`, `errors.test.ts`, `mode-storage.test.ts`, `request-auth.test.ts`, `runtime.test.ts` |
 | API routes | `src/app/api/cron/__tests__/route.test.ts`, `sync/__tests__/manual-routes.test.ts`, `sync/cancel/__tests__/route.test.ts` |
 
+## Known deliberate gaps
+
+Intentional tradeoffs that an agent might otherwise "helpfully" fix. If you believe one of these is now worth addressing, call it out explicitly rather than changing it in passing.
+
+- **DB-level `CHECK` constraints on enum-like text columns** (`syncLog.status`, `syncLog.source`, `syncPhases.status`, `okrUpdates.status`, `probeRuns.status`). Enum values are enforced in application code only. Adding DB-level `CHECK` is a valid future hardening step but requires a coordinated migration + backfill that is not justified under the current single-writer model.
+- **LLM cost / budget caps.** Timeouts and retries are bounded (`src/lib/integrations/llm-okr-parser.ts`, `excel-parser.ts`), but there is no per-day token budget or short-circuit when a batch exceeds N inputs. Treat cost controls as a separate backlog item, not a resilience gap.
+- **`okrUpdates.squadName` is denormalized** rather than a foreign key into `squads`. This is deliberate — it preserves the squad label that came through Slack at the time of the update, even if the canonical squad is later renamed.
+- **Frozen historical scorecards** (the old `SCORECARD.md`, `ARCHITECTURE-SCORECARD.md`, `RESILIENCE-SCORECARD.md`) were removed on 2026-04-18 because they captured point-in-time milestone work whose fixes are now in the code. `git log -- SCORECARD.md` retrieves the full history if an audit trail is needed. `scripts/doc-status.sh` prints current live metrics.
+
 ## Git Workflow (MUST follow -- enforced by hooks)
 
 **Never commit or push directly to `main`.** Three layers of protection enforce this:

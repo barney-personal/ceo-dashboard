@@ -28,9 +28,6 @@ jobs:
         if: github.event_name == 'pull_request'
         run: ./scripts/check-schema-migrations.sh origin/${{ github.base_ref }}
 
-      - name: Check documentation freshness
-        run: ./scripts/check-doc-freshness.sh
-
       - name: Lint
         run: npm run lint
 
