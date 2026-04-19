@@ -3,6 +3,8 @@ import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { SlackMembersSyncCard } from "@/components/dashboard/slack-members-sync-card";
+import { getSlackSyncStatus } from "@/lib/data/slack-members-sync-status";
 import { SyncRunLog } from "@/components/dashboard/sync-run-log";
 import { AutoRefresh } from "@/components/dashboard/auto-refresh";
 import { ModeReportSyncControls } from "@/components/dashboard/mode-report-sync-controls";
@@ -48,6 +50,7 @@ export default async function DataStatusPage() {
   let phases: (typeof syncPhases.$inferSelect)[] = [];
   let modeSyncReports: (typeof modeReports.$inferSelect)[] = [];
   let sourceHealths: SourceHealth[] = [];
+  const slackSyncStatus = await getSlackSyncStatus().catch(() => null);
 
   try {
     sourceHealths = await getSourceHealth();
@@ -263,6 +266,8 @@ export default async function DataStatusPage() {
       )}
 
       <SourceHealthSection healths={sourceHealths} />
+
+      {slackSyncStatus && <SlackMembersSyncCard status={slackSyncStatus} />}
 
       {/* Sync Run Log — the main feature */}
       <SyncRunLog runs={enrichedRuns} avgDurations={avgDurations} />
