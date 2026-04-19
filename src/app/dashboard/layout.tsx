@@ -4,6 +4,7 @@ import { Sidebar, MobileSidebar } from "@/components/dashboard/sidebar";
 import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner";
 import { Bell } from "lucide-react";
 import { PageViewTracker } from "@/components/dashboard/page-view-tracker";
+import { EnpsTakeover } from "@/components/dashboard/enps-takeover";
 
 export default async function DashboardLayout({
   children,
@@ -50,6 +51,7 @@ export default async function DashboardLayout({
         <PageViewTracker />
         <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
       </div>
+      <EnpsTakeover />
     </div>
   );
 }
