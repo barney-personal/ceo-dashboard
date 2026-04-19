@@ -193,6 +193,12 @@ const NAV_GROUPS: NavGroup[] = [
         requiredRole: "ceo",
         icon: HeartPulse,
       },
+      {
+        label: "Happiness",
+        href: "/dashboard/admin/enps",
+        requiredRole: "ceo",
+        icon: Heart,
+      },
     ],
   },
 ];
