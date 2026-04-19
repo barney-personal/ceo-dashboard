@@ -36,12 +36,7 @@ export const PERIOD_OPTIONS = [
 
 export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["value"];
 
-export {
-  RAMPING_DAYS,
-  MIN_ACTIVE_DAYS,
-  computeImpact,
-  computeImpactRate,
-} from "./engineering-metrics";
+export { computeImpact } from "./engineering-metrics";
 
 export async function getEngineeringRankings(
   days: PeriodDays = 30

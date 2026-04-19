@@ -12,12 +12,7 @@ import {
   type EngineeringFilterState,
 } from "./engineering-filters";
 import { MetricInfoTooltip } from "./metric-info-tooltip";
-import {
-  computeImpact,
-  computeImpactRate,
-  MIN_ACTIVE_DAYS,
-  RAMPING_DAYS,
-} from "@/lib/data/engineering-metrics";
+import { computeImpact } from "@/lib/data/engineering-metrics";
 
 interface EngineerRow {
   login: string;
@@ -40,7 +35,6 @@ interface EngineerRow {
 }
 
 type SortKey =
-  | "impactPer30d"
   | "outputScore"
   | "prsCount"
   | "commitsCount"
@@ -58,47 +52,24 @@ const COLUMNS: {
   info?: React.ReactNode;
 }[] = [
   {
-    key: "impactPer30d",
-    label: "Impact / 30d",
-    format: (v) => v.toLocaleString(),
-    info: (
-      <>
-        <p>
-          Impact normalised to a 30-day rate over time actually spent at Cleo.
-          This is the fair rank when comparing a new hire to a long-tenured
-          engineer — a 10-day employee is measured over 10 days, not the full
-          period.
-        </p>
-        <p className="font-mono text-[11px] text-foreground/80">
-          Impact × 30 / min(period, tenure)
-        </p>
-        <p>
-          Uses a {MIN_ACTIVE_DAYS}-day floor so very short tenures don&apos;t
-          blow up the rate. Engineers under {RAMPING_DAYS} days are flagged
-          &ldquo;New&rdquo; and sorted last by default — too little signal to
-          rank confidently.
-        </p>
-      </>
-    ),
-  },
-  {
     key: "outputScore",
-    label: "Impact (raw)",
+    label: "Impact",
     format: (v) => v.toLocaleString(),
     info: (
       <>
         <p>
-          Raw impact over the selected period — not adjusted for how long
-          someone has been here. Combines how much someone ships (PR count)
-          with how meaningful each change is (lines per PR).
+          Combines how much someone ships (PR count) with how meaningful each
+          change is (lines per PR).
         </p>
         <p className="font-mono text-[11px] text-foreground/80">
           PRs × log₂(1 + lines / PR)
         </p>
         <p>
           Log-scaling prevents one huge PR from dominating a steady stream of
-          smaller changes. Prefer the normalised &ldquo;Impact / 30d&rdquo;
-          column for fair ranking across tenures.
+          smaller changes, so both breadth and depth count. Engineers who
+          joined after the start of the period are hidden from the ranking so
+          newer hires aren&apos;t penalised for tenure — use the &ldquo;+N new
+          hires&rdquo; link to see them.
         </p>
       </>
     ),
@@ -126,21 +97,45 @@ export function EngineeringTable({
 }: {
   data: EngineerRow[];
   hideBots?: boolean;
-  /** The time-window the upstream query selected PRs for. Used to clamp the
-   *  rate denominator when an engineer's tenure is shorter than the window. */
+  /** The time-window the upstream query selected PRs for. Engineers whose
+   *  tenure is shorter than this are hidden by default so partial-window
+   *  output doesn't get ranked against full-window output. */
   periodDays?: number;
 }) {
-  const [sortKey, setSortKey] = useState<SortKey>("impactPer30d");
+  const [sortKey, setSortKey] = useState<SortKey>("outputScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filters, setFilters] = useState<EngineeringFilterState>(EMPTY_FILTERS);
+  const [includeNewHires, setIncludeNewHires] = useState(false);
 
   const humans = useMemo(
     () => (hideBots ? data.filter((r) => !r.isBot) : data),
     [data, hideBots]
   );
 
+  // Engineers whose tenure is strictly shorter than the analysis window —
+  // they couldn't have been shipping PRs for the whole period, so ranking
+  // them against veterans is apples-to-oranges. Surfaced separately via
+  // the "+N new hires" toggle.
+  const newHires = useMemo(
+    () =>
+      humans.filter(
+        (r) => r.tenureDays != null && r.tenureDays < periodDays
+      ),
+    [humans, periodDays]
+  );
+
+  const tenured = useMemo(
+    () =>
+      includeNewHires
+        ? humans
+        : humans.filter(
+            (r) => r.tenureDays == null || r.tenureDays >= periodDays
+          ),
+    [humans, includeNewHires, periodDays]
+  );
+
   const filtered = useMemo(() => {
-    let result = humans;
+    let result = tenured;
 
     if (filters.roles.size > 0) {
       result = result.filter((r) => matchesRole(r.jobTitle, filters.roles));
@@ -161,10 +156,10 @@ export function EngineeringTable({
 
     return result.map((r) => {
       const outputScore = computeImpact(r.prsCount, r.additions, r.deletions);
-      const rate = computeImpactRate(outputScore, r.tenureDays, periodDays);
-      return { ...r, outputScore, ...rate };
+      const isNewHire = r.tenureDays != null && r.tenureDays < periodDays;
+      return { ...r, outputScore, isNewHire };
     });
-  }, [humans, filters, periodDays]);
+  }, [tenured, filters, periodDays]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -178,19 +173,13 @@ export function EngineeringTable({
   const sorted = useMemo(
     () =>
       [...filtered].sort((a, b) => {
-        // When sorting by the tenure-normalised rate, demote ramping
-        // engineers to the bottom regardless of direction — their rate
-        // is a high-variance extrapolation from too-few data points.
-        if (sortKey === "impactPer30d" && a.isRamping !== b.isRamping) {
-          return a.isRamping ? 1 : -1;
-        }
         const diff = a[sortKey] - b[sortKey];
         return sortDir === "desc" ? -diff : diff;
       }),
     [filtered, sortKey, sortDir]
   );
 
-  const isFiltered = filtered.length !== humans.length;
+  const isUserFiltered = filtered.length !== tenured.length;
 
   if (humans.length === 0) {
     return (
@@ -211,11 +200,24 @@ export function EngineeringTable({
           filters={filters}
           onFiltersChange={setFilters}
         />
-        {isFiltered && (
-          <span className="text-xs text-muted-foreground">
-            Showing {filtered.length} of {humans.length} engineers
-          </span>
-        )}
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {newHires.length > 0 && (
+            <button
+              onClick={() => setIncludeNewHires((v) => !v)}
+              className="rounded-md px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={`${newHires.length} engineers joined less than ${periodDays} days ago and are hidden by default so partial-window output isn't ranked against full-window output.`}
+            >
+              {includeNewHires
+                ? `Hide ${newHires.length} new hires`
+                : `+${newHires.length} new hires hidden`}
+            </button>
+          )}
+          {isUserFiltered && (
+            <span>
+              Showing {filtered.length} of {tenured.length} engineers
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
@@ -313,10 +315,10 @@ export function EngineeringTable({
                                 {formatTenure(row.tenureMonths)}
                               </span>
                             )}
-                            {row.isRamping && (
+                            {row.isNewHire && (
                               <span
                                 className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium text-amber-700"
-                                title={`Less than ${RAMPING_DAYS} days at Cleo — tenure-normalised rate is directional only`}
+                                title={`Joined within the last ${periodDays} days — output covers only part of the window`}
                               >
                                 New
                               </span>
@@ -343,15 +345,8 @@ export function EngineeringTable({
                             row.netLines < 0 &&
                             "text-negative",
                           col.key === "deletions" && "text-negative/70",
-                          col.key === "impactPer30d" &&
-                            row.isRamping &&
-                            "text-muted-foreground/60 italic"
+                          row.isNewHire && "text-muted-foreground/70 italic"
                         )}
-                        title={
-                          col.key === "impactPer30d"
-                            ? `Normalised over ${row.activeDays} active days`
-                            : undefined
-                        }
                       >
                         {col.format(row[col.key])}
                       </td>
