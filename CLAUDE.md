@@ -13,7 +13,7 @@ make dev                    # Start dev server on port 3100
 ## Architecture
 
 - **Stack:** Next.js 16 + TypeScript + Tailwind CSS 4 + shadcn/ui
-- **Auth:** Clerk (Google SSO) with 3-tier roles: `ceo` > `leadership` > `everyone`
+- **Auth:** Clerk (Google SSO) with 4-tier roles: `ceo` > `leadership` > `manager` > `everyone`. `manager` is data-derived at request time (email has ≥2 active direct reports in SSoT) — not set in Clerk.
 - **Database:** PostgreSQL + Drizzle ORM
 - **Secrets:** Doppler (never use .env files directly)
 - **Hosting:** Render (web service + Postgres + cron)
@@ -184,7 +184,10 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/people/engagement` | leadership | Culture Amp (planned) |
 | `/dashboard/people/attrition` | leadership | Mode attrition signal |
 | `/dashboard/people/data-cleanup` | everyone | Mode HR rows with gaps |
+| `/dashboard/people/[slug]` | manager | Unified person profile — rating panel additionally gated to CEO / self / direct-manager |
+| `/dashboard/managers` | manager | Team performance + alerts for the viewer's direct reports (leadership+ can inspect any manager via `?manager=`) |
 | `/dashboard/engineering` | everyone | GitHub PRs / commits / Mode engineering |
+| `/dashboard/slack` | leadership | Workspace engagement, tenure-normalised |
 | `/dashboard/settings` | everyone | Per-user integrations |
 | `/dashboard/admin/users` | ceo | Clerk user admin |
 | `/dashboard/admin/squads` | ceo | Squad registry |
@@ -193,7 +196,7 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/admin/analytics` | ceo | Internal page-view analytics |
 | `/dashboard/admin/probes` | ceo | Probe run / incident history |
 
-Role is stored in Clerk `publicMetadata.role`, read via `currentUser()` in server components. Default is `everyone`.
+Role is stored in Clerk `publicMetadata.role`, read via `currentUser()` in server components. Default is `everyone`. An `everyone` user is automatically promoted to `manager` at request time by `getCurrentUserRole()` if their Clerk email has ≥2 active direct reports in the Headcount SSoT; leadership/CEO skip this check.
 
 Role handling is bounded: `getCurrentUserWithTimeout` in `src/lib/auth/current-user.server.ts` wraps every Clerk call in a 5-second ceiling that maps timeouts to a `/sign-in` redirect rather than hanging the request.
 

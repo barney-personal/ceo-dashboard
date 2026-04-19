@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
+import { isManagerByAnyEmail } from "@/lib/data/managers";
 
 export const ROLE_PREVIEW_COOKIE = "role-preview";
 export const IMPERSONATE_COOKIE = "impersonate";
@@ -32,8 +33,12 @@ export async function getCurrentUserRole(): Promise<Role> {
     return "everyone";
   }
 
-  const realRole = getUserRole(
+  const clerkRole = getUserRole(
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
+  );
+  const realRole = await promoteToManagerIfNeeded(
+    clerkRole,
+    (result.user.emailAddresses ?? []).map((e) => e.emailAddress),
   );
 
   // CEO-only overrides: impersonation takes precedence over role preview
@@ -52,7 +57,7 @@ export async function getCurrentUserRole(): Promise<Role> {
 
       // Fall back to role preview
       const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as Role | undefined;
-      if (preview === "everyone" || preview === "leadership") {
+      if (preview === "everyone" || preview === "leadership" || preview === "manager") {
         return preview;
       }
     } catch {
@@ -61,6 +66,33 @@ export async function getCurrentUserRole(): Promise<Role> {
   }
 
   return realRole;
+}
+
+/**
+ * Promote an `everyone` role to `manager` if ANY of the user's Clerk email
+ * addresses matches an employee in SSoT with ≥2 active direct reports.
+ * Leadership/CEO roles are unchanged (manager access is a subset of theirs).
+ *
+ * Checking all addresses (not just the primary) makes this robust to Clerk
+ * users whose primary email is a personal address while a verified secondary
+ * is their `@meetcleo.com`.
+ *
+ * The SSoT query is request-scoped via React cache() so this promotion is
+ * essentially free after the first role lookup per request.
+ */
+async function promoteToManagerIfNeeded(
+  clerkRole: Role,
+  emails: string[],
+): Promise<Role> {
+  if (clerkRole !== "everyone" || emails.length === 0) return clerkRole;
+  try {
+    const isMgr = await isManagerByAnyEmail(emails);
+    return isMgr ? "manager" : clerkRole;
+  } catch {
+    // Mode data unavailable (DB down, empty SSoT) — fall back to the
+    // Clerk-configured role rather than crashing the whole request.
+    return clerkRole;
+  }
 }
 
 /**
@@ -78,8 +110,12 @@ export async function getRealUserRole(): Promise<Role> {
     return "everyone";
   }
 
-  return getUserRole(
+  const clerkRole = getUserRole(
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
+  );
+  return promoteToManagerIfNeeded(
+    clerkRole,
+    (result.user.emailAddresses ?? []).map((e) => e.emailAddress),
   );
 }
 
@@ -133,7 +169,7 @@ function parseImpersonateCookie(value: string | undefined): Impersonation | null
     if (
       typeof parsed.userId === "string" &&
       typeof parsed.name === "string" &&
-      (parsed.role === "everyone" || parsed.role === "leadership" || parsed.role === "ceo")
+      (parsed.role === "everyone" || parsed.role === "manager" || parsed.role === "leadership" || parsed.role === "ceo")
     ) {
       return { userId: parsed.userId, name: parsed.name, role: parsed.role };
     }
