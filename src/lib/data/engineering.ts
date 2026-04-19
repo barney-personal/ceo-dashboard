@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { withDbErrorContext } from "@/lib/db/errors";
 import { githubPrs, githubCommits, githubEmployeeMap } from "@/lib/db/schema";
 import { gte, sql, count, sum } from "drizzle-orm";
-import { getActiveEmployees, type Person } from "./people";
+import { getActiveEmployees, computeTenureDays, type Person } from "./people";
 
 export interface EngineerRanking {
   login: string;
@@ -22,8 +22,10 @@ export interface EngineerRanking {
   squad: string | null;
   pillar: string | null;
   tenureMonths: number | null;
-  startDate: string | null;
-  /** Whole days between `startDate` and now. Null when startDate is unknown. */
+  /** Whole days between the engineer's start date and now. Null when the
+   *  start date is unknown or unparseable. We intentionally do NOT return
+   *  the raw start date here — it would serialise into the RSC payload
+   *  visible to every authenticated user, leaking exact hire dates. */
   tenureDays: number | null;
   /** True when the engineer has no merged PRs in the analysis window. */
   silent: boolean;
@@ -119,7 +121,6 @@ export async function getEngineeringRankings(
       });
     }
 
-    const nowMs = Date.now();
     const rankings: EngineerRanking[] = [];
 
     for (const person of activePeople) {
@@ -134,12 +135,10 @@ export async function getEngineeringRankings(
         ? (commitsByLogin.get(gh.githubLogin) ?? 0)
         : 0;
 
-      const startDate = person.startDate || null;
-      const tenureDays = startDate
-        ? Math.max(
-            0,
-            Math.floor((nowMs - new Date(startDate).getTime()) / 86_400_000)
-          )
+      // Use the shared helper so malformed / empty start dates go through
+      // one NaN-safe code path instead of propagating NaN into tenureDays.
+      const tenureDays = person.startDate
+        ? computeTenureDays(person.startDate)
         : null;
 
       const prsCount = pr?.prsCount ?? 0;
@@ -164,7 +163,6 @@ export async function getEngineeringRankings(
         squad: person.squad || null,
         pillar: person.pillar || null,
         tenureMonths: person.tenureMonths,
-        startDate,
         tenureDays,
         silent: prsCount === 0,
         githubMapped: gh != null,

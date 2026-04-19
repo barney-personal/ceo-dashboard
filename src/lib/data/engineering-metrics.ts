@@ -6,10 +6,6 @@
  * dependencies into the browser bundle.
  */
 
-/**
- * Raw impact score. Mirrors the formula displayed in the UI.
- *   impact = round( prs × log₂(1 + (additions + deletions) / prs) )
- */
 export function computeImpact(
   prs: number,
   additions: number,

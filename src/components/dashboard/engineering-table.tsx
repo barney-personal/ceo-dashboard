@@ -44,7 +44,6 @@ type SortKey =
   | "netLines"
   | "changedFiles";
 
-
 const COLUMNS: {
   key: SortKey;
   label: string;

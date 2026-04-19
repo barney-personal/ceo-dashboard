@@ -1,10 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { mockSelect } = vi.hoisted(() => ({ mockSelect: vi.fn() }));
+const { mockSelect, mockGetActiveEmployees } = vi.hoisted(() => ({
+  mockSelect: vi.fn(),
+  mockGetActiveEmployees: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   db: { select: mockSelect },
 }));
+
+vi.mock("../people", async () => {
+  const actual = await vi.importActual<typeof import("../people")>("../people");
+  return {
+    ...actual,
+    getActiveEmployees: mockGetActiveEmployees,
+  };
+});
 
 vi.mock("@/lib/db/schema", () => ({
   githubPrs: {
@@ -53,7 +64,27 @@ import { getEngineeringRankings, computeImpact } from "../engineering";
 
 afterEach(() => {
   mockSelect.mockReset();
+  mockGetActiveEmployees.mockReset();
 });
+
+/** Build a drizzle-query-shaped thenable whose `await` resolves with `rows`. */
+function chainResolving(rows: unknown) {
+  const chain: Record<string, unknown> = {};
+  for (const m of [
+    "select",
+    "from",
+    "innerJoin",
+    "leftJoin",
+    "where",
+    "groupBy",
+    "orderBy",
+    "as",
+  ]) {
+    chain[m] = () => chain;
+  }
+  chain.then = (resolve: (v: unknown) => unknown) => resolve(rows);
+  return chain;
+}
 
 describe("computeImpact", () => {
   it("is zero when no PRs", () => {
@@ -77,6 +108,174 @@ describe("computeImpact", () => {
 });
 
 describe("getEngineeringRankings", () => {
+  // Cast to `any` because Person has ~12 fields we don't care about here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const person = (over: Record<string, unknown>): any => ({
+    name: "Test",
+    email: "test@example.com",
+    jobTitle: "Backend Engineer",
+    level: "B3",
+    squad: null,
+    pillar: null,
+    function: "Engineering",
+    manager: "",
+    startDate: "2020-01-01",
+    location: "",
+    tenureMonths: 50,
+    employmentType: "FTE",
+    ...over,
+  });
+
+  function mockDb(opts: {
+    prRows?: unknown[];
+    commitRows?: unknown[];
+    ghMapRows?: unknown[];
+  }) {
+    const { prRows = [], commitRows = [], ghMapRows = [] } = opts;
+    mockSelect
+      .mockReturnValueOnce(chainResolving(prRows))
+      .mockReturnValueOnce(chainResolving(commitRows))
+      .mockReturnValueOnce(chainResolving(ghMapRows));
+  }
+
+  it("excludes non-engineering functions from the ranking", async () => {
+    mockDb({});
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [
+        person({ email: "eng@x.com", function: "Engineering" }),
+        person({ email: "pm@x.com", function: "Product" }),
+        person({ email: "marketer@x.com", function: "Marketing" }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    expect(result.map((r) => r.employeeEmail)).toEqual(["eng@x.com"]);
+  });
+
+  it("marks engineers with no PRs in the window as silent", async () => {
+    mockDb({
+      prRows: [
+        {
+          login: "alice-gh",
+          avatarUrl: "https://example.com/a.png",
+          prsCount: 4,
+          additions: 200,
+          deletions: 50,
+          changedFiles: 12,
+          repos: ["web"],
+        },
+      ],
+      ghMapRows: [
+        {
+          githubLogin: "alice-gh",
+          employeeEmail: "alice@x.com",
+          isBot: false,
+        },
+        {
+          githubLogin: "bob-gh",
+          employeeEmail: "bob@x.com",
+          isBot: false,
+        },
+      ],
+    });
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [
+        person({ email: "alice@x.com", name: "Alice" }),
+        person({ email: "bob@x.com", name: "Bob" }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    const byEmail = Object.fromEntries(result.map((r) => [r.employeeEmail, r]));
+
+    expect(byEmail["alice@x.com"]).toMatchObject({
+      prsCount: 4,
+      silent: false,
+      githubMapped: true,
+    });
+    expect(byEmail["bob@x.com"]).toMatchObject({
+      prsCount: 0,
+      additions: 0,
+      silent: true,
+      githubMapped: true,
+    });
+  });
+
+  it("flags unmapped engineers with githubMapped=false", async () => {
+    mockDb({ ghMapRows: [] });
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [person({ email: "nomap@x.com" })],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      githubMapped: false,
+      silent: true,
+    });
+  });
+
+  it("returns tenureDays computed from startDate, and null for unparseable dates", async () => {
+    mockDb({});
+    const fiveDaysAgoIso = new Date(Date.now() - 5 * 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [
+        person({ email: "recent@x.com", startDate: fiveDaysAgoIso }),
+        person({ email: "bad@x.com", startDate: "not-a-date" }),
+        person({ email: "missing@x.com", startDate: "" }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    const byEmail = Object.fromEntries(result.map((r) => [r.employeeEmail, r]));
+
+    // Recent hire → computed tenure, small positive integer
+    expect(byEmail["recent@x.com"].tenureDays).toBeGreaterThanOrEqual(4);
+    expect(byEmail["recent@x.com"].tenureDays).toBeLessThanOrEqual(6);
+    // Malformed date must NOT propagate NaN — coerced to 0 by computeTenureDays
+    expect(byEmail["bad@x.com"].tenureDays).toBe(0);
+    // Empty string → null, handled by the falsy-startDate branch
+    expect(byEmail["missing@x.com"].tenureDays).toBeNull();
+  });
+
+  it("does not leak startDate into the returned payload", async () => {
+    mockDb({});
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [person({ startDate: "2021-06-15" })],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("startDate");
+  });
+
   it("surfaces Postgres outages as DatabaseUnavailableError", async () => {
     // Make every chained call return the same thenable object, and have
     // `await`-ing it reject — this way the caller can chain any combination
