@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
@@ -94,7 +95,7 @@ const DAY_MS = 86_400_000;
  * ranking and appear with impact scores on team views where the signal
  * isn't meaningful.
  */
-async function loadEngineerEmails(): Promise<Set<string>> {
+const loadEngineerEmails = cache(async (): Promise<Set<string>> => {
   try {
     const [ssotRow] = await db
       .select({ data: modeReportData.data })
@@ -103,6 +104,9 @@ async function loadEngineerEmails(): Promise<Set<string>> {
       .where(
         and(
           eq(modeReports.name, "Headcount SSoT Dashboard"),
+          // Match the guard used by loadActiveEmployees in managers.ts so
+          // both loaders agree on which snapshot is authoritative.
+          eq(modeReports.section, "people"),
           eq(modeReportData.queryName, "headcount"),
         ),
       )
@@ -120,7 +124,7 @@ async function loadEngineerEmails(): Promise<Set<string>> {
   } catch {
     return new Set();
   }
-}
+});
 
 function percentileOf(value: number, allSorted: number[]): number | null {
   if (allSorted.length === 0) return null;
@@ -141,7 +145,11 @@ function percentileOf(value: number, allSorted: number[]): number | null {
     else hi2 = mid;
   }
   const avgRank = (lo + lo2 - 1) / 2;
-  return allSorted.length > 1 ? avgRank / (allSorted.length - 1) : 0;
+  if (allSorted.length <= 1) return 0;
+  // Clamp to [0, 1]. When `value` is strictly below every cohort element,
+  // both binary searches land at 0 and avgRank = -0.5; clamping keeps alert
+  // thresholds and bar widths safe if the cohort membership ever drifts.
+  return Math.max(0, Math.min(1, avgRank / (allSorted.length - 1)));
 }
 
 function trendFromRatio(ratio: number | null): TrendDirection | null {

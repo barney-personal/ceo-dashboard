@@ -47,10 +47,17 @@ export default async function ManagersPage({
 
   let targetEmail: string | null = null;
   if (canPickAnyManager && params.manager) {
-    targetEmail = params.manager.toLowerCase();
-  } else if (viewerEmail && (await isManagerByEmail(viewerEmail))) {
+    // Validate the param against the known manager set — a stale bookmark or
+    // typo should fall back to the viewer's team rather than silently
+    // rendering an empty table.
+    const candidate = params.manager.toLowerCase();
+    const matched = allManagers.find((m) => m.email === candidate);
+    if (matched) targetEmail = matched.email;
+  }
+  if (!targetEmail && viewerEmail && (await isManagerByEmail(viewerEmail))) {
     targetEmail = viewerEmail;
-  } else if (canPickAnyManager && allManagers[0]) {
+  }
+  if (!targetEmail && canPickAnyManager && allManagers[0]) {
     targetEmail = allManagers[0].email;
   }
 

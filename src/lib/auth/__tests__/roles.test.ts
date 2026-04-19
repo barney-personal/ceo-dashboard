@@ -6,14 +6,22 @@ describe("hasAccess", () => {
     // CEO can access everything
     ["ceo", "ceo", true],
     ["ceo", "leadership", true],
+    ["ceo", "manager", true],
     ["ceo", "everyone", true],
     // Leadership can access leadership and below
     ["leadership", "ceo", false],
     ["leadership", "leadership", true],
+    ["leadership", "manager", true],
     ["leadership", "everyone", true],
+    // Manager can access manager and below (but not leadership or CEO)
+    ["manager", "ceo", false],
+    ["manager", "leadership", false],
+    ["manager", "manager", true],
+    ["manager", "everyone", true],
     // Everyone can only access everyone
     ["everyone", "ceo", false],
     ["everyone", "leadership", false],
+    ["everyone", "manager", false],
     ["everyone", "everyone", true],
   ];
 

@@ -49,13 +49,17 @@ export default async function PersonProfilePage({
       ? viewer.user.emailAddresses?.[0]?.emailAddress?.toLowerCase() ?? null
       : null;
   // A viewer can see performance ratings if they are CEO, viewing themselves,
-  // or directly manage the target employee.
+  // or directly manage the target employee. Normalise both sides to lowercase
+  // — SSoT emails aren't guaranteed to be lowercased at source, and the
+  // viewerEmail is already normalised on line above.
+  const profileEmail = profile.identity.email?.toLowerCase() ?? null;
   const canSeePerformance =
     hasAccess(role, "ceo") ||
-    (viewerEmail !== null && profile.identity.email === viewerEmail) ||
+    (viewerEmail !== null && profileEmail !== null && profileEmail === viewerEmail) ||
     (viewerEmail !== null &&
+      profileEmail !== null &&
       (await getDirectReports(viewerEmail)).some(
-        (r) => r.email.toLowerCase() === profile.identity.email,
+        (r) => r.email.toLowerCase() === profileEmail,
       ));
 
   const {
