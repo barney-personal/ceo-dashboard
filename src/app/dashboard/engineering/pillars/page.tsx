@@ -28,11 +28,12 @@ export default async function EngineeringPillarsPage({
 
   return (
     <div className="space-y-6">
-      <EngineerTopMetrics rankings={rankings} />
+      <EngineerTopMetrics rankings={rankings} periodDays={periodDays} />
       <EngineeringSquadView
         data={rankings}
         groupBy="pillar"
         swarmiaMetrics={swarmiaMetrics.data ?? undefined}
+        periodDays={periodDays}
       />
     </div>
   );
