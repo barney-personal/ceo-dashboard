@@ -108,6 +108,55 @@ export const financialPeriods = pgTable("financial_periods", {
   syncedAt: timestamp("synced_at").defaultNow().notNull(),
 });
 
+export const slackMemberSnapshots = pgTable(
+  "slack_member_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    windowStart: timestamp("window_start").notNull(),
+    windowEnd: timestamp("window_end").notNull(),
+    slackUserId: text("slack_user_id").notNull(),
+    name: text("name"),
+    username: text("username"),
+    title: text("title"),
+    accountType: text("account_type"),
+    accountCreatedAt: timestamp("account_created_at"),
+    claimedAt: timestamp("claimed_at"),
+    deactivatedAt: timestamp("deactivated_at"),
+    daysActive: integer("days_active").default(0).notNull(),
+    daysActiveDesktop: integer("days_active_desktop").default(0).notNull(),
+    daysActiveAndroid: integer("days_active_android").default(0).notNull(),
+    daysActiveIos: integer("days_active_ios").default(0).notNull(),
+    messagesPosted: integer("messages_posted").default(0).notNull(),
+    messagesPostedInChannels: integer("messages_posted_in_channels").default(0).notNull(),
+    reactionsAdded: integer("reactions_added").default(0).notNull(),
+    lastActiveAt: timestamp("last_active_at"),
+    lastActiveDesktopAt: timestamp("last_active_desktop_at"),
+    lastActiveAndroidAt: timestamp("last_active_android_at"),
+    lastActiveIosAt: timestamp("last_active_ios_at"),
+    importedAt: timestamp("imported_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("slack_member_snapshot_window_user_uniq").on(
+      table.windowStart,
+      table.windowEnd,
+      table.slackUserId,
+    ),
+    index("slack_member_snapshots_window_idx").on(table.windowStart, table.windowEnd),
+  ]
+);
+
+export const slackEmployeeMap = pgTable("slack_employee_map", {
+  id: serial("id").primaryKey(),
+  slackUserId: text("slack_user_id").notNull().unique(),
+  slackUsername: text("slack_username"),
+  slackName: text("slack_name"),
+  employeeEmail: text("employee_email"), // lowercased; joins to SSoT row->>'email'
+  employeeName: text("employee_name"),
+  matchMethod: text("match_method").notNull(), // 'auto_username' | 'auto_name' | 'manual' | 'external' | 'unmatched'
+  note: text("note"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const syncLog = pgTable(
   "sync_log",
   {
