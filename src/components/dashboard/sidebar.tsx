@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   GitPullRequest,
   HeartPulse,
+  MessageSquare,
   Menu,
   X,
 } from "lucide-react";
@@ -115,6 +116,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/engineering",
         requiredRole: "everyone",
         icon: GitPullRequest,
+      },
+      {
+        label: "Slack",
+        href: "/dashboard/slack",
+        requiredRole: "ceo",
+        icon: MessageSquare,
       },
       {
         label: "Engagement",
