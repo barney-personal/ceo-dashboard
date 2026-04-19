@@ -79,21 +79,24 @@ describe("getSourceHealth", () => {
     expect(bySource.github.lastSuccessAt).toBeNull();
   });
 
-  it("passes a 7-day window start to the query", async () => {
+  it("passes a 7-day window start (as ISO string) to the query", async () => {
+    // postgres-js rejects raw Date params in drizzle sql templates; we
+    // serialize the window start to ISO + cast to timestamptz server-side.
     mockExecute.mockResolvedValue([]);
     const now = new Date("2026-04-17T12:00:00.000Z");
 
     await getSourceHealth(now);
 
     expect(mockExecute).toHaveBeenCalledTimes(1);
-    const sqlArg = mockExecute.mock.calls[0][0] as {
-      queryChunks: unknown[];
-    };
-    const boundWindowStart = sqlArg.queryChunks.find(
-      (v): v is Date => v instanceof Date
-    );
-    expect(boundWindowStart).toBeInstanceOf(Date);
-    expect(boundWindowStart!.toISOString()).toBe("2026-04-10T12:00:00.000Z");
+    const sqlArg = mockExecute.mock.calls[0][0] as object;
+    // Compile the SQL to get the actual bound param list.
+    const compiled = (sqlArg as { getSQL: () => { toQuery: (config: unknown) => { params: unknown[] } } })
+      .getSQL()
+      .toQuery({ escapeName: (v: string) => `"${v}"`, escapeParam: (i: number) => `$${i + 1}`, escapeString: (v: string) => `'${v}'` });
+    // Must include the ISO string, and must NOT include a raw Date — that's the
+    // exact regression: postgres-js rejects Date instances as query params.
+    expect(compiled.params).toContain("2026-04-10T12:00:00.000Z");
+    expect(compiled.params.some((v) => v instanceof Date)).toBe(false);
   });
 
   it("returns lastSuccessAt / lastFailureAt even when they are older than the 7-day window", async () => {
