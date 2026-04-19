@@ -25,7 +25,7 @@ export default async function EngineeringEngineersPage({
 
   return (
     <div className="space-y-6">
-      <EngineerTopMetrics rankings={rankings} />
+      <EngineerTopMetrics rankings={rankings} periodDays={periodDays} />
       <EngineeringTable data={rankings} periodDays={periodDays} />
       {latestSync && (
         <p className="text-[11px] text-muted-foreground/60">

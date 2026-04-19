@@ -78,23 +78,26 @@ describe("computeImpact", () => {
 
 describe("getEngineeringRankings", () => {
   it("surfaces Postgres outages as DatabaseUnavailableError", async () => {
-    type Thenable = Record<string, (...args: unknown[]) => unknown> & {
-      then: (
-        resolve: (v: unknown) => unknown,
-        reject: (e: Error) => unknown
-      ) => unknown;
-    };
-    const throwingChain: Thenable = {
-      select: () => throwingChain,
-      from: () => throwingChain,
-      innerJoin: () => throwingChain,
-      leftJoin: () => throwingChain,
-      where: () => throwingChain,
-      groupBy: () => throwingChain,
-      orderBy: () => throwingChain,
-      as: () => throwingChain,
-      then: (_resolve, reject) => reject(new Error("fetch failed")),
-    };
+    // Make every chained call return the same thenable object, and have
+    // `await`-ing it reject — this way the caller can chain any combination
+    // of select/from/where/groupBy/etc. without us needing to know the
+    // exact drizzle shape under test.
+    const throwingChain: Record<string, unknown> = {};
+    const chainMethods = [
+      "select",
+      "from",
+      "innerJoin",
+      "leftJoin",
+      "where",
+      "groupBy",
+      "orderBy",
+      "as",
+    ];
+    for (const m of chainMethods) throwingChain[m] = () => throwingChain;
+    throwingChain.then = (
+      _resolve: (v: unknown) => unknown,
+      reject: (e: Error) => unknown
+    ) => reject(new Error("fetch failed"));
     mockSelect.mockImplementation(() => throwingChain);
 
     await expect(getEngineeringRankings(30)).rejects.toMatchObject({
