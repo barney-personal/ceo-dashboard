@@ -63,7 +63,10 @@ function toNullableNumber(value: unknown): number | null {
 export async function getSourceHealth(
   now: Date = new Date()
 ): Promise<SourceHealth[]> {
-  const windowStart = new Date(now.getTime() - SEVEN_DAYS_MS);
+  // postgres-js chokes on raw Date params inside drizzle sql templates
+  // (no column-type hint → "string argument must be string/Buffer, received Date").
+  // Send an ISO string cast to timestamptz server-side instead.
+  const windowStart = new Date(now.getTime() - SEVEN_DAYS_MS).toISOString();
 
   // lastSuccessAt / lastFailureAt are all-time — a source that broke 10 days ago
   // must still appear as "last success 10d ago", not "never". The 7-day window
@@ -76,18 +79,18 @@ export async function getSourceHealth(
         MAX(CASE WHEN status IN ('error','cancelled') THEN completed_at END) AS last_failure_at,
         COUNT(*) FILTER (
           WHERE completed_at IS NOT NULL
-            AND started_at >= ${windowStart}
+            AND started_at >= ${windowStart}::timestamptz
         )::int AS total_runs,
         COUNT(*) FILTER (
           WHERE status IN ('success','partial')
-            AND started_at >= ${windowStart}
+            AND started_at >= ${windowStart}::timestamptz
         )::int AS success_runs,
         percentile_cont(0.95) WITHIN GROUP (
           ORDER BY EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000
         ) FILTER (
           WHERE completed_at IS NOT NULL
             AND status IN ('success','partial')
-            AND started_at >= ${windowStart}
+            AND started_at >= ${windowStart}::timestamptz
         ) AS p95_duration_ms
       FROM sync_log
       GROUP BY source

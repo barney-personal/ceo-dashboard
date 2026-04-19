@@ -13,13 +13,23 @@ export default async function SlackMembersPage({
   if (!snapshot) {
     return (
       <SectionCard title="No snapshot imported yet">
-        <p className="py-8 text-sm text-muted-foreground">
-          Run{" "}
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-            doppler run -- npx tsx scripts/import-slack-members.ts
-          </code>{" "}
-          to import a Slack Member Analytics CSV.
-        </p>
+        <div className="space-y-3 py-6 text-sm text-muted-foreground">
+          <p>
+            Upload a Slack Member Analytics CSV from the{" "}
+            <a
+              href="/dashboard/admin/status"
+              className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
+            >
+              Data Status page
+            </a>{" "}
+            (CEO only) to populate this view.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Export steps: Slack Admin → Analytics → Members → pick a time window →
+            Export CSV. Slackbot DMs you the file; drop it into the uploader on
+            Data Status.
+          </p>
+        </div>
       </SectionCard>
     );
   }
