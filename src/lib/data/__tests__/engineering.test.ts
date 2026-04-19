@@ -78,15 +78,22 @@ describe("computeImpact", () => {
 
 describe("getEngineeringRankings", () => {
   it("surfaces Postgres outages as DatabaseUnavailableError", async () => {
-    const throwingChain = {
+    type Thenable = Record<string, (...args: unknown[]) => unknown> & {
+      then: (
+        resolve: (v: unknown) => unknown,
+        reject: (e: Error) => unknown
+      ) => unknown;
+    };
+    const throwingChain: Thenable = {
       select: () => throwingChain,
       from: () => throwingChain,
       innerJoin: () => throwingChain,
       leftJoin: () => throwingChain,
       where: () => throwingChain,
       groupBy: () => throwingChain,
-      orderBy: () => Promise.reject(new Error("fetch failed")),
+      orderBy: () => throwingChain,
       as: () => throwingChain,
+      then: (_resolve, reject) => reject(new Error("fetch failed")),
     };
     mockSelect.mockImplementation(() => throwingChain);
 

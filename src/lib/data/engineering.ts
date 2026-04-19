@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { withDbErrorContext } from "@/lib/db/errors";
 import { githubPrs, githubCommits, githubEmployeeMap } from "@/lib/db/schema";
-import { gte, desc, eq, sql, count, sum } from "drizzle-orm";
+import { gte, sql, count, sum } from "drizzle-orm";
 import { getActiveEmployees, type Person } from "./people";
 
 export interface EngineerRanking {
@@ -25,6 +25,12 @@ export interface EngineerRanking {
   startDate: string | null;
   /** Whole days between `startDate` and now. Null when startDate is unknown. */
   tenureDays: number | null;
+  /** True when the engineer has no merged PRs in the analysis window. */
+  silent: boolean;
+  /** False when the person has no GitHub mapping in `githubEmployeeMap` —
+   *  PR stats will always be zero and they're effectively invisible on
+   *  GitHub-side until a mapping is set up. */
+  githubMapped: boolean;
 }
 
 export const PERIOD_OPTIONS = [
@@ -38,115 +44,146 @@ export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["value"];
 
 export { computeImpact } from "./engineering-metrics";
 
+/**
+ * Rank currently-employed engineers by their GitHub output over the last
+ * `days` days.
+ *
+ * The active-headcount SSoT is the spine — we intentionally do NOT include
+ * PR authors who have left the company, or who aren't in Engineering. An
+ * engineer who didn't ship a PR in the window is returned with `silent: true`
+ * and zeroed metrics so the caller can surface them explicitly ("N engineers
+ * shipped nothing") without ranking them against active shippers.
+ */
 export async function getEngineeringRankings(
   days: PeriodDays = 30
 ): Promise<EngineerRanking[]> {
   return withDbErrorContext("load engineering rankings", async () => {
-  const since = new Date();
-  since.setUTCDate(since.getUTCDate() - days);
-  since.setUTCHours(0, 0, 0, 0);
+    const since = new Date();
+    since.setUTCDate(since.getUTCDate() - days);
+    since.setUTCHours(0, 0, 0, 0);
 
-  // Subquery: commit counts per author in the same window
-  const commitCounts = db
-    .select({
-      login: githubCommits.authorLogin,
-      commitsCount: count().as("commits_count"),
-    })
-    .from(githubCommits)
-    .where(gte(githubCommits.committedAt, since))
-    .groupBy(githubCommits.authorLogin)
-    .as("commit_counts");
-
-  // Fetch PR/commit metrics and employee metadata in parallel
-  const [rows, employeeLookup] = await Promise.all([
-    db
-      .select({
-        login: githubPrs.authorLogin,
-        avatarUrl: sql<string | null>`MAX(${githubPrs.authorAvatarUrl})`.as(
-          "avatar_url"
-        ),
-        prsCount: count().as("prs_count"),
-        commitsCount:
-          sql<number>`COALESCE(MAX(${commitCounts.commitsCount}), 0)`.as(
-            "commits_count"
+    const [prRows, commitRows, ghMapRows, activePeople] = await Promise.all([
+      db
+        .select({
+          login: githubPrs.authorLogin,
+          avatarUrl: sql<string | null>`MAX(${githubPrs.authorAvatarUrl})`.as(
+            "avatar_url"
           ),
-        additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
-        deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
-        changedFiles: sum(githubPrs.changedFiles)
-          .mapWith(Number)
-          .as("changed_files"),
-        repos:
-          sql<string[]>`ARRAY_AGG(DISTINCT ${githubPrs.repo})`.as("repos"),
-        employeeName: githubEmployeeMap.employeeName,
-        employeeEmail: githubEmployeeMap.employeeEmail,
-        isBot: githubEmployeeMap.isBot,
-      })
-      .from(githubPrs)
-      .leftJoin(
-        githubEmployeeMap,
-        eq(githubPrs.authorLogin, githubEmployeeMap.githubLogin)
-      )
-      .leftJoin(commitCounts, eq(githubPrs.authorLogin, commitCounts.login))
-      .where(gte(githubPrs.mergedAt, since))
-      .groupBy(
-        githubPrs.authorLogin,
-        githubEmployeeMap.employeeName,
-        githubEmployeeMap.employeeEmail,
-        githubEmployeeMap.isBot
-      )
-      .orderBy(desc(sql`prs_count`)),
-    buildEmployeeLookup(),
-  ]);
+          prsCount: count().as("prs_count"),
+          additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
+          deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
+          changedFiles: sum(githubPrs.changedFiles)
+            .mapWith(Number)
+            .as("changed_files"),
+          repos:
+            sql<string[]>`ARRAY_AGG(DISTINCT ${githubPrs.repo})`.as("repos"),
+        })
+        .from(githubPrs)
+        .where(gte(githubPrs.mergedAt, since))
+        .groupBy(githubPrs.authorLogin),
+      db
+        .select({
+          login: githubCommits.authorLogin,
+          commitsCount: count().as("commits_count"),
+        })
+        .from(githubCommits)
+        .where(gte(githubCommits.committedAt, since))
+        .groupBy(githubCommits.authorLogin),
+      db
+        .select({
+          githubLogin: githubEmployeeMap.githubLogin,
+          employeeEmail: githubEmployeeMap.employeeEmail,
+          isBot: githubEmployeeMap.isBot,
+        })
+        .from(githubEmployeeMap),
+      getActiveEmployeesSafe(),
+    ]);
 
-  const nowMs = Date.now();
-  return rows.map((row) => {
-    const person = row.employeeEmail
-      ? employeeLookup.get(row.employeeEmail.toLowerCase())
-      : undefined;
-    const startDate = person?.startDate ?? null;
-    const tenureDays = startDate
-      ? Math.max(
-          0,
-          Math.floor((nowMs - new Date(startDate).getTime()) / 86_400_000)
-        )
-      : null;
-    return {
-      login: row.login,
-      avatarUrl: row.avatarUrl,
-      prsCount: row.prsCount,
-      commitsCount: Number(row.commitsCount) || 0,
-      additions: row.additions ?? 0,
-      deletions: row.deletions ?? 0,
-      netLines: (row.additions ?? 0) - (row.deletions ?? 0),
-      changedFiles: row.changedFiles ?? 0,
-      repos: Array.isArray(row.repos) ? row.repos : [],
-      employeeName: row.employeeName,
-      employeeEmail: row.employeeEmail,
-      isBot: row.isBot ?? false,
-      jobTitle: person?.jobTitle ?? null,
-      level: person?.level ?? null,
-      squad: person?.squad ?? null,
-      pillar: person?.pillar ?? null,
-      tenureMonths: person?.tenureMonths ?? null,
-      startDate,
-      tenureDays,
-    };
-  });
+    const prByLogin = new Map<string, (typeof prRows)[number]>();
+    for (const pr of prRows) prByLogin.set(pr.login, pr);
+
+    const commitsByLogin = new Map<string, number>();
+    for (const c of commitRows) {
+      commitsByLogin.set(c.login, Number(c.commitsCount) || 0);
+    }
+
+    const ghByEmail = new Map<
+      string,
+      { githubLogin: string; isBot: boolean }
+    >();
+    for (const m of ghMapRows) {
+      if (m.isBot || !m.employeeEmail) continue;
+      ghByEmail.set(m.employeeEmail.toLowerCase(), {
+        githubLogin: m.githubLogin,
+        isBot: m.isBot ?? false,
+      });
+    }
+
+    const nowMs = Date.now();
+    const rankings: EngineerRanking[] = [];
+
+    for (const person of activePeople) {
+      // Only engineers — `function` is the normalized SSoT value, preserved
+      // verbatim for anything already spelt "Engineering".
+      if (person.function !== "Engineering") continue;
+      if (!person.email) continue;
+
+      const gh = ghByEmail.get(person.email.toLowerCase());
+      const pr = gh ? prByLogin.get(gh.githubLogin) : undefined;
+      const commitsCount = gh
+        ? (commitsByLogin.get(gh.githubLogin) ?? 0)
+        : 0;
+
+      const startDate = person.startDate || null;
+      const tenureDays = startDate
+        ? Math.max(
+            0,
+            Math.floor((nowMs - new Date(startDate).getTime()) / 86_400_000)
+          )
+        : null;
+
+      const prsCount = pr?.prsCount ?? 0;
+      const additions = pr?.additions ?? 0;
+      const deletions = pr?.deletions ?? 0;
+
+      rankings.push({
+        login: gh?.githubLogin ?? person.email,
+        avatarUrl: pr?.avatarUrl ?? null,
+        prsCount,
+        commitsCount,
+        additions,
+        deletions,
+        netLines: additions - deletions,
+        changedFiles: pr?.changedFiles ?? 0,
+        repos: Array.isArray(pr?.repos) ? pr.repos : [],
+        employeeName: person.name,
+        employeeEmail: person.email,
+        isBot: false,
+        jobTitle: person.jobTitle || null,
+        level: person.level || null,
+        squad: person.squad || null,
+        pillar: person.pillar || null,
+        tenureMonths: person.tenureMonths,
+        startDate,
+        tenureDays,
+        silent: prsCount === 0,
+        githubMapped: gh != null,
+      });
+    }
+
+    // Sort by PRs desc so callers that don't re-sort get a sensible default.
+    rankings.sort((a, b) => b.prsCount - a.prsCount);
+    return rankings;
   });
 }
 
-async function buildEmployeeLookup(): Promise<Map<string, Person>> {
+async function getActiveEmployeesSafe(): Promise<Person[]> {
   try {
     const { employees, unassigned } = await getActiveEmployees();
-    const lookup = new Map<string, Person>();
-    for (const person of [...employees, ...unassigned]) {
-      if (person.email) {
-        lookup.set(person.email.toLowerCase(), person);
-      }
-    }
-    return lookup;
+    return [...employees, ...unassigned];
   } catch {
-    // Mode data unavailable — return empty lookup (metadata will be null)
-    return new Map();
+    // Mode data unavailable — return empty so the caller gets an empty
+    // ranking rather than a crash. The page shows its usual empty state.
+    return [];
   }
 }

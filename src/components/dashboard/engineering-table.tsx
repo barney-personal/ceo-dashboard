@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
@@ -32,6 +32,7 @@ interface EngineerRow {
   pillar: string | null;
   tenureMonths: number | null;
   tenureDays: number | null;
+  silent: boolean;
 }
 
 type SortKey =
@@ -106,6 +107,7 @@ export function EngineeringTable({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filters, setFilters] = useState<EngineeringFilterState>(EMPTY_FILTERS);
   const [includeNewHires, setIncludeNewHires] = useState(false);
+  const [includeSilent, setIncludeSilent] = useState(false);
 
   const humans = useMemo(
     () => (hideBots ? data.filter((r) => !r.isBot) : data),
@@ -114,28 +116,42 @@ export function EngineeringTable({
 
   // Engineers whose tenure is strictly shorter than the analysis window —
   // they couldn't have been shipping PRs for the whole period, so ranking
-  // them against veterans is apples-to-oranges. Surfaced separately via
-  // the "+N new hires" toggle.
+  // them against veterans is apples-to-oranges.
+  const isNewHireRow = useCallback(
+    (r: EngineerRow) => r.tenureDays != null && r.tenureDays < periodDays,
+    [periodDays]
+  );
   const newHires = useMemo(
+    () => humans.filter(isNewHireRow),
+    [humans, isNewHireRow]
+  );
+
+  // Engineers on the active headcount who merged nothing in the window.
+  // Count excludes rows already hidden by the new-hires filter so the chip
+  // count matches the number of rows that actually appear on toggle.
+  const silent = useMemo(
     () =>
       humans.filter(
-        (r) => r.tenureDays != null && r.tenureDays < periodDays
+        (r) => r.silent && (includeNewHires || !isNewHireRow(r))
       ),
-    [humans, periodDays]
+    [humans, includeNewHires, isNewHireRow]
   );
 
-  const tenured = useMemo(
-    () =>
-      includeNewHires
-        ? humans
-        : humans.filter(
-            (r) => r.tenureDays == null || r.tenureDays >= periodDays
-          ),
-    [humans, includeNewHires, periodDays]
-  );
+  const ranked = useMemo(() => {
+    let result = humans;
+    if (!includeNewHires) {
+      result = result.filter(
+        (r) => r.tenureDays == null || r.tenureDays >= periodDays
+      );
+    }
+    if (!includeSilent) {
+      result = result.filter((r) => !r.silent);
+    }
+    return result;
+  }, [humans, includeNewHires, includeSilent, periodDays]);
 
   const filtered = useMemo(() => {
-    let result = tenured;
+    let result = ranked;
 
     if (filters.roles.size > 0) {
       result = result.filter((r) => matchesRole(r.jobTitle, filters.roles));
@@ -159,7 +175,7 @@ export function EngineeringTable({
       const isNewHire = r.tenureDays != null && r.tenureDays < periodDays;
       return { ...r, outputScore, isNewHire };
     });
-  }, [tenured, filters, periodDays]);
+  }, [ranked, filters, periodDays]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -179,7 +195,7 @@ export function EngineeringTable({
     [filtered, sortKey, sortDir]
   );
 
-  const isUserFiltered = filtered.length !== tenured.length;
+  const isUserFiltered = filtered.length !== ranked.length;
 
   if (humans.length === 0) {
     return (
@@ -212,9 +228,20 @@ export function EngineeringTable({
                 : `+${newHires.length} new hires hidden`}
             </button>
           )}
+          {silent.length > 0 && (
+            <button
+              onClick={() => setIncludeSilent((v) => !v)}
+              className="rounded-md px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={`${silent.length} active engineers merged no PRs in the last ${periodDays} days. Hidden by default to keep the ranking readable.`}
+            >
+              {includeSilent
+                ? `Hide ${silent.length} with no PRs`
+                : `+${silent.length} shipped nothing`}
+            </button>
+          )}
           {isUserFiltered && (
             <span>
-              Showing {filtered.length} of {tenured.length} engineers
+              Showing {filtered.length} of {ranked.length} engineers
             </span>
           )}
         </div>

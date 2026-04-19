@@ -8,6 +8,7 @@ import type { EngineerRanking } from "@/lib/data/engineering";
  */
 export function EngineerTopMetrics({ rankings }: { rankings: EngineerRanking[] }) {
   const humans = rankings.filter((r) => !r.isBot);
+  const contributors = humans.filter((r) => !r.silent);
   const totalPRs = humans.reduce((sum, r) => sum + r.prsCount, 0);
   const totalCommits = humans.reduce((sum, r) => sum + r.commitsCount, 0);
   const totalAdditions = humans.reduce((sum, r) => sum + r.additions, 0);
@@ -18,8 +19,8 @@ export function EngineerTopMetrics({ rankings }: { rankings: EngineerRanking[] }
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
       <MetricCard
         label="Contributors"
-        value={humans.length.toString()}
-        subtitle="engineers"
+        value={contributors.length.toString()}
+        subtitle={`of ${humans.length} engineers`}
         delay={0}
       />
       <MetricCard

@@ -28,6 +28,7 @@ interface EngineerRow {
   pillar: string | null;
   tenureMonths: number | null;
   tenureDays: number | null;
+  silent: boolean;
 }
 
 interface SquadRow {
