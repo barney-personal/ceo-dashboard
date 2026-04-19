@@ -109,16 +109,10 @@ export async function getEngineeringRankings(
       commitsByLogin.set(c.login, Number(c.commitsCount) || 0);
     }
 
-    const ghByEmail = new Map<
-      string,
-      { githubLogin: string; isBot: boolean }
-    >();
+    const loginByEmail = new Map<string, string>();
     for (const m of ghMapRows) {
       if (m.isBot || !m.employeeEmail) continue;
-      ghByEmail.set(m.employeeEmail.toLowerCase(), {
-        githubLogin: m.githubLogin,
-        isBot: m.isBot ?? false,
-      });
+      loginByEmail.set(m.employeeEmail.toLowerCase(), m.githubLogin);
     }
 
     const rankings: EngineerRanking[] = [];
@@ -129,10 +123,10 @@ export async function getEngineeringRankings(
       if (person.function !== "Engineering") continue;
       if (!person.email) continue;
 
-      const gh = ghByEmail.get(person.email.toLowerCase());
-      const pr = gh ? prByLogin.get(gh.githubLogin) : undefined;
-      const commitsCount = gh
-        ? (commitsByLogin.get(gh.githubLogin) ?? 0)
+      const githubLogin = loginByEmail.get(person.email.toLowerCase()) ?? null;
+      const pr = githubLogin ? prByLogin.get(githubLogin) : undefined;
+      const commitsCount = githubLogin
+        ? (commitsByLogin.get(githubLogin) ?? 0)
         : 0;
 
       // Use the shared helper so malformed / empty start dates go through
@@ -146,7 +140,7 @@ export async function getEngineeringRankings(
       const deletions = pr?.deletions ?? 0;
 
       rankings.push({
-        login: gh?.githubLogin ?? person.email,
+        login: githubLogin ?? person.email,
         avatarUrl: pr?.avatarUrl ?? null,
         prsCount,
         commitsCount,
@@ -165,7 +159,7 @@ export async function getEngineeringRankings(
         tenureMonths: person.tenureMonths,
         tenureDays,
         silent: prsCount === 0,
-        githubMapped: gh != null,
+        githubMapped: githubLogin !== null,
       });
     }
 
