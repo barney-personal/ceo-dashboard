@@ -31,11 +31,6 @@ export default async function EnpsAdminPage() {
   const latest = trend[trend.length - 1] as EnpsMonthlyAggregate | undefined;
   const hasAnyData = trend.length > 0;
 
-  const distributionData = distribution.map((d) => ({
-    date: String(d.score),
-    value: d.count,
-  }));
-
   const averageTrend = trend.map((t) => ({
     date: `${t.month}-01`,
     value: t.average ?? 0,
@@ -156,14 +151,17 @@ export default async function EnpsAdminPage() {
               title="This Month's Distribution"
               subtitle={`Score counts for ${formatMonthLabel(month)}`}
             />
-            <ColumnChart
-              data={distributionData}
-              title="Responses by score"
-              subtitle="0 = not happy, 10 = love it here"
-              yLabel="Responses"
-              yFormatType="number"
-              color="#3b3bba"
-            />
+            <div className="rounded-xl bg-card p-6 ring-1 ring-foreground/10">
+              <div className="mb-6 flex items-baseline justify-between">
+                <h3 className="text-sm font-medium text-foreground">
+                  Responses by score
+                </h3>
+                <span className="text-xs text-muted-foreground">
+                  0 = not happy, 10 = love it here
+                </span>
+              </div>
+              <DistributionBars buckets={distribution} />
+            </div>
           </section>
 
           {/* Reasons */}
@@ -219,6 +217,47 @@ function formatMonthLabel(month: string): string {
     month: "long",
     year: "numeric",
   });
+}
+
+function DistributionBars({
+  buckets,
+}: {
+  buckets: { score: number; count: number }[];
+}) {
+  const max = Math.max(1, ...buckets.map((b) => b.count));
+  const BAR_AREA_HEIGHT = 180;
+  return (
+    <div className="flex items-end gap-2">
+      {buckets.map((b) => {
+        const barHeight =
+          b.count > 0 ? Math.max((b.count / max) * BAR_AREA_HEIGHT, 6) : 0;
+        return (
+          <div key={b.score} className="flex flex-1 flex-col items-center gap-2">
+            <div
+              className="flex w-full items-end justify-center"
+              style={{ height: BAR_AREA_HEIGHT }}
+            >
+              <div
+                className={`w-full rounded-t-md transition-all ${barTone(b.score)}`}
+                style={{ height: barHeight }}
+                title={`${b.count} response${b.count === 1 ? "" : "s"} at ${b.score}`}
+              />
+            </div>
+            <div className="text-center">
+              <div className="text-xs font-medium text-foreground">{b.score}</div>
+              <div className="text-[10px] text-muted-foreground">{b.count}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function barTone(score: number): string {
+  if (score >= 9) return "bg-positive/70";
+  if (score >= 7) return "bg-primary/50";
+  return "bg-destructive/60";
 }
 
 function toneFor(score: number): string {
