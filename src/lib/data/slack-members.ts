@@ -328,6 +328,7 @@ export async function getLatestSlackMembersSnapshot(): Promise<SlackMembersSnaps
   const mapBySlackId = new Map(mapRows.map((m) => [m.slackUserId, m]));
 
   const windowEnd = latest.windowEnd;
+  const now = new Date();
   const windowSpanDays = Math.min(
     WINDOW_CAP_DAYS,
     diffDays(latest.windowEnd, latest.windowStart),
@@ -367,8 +368,13 @@ export async function getLatestSlackMembersSnapshot(): Promise<SlackMembersSnaps
     const primaryPlatform: "desktop" | "android" | "ios" | "none" =
       platforms[0]![1] > 0 ? platforms[0]![0] : "none";
 
+    // Use current date for "last seen" — answers "how stale is their
+    // activity *today*?" from the viewer's perspective. Measuring relative
+    // to windowEnd would be misleading: if the snapshot was pulled two days
+    // ago, someone last active on windowEnd would render as "today" when
+    // they actually haven't shown up in two days.
     const daysSinceLastActive = r.lastActiveAt
-      ? diffDays(windowEnd, r.lastActiveAt)
+      ? Math.max(0, diffDays(now, r.lastActiveAt))
       : null;
 
     return {
