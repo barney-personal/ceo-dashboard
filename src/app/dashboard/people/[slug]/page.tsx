@@ -10,7 +10,7 @@ import { ImpactRankCharts } from "@/components/dashboard/impact-rank-charts";
 import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
 import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
 import { getPersonProfile } from "@/lib/data/person-profile";
-import { getDirectReports } from "@/lib/data/managers";
+import { getDirectReports, resolveViewerEmail } from "@/lib/data/managers";
 
 function formatTenure(months: number | null): string {
   if (months === null) return "—";
@@ -46,7 +46,9 @@ export default async function PersonProfilePage({
   const viewer = await getCurrentUserWithTimeout();
   const viewerEmail =
     viewer.status === "authenticated"
-      ? viewer.user.emailAddresses?.[0]?.emailAddress?.toLowerCase() ?? null
+      ? await resolveViewerEmail(
+          (viewer.user.emailAddresses ?? []).map((e) => e.emailAddress),
+        )
       : null;
   // A viewer can see performance ratings if they are CEO, viewing themselves,
   // or directly manage the target employee. Normalise both sides to lowercase

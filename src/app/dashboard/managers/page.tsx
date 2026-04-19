@@ -11,6 +11,7 @@ import {
   getAllManagers,
   getDirectReports,
   isManagerByEmail,
+  resolveViewerEmail,
 } from "@/lib/data/managers";
 import { getTeamPerformance } from "@/lib/data/team-performance";
 
@@ -35,9 +36,14 @@ export default async function ManagersPage({
   const params = await searchParams;
 
   const userResult = await getCurrentUserWithTimeout();
+  // Pick the email address that actually appears in SSoT so managers whose
+  // Clerk primary email differs from their HiBob email still default to
+  // their own team.
   const viewerEmail =
     userResult.status === "authenticated"
-      ? userResult.user.emailAddresses?.[0]?.emailAddress?.toLowerCase() ?? null
+      ? await resolveViewerEmail(
+          (userResult.user.emailAddresses ?? []).map((e) => e.emailAddress),
+        )
       : null;
 
   // Leadership/CEO can inspect any manager via ?manager=email. Managers see

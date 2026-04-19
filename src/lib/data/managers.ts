@@ -76,6 +76,46 @@ export async function isManagerByEmail(email: string | null | undefined): Promis
   return n >= MIN_DIRECT_REPORTS_FOR_MANAGER_ROLE;
 }
 
+/**
+ * Does ANY of these emails run a team? Use when the identity provider might
+ * expose multiple addresses (primary + aliases) and only one matches SSoT.
+ */
+export async function isManagerByAnyEmail(
+  emails: Array<string | null | undefined>,
+): Promise<boolean> {
+  const counts = await loadReportCountsByManagerEmail();
+  for (const e of emails) {
+    if (!e) continue;
+    const n = counts.get(e.toLowerCase()) ?? 0;
+    if (n >= MIN_DIRECT_REPORTS_FOR_MANAGER_ROLE) return true;
+  }
+  return false;
+}
+
+/**
+ * Return the SSoT-matching email for a Clerk user given all their addresses.
+ * Prefers the first email that appears as an employee in the SSoT so that
+ * downstream "whose team are you viewing" queries work regardless of which
+ * address Clerk flagged as primary. Falls back to the first non-empty
+ * address if nothing matches.
+ */
+export async function resolveViewerEmail(
+  emails: Array<string | null | undefined>,
+): Promise<string | null> {
+  const nonEmpty = emails
+    .map((e) => (e ? e.toLowerCase().trim() : ""))
+    .filter((e) => e.length > 0);
+  if (nonEmpty.length === 0) return null;
+  const active = await loadActiveEmployees();
+  const activeEmails = new Set(
+    active.map((r) => String(r.email ?? "").toLowerCase()),
+  );
+  for (const e of nonEmpty) {
+    if (activeEmails.has(e)) return e;
+  }
+  return nonEmpty[0] ?? null;
+}
+
 function rowToReport(r: Record<string, unknown>): ManagerReport {
   return {
     email: String(r.email).toLowerCase(),

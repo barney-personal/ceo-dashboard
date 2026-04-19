@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
-import { isManagerByEmail } from "@/lib/data/managers";
+import { isManagerByAnyEmail } from "@/lib/data/managers";
 
 export const ROLE_PREVIEW_COOKIE = "role-preview";
 export const IMPERSONATE_COOKIE = "impersonate";
@@ -38,7 +38,7 @@ export async function getCurrentUserRole(): Promise<Role> {
   );
   const realRole = await promoteToManagerIfNeeded(
     clerkRole,
-    result.user.emailAddresses?.[0]?.emailAddress ?? null,
+    (result.user.emailAddresses ?? []).map((e) => e.emailAddress),
   );
 
   // CEO-only overrides: impersonation takes precedence over role preview
@@ -69,20 +69,24 @@ export async function getCurrentUserRole(): Promise<Role> {
 }
 
 /**
- * Promote an `everyone` role to `manager` if the user's primary email has
- * ≥2 active direct reports in the SSoT. Leadership/CEO roles are unchanged
- * (manager access is a subset of theirs).
+ * Promote an `everyone` role to `manager` if ANY of the user's Clerk email
+ * addresses matches an employee in SSoT with ≥2 active direct reports.
+ * Leadership/CEO roles are unchanged (manager access is a subset of theirs).
+ *
+ * Checking all addresses (not just the primary) makes this robust to Clerk
+ * users whose primary email is a personal address while a verified secondary
+ * is their `@meetcleo.com`.
  *
  * The SSoT query is request-scoped via React cache() so this promotion is
  * essentially free after the first role lookup per request.
  */
 async function promoteToManagerIfNeeded(
   clerkRole: Role,
-  email: string | null,
+  emails: string[],
 ): Promise<Role> {
-  if (clerkRole !== "everyone" || !email) return clerkRole;
+  if (clerkRole !== "everyone" || emails.length === 0) return clerkRole;
   try {
-    const isMgr = await isManagerByEmail(email);
+    const isMgr = await isManagerByAnyEmail(emails);
     return isMgr ? "manager" : clerkRole;
   } catch {
     // Mode data unavailable (DB down, empty SSoT) — fall back to the
@@ -111,7 +115,7 @@ export async function getRealUserRole(): Promise<Role> {
   );
   return promoteToManagerIfNeeded(
     clerkRole,
-    result.user.emailAddresses?.[0]?.emailAddress ?? null,
+    (result.user.emailAddresses ?? []).map((e) => e.emailAddress),
   );
 }
 
