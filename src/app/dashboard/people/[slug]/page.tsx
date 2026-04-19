@@ -3,12 +3,14 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ImpactRankCharts } from "@/components/dashboard/impact-rank-charts";
 import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
 import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
 import { getPersonProfile } from "@/lib/data/person-profile";
+import { getDirectReports, resolveViewerEmail } from "@/lib/data/managers";
 
 function formatTenure(months: number | null): string {
   if (months === null) return "—";
@@ -31,12 +33,36 @@ export default async function PersonProfilePage({
   params: Promise<{ slug: string }>;
 }) {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
+  // Profile is accessible to manager+ so team leads can click through from
+  // their team view. The Performance section below is additionally gated to
+  // CEO-or-own-manager, because ratings are sensitive.
+  if (!hasAccess(role, "manager")) {
     redirect("/dashboard");
   }
   const { slug } = await params;
   const profile = await getPersonProfile(decodeURIComponent(slug));
   if (!profile) notFound();
+
+  const viewer = await getCurrentUserWithTimeout();
+  const viewerEmail =
+    viewer.status === "authenticated"
+      ? await resolveViewerEmail(
+          (viewer.user.emailAddresses ?? []).map((e) => e.emailAddress),
+        )
+      : null;
+  // A viewer can see performance ratings if they are CEO, viewing themselves,
+  // or directly manage the target employee. Normalise both sides to lowercase
+  // — SSoT emails aren't guaranteed to be lowercased at source, and the
+  // viewerEmail is already normalised on line above.
+  const profileEmail = profile.identity.email?.toLowerCase() ?? null;
+  const canSeePerformance =
+    hasAccess(role, "ceo") ||
+    (viewerEmail !== null && profileEmail !== null && profileEmail === viewerEmail) ||
+    (viewerEmail !== null &&
+      profileEmail !== null &&
+      (await getDirectReports(viewerEmail)).some(
+        (r) => r.email.toLowerCase() === profileEmail,
+      ));
 
   const {
     identity,
@@ -199,8 +225,8 @@ export default async function PersonProfilePage({
       )}
 
 
-      {/* Performance ratings */}
-      {performance && (
+      {/* Performance ratings — CEO, self, or own-manager only */}
+      {performance && canSeePerformance && (
         <section className="space-y-4">
           <SectionDivider
             title="Performance"

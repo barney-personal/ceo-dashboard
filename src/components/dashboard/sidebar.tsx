@@ -118,9 +118,15 @@ const NAV_GROUPS: NavGroup[] = [
         icon: GitPullRequest,
       },
       {
+        label: "My Team",
+        href: "/dashboard/managers",
+        requiredRole: "manager",
+        icon: Users,
+      },
+      {
         label: "Slack",
         href: "/dashboard/slack",
-        requiredRole: "ceo",
+        requiredRole: "leadership",
         icon: MessageSquare,
       },
       {
