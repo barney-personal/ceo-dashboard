@@ -201,6 +201,7 @@ export async function getEnpsMonthlyTrend(
     "getEnpsMonthlyTrend",
     async () => {
       const since = new Date(now);
+      since.setDate(1); // pin to 1st before stepping back to avoid month overflow
       since.setMonth(since.getMonth() - months);
       const sinceMonth = currentMonth(since);
 

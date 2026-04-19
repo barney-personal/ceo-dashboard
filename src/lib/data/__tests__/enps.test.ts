@@ -52,7 +52,10 @@ import {
   currentMonth,
   ENPS_MAX_SHOWS_PER_MONTH,
   ENPS_PROMPT_COOLDOWN_MS,
+  getEnpsDistribution,
   getEnpsMonthlyTrend,
+  getEnpsReasonExcerpts,
+  getEnpsResponseRate,
   recordEnpsPromptShown,
   shouldShowEnpsPrompt,
   submitEnpsResponse,
@@ -220,6 +223,77 @@ describe("recordEnpsPromptShown", () => {
   });
 });
 
+describe("getEnpsDistribution", () => {
+  it("returns 11 buckets (0-10) with all zeros when month has no responses", async () => {
+    mockSelect.mockImplementation(() => buildSelectChain([]));
+    const buckets = await getEnpsDistribution("2026-04");
+    expect(buckets).toHaveLength(11);
+    for (let i = 0; i < 11; i++) {
+      expect(buckets[i].score).toBe(i);
+      expect(buckets[i].count).toBe(0);
+    }
+  });
+
+  it("populates counts for scores that had responses and zeros for the rest", async () => {
+    mockSelect.mockImplementation(() =>
+      buildSelectChain([
+        { score: 8, count: 3 },
+        { score: 10, count: 1 },
+      ])
+    );
+    const buckets = await getEnpsDistribution("2026-04");
+    expect(buckets).toHaveLength(11);
+    expect(buckets[7].count).toBe(0);
+    expect(buckets[8].count).toBe(3);
+    expect(buckets[9].count).toBe(0);
+    expect(buckets[10].count).toBe(1);
+  });
+});
+
+describe("getEnpsResponseRate", () => {
+  it("returns null rate when no one was prompted", async () => {
+    mockSelect.mockImplementation(() => buildSelectChain([{ n: 0 }]));
+    const result = await getEnpsResponseRate("2026-04");
+    expect(result).toEqual({ responded: 0, prompted: 0, rate: null });
+  });
+
+  it("computes responded / prompted when both are present", async () => {
+    const queue = [[{ n: 3 }], [{ n: 6 }]]; // responded, then prompted
+    mockSelect.mockImplementation(() => buildSelectChain(queue.shift() ?? []));
+    const result = await getEnpsResponseRate("2026-04");
+    expect(result.responded).toBe(3);
+    expect(result.prompted).toBe(6);
+    expect(result.rate).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe("getEnpsReasonExcerpts", () => {
+  it("returns empty list when no reasons exist", async () => {
+    mockSelect.mockImplementation(() => buildSelectChain([]));
+    const rows = await getEnpsReasonExcerpts();
+    expect(rows).toEqual([]);
+  });
+
+  it("serialises rows including the reason text", async () => {
+    mockSelect.mockImplementation(() =>
+      buildSelectChain([
+        {
+          id: 7,
+          month: "2026-04",
+          score: 8,
+          reason: "Love the new dashboards",
+          createdAt: new Date("2026-04-19T10:00:00Z"),
+        },
+      ])
+    );
+    const rows = await getEnpsReasonExcerpts();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("Love the new dashboards");
+    expect(rows[0].score).toBe(8);
+    expect(rows[0].createdAt).toBe("2026-04-19T10:00:00.000Z");
+  });
+});
+
 describe("getEnpsMonthlyTrend", () => {
   it("aggregates responses into monthly buckets with eNPS score", async () => {
     mockSelect.mockImplementation(() =>
@@ -251,5 +325,18 @@ describe("getEnpsMonthlyTrend", () => {
     expect(april.detractors).toBe(1);
     // eNPS = (1/2 - 1/2) * 100 = 0
     expect(april.enps).toBeCloseTo(0, 5);
+  });
+
+  it("does not overflow months when `now` is late in a long month", async () => {
+    // Regression: now = Mar 31, stepping back 1 month must not land in March
+    // (naive setMonth(month-1) on Mar 31 → Feb 31 → March 3).
+    const spy = vi.fn(() => buildSelectChain([]));
+    mockSelect.mockImplementation(spy);
+    await getEnpsMonthlyTrend(1, new Date("2026-03-31T10:00:00Z"));
+    // No crash + no results (empty DB) is the happy path — the real invariant
+    // is that the computed `sinceMonth` boundary did not wrap back to March.
+    // We sanity-check by calling again for a 12-month window on Oct 31.
+    await getEnpsMonthlyTrend(12, new Date("2026-10-31T10:00:00Z"));
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });

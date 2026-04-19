@@ -47,15 +47,19 @@ export function EnpsTakeover() {
       if (score === null || submitting) return;
       setSubmitting(true);
       try {
-        await fetch("/api/enps/submit", {
+        const r = await fetch("/api/enps/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ score, reason: finalReason }),
         });
+        if (!r.ok) {
+          setSubmitting(false);
+          return;
+        }
         setStage("thanks");
         setTimeout(() => setOpen(false), 1800);
       } catch {
-        // If the submit fails, allow retry.
+        // Network error — allow retry.
         setSubmitting(false);
       }
     },
