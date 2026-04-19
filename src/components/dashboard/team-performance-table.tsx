@@ -7,6 +7,7 @@ import type {
   TrendDirection,
 } from "@/lib/data/team-performance";
 import { cn } from "@/lib/utils";
+import { MetricInfoTooltip } from "./metric-info-tooltip";
 
 function fmtPercentile(p: number | null): string {
   if (p === null) return "—";
@@ -50,6 +51,11 @@ function PercentileBar({ value, tone = "primary" }: { value: number | null; tone
 }
 
 export function TeamPerformanceTable({ rows }: { rows: TeamMemberRow[] }) {
+  // Hide the Impact column entirely when no direct report is an engineer —
+  // otherwise it's a column of "not eng" cells for managers in Finance, CS,
+  // etc. which is just noise.
+  const showImpact = rows.some((r) => r.isEngineer || r.impactTotal !== null);
+  const colCount = showImpact ? 7 : 6;
   return (
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-warm">
       <div className="overflow-x-auto">
@@ -60,7 +66,7 @@ export function TeamPerformanceTable({ rows }: { rows: TeamMemberRow[] }) {
             <col style={{ width: "130px" }} />
             <col style={{ width: "160px" }} />
             <col style={{ width: "160px" }} />
-            <col style={{ width: "180px" }} />
+            {showImpact && <col style={{ width: "180px" }} />}
             <col style={{ width: "160px" }} />
           </colgroup>
           <thead>
@@ -73,29 +79,104 @@ export function TeamPerformanceTable({ rows }: { rows: TeamMemberRow[] }) {
                 Function
               </th>
               <th className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                Slack engagement
-              </th>
-              <th
-                className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
-                title="Latest performance rating, with trend direction vs the prior review cycle"
-              >
-                Perf rating
-              </th>
-              <th
-                className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
-                title="Engineering impact score (PRs × log₂(1 + lines/PR)) over the window. Trend compares last 90 days to the prior 90 days."
-              >
-                Impact (trend)
+                <span className="inline-flex items-center justify-end gap-1">
+                  Slack engagement
+                  <MetricInfoTooltip label="Slack engagement" align="below">
+                    <p>
+                      <span className="font-medium text-foreground">Score (0–100):</span>{" "}
+                      average of this person&apos;s percentile rank for
+                      messages/day and reactions/day, within the non-guest /
+                      non-deactivated ranking population. Tenure-normalised
+                      (capped at 365 days).
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">
+                        Percentile bar:
+                      </span>{" "}
+                      where this person sits within their own <em>function</em>.
+                      Turns red at ≤25% (bottom-quartile alert).
+                    </p>
+                  </MetricInfoTooltip>
+                </span>
               </th>
               <th className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                Alerts
+                <span className="inline-flex items-center justify-end gap-1">
+                  Perf rating
+                  <MetricInfoTooltip label="Performance rating" align="below">
+                    <p>
+                      <span className="font-medium text-foreground">Value:</span>{" "}
+                      most recent Culture-Amp-style cycle rating (1–5).
+                      <span className="font-medium text-foreground"> Arrow:</span>{" "}
+                      direction vs the prior cycle.
+                    </p>
+                    <p>
+                      <span className="font-medium text-foreground">
+                        Function percentile:
+                      </span>{" "}
+                      where their average across all cycles sits within their
+                      function. &ldquo;no rating&rdquo; means they haven&apos;t
+                      completed a review cycle yet.
+                    </p>
+                  </MetricInfoTooltip>
+                </span>
+              </th>
+              {showImpact && (
+                <th className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                  <span className="inline-flex items-center justify-end gap-1">
+                    Impact (trend)
+                    <MetricInfoTooltip label="Engineering impact" align="below">
+                      <p>
+                        <span className="font-medium text-foreground">Score:</span>{" "}
+                        <span className="font-mono text-[11px]">
+                          Σ(PRs × log₂(1 + lines/PR))
+                        </span>{" "}
+                        across the window, summed monthly. Log-scaling prevents
+                        one huge PR from dominating a steady stream of smaller
+                        changes.
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">
+                          Trend %:
+                        </span>{" "}
+                        last 90 days vs the prior 90 days (equal-length
+                        windows). Flags as alert below −25% when the prior
+                        window had meaningful activity.
+                      </p>
+                      <p>
+                        <span className="font-medium text-foreground">
+                          Company pct:
+                        </span>{" "}
+                        percentile among all engineering-function employees
+                        with PR activity in the window.
+                      </p>
+                    </MetricInfoTooltip>
+                  </span>
+                </th>
+              )}
+              <th className="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                <span className="inline-flex items-center justify-end gap-1">
+                  Alerts
+                  <MetricInfoTooltip label="When a report gets flagged" align="below">
+                    <p>Any of the following raises an alert:</p>
+                    <ul className="list-disc space-y-0.5 pl-4">
+                      <li>Slack engagement in bottom 25% of their function</li>
+                      <li>Latest perf rating dropped vs the prior cycle</li>
+                      <li>Avg perf rating in bottom 25% of their function</li>
+                      <li>
+                        90-day impact score dropped ≥25% vs prior 90 days
+                        (only when prior-window activity &gt; 50, to avoid
+                        low-volume noise)
+                      </li>
+                    </ul>
+                  </MetricInfoTooltip>
+                </span>
               </th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                <td colSpan={colCount} className="px-4 py-12 text-center text-sm text-muted-foreground">
                   No direct reports.
                 </td>
               </tr>
@@ -172,39 +253,39 @@ export function TeamPerformanceTable({ rows }: { rows: TeamMemberRow[] }) {
                         <span className="text-xs text-muted-foreground/40">no rating</span>
                       )}
                     </td>
-                    {/* Impact */}
-                    <td className="px-3 py-3 text-right">
-                      {r.impactTotal !== null ? (
-                        <div className="flex flex-col items-end gap-0.5">
-                          <div className="flex items-center gap-1">
-                            <TrendIcon direction={r.impactTrendDirection} />
-                            <span className="tabular-nums font-medium text-foreground">
-                              {r.impactTotal.toLocaleString()}
-                            </span>
-                            {r.impactTrend !== null && (
-                              <span
-                                className={cn(
-                                  "text-[10px] tabular-nums",
-                                  r.impactTrendDirection === "down" && "text-rose-600",
-                                  r.impactTrendDirection === "up" && "text-emerald-600",
-                                  r.impactTrendDirection === "flat" && "text-muted-foreground/60",
-                                )}
-                              >
-                                {r.impactTrend >= 0 ? "+" : ""}
-                                {Math.round(r.impactTrend * 100)}%
+                    {/* Impact — only rendered when the team has at least one engineer */}
+                    {showImpact && (
+                      <td className="px-3 py-3 text-right">
+                        {r.impactTotal !== null ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <div className="flex items-center gap-1">
+                              <TrendIcon direction={r.impactTrendDirection} />
+                              <span className="tabular-nums font-medium text-foreground">
+                                {r.impactTotal.toLocaleString()}
                               </span>
-                            )}
+                              {r.impactTrend !== null && (
+                                <span
+                                  className={cn(
+                                    "text-[10px] tabular-nums",
+                                    r.impactTrendDirection === "down" && "text-rose-600",
+                                    r.impactTrendDirection === "up" && "text-emerald-600",
+                                    r.impactTrendDirection === "flat" && "text-muted-foreground/60",
+                                  )}
+                                >
+                                  {r.impactTrend >= 0 ? "+" : ""}
+                                  {Math.round(r.impactTrend * 100)}%
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">
+                              company pct: {fmtPercentile(r.impactCompanyPercentile)}
+                            </span>
                           </div>
-                          <span className="text-[10px] text-muted-foreground">
-                            company pct: {fmtPercentile(r.impactCompanyPercentile)}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground/40">
-                          {r.isEngineer ? "—" : "not eng"}
-                        </span>
-                      )}
-                    </td>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/40">—</span>
+                        )}
+                      </td>
+                    )}
                     {/* Alerts */}
                     <td className="px-3 py-3">
                       {hasAlerts ? (

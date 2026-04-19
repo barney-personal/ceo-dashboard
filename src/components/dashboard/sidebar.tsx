@@ -126,7 +126,7 @@ const NAV_GROUPS: NavGroup[] = [
       {
         label: "Slack",
         href: "/dashboard/slack",
-        requiredRole: "ceo",
+        requiredRole: "leadership",
         icon: MessageSquare,
       },
       {

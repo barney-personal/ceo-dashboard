@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
@@ -7,6 +6,7 @@ import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { TeamPerformanceTable } from "@/components/dashboard/team-performance-table";
+import { ManagerPicker } from "@/components/dashboard/manager-picker";
 import {
   getAllManagers,
   getDirectReports,
@@ -106,16 +106,21 @@ export default async function ManagersPage({
 
       {canPickAnyManager && allManagers.length > 0 && (
         <div className="flex items-center gap-2">
-          <label htmlFor="mgr-picker" className="text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/70">
+          <label className="text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/70">
             Viewing
           </label>
           <ManagerPicker
             current={targetEmail}
             managers={allManagers.map((m) => ({
               email: m.email,
-              label: `${m.name} · ${m.directReports.length} reports`,
+              name: m.name,
+              directReports: m.directReports.length,
+              jobTitle: m.jobTitle,
             }))}
           />
+          <span className="text-[11px] text-muted-foreground">
+            {allManagers.length} managers
+          </span>
         </div>
       )}
 
@@ -214,33 +219,3 @@ function StatTile({
   );
 }
 
-function ManagerPicker({
-  current,
-  managers,
-}: {
-  current: string;
-  managers: { email: string; label: string }[];
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {managers.slice(0, 12).map((m) => (
-        <Link
-          key={m.email}
-          href={`/dashboard/managers?manager=${encodeURIComponent(m.email)}`}
-          className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
-            m.email === current
-              ? "border-primary/40 bg-primary/10 text-primary"
-              : "border-border/50 bg-card text-muted-foreground hover:border-border hover:text-foreground"
-          }`}
-        >
-          {m.label}
-        </Link>
-      ))}
-      {managers.length > 12 && (
-        <span className="px-2 py-1 text-[11px] text-muted-foreground/60">
-          + {managers.length - 12} more
-        </span>
-      )}
-    </div>
-  );
-}

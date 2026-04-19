@@ -1,6 +1,11 @@
-import { sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { githubEmployeeMap, githubPrs } from "@/lib/db/schema";
+import {
+  githubEmployeeMap,
+  githubPrs,
+  modeReportData,
+  modeReports,
+} from "@/lib/db/schema";
 import {
   getLatestSlackMembersSnapshot,
   type SlackMemberRow,
@@ -82,6 +87,41 @@ const IMPACT_TREND_RED_THRESHOLD = -0.25;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * Set of employee emails whose SSoT `hb_function` is "Engineering". Used to
+ * scope the impact-score cohort to real engineers — execs and VPs who push
+ * the occasional PR (Chris Hamblin, Sam Taylor) would otherwise skew the
+ * ranking and appear with impact scores on team views where the signal
+ * isn't meaningful.
+ */
+async function loadEngineerEmails(): Promise<Set<string>> {
+  try {
+    const [ssotRow] = await db
+      .select({ data: modeReportData.data })
+      .from(modeReportData)
+      .innerJoin(modeReports, eq(modeReports.id, modeReportData.reportId))
+      .where(
+        and(
+          eq(modeReports.name, "Headcount SSoT Dashboard"),
+          eq(modeReportData.queryName, "headcount"),
+        ),
+      )
+      .orderBy(desc(modeReportData.syncedAt))
+      .limit(1);
+    const rows = (ssotRow?.data ?? []) as Array<Record<string, unknown>>;
+    const out = new Set<string>();
+    for (const r of rows) {
+      if (r.termination_date) continue;
+      if ((r.hb_function as string) !== "Engineering") continue;
+      const email = String(r.email ?? "").toLowerCase().trim();
+      if (email) out.add(email);
+    }
+    return out;
+  } catch {
+    return new Set();
+  }
+}
+
 function percentileOf(value: number, allSorted: number[]): number | null {
   if (allSorted.length === 0) return null;
   // lower bound (first index >= value)
@@ -137,9 +177,10 @@ export async function getTeamPerformance(
   }));
   const reportEmails = new Set(lowerReports.map((r) => r.email));
 
-  const [slackSnap, perfData] = await Promise.all([
+  const [slackSnap, perfData, engineerEmails] = await Promise.all([
     getLatestSlackMembersSnapshot(),
     getPerformanceData().catch(() => null),
+    loadEngineerEmails(),
   ]);
 
   // Map all slack rows by email for percentile cohort computations
@@ -258,14 +299,18 @@ export async function getTeamPerformance(
   const impactByEmail = new Map<string, ImpactRow>();
   const allImpact: number[] = [];
   for (const r of impactRows) {
+    const email = r.email ? r.email.toLowerCase() : null;
+    // Only count real engineers in the cohort + the per-person lookup. Execs
+    // who push the occasional PR aren't the population we're comparing against.
+    if (!email || !engineerEmails.has(email)) continue;
     const row: ImpactRow = {
-      email: r.email ? r.email.toLowerCase() : null,
+      email,
       login: r.login,
       total: Number(r.total_impact) || 0,
       recent: Number(r.recent_impact) || 0,
       prior: Number(r.prior_impact) || 0,
     };
-    if (row.email) impactByEmail.set(row.email, row);
+    impactByEmail.set(email, row);
     if (row.total > 0) allImpact.push(row.total);
   }
   allImpact.sort((a, b) => a - b);
