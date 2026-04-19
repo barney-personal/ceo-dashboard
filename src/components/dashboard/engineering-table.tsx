@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
@@ -12,6 +12,7 @@ import {
   type EngineeringFilterState,
 } from "./engineering-filters";
 import { MetricInfoTooltip } from "./metric-info-tooltip";
+import { computeImpact } from "@/lib/data/engineering-metrics";
 
 interface EngineerRow {
   login: string;
@@ -30,9 +31,18 @@ interface EngineerRow {
   squad: string | null;
   pillar: string | null;
   tenureMonths: number | null;
+  tenureDays: number | null;
+  silent: boolean;
 }
 
-type SortKey = "outputScore" | "prsCount" | "commitsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
+type SortKey =
+  | "outputScore"
+  | "prsCount"
+  | "commitsCount"
+  | "additions"
+  | "deletions"
+  | "netLines"
+  | "changedFiles";
 
 const COLUMNS: {
   key: SortKey;
@@ -56,7 +66,10 @@ const COLUMNS: {
         </p>
         <p>
           Log-scaling prevents one huge PR from dominating a steady stream of
-          smaller changes, so both breadth and depth count.
+          smaller changes, so both breadth and depth count. Engineers who
+          joined after the start of the period are hidden from the ranking so
+          newer hires aren&apos;t penalised for tenure — use the &ldquo;+N new
+          hires&rdquo; link to see them.
         </p>
       </>
     ),
@@ -80,21 +93,64 @@ function formatTenure(months: number): string {
 export function EngineeringTable({
   data,
   hideBots = true,
+  periodDays = 30,
 }: {
   data: EngineerRow[];
   hideBots?: boolean;
+  /** The time-window the upstream query selected PRs for. Engineers whose
+   *  tenure is shorter than this are hidden by default so partial-window
+   *  output doesn't get ranked against full-window output. */
+  periodDays?: number;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("outputScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filters, setFilters] = useState<EngineeringFilterState>(EMPTY_FILTERS);
+  const [includeNewHires, setIncludeNewHires] = useState(false);
+  const [includeSilent, setIncludeSilent] = useState(false);
 
   const humans = useMemo(
     () => (hideBots ? data.filter((r) => !r.isBot) : data),
     [data, hideBots]
   );
 
-  const filtered = useMemo(() => {
+  // Engineers whose tenure is strictly shorter than the analysis window —
+  // they couldn't have been shipping PRs for the whole period, so ranking
+  // them against veterans is apples-to-oranges.
+  const isNewHireRow = useCallback(
+    (r: EngineerRow) => r.tenureDays != null && r.tenureDays < periodDays,
+    [periodDays]
+  );
+  const newHires = useMemo(
+    () => humans.filter(isNewHireRow),
+    [humans, isNewHireRow]
+  );
+
+  // Engineers on the active headcount who merged nothing in the window.
+  // Count excludes rows already hidden by the new-hires filter so the chip
+  // count matches the number of rows that actually appear on toggle.
+  const silent = useMemo(
+    () =>
+      humans.filter(
+        (r) => r.silent && (includeNewHires || !isNewHireRow(r))
+      ),
+    [humans, includeNewHires, isNewHireRow]
+  );
+
+  const ranked = useMemo(() => {
     let result = humans;
+    if (!includeNewHires) {
+      result = result.filter(
+        (r) => r.tenureDays == null || r.tenureDays >= periodDays
+      );
+    }
+    if (!includeSilent) {
+      result = result.filter((r) => !r.silent);
+    }
+    return result;
+  }, [humans, includeNewHires, includeSilent, periodDays]);
+
+  const filtered = useMemo(() => {
+    let result = ranked;
 
     if (filters.roles.size > 0) {
       result = result.filter((r) => matchesRole(r.jobTitle, filters.roles));
@@ -113,17 +169,12 @@ export function EngineeringTable({
       );
     }
 
-    return result.map((r) => ({
-      ...r,
-      outputScore:
-        r.prsCount > 0
-          ? Math.round(
-              r.prsCount *
-                Math.log2(1 + (r.additions + r.deletions) / r.prsCount)
-            )
-          : 0,
-    }));
-  }, [humans, filters]);
+    return result.map((r) => {
+      const outputScore = computeImpact(r.prsCount, r.additions, r.deletions);
+      const isNewHire = r.tenureDays != null && r.tenureDays < periodDays;
+      return { ...r, outputScore, isNewHire };
+    });
+  }, [ranked, filters, periodDays]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -143,7 +194,7 @@ export function EngineeringTable({
     [filtered, sortKey, sortDir]
   );
 
-  const isFiltered = filtered.length !== humans.length;
+  const isUserFiltered = filtered.length !== ranked.length;
 
   if (humans.length === 0) {
     return (
@@ -164,11 +215,35 @@ export function EngineeringTable({
           filters={filters}
           onFiltersChange={setFilters}
         />
-        {isFiltered && (
-          <span className="text-xs text-muted-foreground">
-            Showing {filtered.length} of {humans.length} engineers
-          </span>
-        )}
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {newHires.length > 0 && (
+            <button
+              onClick={() => setIncludeNewHires((v) => !v)}
+              className="rounded-md px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={`${newHires.length} engineers joined less than ${periodDays} days ago and are hidden by default so partial-window output isn't ranked against full-window output.`}
+            >
+              {includeNewHires
+                ? `Hide ${newHires.length} new hires`
+                : `+${newHires.length} new hires hidden`}
+            </button>
+          )}
+          {silent.length > 0 && (
+            <button
+              onClick={() => setIncludeSilent((v) => !v)}
+              className="rounded-md px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+              title={`${silent.length} active engineers merged no PRs in the last ${periodDays} days. Hidden by default to keep the ranking readable.`}
+            >
+              {includeSilent
+                ? `Hide ${silent.length} with no PRs`
+                : `+${silent.length} shipped nothing`}
+            </button>
+          )}
+          {isUserFiltered && (
+            <span>
+              Showing {filtered.length} of {ranked.length} engineers
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
@@ -266,6 +341,14 @@ export function EngineeringTable({
                                 {formatTenure(row.tenureMonths)}
                               </span>
                             )}
+                            {row.isNewHire && (
+                              <span
+                                className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium text-amber-700"
+                                title={`Joined within the last ${periodDays} days — output covers only part of the window`}
+                              >
+                                New
+                              </span>
+                            )}
                           </div>
                           <span className="text-[11px] text-muted-foreground group-hover:text-primary transition-colors">
                             @{row.login}
@@ -287,7 +370,8 @@ export function EngineeringTable({
                           col.key === "netLines" &&
                             row.netLines < 0 &&
                             "text-negative",
-                          col.key === "deletions" && "text-negative/70"
+                          col.key === "deletions" && "text-negative/70",
+                          row.isNewHire && "text-muted-foreground/70 italic"
                         )}
                       >
                         {col.format(row[col.key])}

@@ -31,6 +31,9 @@ node_modules/
 # === Claude Code worktrees ===
 .claude/worktrees/
 
+# Local preview-server launch config (per-developer port + command)
+.claude/launch.json
+
 # === OS junk ===
 .DS_Store
 Thumbs.db
