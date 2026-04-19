@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { syncLog } from "@/lib/db/schema";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import {
+  authorizeSyncRequest,
+  syncRequestAccessErrorResponse,
+} from "@/lib/sync/request-auth";
 import {
   importSnapshot,
   SlackCsvError,
@@ -13,10 +15,12 @@ import {
 const MAX_BYTES = 5 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const access = await authorizeSyncRequest(request);
+  const accessError = syncRequestAccessErrorResponse(access);
+  if (accessError) {
+    return accessError;
   }
+  const trigger = access === "cron" ? "cron" : "manual";
 
   let form: FormData;
   try {
@@ -54,7 +58,7 @@ export async function POST(request: NextRequest) {
     .insert(syncLog)
     .values({
       source: "slack-members",
-      trigger: "manual",
+      trigger,
       status: "running",
     })
     .returning({ id: syncLog.id });

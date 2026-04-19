@@ -167,9 +167,13 @@ function parseInteger(value: string): number {
 }
 
 /**
- * Parse + import a CSV file. Idempotent: reruns skip duplicate rows based on
- * the (windowStart, windowEnd, slackUserId) unique constraint. After insert,
- * runs reconciliation so new members land in slack_employee_map.
+ * Parse + import a CSV file. Upserts on the (windowStart, windowEnd,
+ * slackUserId) unique key so a corrected re-export of the same window
+ * overwrites the stored metrics rather than being silently dropped.
+ * Idempotent in the "same input → same final state" sense.
+ *
+ * After insert, runs reconciliation so new members land in
+ * slack_employee_map.
  */
 export async function importSnapshot(input: {
   csvText: string;
