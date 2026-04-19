@@ -27,6 +27,7 @@ interface EngineerRow {
   squad: string | null;
   pillar: string | null;
   tenureMonths: number | null;
+  tenureDays: number | null;
 }
 
 interface SquadRow {
@@ -100,10 +101,12 @@ export function EngineeringSquadView({
   data,
   groupBy = "squad",
   swarmiaMetrics,
+  periodDays = 30,
 }: {
   data: EngineerRow[];
   groupBy?: "squad" | "pillar";
   swarmiaMetrics?: SquadPillarLookup;
+  periodDays?: number;
 }) {
   const groupLabel = groupBy === "pillar" ? "Pillar" : "Squad";
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
@@ -221,7 +224,7 @@ export function EngineeringSquadView({
         <h3 className="text-lg font-semibold font-serif text-foreground">
           {selectedGroup}
         </h3>
-        <EngineeringTable data={groupData} />
+        <EngineeringTable data={groupData} periodDays={periodDays} />
       </div>
     );
   }

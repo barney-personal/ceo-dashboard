@@ -12,6 +12,12 @@ import {
   type EngineeringFilterState,
 } from "./engineering-filters";
 import { MetricInfoTooltip } from "./metric-info-tooltip";
+import {
+  computeImpact,
+  computeImpactRate,
+  MIN_ACTIVE_DAYS,
+  RAMPING_DAYS,
+} from "@/lib/data/engineering-metrics";
 
 interface EngineerRow {
   login: string;
@@ -30,9 +36,19 @@ interface EngineerRow {
   squad: string | null;
   pillar: string | null;
   tenureMonths: number | null;
+  tenureDays: number | null;
 }
 
-type SortKey = "outputScore" | "prsCount" | "commitsCount" | "additions" | "deletions" | "netLines" | "changedFiles";
+type SortKey =
+  | "impactPer30d"
+  | "outputScore"
+  | "prsCount"
+  | "commitsCount"
+  | "additions"
+  | "deletions"
+  | "netLines"
+  | "changedFiles";
+
 
 const COLUMNS: {
   key: SortKey;
@@ -42,21 +58,47 @@ const COLUMNS: {
   info?: React.ReactNode;
 }[] = [
   {
-    key: "outputScore",
-    label: "Impact",
+    key: "impactPer30d",
+    label: "Impact / 30d",
     format: (v) => v.toLocaleString(),
     info: (
       <>
         <p>
-          Combines how much someone ships (PR count) with how meaningful each
-          change is (lines per PR).
+          Impact normalised to a 30-day rate over time actually spent at Cleo.
+          This is the fair rank when comparing a new hire to a long-tenured
+          engineer — a 10-day employee is measured over 10 days, not the full
+          period.
+        </p>
+        <p className="font-mono text-[11px] text-foreground/80">
+          Impact × 30 / min(period, tenure)
+        </p>
+        <p>
+          Uses a {MIN_ACTIVE_DAYS}-day floor so very short tenures don&apos;t
+          blow up the rate. Engineers under {RAMPING_DAYS} days are flagged
+          &ldquo;New&rdquo; and sorted last by default — too little signal to
+          rank confidently.
+        </p>
+      </>
+    ),
+  },
+  {
+    key: "outputScore",
+    label: "Impact (raw)",
+    format: (v) => v.toLocaleString(),
+    info: (
+      <>
+        <p>
+          Raw impact over the selected period — not adjusted for how long
+          someone has been here. Combines how much someone ships (PR count)
+          with how meaningful each change is (lines per PR).
         </p>
         <p className="font-mono text-[11px] text-foreground/80">
           PRs × log₂(1 + lines / PR)
         </p>
         <p>
           Log-scaling prevents one huge PR from dominating a steady stream of
-          smaller changes, so both breadth and depth count.
+          smaller changes. Prefer the normalised &ldquo;Impact / 30d&rdquo;
+          column for fair ranking across tenures.
         </p>
       </>
     ),
@@ -80,11 +122,15 @@ function formatTenure(months: number): string {
 export function EngineeringTable({
   data,
   hideBots = true,
+  periodDays = 30,
 }: {
   data: EngineerRow[];
   hideBots?: boolean;
+  /** The time-window the upstream query selected PRs for. Used to clamp the
+   *  rate denominator when an engineer's tenure is shorter than the window. */
+  periodDays?: number;
 }) {
-  const [sortKey, setSortKey] = useState<SortKey>("outputScore");
+  const [sortKey, setSortKey] = useState<SortKey>("impactPer30d");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filters, setFilters] = useState<EngineeringFilterState>(EMPTY_FILTERS);
 
@@ -113,17 +159,12 @@ export function EngineeringTable({
       );
     }
 
-    return result.map((r) => ({
-      ...r,
-      outputScore:
-        r.prsCount > 0
-          ? Math.round(
-              r.prsCount *
-                Math.log2(1 + (r.additions + r.deletions) / r.prsCount)
-            )
-          : 0,
-    }));
-  }, [humans, filters]);
+    return result.map((r) => {
+      const outputScore = computeImpact(r.prsCount, r.additions, r.deletions);
+      const rate = computeImpactRate(outputScore, r.tenureDays, periodDays);
+      return { ...r, outputScore, ...rate };
+    });
+  }, [humans, filters, periodDays]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -137,6 +178,12 @@ export function EngineeringTable({
   const sorted = useMemo(
     () =>
       [...filtered].sort((a, b) => {
+        // When sorting by the tenure-normalised rate, demote ramping
+        // engineers to the bottom regardless of direction — their rate
+        // is a high-variance extrapolation from too-few data points.
+        if (sortKey === "impactPer30d" && a.isRamping !== b.isRamping) {
+          return a.isRamping ? 1 : -1;
+        }
         const diff = a[sortKey] - b[sortKey];
         return sortDir === "desc" ? -diff : diff;
       }),
@@ -266,6 +313,14 @@ export function EngineeringTable({
                                 {formatTenure(row.tenureMonths)}
                               </span>
                             )}
+                            {row.isRamping && (
+                              <span
+                                className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-medium text-amber-700"
+                                title={`Less than ${RAMPING_DAYS} days at Cleo — tenure-normalised rate is directional only`}
+                              >
+                                New
+                              </span>
+                            )}
                           </div>
                           <span className="text-[11px] text-muted-foreground group-hover:text-primary transition-colors">
                             @{row.login}
@@ -287,8 +342,16 @@ export function EngineeringTable({
                           col.key === "netLines" &&
                             row.netLines < 0 &&
                             "text-negative",
-                          col.key === "deletions" && "text-negative/70"
+                          col.key === "deletions" && "text-negative/70",
+                          col.key === "impactPer30d" &&
+                            row.isRamping &&
+                            "text-muted-foreground/60 italic"
                         )}
+                        title={
+                          col.key === "impactPer30d"
+                            ? `Normalised over ${row.activeDays} active days`
+                            : undefined
+                        }
                       >
                         {col.format(row[col.key])}
                       </td>

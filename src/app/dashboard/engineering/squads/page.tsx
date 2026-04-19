@@ -33,6 +33,7 @@ export default async function EngineeringSquadsPage({
         data={rankings}
         groupBy="squad"
         swarmiaMetrics={swarmiaMetrics.data ?? undefined}
+        periodDays={periodDays}
       />
     </div>
   );

@@ -22,6 +22,9 @@ export interface EngineerRanking {
   squad: string | null;
   pillar: string | null;
   tenureMonths: number | null;
+  startDate: string | null;
+  /** Whole days between `startDate` and now. Null when startDate is unknown. */
+  tenureDays: number | null;
 }
 
 export const PERIOD_OPTIONS = [
@@ -32,6 +35,13 @@ export const PERIOD_OPTIONS = [
 ] as const;
 
 export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["value"];
+
+export {
+  RAMPING_DAYS,
+  MIN_ACTIVE_DAYS,
+  computeImpact,
+  computeImpactRate,
+} from "./engineering-metrics";
 
 export async function getEngineeringRankings(
   days: PeriodDays = 30
@@ -93,10 +103,18 @@ export async function getEngineeringRankings(
     buildEmployeeLookup(),
   ]);
 
+  const nowMs = Date.now();
   return rows.map((row) => {
     const person = row.employeeEmail
       ? employeeLookup.get(row.employeeEmail.toLowerCase())
       : undefined;
+    const startDate = person?.startDate ?? null;
+    const tenureDays = startDate
+      ? Math.max(
+          0,
+          Math.floor((nowMs - new Date(startDate).getTime()) / 86_400_000)
+        )
+      : null;
     return {
       login: row.login,
       avatarUrl: row.avatarUrl,
@@ -115,6 +133,8 @@ export async function getEngineeringRankings(
       squad: person?.squad ?? null,
       pillar: person?.pillar ?? null,
       tenureMonths: person?.tenureMonths ?? null,
+      startDate,
+      tenureDays,
     };
   });
   });
