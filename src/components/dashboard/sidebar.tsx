@@ -136,6 +136,12 @@ const NAV_GROUPS: NavGroup[] = [
         icon: Heart,
       },
       {
+        label: "Happiness",
+        href: "/dashboard/admin/enps",
+        requiredRole: "ceo",
+        icon: Heart,
+      },
+      {
         label: "Attrition",
         href: "/dashboard/people/attrition",
         requiredRole: "leadership",

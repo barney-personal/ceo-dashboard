@@ -440,3 +440,42 @@ export const probeIncidents = pgTable(
   ]
 );
 
+// ---------------------------------------------------------------------------
+// Employee NPS (eNPS) — monthly full-screen takeover for happiness pulse
+// ---------------------------------------------------------------------------
+
+export const enpsResponses = pgTable(
+  "enps_responses",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    month: text("month").notNull(), // "YYYY-MM"
+    score: integer("score").notNull(), // 0-10
+    reason: text("reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // One submission per user per month
+    unique("enps_responses_user_month_uniq").on(table.clerkUserId, table.month),
+    index("enps_responses_month_idx").on(table.month),
+    index("enps_responses_created_idx").on(table.createdAt),
+  ]
+);
+
+export const enpsPrompts = pgTable(
+  "enps_prompts",
+  {
+    id: serial("id").primaryKey(),
+    clerkUserId: text("clerk_user_id").notNull(),
+    month: text("month").notNull(), // "YYYY-MM"
+    skipCount: integer("skip_count").notNull().default(0),
+    lastShownAt: timestamp("last_shown_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("enps_prompts_user_month_uniq").on(table.clerkUserId, table.month),
+  ]
+);
+
