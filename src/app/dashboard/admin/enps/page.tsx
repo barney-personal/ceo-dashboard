@@ -38,22 +38,27 @@ export default async function EnpsAdminPage() {
 
   // Resolve each respondent's Clerk user → SSoT employee so we can link each
   // card to the person profile and show their title + department inline.
+  // Clerk's `getUserList` caps `userId` at 100 entries per request, so batch.
   const uniqueClerkIds = [...new Set(monthResponses.map((r) => r.clerkUserId))];
   const employeeByClerkId = new Map<string, EmployeeSummary>();
   if (uniqueClerkIds.length > 0) {
     const client = await clerkClient();
-    const { data: users } = await client.users.getUserList({
-      userId: uniqueClerkIds,
-      limit: uniqueClerkIds.length,
-    });
+    const CLERK_USER_ID_BATCH = 100;
     const clerkIdToEmails = new Map<string, string[]>();
     const allEmails: string[] = [];
-    for (const u of users) {
-      const emails = (u.emailAddresses ?? []).map((e) =>
-        e.emailAddress.toLowerCase(),
-      );
-      clerkIdToEmails.set(u.id, emails);
-      allEmails.push(...emails);
+    for (let i = 0; i < uniqueClerkIds.length; i += CLERK_USER_ID_BATCH) {
+      const batch = uniqueClerkIds.slice(i, i + CLERK_USER_ID_BATCH);
+      const { data: users } = await client.users.getUserList({
+        userId: batch,
+        limit: batch.length,
+      });
+      for (const u of users) {
+        const emails = (u.emailAddresses ?? []).map((e) =>
+          e.emailAddress.toLowerCase(),
+        );
+        clerkIdToEmails.set(u.id, emails);
+        allEmails.push(...emails);
+      }
     }
     const summaries = await getEmployeeSummariesByEmail(allEmails);
     for (const [clerkId, emails] of clerkIdToEmails) {

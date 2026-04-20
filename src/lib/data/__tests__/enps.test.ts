@@ -56,6 +56,7 @@ import {
   getEnpsMonthlyTrend,
   getEnpsReasonExcerpts,
   getEnpsResponseRate,
+  getEnpsResponsesForMonth,
   recordEnpsPromptShown,
   shouldShowEnpsPrompt,
   submitEnpsResponse,
@@ -293,6 +294,47 @@ describe("getEnpsReasonExcerpts", () => {
     expect(rows[0].reason).toBe("Love the new dashboards");
     expect(rows[0].score).toBe(8);
     expect(rows[0].createdAt).toBe("2026-04-19T10:00:00.000Z");
+  });
+});
+
+describe("getEnpsResponsesForMonth", () => {
+  it("returns an empty list when the month has no responses", async () => {
+    mockSelect.mockImplementation(() => buildSelectChain([]));
+    const rows = await getEnpsResponsesForMonth("2026-04");
+    expect(rows).toEqual([]);
+  });
+
+  it("preserves null reasons and serialises createdAt to ISO", async () => {
+    mockSelect.mockImplementation(() =>
+      buildSelectChain([
+        {
+          id: 1,
+          clerkUserId: "user_silent",
+          score: 3,
+          reason: null,
+          createdAt: new Date("2026-04-19T10:00:00Z"),
+        },
+        {
+          id: 2,
+          clerkUserId: "user_chatty",
+          score: 9,
+          reason: "great team",
+          createdAt: new Date("2026-04-18T09:00:00Z"),
+        },
+      ])
+    );
+
+    const rows = await getEnpsResponsesForMonth("2026-04");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toEqual({
+      id: 1,
+      clerkUserId: "user_silent",
+      score: 3,
+      reason: null,
+      createdAt: "2026-04-19T10:00:00.000Z",
+    });
+    expect(rows[1].reason).toBe("great team");
+    expect(rows[1].createdAt).toBe("2026-04-18T09:00:00.000Z");
   });
 });
 
