@@ -279,6 +279,7 @@ describe("getEnpsReasonExcerpts", () => {
       buildSelectChain([
         {
           id: 7,
+          clerkUserId: "user_abc",
           month: "2026-04",
           score: 8,
           reason: "Love the new dashboards",
@@ -288,6 +289,7 @@ describe("getEnpsReasonExcerpts", () => {
     );
     const rows = await getEnpsReasonExcerpts();
     expect(rows).toHaveLength(1);
+    expect(rows[0].clerkUserId).toBe("user_abc");
     expect(rows[0].reason).toBe("Love the new dashboards");
     expect(rows[0].score).toBe(8);
     expect(rows[0].createdAt).toBe("2026-04-19T10:00:00.000Z");

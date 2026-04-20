@@ -180,9 +180,18 @@ export interface EnpsDistributionBucket {
 
 export interface EnpsReasonExcerpt {
   id: number;
+  clerkUserId: string;
   month: string;
   score: number;
   reason: string;
+  createdAt: string;
+}
+
+export interface EnpsMonthlyResponse {
+  id: number;
+  clerkUserId: string;
+  score: number;
+  reason: string | null;
   createdAt: string;
 }
 
@@ -319,6 +328,7 @@ export async function getEnpsReasonExcerpts(
       const rows = await db
         .select({
           id: enpsResponses.id,
+          clerkUserId: enpsResponses.clerkUserId,
           month: enpsResponses.month,
           score: enpsResponses.score,
           reason: enpsResponses.reason,
@@ -333,9 +343,41 @@ export async function getEnpsReasonExcerpts(
 
       return rows.map((r) => ({
         id: r.id,
+        clerkUserId: r.clerkUserId,
         month: r.month,
         score: r.score,
         reason: r.reason ?? "",
+        createdAt: r.createdAt.toISOString(),
+      }));
+    },
+    []
+  );
+}
+
+/** All responses (score + optional reason) for a given month, newest first. */
+export async function getEnpsResponsesForMonth(
+  month: string
+): Promise<EnpsMonthlyResponse[]> {
+  return safeQuery(
+    "getEnpsResponsesForMonth",
+    async () => {
+      const rows = await db
+        .select({
+          id: enpsResponses.id,
+          clerkUserId: enpsResponses.clerkUserId,
+          score: enpsResponses.score,
+          reason: enpsResponses.reason,
+          createdAt: enpsResponses.createdAt,
+        })
+        .from(enpsResponses)
+        .where(eq(enpsResponses.month, month))
+        .orderBy(desc(enpsResponses.createdAt));
+
+      return rows.map((r) => ({
+        id: r.id,
+        clerkUserId: r.clerkUserId,
+        score: r.score,
+        reason: r.reason,
         createdAt: r.createdAt.toISOString(),
       }));
     },

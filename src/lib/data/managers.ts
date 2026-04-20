@@ -144,6 +144,49 @@ export async function getDirectReports(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export interface EmployeeSummary {
+  email: string;
+  slug: string;
+  name: string;
+  jobTitle: string | null;
+  function: string | null;
+}
+
+/**
+ * Resolve a batch of employee emails against the Headcount SSoT snapshot and
+ * return a map keyed by lowercased email → summary. Unknown emails are omitted.
+ * Uses the cached active-employees load so repeated lookups in the same render
+ * don't re-query Mode data.
+ */
+export async function getEmployeeSummariesByEmail(
+  emails: Array<string | null | undefined>,
+): Promise<Map<string, EmployeeSummary>> {
+  const wanted = new Set(
+    emails
+      .map((e) => (e ? e.toLowerCase().trim() : ""))
+      .filter((e) => e.length > 0),
+  );
+  if (wanted.size === 0) return new Map();
+
+  const active = await loadActiveEmployees();
+  const out = new Map<string, EmployeeSummary>();
+  for (const r of active) {
+    const email = String(r.email ?? "").toLowerCase();
+    if (!wanted.has(email)) continue;
+    out.set(email, {
+      email,
+      slug: email.split("@")[0] ?? email,
+      name:
+        (r.preferred_name as string) ??
+        (r.rp_full_name as string) ??
+        email,
+      jobTitle: (r.job_title as string) ?? null,
+      function: (r.hb_function as string) ?? null,
+    });
+  }
+  return out;
+}
+
 /** All managers (>= MIN_DIRECT_REPORTS_FOR_MANAGER_ROLE reports), for picker UIs. */
 export async function getAllManagers(): Promise<ManagerInfo[]> {
   const [active, counts] = await Promise.all([
