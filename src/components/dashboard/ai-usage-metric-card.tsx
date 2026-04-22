@@ -8,6 +8,12 @@ interface AiUsageMetricCardProps {
   subtitle?: string;
   /** Percentage change vs prior window. Null hides the badge. */
   deltaPct: number | null;
+  /**
+   * When true, an increase is rendered as good (green) and a decrease as bad
+   * (amber). Defaults to false because most cards on this page show cost,
+   * where going up is bad.
+   */
+  higherIsBetter?: boolean;
   modeUrl?: string;
   /** Recent window sparkline. Skipped if < 2 points. */
   sparkline?: number[];
@@ -28,6 +34,7 @@ export function AiUsageMetricCard({
   value,
   subtitle,
   deltaPct,
+  higherIsBetter = false,
   modeUrl,
   sparkline,
   sparklineColor = "#4f46e5",
@@ -43,12 +50,18 @@ export function AiUsageMetricCard({
           : "down";
   const DeltaIcon =
     deltaTone === "up" ? TrendingUp : deltaTone === "down" ? TrendingDown : Minus;
+  const goodColor = "text-positive";
+  const badColor = "text-amber-700";
   const deltaColor =
-    deltaTone === "up"
-      ? "text-amber-700"
-      : deltaTone === "down"
-        ? "text-positive"
-        : "text-muted-foreground/70";
+    deltaTone === "flat"
+      ? "text-muted-foreground/70"
+      : deltaTone === "up"
+        ? higherIsBetter
+          ? goodColor
+          : badColor
+        : higherIsBetter
+          ? badColor
+          : goodColor;
 
   const showSpark =
     Array.isArray(sparkline) &&

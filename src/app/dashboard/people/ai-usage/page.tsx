@@ -198,6 +198,7 @@ export default async function PeopleAiUsagePage() {
           label="Active users (this month)"
           value={totals.latestMonthUsers.toString()}
           deltaPct={userDelta}
+          higherIsBetter
           subtitle={
             totals.priorMonthUsers > 0
               ? `${totals.priorMonthUsers} last month`
