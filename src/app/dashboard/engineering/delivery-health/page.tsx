@@ -109,6 +109,10 @@ export default async function EngineeringDeliveryHealthPage() {
               color: s.cycleTimeHours > 72 ? "#c44" : "#3b3bba",
             }))}
             leftMargin={180}
+            xAxisLabel="Hours (PR open → merge)"
+            formatTooltipValue={(value) =>
+              `${value.toLocaleString()} hours from PR open to merge`
+            }
           />
         ) : (
           <SectionEmpty
