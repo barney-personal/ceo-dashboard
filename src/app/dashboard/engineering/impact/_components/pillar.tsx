@@ -6,7 +6,6 @@ import { scaleLinear, scaleBand } from "d3-scale";
 import { axisBottom, axisLeft } from "d3-axis";
 import { line as d3Line, curveMonotoneX } from "d3-shape";
 import { group as d3Group, rollup as d3Rollup, max as d3Max } from "d3-array";
-import { randomUniform } from "d3-random";
 import type {
   ImpactEngineer,
   ImpactTenureBucket,
@@ -156,7 +155,11 @@ export function PillarBoxes({
         .attr("stroke", color)
         .attr("stroke-width", 2);
 
-      const jitter = randomUniform(-7, 7);
+      // Visual-only jitter so overlapping dots resolve. Math.random()
+      // is fine here — d3-random's `randomUniform` was overkill for a
+      // one-line uniform draw and avoiding the import keeps the chart
+      // self-contained.
+      const jitter = () => (Math.random() - 0.5) * 14;
       g.append("g")
         .selectAll("circle")
         .data(grp.items)

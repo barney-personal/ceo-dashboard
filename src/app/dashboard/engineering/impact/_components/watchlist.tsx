@@ -483,6 +483,7 @@ const COLS: {
   { key: "peerRatio90d", label: "% of peer", sort: "num", num: true },
   { key: "impact30d", label: "Impact 30d", sort: "num", num: true },
   { key: "trajectoryRatio", label: "Traj.", sort: "num", num: true },
+  { key: "aiSpend", label: "AI $/mo", sort: "num", num: true },
   { key: "flags", label: "Flags", sort: "none" },
 ];
 
@@ -501,6 +502,19 @@ export function WatchlistTable({
         s.declining,
     );
   }, [engineers]);
+
+  // When NO engineer on the page has any AI spend recorded (Mode outage,
+  // or the report hasn't been synced yet) we hide both the AI column and
+  // the "try AI?" pill — otherwise every row gets the pill, including
+  // engineers who are heavy AI users whose data is just missing.
+  const hasAnyAiData = useMemo(
+    () => engineers.some((e) => e.aiSpend != null),
+    [engineers],
+  );
+  const visibleCols = useMemo(
+    () => (hasAnyAiData ? COLS : COLS.filter((c) => c.key !== "aiSpend")),
+    [hasAnyAiData],
+  );
 
   const [sortKey, setSortKey] = useState<string>("peerRatio90d");
   const [sortAsc, setSortAsc] = useState(true);
@@ -548,7 +562,7 @@ export function WatchlistTable({
           <table className="w-full text-[13px]">
             <thead>
               <tr>
-                {COLS.map((c) => (
+                {visibleCols.map((c) => (
                   <th
                     key={c.key}
                     onClick={() => setSort(c.key)}
@@ -623,6 +637,17 @@ export function WatchlistTable({
                       ? r.trajectoryRatio.toFixed(2)
                       : "—"}
                   </td>
+                  {hasAnyAiData && (
+                    <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
+                      {r.aiSpend == null
+                        ? "—"
+                        : r.aiSpend === 0
+                          ? "$0"
+                          : r.aiSpend >= 100
+                            ? `$${Math.round(r.aiSpend)}`
+                            : `$${r.aiSpend.toFixed(0)}`}
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-xs">
                     {r.severity === "severe" && (
                       <span className="mr-1 rounded-full bg-negative/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-negative">
@@ -635,8 +660,22 @@ export function WatchlistTable({
                       </span>
                     )}
                     {r.declining && (
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-primary">
+                      <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-primary">
                         declining
+                      </span>
+                    )}
+                    {/* AI coaching hint: matched in the AI dataset but
+                        spent $0 last month. Strictly r.aiSpend === 0,
+                        NOT null — null means the engineer's email
+                        hasn't been matched in Mode yet (or Mode is
+                        unreachable), and showing the pill in that case
+                        flags heavy AI users as non-adopters. */}
+                    {hasAnyAiData && r.aiSpend === 0 && (
+                      <span
+                        className="rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-medium text-primary/80"
+                        title="$0 AI usage recorded for the latest month — consider an onboarding chat about Claude Code / Cursor"
+                      >
+                        try AI?
                       </span>
                     )}
                   </td>
