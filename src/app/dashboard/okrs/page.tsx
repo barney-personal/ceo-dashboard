@@ -12,6 +12,11 @@ import {
 } from "@/lib/data/okrs";
 import { getLatestTerminalSyncRun } from "@/lib/data/mode";
 import { getModeOkrs } from "@/lib/data/okr-mode";
+import {
+  hasCurrentValue,
+  needsAttention,
+  progressTowardTarget,
+} from "@/lib/data/okr-mode-shared";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
@@ -95,6 +100,24 @@ export default async function OKRsPage() {
     modeSquadKrCounts[squadName] = krs.length;
   }
 
+  // Sort Company KRs so CEO triage reads top-down. Tracked KRs with a current
+  // value come first, ordered by progress ascending (worst first). KRs with no
+  // current value drop to a secondary "not tracked" list.
+  const trackedCompanyKrs = modeOkrs.company
+    .filter(hasCurrentValue)
+    .slice()
+    .sort((a, b) => {
+      const pa = progressTowardTarget(a) ?? 1;
+      const pb = progressTowardTarget(b) ?? 1;
+      if (pa !== pb) return pa - pb;
+      return a.description.localeCompare(b.description);
+    });
+  const untrackedCompanyKrs = modeOkrs.company
+    .filter((kr) => !hasCurrentValue(kr))
+    .slice()
+    .sort((a, b) => a.description.localeCompare(b.description));
+  const companyAttentionCount = trackedCompanyKrs.filter(needsAttention).length;
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
       <PageHeader
@@ -111,7 +134,9 @@ export default async function OKRsPage() {
         <OkrView
           pillars={pillars}
           counts={counts}
-          companyKrs={modeOkrs.company}
+          companyKrs={trackedCompanyKrs}
+          untrackedCompanyKrs={untrackedCompanyKrs}
+          companyAttentionCount={companyAttentionCount}
           squadKrs={modeOkrs.squad}
           modeSquadKrCounts={modeSquadKrCounts}
         />

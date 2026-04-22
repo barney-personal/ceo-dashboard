@@ -4,13 +4,13 @@ import { useState } from "react";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { RagBar } from "@/components/dashboard/rag-bar";
 import { OkrCompanyKrCard } from "@/components/dashboard/okr-company-kr-card";
-import { ExternalLink, ArrowLeft, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { ExternalLink, ArrowLeft, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
 import {
   formatKrValue,
   krTrend,
   progressTowardTarget,
   type ModeKr,
-} from "@/lib/data/okr-mode";
+} from "@/lib/data/okr-mode-shared";
 
 const STALE_DAYS = 10;
 
@@ -59,7 +59,12 @@ interface PillarData {
 interface OkrViewProps {
   pillars: PillarData[];
   counts: { onTrack: number; atRisk: number; behind: number; total: number };
+  /** Company KRs with numeric data, pre-sorted worst-first by the server. */
   companyKrs: ModeKr[];
+  /** Company KRs defined in Mode but not yet reporting a current value. */
+  untrackedCompanyKrs: ModeKr[];
+  /** Count of tracked Company KRs that are trending down or below 50% progress. */
+  companyAttentionCount: number;
   squadKrs: ModeKr[];
   modeSquadKrCounts: Record<string, number>;
 }
@@ -97,6 +102,8 @@ export function OkrView({
   pillars,
   counts,
   companyKrs,
+  untrackedCompanyKrs,
+  companyAttentionCount,
   squadKrs,
   modeSquadKrCounts,
 }: OkrViewProps) {
@@ -157,25 +164,66 @@ export function OkrView({
       />
 
       {/* Company KRs: numeric truth from Mode */}
-      {!selectedPillar && companyKrs.length > 0 && (
+      {!selectedPillar && (companyKrs.length > 0 || untrackedCompanyKrs.length > 0) && (
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
               Company KRs
             </h3>
             <span className="text-[10px] text-muted-foreground/60">
-              Baseline → current → target from Mode
+              {companyKrs.length > 0
+                ? "Worst first · baseline → current → target from Mode"
+                : "From Mode"}
             </span>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-            {companyKrs.map((kr, i) => (
-              <OkrCompanyKrCard
-                key={`${kr.krType}::${kr.description}`}
-                kr={kr}
-                delay={i * 40}
-              />
-            ))}
-          </div>
+
+          {companyAttentionCount > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                <span className="font-semibold">
+                  {companyAttentionCount} of {companyKrs.length}
+                </span>{" "}
+                Company {companyAttentionCount === 1 ? "KR needs" : "KRs need"} attention —
+                trending away from target or below 50% progress.
+              </span>
+            </div>
+          )}
+
+          {companyKrs.length > 0 && (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {companyKrs.map((kr, i) => (
+                <OkrCompanyKrCard
+                  key={`${kr.krType}::${kr.description}`}
+                  kr={kr}
+                  delay={i * 40}
+                />
+              ))}
+            </div>
+          )}
+
+          {untrackedCompanyKrs.length > 0 && (
+            <div className="rounded-lg border border-dashed border-border/50 bg-muted/10 px-4 py-3">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
+                  Not yet tracked in Mode
+                </span>
+                <span className="text-[10px] text-muted-foreground/50">
+                  {untrackedCompanyKrs.length}
+                </span>
+              </div>
+              <ul className="space-y-0.5">
+                {untrackedCompanyKrs.map((kr) => (
+                  <li
+                    key={`${kr.krType}::${kr.description}`}
+                    className="text-xs text-muted-foreground/70"
+                  >
+                    {kr.description}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 

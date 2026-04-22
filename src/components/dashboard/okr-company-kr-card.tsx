@@ -6,7 +6,7 @@ import {
   krTrend,
   progressTowardTarget,
   type ModeKr,
-} from "@/lib/data/okr-mode";
+} from "@/lib/data/okr-mode-shared";
 
 interface OkrCompanyKrCardProps {
   kr: ModeKr;

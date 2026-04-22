@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildModeKrs,
   formatKrValue,
+  hasCurrentValue,
   krTrend,
+  needsAttention,
   progressTowardTarget,
   type ModeKr,
 } from "../okr-mode";
@@ -189,6 +191,64 @@ describe("krTrend", () => {
   it("returns unknown without two snapshots", () => {
     const kr = buildModeKrs([row({})])[0];
     expect(krTrend(kr)).toBe("unknown");
+  });
+});
+
+describe("hasCurrentValue", () => {
+  it("is true when a current snapshot exists", () => {
+    const kr = buildModeKrs([row({})])[0];
+    expect(hasCurrentValue(kr)).toBe(true);
+  });
+
+  it("is false when no snapshot has a value", () => {
+    const kr = buildModeKrs([
+      row({ reporting_month: "", kr_current_value: null }),
+    ])[0];
+    expect(hasCurrentValue(kr)).toBe(false);
+  });
+});
+
+describe("needsAttention", () => {
+  it("flags a KR trending down even if progress is high", () => {
+    const kr = buildModeKrs([
+      row({
+        reporting_month: "2026-01-01T00:00:00.000Z",
+        kr_current_value: 300000,
+      }),
+      row({
+        reporting_month: "2026-02-01T00:00:00.000Z",
+        kr_current_value: 290000,
+      }),
+    ])[0];
+    expect(needsAttention(kr)).toBe(true);
+  });
+
+  it("flags a KR below 50% progress", () => {
+    const kr = buildModeKrs([
+      row({ kr_current_value: 240000 }), // baseline 236k, target 306k → ~6%
+    ])[0];
+    expect(needsAttention(kr)).toBe(true);
+  });
+
+  it("does not flag a KR trending up and above 50%", () => {
+    const kr = buildModeKrs([
+      row({
+        reporting_month: "2026-01-01T00:00:00.000Z",
+        kr_current_value: 270000, // ~48% (not enough on its own)
+      }),
+      row({
+        reporting_month: "2026-02-01T00:00:00.000Z",
+        kr_current_value: 285000, // ~70%, trending up
+      }),
+    ])[0];
+    expect(needsAttention(kr)).toBe(false);
+  });
+
+  it("does not flag a KR without a current value", () => {
+    const kr = buildModeKrs([
+      row({ reporting_month: "", kr_current_value: null }),
+    ])[0];
+    expect(needsAttention(kr)).toBe(false);
   });
 });
 
