@@ -110,9 +110,8 @@ export default async function EngineeringDeliveryHealthPage() {
             }))}
             leftMargin={180}
             xAxisLabel="Hours (PR open → merge)"
-            formatTooltipValue={(value) =>
-              `${value.toLocaleString()} hours from PR open to merge`
-            }
+            valueUnit="hours"
+            showPercentOfMax={false}
           />
         ) : (
           <SectionEmpty
