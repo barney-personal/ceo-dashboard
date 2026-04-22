@@ -26,6 +26,7 @@ import {
   Menu,
   X,
   Sparkles,
+  Compass,
 } from "lucide-react";
 
 interface NavItem {
@@ -78,6 +79,12 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Goals",
     items: [
+      {
+        label: "Strategy",
+        href: "/dashboard/strategy",
+        requiredRole: "everyone",
+        icon: Compass,
+      },
       {
         label: "OKRs",
         href: "/dashboard/okrs",
