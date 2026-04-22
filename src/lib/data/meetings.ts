@@ -2,7 +2,11 @@ import { db } from "@/lib/db";
 import { withDbErrorContext } from "@/lib/db/errors";
 import { meetingNotes, preReads } from "@/lib/db/schema";
 import { and, gte, lte, desc, like, or, inArray, sql, isNull, eq } from "drizzle-orm";
-import { getAllEvents, type CalendarEvent } from "@/lib/integrations/google-calendar";
+import {
+  CalendarAuthError,
+  getAllEvents,
+  type CalendarEvent,
+} from "@/lib/integrations/google-calendar";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +59,16 @@ export interface DayData {
   meetings: LinkedMeeting[];
   unlinkedPreReads: PreReadRow[];
   unlinkedNotes: MeetingNoteRow[];
+}
+
+export interface MeetingsRangeResult {
+  days: DayData[];
+  /**
+   * True when Clerk returned a Google access token but Google rejected it with
+   * 401. Signals the user needs to reconnect (sign out/in). Pages should treat
+   * this like `calendarConnected: false` so the reconnect CTA shows.
+   */
+  calendarAuthExpired: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,17 +178,36 @@ export async function getMeetingsForRange(
   startDate: Date,
   endDate: Date,
   opts: { minAttendees?: number; accessToken?: string; userId?: string } = {}
-): Promise<DayData[]> {
+): Promise<MeetingsRangeResult> {
   const minAttendees = opts.minAttendees ?? 2;
 
   // Fetch pre-reads from 1 day before the range start (they may link to day 1 meetings)
   const preReadStart = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
 
+  // Catch a 401 from Google Calendar so an expired-but-cached Clerk token
+  // degrades to "reconnect" UX instead of crashing the whole page.
+  let calendarAuthExpired = false;
+  const loadCalendarMeetings = async (): Promise<MeetingRow[]> => {
+    if (!opts.accessToken) return [];
+    try {
+      return await fetchLiveCalendarMeetings(
+        startDate,
+        endDate,
+        opts.accessToken,
+        minAttendees
+      );
+    } catch (error) {
+      if (error instanceof CalendarAuthError) {
+        calendarAuthExpired = true;
+        return [];
+      }
+      throw error;
+    }
+  };
+
   // Fetch meetings, pre-reads, and Granola notes in parallel
   const [serializedMeetings, preReadRows, noteRows] = await Promise.all([
-    opts.accessToken
-      ? fetchLiveCalendarMeetings(startDate, endDate, opts.accessToken, minAttendees)
-      : Promise.resolve([] as MeetingRow[]),
+    loadCalendarMeetings(),
     withDbErrorContext("load meeting pre-reads", () =>
       db
         .select()
@@ -488,7 +521,7 @@ export async function getMeetingsForRange(
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  return days;
+  return { days, calendarAuthExpired };
 }
 
 /**

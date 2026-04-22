@@ -2,6 +2,19 @@ const GCAL_API = "https://www.googleapis.com/calendar/v3";
 const GCAL_REQUEST_TIMEOUT_MS = 30_000;
 const GCAL_MAX_RETRIES = 3;
 
+/**
+ * Thrown when the Google Calendar API rejects the access token (401). Surfaced
+ * distinctly so callers can prompt the user to reconnect rather than silently
+ * falling back to an empty calendar (which looks indistinguishable from "no
+ * meetings").
+ */
+export class CalendarAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CalendarAuthError";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -66,7 +79,9 @@ async function gcalRequest<T>(
       });
 
       if (res.status === 401) {
-        throw new Error(`Google Calendar API error 401: ${await res.text()}`);
+        throw new CalendarAuthError(
+          `Google Calendar token rejected (401): ${await res.text()}`
+        );
       }
 
       if (isRetryableStatus(res.status) && attempt < maxRetries) {

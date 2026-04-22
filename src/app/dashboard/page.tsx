@@ -97,7 +97,7 @@ export default async function DashboardOverview() {
           accessToken: accessToken ?? undefined,
           userId: effectiveUserId ?? undefined,
         }),
-      [],
+      { days: [], calendarAuthExpired: false },
     ),
   ]);
 
@@ -116,7 +116,8 @@ export default async function DashboardOverview() {
     recentSyncsResult.error ??
     todayMeetingsResult.error;
 
-  const todayData = todayMeetings[0] ?? null;
+  const todayData = todayMeetings.days[0] ?? null;
+  const calendarConnected = !!accessToken && !todayMeetings.calendarAuthExpired;
 
   const syncEntries = recentSyncs.map((sync) => {
     const sourceLabels: Record<string, string> = {
@@ -193,7 +194,7 @@ export default async function DashboardOverview() {
       </div>
 
       {/* Today's meetings */}
-      <TodayMeetings day={todayData} calendarConnected={!!accessToken} />
+      <TodayMeetings day={todayData} calendarConnected={calendarConnected} />
 
       {/* Sections grid */}
       <div className="space-y-3">
