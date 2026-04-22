@@ -47,6 +47,9 @@ export default async function OKRsPage() {
     } as Awaited<ReturnType<typeof getModeOkrs>>),
   ]);
 
+  // Mode OKR numerics are additive — a Mode load failure should render the
+  // page without the KR cards rather than marking the whole page unavailable,
+  // which would hide the Slack narrative too. Deliberately excluded here.
   const firstUnavailable =
     okrsByPillarResult.error ?? countsResult.error ?? latestSyncRunResult.error;
 

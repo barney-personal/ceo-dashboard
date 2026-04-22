@@ -158,7 +158,7 @@ export async function getModeOkrs(): Promise<{
   bySquad: Map<string, ModeKr[]>;
   lastSync: Date | null;
 }> {
-  const data = await getReportData("okrs", "company");
+  const data = await getReportData("okrs", "company", ["OKR Reporting"]);
   const query = data.find((d) => d.queryName === "OKR Reporting");
   if (!query) {
     return {
