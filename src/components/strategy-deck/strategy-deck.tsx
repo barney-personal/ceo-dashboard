@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -20,7 +20,7 @@ interface SlideDef {
 }
 
 export function StrategyDeck() {
-  const slides = useMemo<SlideDef[]>(() => SLIDES, []);
+  const slides = SLIDES;
   const total = slides.length;
 
   const [idx, setIdx] = useState(0);
