@@ -15,7 +15,11 @@ vi.mock("../mode", async (importOriginal) => {
 
 import {
   aggregateLatestMonthByUser,
+  buildTopModelTrends,
+  buildUserMonthlyTrends,
   getAiUsageData,
+  getLatestMonthPeerSpend,
+  getTrailingWeeklyTotals,
   getUserTrend,
   summariseTotals,
 } from "../ai-usage";
@@ -296,5 +300,90 @@ describe("getUserTrend", () => {
     getReportDataMock.mockResolvedValueOnce(makeReportData());
     const data = await getAiUsageData();
     expect(getUserTrend(data, "nobody@meetcleo.com")).toEqual([]);
+  });
+});
+
+describe("summariseTotals — trailing 30d + user counts", () => {
+  it("returns trailing-4-week totals and distinct user counts", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const totals = summariseTotals(data);
+
+    // Only 3 week buckets in fixture — trailing 4 sums them all: 1500+3700+1200 = 6400
+    expect(totals.trailing30DayCost).toBe(6400);
+    // No weeks before that window, so prior-30d is 0.
+    expect(totals.prior30DayCost).toBe(0);
+
+    // Latest user-month is April: alice + bob = 2.
+    expect(totals.latestMonthUsers).toBe(2);
+    // Prior (March) has only alice.
+    expect(totals.priorMonthUsers).toBe(1);
+  });
+});
+
+describe("buildUserMonthlyTrends", () => {
+  it("returns a padded time series per user for the trailing N months", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const trends = buildUserMonthlyTrends(data, 6);
+
+    const alice = trends.get("alice@meetcleo.com");
+    expect(alice?.map((m) => m.monthStart)).toEqual(["2026-03-01", "2026-04-01"]);
+    expect(alice?.map((m) => m.cost)).toEqual([300, 620]);
+
+    const bob = trends.get("bob@meetcleo.com");
+    // Bob has no March row, so the March entry should be padded with 0.
+    expect(bob?.map((m) => m.monthStart)).toEqual(["2026-03-01", "2026-04-01"]);
+    expect(bob?.map((m) => m.cost)).toEqual([0, 45]);
+  });
+
+  it("respects the months window (caps trailing size)", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const trends = buildUserMonthlyTrends(data, 1);
+    const alice = trends.get("alice@meetcleo.com");
+    expect(alice).toHaveLength(1);
+    expect(alice?.[0].monthStart).toBe("2026-04-01");
+  });
+});
+
+describe("buildTopModelTrends", () => {
+  it("returns top-N models by latest-month cost with prior-month carried through", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const trends = buildTopModelTrends(data, 5);
+
+    // Only the Claude Sonnet 4.6 row exists in monthlyByModel beyond the
+    // ALL MODELS rollup. "ALL MODELS" should be excluded.
+    expect(trends.map((t) => t.modelName)).toEqual(["Claude Sonnet 4.6"]);
+    expect(trends[0].trend.map((p) => p.monthStart)).toEqual([
+      "2026-03-01",
+      "2026-04-01",
+    ]);
+    // March has no row for this model → padded with 0 (priorCost).
+    expect(trends[0].priorCost).toBe(0);
+    expect(trends[0].latestCost).toBe(2000);
+  });
+});
+
+describe("getLatestMonthPeerSpend", () => {
+  it("returns one entry per latest-month user", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const spend = getLatestMonthPeerSpend(data);
+    expect(spend.sort((a, b) => b - a)).toEqual([620, 45]);
+  });
+});
+
+describe("getTrailingWeeklyTotals", () => {
+  it("returns week+cost pairs sorted ascending, capped at N weeks", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const weekly = getTrailingWeeklyTotals(data, 4);
+    expect(weekly.map((w) => w.weekStart)).toEqual([
+      "2026-04-06",
+      "2026-04-13",
+    ]);
+    expect(weekly.map((w) => w.cost)).toEqual([1200, 5200]);
   });
 });

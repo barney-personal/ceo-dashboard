@@ -162,6 +162,14 @@ export interface AiUsageTotals {
   latestMonthStart: string | null;
   latestMonthCost: number;
   priorMonthCost: number;
+  /** Sum of weekly spend over the trailing 4 weeks (≈ 30-day spend). */
+  trailing30DayCost: number;
+  /** Prior 30 days (weeks 5-8 back) for the trailing-30-day MoM delta. */
+  prior30DayCost: number;
+  /** Active users in the current month. */
+  latestMonthUsers: number;
+  /** Active users in the prior month. */
+  priorMonthUsers: number;
 }
 
 export function summariseTotals(data: AiUsageData): AiUsageTotals {
@@ -210,6 +218,26 @@ export function summariseTotals(data: AiUsageData): AiUsageTotals {
     ? (monthTotals.get(priorMonthStart) ?? 0)
     : 0;
 
+  // Trailing-30-day sums derived from the 4 most-recent weeks. Prior window
+  // = weeks 5-8. Gives a more decision-relevant "how much are we spending
+  // right now" than an all-time total.
+  const sortedWeekCosts = sortedWeeks.map((w) => weekTotals.get(w) ?? 0);
+  const trailing30DayCost = sortedWeekCosts.slice(-4).reduce((a, b) => a + b, 0);
+  const prior30DayCost = sortedWeekCosts.slice(-8, -4).reduce((a, b) => a + b, 0);
+
+  const latestMonthUsers = new Set<string>();
+  const priorMonthUsers = new Set<string>();
+  const sortedUserMonths = [
+    ...new Set(data.monthlyByUser.map((r) => r.monthStart)),
+  ].sort();
+  const latestUserMonth = sortedUserMonths.at(-1);
+  const priorUserMonth = sortedUserMonths.at(-2);
+  for (const row of data.monthlyByUser) {
+    if (!row.userEmail) continue;
+    if (row.monthStart === latestUserMonth) latestMonthUsers.add(row.userEmail);
+    if (row.monthStart === priorUserMonth) priorMonthUsers.add(row.userEmail);
+  }
+
   return {
     totalCost,
     totalTokens,
@@ -219,6 +247,10 @@ export function summariseTotals(data: AiUsageData): AiUsageTotals {
     latestMonthStart,
     latestMonthCost,
     priorMonthCost,
+    trailing30DayCost,
+    prior30DayCost,
+    latestMonthUsers: latestMonthUsers.size,
+    priorMonthUsers: priorMonthUsers.size,
   };
 }
 
@@ -286,6 +318,156 @@ export function aggregateLatestMonthByUser(
   }
 
   return perUser;
+}
+
+export interface UserMonthlyTrend {
+  monthStart: string;
+  cost: number;
+  tokens: number;
+}
+
+/**
+ * Build a per-user monthly spend trend indexed by email so the leaderboard
+ * can render sparklines without a second pass through the data.
+ *
+ * `months` bounds the trend to the last N months so sparklines fit in a
+ * ~72px width. Earlier months fall off the left.
+ */
+export function buildUserMonthlyTrends(
+  data: AiUsageData,
+  months = 6,
+): Map<string, UserMonthlyTrend[]> {
+  const allMonths = [
+    ...new Set(data.monthlyByUser.map((r) => r.monthStart)),
+  ].sort();
+  const windowMonths = allMonths.slice(-months);
+  const windowSet = new Set(windowMonths);
+
+  const per = new Map<string, Map<string, { cost: number; tokens: number }>>();
+  for (const row of data.monthlyByUser) {
+    if (!windowSet.has(row.monthStart)) continue;
+    if (!row.userEmail) continue;
+    const inner =
+      per.get(row.userEmail) ??
+      new Map<string, { cost: number; tokens: number }>();
+    const existing = inner.get(row.monthStart) ?? { cost: 0, tokens: 0 };
+    inner.set(row.monthStart, {
+      cost: existing.cost + row.totalCost,
+      tokens: existing.tokens + row.totalTokens,
+    });
+    per.set(row.userEmail, inner);
+  }
+
+  const result = new Map<string, UserMonthlyTrend[]>();
+  for (const [email, monthMap] of per) {
+    result.set(
+      email,
+      windowMonths.map((m) => {
+        const v = monthMap.get(m);
+        return {
+          monthStart: m,
+          cost: v?.cost ?? 0,
+          tokens: v?.tokens ?? 0,
+        };
+      }),
+    );
+  }
+  return result;
+}
+
+export interface ModelMonthlyTrend {
+  monthStart: string;
+  cost: number;
+  tokens: number;
+}
+
+/**
+ * Build a per-model monthly trend for small-multiples panels. Returns the
+ * top-N models by latest-month spend, each padded with zero-values for any
+ * month they didn't appear in so the x-axes line up.
+ */
+export function buildTopModelTrends(
+  data: AiUsageData,
+  topN = 9,
+): Array<{
+  modelName: string;
+  category: string;
+  trend: ModelMonthlyTrend[];
+  latestCost: number;
+  priorCost: number;
+}> {
+  const allMonths = [
+    ...new Set(data.monthlyByModel.map((r) => r.monthStart)),
+  ].sort();
+  const latestMonth = allMonths.at(-1);
+  const priorMonth = allMonths.at(-2);
+  if (!latestMonth) return [];
+
+  // Sort models by latest-month cost (only non-ALL-MODELS rows).
+  const latestRows = data.monthlyByModel
+    .filter(
+      (r) =>
+        r.monthStart === latestMonth &&
+        r.category !== "ALL MODELS" &&
+        r.modelName !== "ALL MODELS",
+    )
+    .sort((a, b) => b.totalCost - a.totalCost)
+    .slice(0, topN);
+
+  return latestRows.map((latestRow) => {
+    const byMonth = new Map<string, { cost: number; tokens: number }>();
+    for (const row of data.monthlyByModel) {
+      if (row.modelName !== latestRow.modelName) continue;
+      if (row.category !== latestRow.category) continue;
+      const existing = byMonth.get(row.monthStart) ?? { cost: 0, tokens: 0 };
+      byMonth.set(row.monthStart, {
+        cost: existing.cost + row.totalCost,
+        tokens: existing.tokens + row.totalTokens,
+      });
+    }
+
+    const trend = allMonths.map((m) => {
+      const v = byMonth.get(m) ?? { cost: 0, tokens: 0 };
+      return { monthStart: m, cost: v.cost, tokens: v.tokens };
+    });
+
+    const priorCost = priorMonth ? (byMonth.get(priorMonth)?.cost ?? 0) : 0;
+
+    return {
+      modelName: latestRow.modelName,
+      category: latestRow.category,
+      trend,
+      latestCost: latestRow.totalCost,
+      priorCost,
+    };
+  });
+}
+
+/**
+ * Get peer spend for the latest month (one entry per user). Used for the
+ * distribution strip on an engineer's profile.
+ */
+export function getLatestMonthPeerSpend(data: AiUsageData): number[] {
+  const perUser = aggregateLatestMonthByUser(data);
+  return [...perUser.values()].map((u) => u.totalCost);
+}
+
+/**
+ * Summed daily spend for the trailing N days, derived from the weekly
+ * totals query. Used for metric-card sparklines.
+ */
+export function getTrailingWeeklyTotals(
+  data: AiUsageData,
+  weeks = 12,
+): Array<{ weekStart: string; cost: number }> {
+  const byWeek = new Map<string, number>();
+  for (const row of data.weeklyByCategory) {
+    byWeek.set(row.weekStart, (byWeek.get(row.weekStart) ?? 0) + row.totalCost);
+  }
+  return [...byWeek.entries()]
+    .map(([weekStart, cost]) => ({ weekStart, cost }))
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+    .slice(-weeks);
 }
 
 export function getUserTrend(

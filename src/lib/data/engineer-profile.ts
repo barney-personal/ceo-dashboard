@@ -11,6 +11,7 @@ import { groupLatestOkrRows, type OkrSummary } from "./okrs";
 import { getPerformanceData, type PerformanceRating } from "./performance";
 import type { PeriodDays } from "./engineering";
 import {
+  aggregateLatestMonthByUser,
   getAiUsageData,
   getUserTrend,
   type AiUsageData,
@@ -220,6 +221,9 @@ export interface EngineerAiUsage {
   peerMedianCost: number;
   /** Company-wide average cost for the latest month (from Mode). */
   peerAvgCost: number;
+  /** All peers' latest-month spend (one entry per user, incl. this user)
+   *  for a distribution strip plot. */
+  peerSpend: number[];
 }
 
 /**
@@ -253,6 +257,9 @@ export async function getEngineerAiUsage(
   const nDays = Math.max(...latestRows.map((r) => r.nDays), 0);
   const peerMedianCost = latestRows[0]?.medianCost ?? 0;
   const peerAvgCost = latestRows[0]?.avgCostPerPerson ?? 0;
+  const peerSpend = [...aggregateLatestMonthByUser(data).values()]
+    .map((u) => u.totalCost)
+    .filter((v) => Number.isFinite(v));
 
   return {
     latestMonthStart: latestMonth.monthStart,
@@ -275,6 +282,7 @@ export async function getEngineerAiUsage(
     })),
     peerMedianCost,
     peerAvgCost,
+    peerSpend,
   };
 }
 

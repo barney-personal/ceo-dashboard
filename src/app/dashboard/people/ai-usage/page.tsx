@@ -1,19 +1,27 @@
 import { PageHeader } from "@/components/dashboard/page-header";
-import { MetricCard } from "@/components/dashboard/metric-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { AiUsageDashboard } from "@/components/dashboard/ai-usage-dashboard";
+import { AiUsageMetricCard } from "@/components/dashboard/ai-usage-metric-card";
 import {
   DataStateBanner,
   UnavailablePage,
 } from "@/components/dashboard/page-data-boundary";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
-import { getAiUsageData, summariseTotals } from "@/lib/data/ai-usage";
+import {
+  buildTopModelTrends,
+  buildUserMonthlyTrends,
+  getAiUsageData,
+  getTrailingWeeklyTotals,
+  summariseTotals,
+} from "@/lib/data/ai-usage";
 import { getActiveEmployees } from "@/lib/data/people";
 import {
   getLatestTerminalSyncRun,
   resolveModeStaleReason,
 } from "@/lib/data/mode";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
+
+const CLAUDE_DATA_START_ISO = "2026-03-23";
 
 export default async function PeopleAiUsagePage() {
   const [usageResult, employeesResult, latestSyncRunResult] = await Promise.all(
@@ -74,9 +82,12 @@ export default async function PeopleAiUsagePage() {
 
   const totals = summariseTotals(usage);
   const modeUrl = getModeReportLink("people", "ai-usage");
+  const userTrendsMap = buildUserMonthlyTrends(usage, 6);
+  const userTrendsRecord = Object.fromEntries(userTrendsMap);
+  const modelTrends = buildTopModelTrends(usage, 9);
+  const weeklyTotals = getTrailingWeeklyTotals(usage, 12);
+  const weeklySparkValues = weeklyTotals.map((w) => w.cost);
 
-  // Map user email → person name/squad/pillar so the page can display
-  // nice "who is this?" metadata instead of raw emails.
   const allPeople = [
     ...employees.employees,
     ...employees.unassigned,
@@ -101,7 +112,6 @@ export default async function PeopleAiUsagePage() {
       pillar: person.pillar || null,
     });
   }
-
   const peopleList = [...peopleByEmail.entries()].map(([email, person]) => ({
     email,
     ...person,
@@ -111,6 +121,18 @@ export default async function PeopleAiUsagePage() {
     totals.priorMonthCost > 0
       ? ((totals.latestMonthCost - totals.priorMonthCost) /
           totals.priorMonthCost) *
+        100
+      : null;
+  const trailing30Delta =
+    totals.prior30DayCost > 0
+      ? ((totals.trailing30DayCost - totals.prior30DayCost) /
+          totals.prior30DayCost) *
+        100
+      : null;
+  const userDelta =
+    totals.priorMonthUsers > 0
+      ? ((totals.latestMonthUsers - totals.priorMonthUsers) /
+          totals.priorMonthUsers) *
         100
       : null;
 
@@ -133,50 +155,49 @@ export default async function PeopleAiUsagePage() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard
-          label="Spend (all time)"
-          value={formatCurrency(totals.totalCost)}
-          subtitle={`${formatTokens(totals.totalTokens)} tokens`}
-          modeUrl={modeUrl}
-        />
-        <MetricCard
-          label={`${formatMonth(totals.latestMonthStart)} spend`}
-          value={formatCurrency(totals.latestMonthCost)}
-          change={
-            monthDelta != null
-              ? `${monthDelta > 0 ? "+" : ""}${monthDelta.toFixed(0)}% MoM`
-              : undefined
-          }
-          trend={
-            monthDelta == null
-              ? undefined
-              : monthDelta > 3
-                ? "up"
-                : monthDelta < -3
-                  ? "down"
-                  : "flat"
-          }
+        <AiUsageMetricCard
+          label="Trailing 30 days"
+          value={formatCurrency(totals.trailing30DayCost)}
+          deltaPct={trailing30Delta}
           subtitle={
-            totals.priorMonthCost > 0
-              ? `vs ${formatCurrency(totals.priorMonthCost)} prior month`
+            totals.prior30DayCost > 0
+              ? `vs ${formatCurrency(totals.prior30DayCost)} prior 30d`
               : "first month of data"
           }
           modeUrl={modeUrl}
-          delay={50}
+          sparkline={weeklySparkValues}
         />
-        <MetricCard
-          label="Active users (last month)"
-          value={totals.totalUsers.toString()}
-          subtitle="distinct emails"
+        <AiUsageMetricCard
+          label={`${formatMonth(totals.latestMonthStart)} spend`}
+          value={formatCurrency(totals.latestMonthCost)}
+          deltaPct={monthDelta}
+          subtitle={
+            totals.priorMonthCost > 0
+              ? `vs ${formatCurrency(totals.priorMonthCost)} last month`
+              : undefined
+          }
           modeUrl={modeUrl}
-          delay={100}
+          sparkline={weeklySparkValues}
         />
-        <MetricCard
+        <AiUsageMetricCard
+          label="Active users (this month)"
+          value={totals.latestMonthUsers.toString()}
+          deltaPct={userDelta}
+          subtitle={
+            totals.priorMonthUsers > 0
+              ? `${totals.priorMonthUsers} last month`
+              : "distinct emails"
+          }
+          modeUrl={modeUrl}
+        />
+        <AiUsageMetricCard
           label={`Week of ${formatMonth(totals.latestWeekStart, "short-day")}`}
           value={formatCurrency(totals.latestWeekCost)}
+          deltaPct={null}
           subtitle="latest complete week"
           modeUrl={modeUrl}
-          delay={150}
+          sparkline={weeklySparkValues}
+          sparklineColor="#7c3aed"
         />
       </div>
 
@@ -186,7 +207,10 @@ export default async function PeopleAiUsagePage() {
           weeklyByModel={usage.weeklyByModel}
           monthlyByModel={usage.monthlyByModel}
           monthlyByUser={usage.monthlyByUser}
+          userTrends={userTrendsRecord}
+          modelTrends={modelTrends}
           people={peopleList}
+          claudeDataStart={CLAUDE_DATA_START_ISO}
         />
       ) : (
         <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/50">
@@ -212,12 +236,6 @@ function formatCurrency(value: number): string {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1000) return `$${Math.round(value).toLocaleString()}`;
   return `$${value.toFixed(2)}`;
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)}M`;
-  return value.toLocaleString();
 }
 
 function formatMonth(

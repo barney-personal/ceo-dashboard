@@ -1,6 +1,7 @@
 "use client";
 
 import { LineChart } from "@/components/charts/line-chart";
+import { PeerDistributionStrip } from "@/components/charts/peer-distribution-strip";
 import type { EngineerAiUsage } from "@/lib/data/engineer-profile";
 
 function formatCurrency(value: number): string {
@@ -102,6 +103,16 @@ export function EngineerAiUsageCard({ usage }: { usage: EngineerAiUsage }) {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+
+        {usage.peerSpend.length > 1 && (
+          <div className="mt-6 border-t border-border/40 pt-4">
+            <PeerDistributionStrip
+              peers={usage.peerSpend}
+              userValue={usage.latestMonthCost}
+              label="Peer spend distribution"
+            />
           </div>
         )}
       </div>
