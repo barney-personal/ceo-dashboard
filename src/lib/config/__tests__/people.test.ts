@@ -274,4 +274,11 @@ describe("normalizeDepartment (with rp_specialisation signal)", () => {
     // Title says ML but specialisation is analyst → Analytics (specialisation wins)
     expect(normalizeDepartment("Data Science", "Machine Learning Engineer", "Product Analyst")).toBe("Analytics");
   });
+
+  it("aliases legacy specialisation values before checking the signal", () => {
+    // Legacy HiBob value "Data Scientist" (pre-standardisation) — still aliases to
+    // Machine Learning via JOB_TITLE_ALIASES, so it must still route correctly.
+    expect(normalizeDepartment("Data Science", "", "Data Scientist")).toBe("Machine Learning");
+    expect(normalizeDepartment("Data Science", "", "Data Science Manager")).toBe("Machine Learning");
+  });
 });

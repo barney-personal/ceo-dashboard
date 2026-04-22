@@ -132,7 +132,16 @@ export function normalizeDepartment(
   normalizedJobTitle: string,
   specialisation?: string,
 ): string {
-  const signal = (specialisation || normalizedJobTitle || "").toLowerCase();
+  // Apply the same alias map to the raw specialisation so legacy values like
+  // "Data Scientist" still route to Machine Learning. Without this, a signal
+  // of "data scientist" doesn't match "machine learning" and would fall
+  // through to Analytics for any HiBob row that hasn't been updated to the
+  // canonical value yet.
+  const rawSpec = (specialisation ?? "").trim();
+  const aliasedSpec = rawSpec
+    ? (JOB_TITLE_ALIASES[rawSpec.toLowerCase()] ?? rawSpec)
+    : "";
+  const signal = (aliasedSpec || normalizedJobTitle || "").toLowerCase();
   if (!signal) return department;
 
   if (department === "Data Science") {
