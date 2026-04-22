@@ -468,7 +468,10 @@ export function OkrView({
                     </div>
                     <div className="space-y-1.5">
                       {modeKrs.map((kr) => (
-                        <ModeKrRow key={kr.description} kr={kr} />
+                        <ModeKrRow
+                          key={`${kr.krType}::${kr.description}`}
+                          kr={kr}
+                        />
                       ))}
                     </div>
                   </div>

@@ -56,7 +56,12 @@ export default async function OKRsPage() {
   const modeOkrs = modeOkrsResult.data;
 
   const okrCharts = getChartEmbeds("okrs", "company");
-  const hasData = counts.total > 0;
+  const hasSlackData = counts.total > 0;
+  const hasModeData =
+    modeOkrs.company.length > 0 ||
+    modeOkrs.pillar.length > 0 ||
+    modeOkrs.squad.length > 0;
+  const hasData = hasSlackData || hasModeData;
 
   const pageState = resolveDataState({
     source: "slack",
@@ -143,7 +148,8 @@ export default async function OKRsPage() {
       ) : (
         <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
           <p className="text-sm text-muted-foreground">
-            No OKR updates synced yet. Trigger a sync to pull updates from Slack.
+            No OKR data synced yet. Trigger the Slack and Mode syncs to pull
+            updates and numeric KRs.
           </p>
         </div>
       )}

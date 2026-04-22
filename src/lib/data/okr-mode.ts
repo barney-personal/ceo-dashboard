@@ -62,7 +62,20 @@ export function buildModeKrs(rows: RawRow[]): ModeKr[] {
 
   const byKey = new Map<string, Acc>();
 
-  for (const row of rows) {
+  // Process rows with the newest reporting_month first. The "only fill if
+  // still null" logic below then picks up baseline/target from the latest
+  // dated row, so target revisions over time aren't masked by whichever row
+  // happened to sort first.
+  const sortedRows = [...rows].sort((a, b) => {
+    const ma = normalizeMonth(rowStr(a, "reporting_month")) ?? "";
+    const mb = normalizeMonth(rowStr(b, "reporting_month")) ?? "";
+    if (ma === mb) return 0;
+    if (!ma) return 1; // undated rows sort to the end
+    if (!mb) return -1;
+    return mb.localeCompare(ma); // newest first
+  });
+
+  for (const row of sortedRows) {
     const level = parseLevel(rowStr(row, "kr_level"));
     const krType = rowStr(row, "kr_type");
     const description = rowStr(row, "kr_description");
@@ -153,7 +166,12 @@ export async function getModeOkrs(): Promise<{
   const all = buildModeKrs(query.rows as RawRow[]);
   const company = all.filter((k) => k.level === "Company");
   const pillar = all.filter((k) => k.level === "Pillar");
-  const squad = all.filter((k) => k.level === "Squad" && k.squad);
+  // Only count squad KRs that are actually reporting a current value —
+  // otherwise the "N KR tracked" badges overstate Mode coverage for squads
+  // whose KR was defined before the first measurement landed.
+  const squad = all.filter(
+    (k) => k.level === "Squad" && k.squad && k.current != null,
+  );
 
   const bySquad = new Map<string, ModeKr[]>();
   for (const kr of squad) {

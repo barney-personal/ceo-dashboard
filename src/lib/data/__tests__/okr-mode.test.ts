@@ -92,6 +92,37 @@ describe("buildModeKrs", () => {
     expect(krs[0].current).toBeNull();
   });
 
+  it("uses baseline/target from the latest dated row when they differ across months", () => {
+    // Jan has the original target (300k), Feb is a revision (400k). Regardless
+    // of input order, the latest dated row's values should win.
+    const krs = buildModeKrs([
+      {
+        kr_level: "Company",
+        kr_type: "Company",
+        kr_description: "User Acquisition",
+        reporting_month: "2026-01-01T00:00:00.000Z",
+        kr_baseline_value: 236000,
+        kr_target_value: 300000,
+        kr_current_value: 240000,
+        format: "k",
+      },
+      {
+        kr_level: "Company",
+        kr_type: "Company",
+        kr_description: "User Acquisition",
+        reporting_month: "2026-02-01T00:00:00.000Z",
+        kr_baseline_value: 236000,
+        kr_target_value: 400000,
+        kr_current_value: 260000,
+        format: "k",
+      },
+    ]);
+    expect(krs).toHaveLength(1);
+    expect(krs[0].target).toBe(400000);
+    expect(krs[0].baseline).toBe(236000);
+    expect(krs[0].current).toBe(260000);
+  });
+
   it("backfills baseline/target from later rows if first row lacks them", () => {
     const krs = buildModeKrs([
       row({
@@ -129,6 +160,28 @@ describe("progressTowardTarget", () => {
       }),
     ])[0];
     expect(progressTowardTarget(kr)).toBeCloseTo(0.5, 2);
+  });
+
+  it("returns 1 when target equals baseline and current has reached it", () => {
+    const kr = buildModeKrs([
+      row({
+        kr_baseline_value: 100,
+        kr_target_value: 100,
+        kr_current_value: 100,
+      }),
+    ])[0];
+    expect(progressTowardTarget(kr)).toBe(1);
+  });
+
+  it("returns 0 when target equals baseline but current is below", () => {
+    const kr = buildModeKrs([
+      row({
+        kr_baseline_value: 100,
+        kr_target_value: 100,
+        kr_current_value: 99,
+      }),
+    ])[0];
+    expect(progressTowardTarget(kr)).toBe(0);
   });
 
   it("returns null when any of baseline/target/current is missing", () => {
