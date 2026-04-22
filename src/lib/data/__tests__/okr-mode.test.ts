@@ -62,6 +62,16 @@ describe("buildModeKrs", () => {
     expect(krs[0].squad).toBe("Growth Marketing");
   });
 
+  it("leaves squad null when kr_type lacks the Squad - prefix", () => {
+    // Defensive: if Mode ever emits a Squad-level row without the expected
+    // prefix, getModeOkrs filters it out of the squad list (needs k.squad).
+    const krs = buildModeKrs([
+      row({ kr_level: "Squad", kr_type: "Growth Marketing" }),
+    ]);
+    expect(krs[0].level).toBe("Squad");
+    expect(krs[0].squad).toBeNull();
+  });
+
   it("strips Pillar - prefix into pillar name", () => {
     const krs = buildModeKrs([
       row({ kr_level: "Pillar", kr_type: "Pillar - Growth" }),

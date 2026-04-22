@@ -291,6 +291,10 @@ export function OkrView({
                     const days = daysSince(krs[0].postedAt);
                     const isStale = days > STALE_DAYS;
                     const toneClasses = staleToneClasses(days);
+                    // Badge joins on the squad name string. Mode strips the
+                    // "Squad - " prefix from kr_type; Slack uses the squad name
+                    // as posted. A whitespace/casing mismatch silently hides the
+                    // badge — if that happens, add a mapping to src/lib/config.
                     const modeCount = modeSquadKrCounts[squad] ?? 0;
                     return (
                       <div key={squad} className="flex items-center gap-2">
@@ -531,8 +535,17 @@ function ModeKrRow({ kr }: { kr: ModeKr }) {
         )}
       </span>
       {kr.previous != null && kr.current != null && (
-        <span className={`flex w-6 shrink-0 items-center justify-end ${trendColor}`}>
-          <TrendIcon className="h-3 w-3" />
+        <span
+          className={`flex w-6 shrink-0 items-center justify-end ${trendColor}`}
+          aria-label={
+            trend === "up"
+              ? "improving"
+              : trend === "down"
+                ? "worsening"
+                : "flat"
+          }
+        >
+          <TrendIcon className="h-3 w-3" aria-hidden="true" />
         </span>
       )}
     </div>

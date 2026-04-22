@@ -57,7 +57,15 @@ export function OkrCompanyKrCard({ kr, delay = 0 }: OkrCompanyKrCardProps) {
         </h4>
         {deltaLabel && (
           <div className={cn("flex shrink-0 items-center gap-1", trendColor)}>
-            <TrendIcon className="h-3 w-3" />
+            <TrendIcon className="h-3 w-3" aria-hidden="true" />
+            <span className="sr-only">
+              {trend === "up"
+                ? "improving"
+                : trend === "down"
+                  ? "worsening"
+                  : "flat"}
+              {" "}
+            </span>
             <span className="font-mono text-[11px] font-medium tabular-nums">
               {deltaLabel}
             </span>
