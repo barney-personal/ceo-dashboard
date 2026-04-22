@@ -1,11 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { RagBar } from "@/components/dashboard/rag-bar";
 import { ExternalLink, ArrowLeft } from "lucide-react";
-
-const STALE_DAYS = 10;
+import {
+  STALE_DAYS,
+  daysSince,
+  formatAbsoluteDate,
+  formatUpdatedAgo,
+  staleToneClasses,
+} from "@/lib/data/okr-staleness";
 
 interface OkrKr {
   pillar: string;
@@ -18,30 +23,6 @@ interface OkrKr {
   userName: string | null;
   postedAt: string;
   slackUrl: string;
-}
-
-function daysSince(iso: string): number {
-  const ms = Date.now() - new Date(iso).getTime();
-  return Math.max(0, Math.floor(ms / 86_400_000));
-}
-
-function formatUpdatedAgo(days: number): string {
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  return `${days}d ago`;
-}
-
-function formatAbsoluteDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function staleToneClasses(days: number): string {
-  if (days > 30) return "text-negative";
-  if (days > STALE_DAYS) return "text-warning";
-  return "text-muted-foreground/70";
 }
 
 interface PillarData {
@@ -86,15 +67,27 @@ function groupBySquad(okrs: OkrKr[]) {
 export function OkrView({ pillars, counts }: OkrViewProps) {
   const [selectedPillar, setSelectedPillar] = useState<string | null>(null);
 
-  const activePillar = pillars.find((p) => p.name === selectedPillar);
+  const pillarStats = useMemo(
+    () =>
+      pillars.map((pillar) => {
+        const squads = groupBySquad(pillar.okrs);
+        const rag = countStatuses(pillar.okrs);
+        const staleSquadCount = squads.filter(
+          ([, krs]) => daysSince(krs[0].postedAt) > STALE_DAYS,
+        ).length;
+        return { pillar, squads, rag, staleSquadCount };
+      }),
+    [pillars],
+  );
 
-  const totalStaleSquads = pillars.reduce((sum, pillar) => {
-    const squads = groupBySquad(pillar.okrs);
-    return (
-      sum +
-      squads.filter(([, krs]) => daysSince(krs[0].postedAt) > STALE_DAYS).length
-    );
-  }, 0);
+  const activePillarStats = pillarStats.find(
+    (p) => p.pillar.name === selectedPillar,
+  );
+
+  const totalStaleSquads = pillarStats.reduce(
+    (sum, p) => sum + p.staleSquadCount,
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -113,7 +106,11 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
         ].map((stat, i) => (
           <div
             key={stat.label}
-            className={`flex flex-col gap-1 px-5 py-4 ${i > 0 ? "border-l border-border/50" : ""}`}
+            className={`flex flex-col gap-1 border-border/50 px-5 py-4 ${
+              i % 2 === 1 ? "border-l" : ""
+            } ${i > 0 ? "sm:border-l" : ""} ${
+              i >= 2 ? "border-t sm:border-t-0" : ""
+            }`}
           >
             <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
               {stat.label}
@@ -135,13 +132,7 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
       {/* Overview: pillar cards */}
       {!selectedPillar && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {pillars.map((pillar) => {
-            const rag = countStatuses(pillar.okrs);
-            const squads = groupBySquad(pillar.okrs);
-            const staleSquadCount = squads.filter(
-              ([, krs]) => daysSince(krs[0].postedAt) > STALE_DAYS,
-            ).length;
-
+          {pillarStats.map(({ pillar, squads, rag, staleSquadCount }) => {
             return (
               <button
                 key={pillar.name}
@@ -238,7 +229,7 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
       )}
 
       {/* Detail view: selected pillar */}
-      {selectedPillar && activePillar && (
+      {selectedPillar && activePillarStats && (
         <div className="space-y-5">
           <button
             onClick={() => setSelectedPillar(null)}
@@ -250,107 +241,107 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
 
           <div>
             <h3 className="text-xl font-semibold text-foreground">
-              {activePillar.name}
+              {activePillarStats.pillar.name}
             </h3>
             <div className="mt-2 max-w-md">
               <RagBar
-                green={countStatuses(activePillar.okrs).green}
-                amber={countStatuses(activePillar.okrs).amber}
-                red={countStatuses(activePillar.okrs).red}
-                grey={countStatuses(activePillar.okrs).grey}
+                green={activePillarStats.rag.green}
+                amber={activePillarStats.rag.amber}
+                red={activePillarStats.rag.red}
+                grey={activePillarStats.rag.grey}
               />
             </div>
           </div>
 
-          {groupBySquad(activePillar.okrs).map(([squad, krs]) => {
+          {activePillarStats.squads.map(([squad, krs]) => {
             const days = daysSince(krs[0].postedAt);
             const isStale = days > STALE_DAYS;
             return (
-            <div
-              key={squad}
-              className="rounded-xl border border-border/60 bg-card shadow-warm"
-            >
-              <div className="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">
-                      {squad}
-                    </span>
-                    {krs[0]?.userName && (
-                      <span className="text-xs text-muted-foreground">
-                        {krs[0].userName}
+              <div
+                key={squad}
+                className="rounded-xl border border-border/60 bg-card shadow-warm"
+              >
+                <div className="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">
+                        {squad}
                       </span>
-                    )}
-                  </div>
-                  <div
-                    className={`mt-0.5 text-[11px] ${
-                      isStale ? "text-warning" : "text-muted-foreground"
-                    }`}
-                  >
-                    Last updated {formatAbsoluteDate(krs[0].postedAt)} ·{" "}
-                    <span className="font-medium tabular-nums">
-                      {formatUpdatedAgo(days)}
-                    </span>
-                  </div>
-                </div>
-                {isStale && (
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                      days > 30
-                        ? "bg-negative/10 text-negative"
-                        : "bg-warning/10 text-warning"
-                    }`}
-                    title={`No update in ${days} days`}
-                  >
-                    Stale · {days}d
-                  </span>
-                )}
-                <a
-                  href={krs[0].slackUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
-                >
-                  Slack
-                  <ExternalLink className="h-2.5 w-2.5" />
-                </a>
-              </div>
-              <div className="p-5 space-y-2">
-                {krs.map((kr) => (
-                  <div
-                    key={`${kr.squadName}-${kr.krName}`}
-                    className="flex items-start gap-3 rounded-lg bg-muted/30 px-3 py-2.5"
-                  >
-                    <span
-                      className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm ${
-                        kr.status === "on_track"
-                          ? "bg-positive"
-                          : kr.status === "at_risk"
-                            ? "bg-warning"
-                            : kr.status === "behind"
-                              ? "bg-negative"
-                              : "bg-muted-foreground/30"
-                      }`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        {kr.krName}
-                      </p>
-                      {(kr.actual || kr.target) && (
-                        <p className="mt-0.5 font-mono text-xs text-muted-foreground">
-                          {kr.actual}
-                          {kr.target ? ` vs ${kr.target} target` : ""}
-                        </p>
+                      {krs[0]?.userName && (
+                        <span className="text-xs text-muted-foreground">
+                          {krs[0].userName}
+                        </span>
                       )}
-                      <p className="mt-0.5 text-[11px] text-muted-foreground/60">
-                        {kr.objectiveName}
-                      </p>
                     </div>
-                    <StatusBadge status={statusToType(kr.status)} />
+                    <div
+                      className={`mt-0.5 text-[11px] ${
+                        isStale ? "text-warning" : "text-muted-foreground"
+                      }`}
+                    >
+                      Last updated {formatAbsoluteDate(krs[0].postedAt)} ·{" "}
+                      <span className="font-medium tabular-nums">
+                        {formatUpdatedAgo(days)}
+                      </span>
+                    </div>
                   </div>
-                ))}
+                  {isStale && (
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        days > 30
+                          ? "bg-negative/10 text-negative"
+                          : "bg-warning/10 text-warning"
+                      }`}
+                      title={`No update in ${days} days`}
+                    >
+                      Stale · {days}d
+                    </span>
+                  )}
+                  <a
+                    href={krs[0].slackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 rounded-md border border-border/50 px-2 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:border-border hover:text-foreground"
+                  >
+                    Slack
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </a>
+                </div>
+                <div className="p-5 space-y-2">
+                  {krs.map((kr) => (
+                    <div
+                      key={`${kr.squadName}-${kr.krName}`}
+                      className="flex items-start gap-3 rounded-lg bg-muted/30 px-3 py-2.5"
+                    >
+                      <span
+                        className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-sm ${
+                          kr.status === "on_track"
+                            ? "bg-positive"
+                            : kr.status === "at_risk"
+                              ? "bg-warning"
+                              : kr.status === "behind"
+                                ? "bg-negative"
+                                : "bg-muted-foreground/30"
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground">
+                          {kr.krName}
+                        </p>
+                        {(kr.actual || kr.target) && (
+                          <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                            {kr.actual}
+                            {kr.target ? ` vs ${kr.target} target` : ""}
+                          </p>
+                        )}
+                        <p className="mt-0.5 text-[11px] text-muted-foreground/60">
+                          {kr.objectiveName}
+                        </p>
+                      </div>
+                      <StatusBadge status={statusToType(kr.status)} />
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
             );
           })}
         </div>
