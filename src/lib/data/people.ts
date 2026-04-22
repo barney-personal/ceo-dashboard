@@ -70,6 +70,11 @@ function todayUtc(): string {
  *
  *   start_date <= asOf AND (termination_date IS NULL OR termination_date > asOf)
  *
+ * Rehires: HiBob keeps the prior stint's `termination_date` on the row even
+ * after a new `start_date` begins. When `termination_date < start_date`, it
+ * refers to the previous employment and must be ignored — otherwise an active
+ * rehire (e.g. Arti, Stu, Tom, Yawer) is treated as terminated.
+ *
  * The label argument selects FTE / CS / Contractor (Mode's own bucketing).
  * Lex compare on YYYY-MM-DD prefixes is correct because all SSoT date columns
  * are midnight-UTC ISO timestamps.
@@ -84,7 +89,9 @@ export function selectModeFteActive(
     const start = rowStr(r, "start_date").slice(0, 10);
     if (!start || start > asOf) return false;
     const term = rowStr(r, "termination_date").slice(0, 10);
-    return !term || term > asOf;
+    if (!term) return true;
+    if (term < start) return true;
+    return term > asOf;
   });
 }
 
