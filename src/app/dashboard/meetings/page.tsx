@@ -54,10 +54,14 @@ export default async function MeetingsPage({
       ).length > 0
     : false;
 
-  const days = await getMeetingsForRange(weekStart, weekEnd, {
-    accessToken: accessToken ?? undefined,
-    userId: effectiveUserId ?? undefined,
-  });
+  const { days, calendarAuthExpired } = await getMeetingsForRange(
+    weekStart,
+    weekEnd,
+    {
+      accessToken: accessToken ?? undefined,
+      userId: effectiveUserId ?? undefined,
+    }
+  );
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
@@ -69,7 +73,7 @@ export default async function MeetingsPage({
       <MeetingsView
         initialDays={days}
         initialWeekStart={`${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`}
-        calendarConnected={!!accessToken}
+        calendarConnected={!!accessToken && !calendarAuthExpired}
         granolaConnected={granolaConnected}
       />
     </div>

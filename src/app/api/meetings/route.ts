@@ -27,14 +27,18 @@ export async function GET(request: NextRequest) {
     ? await getUserGoogleAccessToken(userId)
     : null;
 
-  const days = await getMeetingsForRange(weekStart, weekEnd, {
-    accessToken: accessToken ?? undefined,
-    userId: userId ?? undefined,
-  });
+  const { days, calendarAuthExpired } = await getMeetingsForRange(
+    weekStart,
+    weekEnd,
+    {
+      accessToken: accessToken ?? undefined,
+      userId: userId ?? undefined,
+    }
+  );
 
   return NextResponse.json({
     days,
     weekStart: `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}`,
-    calendarConnected: !!accessToken,
+    calendarConnected: !!accessToken && !calendarAuthExpired,
   });
 }
