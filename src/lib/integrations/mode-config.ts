@@ -321,6 +321,35 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     ],
   },
   {
+    reportToken: "ac8032a3cc89",
+    name: "AI Model Usage Dashboard",
+    section: "people",
+    category: "ai-usage",
+    syncEnabled: true,
+    queries: [
+      {
+        // Weekly per-model cost/tokens (claude + cursor)
+        name: "Query 1",
+        storageWindow: { kind: "all" },
+      },
+      {
+        // Monthly per-user aggregation + report-wide median/avg
+        name: "Query 3",
+        storageWindow: { kind: "all" },
+      },
+      {
+        // Monthly per-model cost/tokens + "ALL MODELS" roll-up
+        name: "MoM Usage",
+        storageWindow: { kind: "all" },
+      },
+      {
+        // Weekly per-category totals (no model split)
+        name: "Overall Data",
+        storageWindow: { kind: "all" },
+      },
+    ],
+  },
+  {
     reportToken: "47715a0cccf7",
     name: "Attrition Tracker",
     section: "people",
@@ -486,6 +515,13 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
     title: "Attrition Tracker",
     section: "people",
     category: "attrition",
+    height: 800,
+  },
+  {
+    url: buildModeReportUrl("ac8032a3cc89"),
+    title: "AI Model Usage Dashboard",
+    section: "people",
+    category: "ai-usage",
     height: 800,
   },
 ];

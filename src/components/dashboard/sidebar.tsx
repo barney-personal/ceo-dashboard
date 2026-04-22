@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Menu,
   X,
+  Sparkles,
 } from "lucide-react";
 
 interface NavItem {
@@ -146,6 +147,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/attrition",
         requiredRole: "leadership",
         icon: TrendingUp,
+      },
+      {
+        label: "AI Usage",
+        href: "/dashboard/people/ai-usage",
+        requiredRole: "everyone",
+        icon: Sparkles,
       },
       {
         label: "Data Cleanup",

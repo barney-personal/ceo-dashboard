@@ -3,6 +3,11 @@ import { withDbErrorContext } from "@/lib/db/errors";
 import { githubPrs, githubCommits, githubEmployeeMap } from "@/lib/db/schema";
 import { gte, sql, count, sum } from "drizzle-orm";
 import { getActiveEmployees, computeTenureDays, type Person } from "./people";
+import {
+  aggregateLatestMonthByUser,
+  getAiUsageData,
+  type AiUsageUserSummary,
+} from "./ai-usage";
 
 export interface EngineerRanking {
   login: string;
@@ -33,6 +38,13 @@ export interface EngineerRanking {
    *  PR stats will always be zero and they're effectively invisible on
    *  GitHub-side until a mapping is set up. */
   githubMapped: boolean;
+  /** Total AI spend (USD) for the latest month in the AI Model Usage dashboard.
+   *  Null when there's no AI usage data synced for this engineer. */
+  aiSpend: number | null;
+  /** Total tokens used in the latest month. Null with no data. */
+  aiTokens: number | null;
+  /** ISO date (YYYY-MM-DD) of the latest month represented by `aiSpend`. */
+  aiMonthStart: string | null;
 }
 
 export const PERIOD_OPTIONS = [
@@ -64,42 +76,44 @@ export async function getEngineeringRankings(
     since.setUTCDate(since.getUTCDate() - days);
     since.setUTCHours(0, 0, 0, 0);
 
-    const [prRows, commitRows, ghMapRows, activePeople] = await Promise.all([
-      db
-        .select({
-          login: githubPrs.authorLogin,
-          avatarUrl: sql<string | null>`MAX(${githubPrs.authorAvatarUrl})`.as(
-            "avatar_url"
-          ),
-          prsCount: count().as("prs_count"),
-          additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
-          deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
-          changedFiles: sum(githubPrs.changedFiles)
-            .mapWith(Number)
-            .as("changed_files"),
-          repos:
-            sql<string[]>`ARRAY_AGG(DISTINCT ${githubPrs.repo})`.as("repos"),
-        })
-        .from(githubPrs)
-        .where(gte(githubPrs.mergedAt, since))
-        .groupBy(githubPrs.authorLogin),
-      db
-        .select({
-          login: githubCommits.authorLogin,
-          commitsCount: count().as("commits_count"),
-        })
-        .from(githubCommits)
-        .where(gte(githubCommits.committedAt, since))
-        .groupBy(githubCommits.authorLogin),
-      db
-        .select({
-          githubLogin: githubEmployeeMap.githubLogin,
-          employeeEmail: githubEmployeeMap.employeeEmail,
-          isBot: githubEmployeeMap.isBot,
-        })
-        .from(githubEmployeeMap),
-      getActiveEmployeesSafe(),
-    ]);
+    const [prRows, commitRows, ghMapRows, activePeople, aiUsageByUser] =
+      await Promise.all([
+        db
+          .select({
+            login: githubPrs.authorLogin,
+            avatarUrl: sql<string | null>`MAX(${githubPrs.authorAvatarUrl})`.as(
+              "avatar_url"
+            ),
+            prsCount: count().as("prs_count"),
+            additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
+            deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
+            changedFiles: sum(githubPrs.changedFiles)
+              .mapWith(Number)
+              .as("changed_files"),
+            repos:
+              sql<string[]>`ARRAY_AGG(DISTINCT ${githubPrs.repo})`.as("repos"),
+          })
+          .from(githubPrs)
+          .where(gte(githubPrs.mergedAt, since))
+          .groupBy(githubPrs.authorLogin),
+        db
+          .select({
+            login: githubCommits.authorLogin,
+            commitsCount: count().as("commits_count"),
+          })
+          .from(githubCommits)
+          .where(gte(githubCommits.committedAt, since))
+          .groupBy(githubCommits.authorLogin),
+        db
+          .select({
+            githubLogin: githubEmployeeMap.githubLogin,
+            employeeEmail: githubEmployeeMap.employeeEmail,
+            isBot: githubEmployeeMap.isBot,
+          })
+          .from(githubEmployeeMap),
+        getActiveEmployeesSafe(),
+        getAiUsageByUserSafe(),
+      ]);
 
     const prByLogin = new Map<string, (typeof prRows)[number]>();
     for (const pr of prRows) prByLogin.set(pr.login, pr);
@@ -138,6 +152,7 @@ export async function getEngineeringRankings(
       const prsCount = pr?.prsCount ?? 0;
       const additions = pr?.additions ?? 0;
       const deletions = pr?.deletions ?? 0;
+      const aiUsage = aiUsageByUser.get(person.email.toLowerCase()) ?? null;
 
       rankings.push({
         login: githubLogin ?? person.email,
@@ -160,6 +175,9 @@ export async function getEngineeringRankings(
         tenureDays,
         silent: prsCount === 0,
         githubMapped: githubLogin !== null,
+        aiSpend: aiUsage?.totalCost ?? null,
+        aiTokens: aiUsage?.totalTokens ?? null,
+        aiMonthStart: aiUsage?.latestMonthStart ?? null,
       });
     }
 
@@ -177,5 +195,16 @@ async function getActiveEmployeesSafe(): Promise<Person[]> {
     // Mode data unavailable — return empty so the caller gets an empty
     // ranking rather than a crash. The page shows its usual empty state.
     return [];
+  }
+}
+
+async function getAiUsageByUserSafe(): Promise<
+  Map<string, AiUsageUserSummary>
+> {
+  try {
+    const data = await getAiUsageData();
+    return aggregateLatestMonthByUser(data);
+  } catch {
+    return new Map();
   }
 }

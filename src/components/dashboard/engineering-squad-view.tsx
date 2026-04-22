@@ -29,6 +29,9 @@ interface EngineerRow {
   tenureMonths: number | null;
   tenureDays: number | null;
   silent: boolean;
+  aiSpend: number | null;
+  aiTokens: number | null;
+  aiMonthStart: string | null;
 }
 
 interface SquadRow {

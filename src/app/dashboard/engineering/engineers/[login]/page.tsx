@@ -5,6 +5,7 @@ import { SectionDivider } from "@/components/dashboard/section-divider";
 import { EngineerProfileCharts } from "@/components/dashboard/engineer-profile-charts";
 import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
 import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
+import { EngineerAiUsageCard } from "@/components/dashboard/engineer-ai-usage-card";
 import { EditMappingDialog } from "@/components/dashboard/edit-mapping-dialog";
 import {
   getEngineerProfile,
@@ -12,6 +13,7 @@ import {
   getSquadOkrs,
   getEngineerPerformanceRatings,
   getEmployeeOptions,
+  getEngineerAiUsage,
 } from "@/lib/data/engineer-profile";
 import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
@@ -57,7 +59,7 @@ export default async function EngineerProfilePage({
     console.error("[engineer profile] role lookup failed", err);
   }
 
-  const [timeSeries, squadOkrs, performance, employeeOptions] =
+  const [timeSeries, squadOkrs, performance, employeeOptions, aiUsage] =
     await Promise.all([
       getEngineerTimeSeries(login, periodDays).catch((err) => {
         console.error("[engineer profile] time series failed", err);
@@ -89,6 +91,10 @@ export default async function EngineerProfilePage({
             return [];
           })
         : Promise.resolve([]),
+      getEngineerAiUsage(profile.employeeEmail).catch((err) => {
+        console.error("[engineer profile] ai usage failed", err);
+        return null;
+      }),
     ]);
 
   const displayName = profile.employeeName ?? login;
@@ -196,6 +202,17 @@ export default async function EngineerProfilePage({
           deletionsSeries={timeSeries.deletionsSeries}
         />
       </section>
+
+      {/* AI usage */}
+      {aiUsage && (
+        <section className="space-y-4">
+          <SectionDivider
+            title="AI usage"
+            subtitle="Claude + Cursor spend and tokens from Mode"
+          />
+          <EngineerAiUsageCard usage={aiUsage} />
+        </section>
+      )}
 
       {/* Performance ratings — CEO only */}
       {isCeo && performance && (

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetPerformanceData, mockGetActiveEmployees } = vi.hoisted(() => ({
-  mockGetPerformanceData: vi.fn(),
-  mockGetActiveEmployees: vi.fn(),
-}));
+const { mockGetPerformanceData, mockGetActiveEmployees, mockGetAiUsageData } =
+  vi.hoisted(() => ({
+    mockGetPerformanceData: vi.fn(),
+    mockGetActiveEmployees: vi.fn(),
+    mockGetAiUsageData: vi.fn(),
+  }));
 
 vi.mock("../performance", async () => {
   const actual = await vi.importActual<typeof import("../performance")>(
@@ -24,10 +26,19 @@ vi.mock("../people", () => ({
 vi.mock("../okrs", () => ({
   groupLatestOkrRows: vi.fn(() => new Map()),
 }));
+vi.mock("../ai-usage", async () => {
+  const actual =
+    await vi.importActual<typeof import("../ai-usage")>("../ai-usage");
+  return {
+    ...actual,
+    getAiUsageData: mockGetAiUsageData,
+  };
+});
 
 import {
   getEmployeeOptions,
   getEngineerPerformanceRatings,
+  getEngineerAiUsage,
 } from "../engineer-profile";
 import type { Person } from "../people";
 import type { PersonPerformance } from "../performance";
@@ -211,5 +222,101 @@ describe("getEmployeeOptions", () => {
       expect.any(Error)
     );
     consoleError.mockRestore();
+  });
+});
+
+describe("getEngineerAiUsage", () => {
+  beforeEach(() => {
+    mockGetAiUsageData.mockReset();
+  });
+
+  it("returns null when email is missing", async () => {
+    const result = await getEngineerAiUsage(null);
+    expect(result).toBeNull();
+    expect(mockGetAiUsageData).not.toHaveBeenCalled();
+  });
+
+  it("returns null when Mode throws (graceful fallback)", async () => {
+    mockGetAiUsageData.mockRejectedValue(new Error("Mode unavailable"));
+    const result = await getEngineerAiUsage("alice@meetcleo.com");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the engineer has no monthly usage rows", async () => {
+    mockGetAiUsageData.mockResolvedValue({
+      weeklyByCategory: [],
+      weeklyByModel: [],
+      monthlyByModel: [],
+      monthlyByUser: [],
+      syncedAt: new Date("2026-04-22T06:00:00Z"),
+      missing: [],
+    });
+    expect(await getEngineerAiUsage("alice@meetcleo.com")).toBeNull();
+  });
+
+  it("combines Claude + Cursor rows for the latest month and exposes peer stats", async () => {
+    mockGetAiUsageData.mockResolvedValue({
+      weeklyByCategory: [],
+      weeklyByModel: [],
+      monthlyByModel: [],
+      monthlyByUser: [
+        {
+          monthStart: "2026-04-01",
+          category: "claude",
+          userEmail: "alice@meetcleo.com",
+          nDays: 10,
+          nModelsUsed: 2,
+          totalCost: 500,
+          totalTokens: 800_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 40,
+          medianCost: 25,
+        },
+        {
+          monthStart: "2026-04-01",
+          category: "cursor",
+          userEmail: "alice@meetcleo.com",
+          nDays: 8,
+          nModelsUsed: 1,
+          totalCost: 120,
+          totalTokens: 200_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 40,
+          medianCost: 25,
+        },
+        {
+          monthStart: "2026-03-01",
+          category: "cursor",
+          userEmail: "alice@meetcleo.com",
+          nDays: 20,
+          nModelsUsed: 3,
+          totalCost: 300,
+          totalTokens: 500_000_000,
+          medianTokensPerPerson: 27_000_000,
+          avgTokensPerPerson: 70_000_000,
+          avgCostPerPerson: 35,
+          medianCost: 20,
+        },
+      ],
+      syncedAt: new Date("2026-04-22T06:00:00Z"),
+      missing: [],
+    });
+
+    const result = await getEngineerAiUsage("ALICE@meetcleo.com");
+    expect(result).toBeDefined();
+    expect(result?.latestMonthStart).toBe("2026-04-01");
+    expect(result?.latestMonthCost).toBe(620);
+    expect(result?.latestMonthTokens).toBe(1_000_000_000);
+    expect(result?.nDays).toBe(10);
+    expect(result?.byCategory).toHaveLength(2);
+    expect(result?.peerMedianCost).toBe(25);
+    expect(result?.peerAvgCost).toBe(40);
+    expect(result?.monthlyTrend.map((t) => t.monthStart)).toEqual([
+      "2026-03-01",
+      "2026-04-01",
+    ]);
+    expect(result?.costSeries).toHaveLength(2);
   });
 });
