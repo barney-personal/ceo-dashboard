@@ -171,3 +171,104 @@
     stroke-dashoffset: 47.12;
   }
 }
+
+/* Strategy deck — "Manifesto Folio" editorial theme */
+.strategy-deck {
+  --paper: #f4eee0;
+  --paper-deep: #e8dfcb;
+  --paper-warm: #ebe3cf;
+  --ink: #1a1714;
+  --ink-soft: #322c27;
+  --ink-muted: #6b6560;
+  --ink-faint: #a59e93;
+  --rule: #d4cbb5;
+  --rule-soft: #ddd2b9;
+  --accent: #0f8a3c;
+  --accent-bright: #12c25b;
+  --accent-tint: #d5f0de;
+  --rust: #b45023;
+}
+
+.strategy-deck-invert {
+  --paper: #141310;
+  --paper-deep: #0d0c0a;
+  --paper-warm: #1d1a16;
+  --ink: #f1ead9;
+  --ink-soft: #d3ccba;
+  --ink-muted: #8a847a;
+  --ink-faint: #5a554e;
+  --rule: #34302a;
+  --rule-soft: #26231f;
+  --accent-tint: #113a22;
+}
+
+.strategy-deck-grain {
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(0, 0, 0, 0.018) 0.5px, transparent 1px),
+    radial-gradient(circle at 70% 60%, rgba(0, 0, 0, 0.018) 0.5px, transparent 1px),
+    radial-gradient(circle at 40% 80%, rgba(0, 0, 0, 0.015) 0.5px, transparent 1px);
+  background-size: 120px 120px, 180px 180px, 220px 220px;
+  background-position: 0 0, 40px 60px, 80px 120px;
+}
+
+@keyframes deck-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes deck-reveal-wide {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+    letter-spacing: 0.01em;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    letter-spacing: 0;
+  }
+}
+
+@keyframes deck-rule-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes deck-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.strategy-deck [data-reveal] {
+  opacity: 0;
+  animation: deck-reveal 700ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.strategy-deck [data-reveal="wide"] {
+  animation-name: deck-reveal-wide;
+  animation-duration: 1000ms;
+}
+
+.strategy-deck [data-reveal="fade"] {
+  animation-name: deck-fade;
+  animation-duration: 900ms;
+}
+
+.strategy-deck [data-rule] {
+  transform-origin: left center;
+  animation: deck-rule-draw 900ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
