@@ -25,7 +25,8 @@ interface BarChartProps {
   headerLeft?: React.ReactNode;
   leftMargin?: number;
   xAxisLabel?: string;
-  formatTooltipValue?: (value: number, maxValue: number) => string;
+  valueUnit?: string;
+  showPercentOfMax?: boolean;
 }
 
 export function BarChart({
@@ -38,7 +39,8 @@ export function BarChart({
   headerLeft,
   leftMargin = 150,
   xAxisLabel = "Employees",
-  formatTooltipValue,
+  valueUnit = "employees",
+  showPercentOfMax = true,
 }: BarChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -136,9 +138,9 @@ export function BarChart({
       .on("mouseenter", function (event: MouseEvent, d: BarChartData) {
         select(this).attr("opacity", 1);
         const pct = ((d.value / maxVal) * 100).toFixed(0);
-        const valueLine = formatTooltipValue
-          ? formatTooltipValue(d.value, maxVal)
-          : `${d.value.toLocaleString()} employees (${pct}% of largest)`;
+        const valueLine = showPercentOfMax
+          ? `${d.value.toLocaleString()} ${valueUnit} (${pct}% of largest)`
+          : `${d.value.toLocaleString()} ${valueUnit}`;
         tooltip
           .html(
             `<div style="font-size:12px;font-weight:600;color:#333">${d.label}</div>
@@ -178,7 +180,7 @@ export function BarChart({
       .attr("font-size", "11px")
       .attr("font-family", "var(--font-geist-mono)")
       .text((d) => d.value.toLocaleString());
-  }, [data, onBarClick, leftMargin, xAxisLabel, formatTooltipValue]);
+  }, [data, onBarClick, leftMargin, xAxisLabel, valueUnit, showPercentOfMax]);
 
   useEffect(() => {
     draw();
