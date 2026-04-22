@@ -24,6 +24,8 @@ interface BarChartProps {
   onBarClick?: (item: BarChartData) => void;
   headerLeft?: React.ReactNode;
   leftMargin?: number;
+  xAxisLabel?: string;
+  formatTooltipValue?: (value: number, maxValue: number) => string;
 }
 
 export function BarChart({
@@ -35,6 +37,8 @@ export function BarChart({
   onBarClick,
   headerLeft,
   leftMargin = 150,
+  xAxisLabel = "Employees",
+  formatTooltipValue,
 }: BarChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -110,7 +114,7 @@ export function BarChart({
       .attr("text-anchor", "middle")
       .attr("fill", "#aaa")
       .attr("font-size", "11px")
-      .text("Employees");
+      .text(xAxisLabel);
 
     const tooltip = select(tooltipRef.current);
 
@@ -132,10 +136,13 @@ export function BarChart({
       .on("mouseenter", function (event: MouseEvent, d: BarChartData) {
         select(this).attr("opacity", 1);
         const pct = ((d.value / maxVal) * 100).toFixed(0);
+        const valueLine = formatTooltipValue
+          ? formatTooltipValue(d.value, maxVal)
+          : `${d.value.toLocaleString()} employees (${pct}% of largest)`;
         tooltip
           .html(
             `<div style="font-size:12px;font-weight:600;color:#333">${d.label}</div>
-             <div style="font-size:12px;color:#666;margin-top:2px">${d.value.toLocaleString()} employees (${pct}% of largest)</div>`
+             <div style="font-size:12px;color:#666;margin-top:2px">${valueLine}</div>`
           )
           .style("opacity", 1)
           .style("left", `${event.offsetX + 16}px`)
@@ -171,7 +178,7 @@ export function BarChart({
       .attr("font-size", "11px")
       .attr("font-family", "var(--font-geist-mono)")
       .text((d) => d.value.toLocaleString());
-  }, [data, onBarClick, leftMargin]);
+  }, [data, onBarClick, leftMargin, xAxisLabel, formatTooltipValue]);
 
   useEffect(() => {
     draw();
