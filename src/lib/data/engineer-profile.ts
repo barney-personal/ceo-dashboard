@@ -255,11 +255,25 @@ export async function getEngineerAiUsage(
     (r) => r.monthStart === latestMonth.monthStart,
   );
   const nDays = Math.max(...latestRows.map((r) => r.nDays), 0);
-  const peerMedianCost = latestRows[0]?.medianCost ?? 0;
-  const peerAvgCost = latestRows[0]?.avgCostPerPerson ?? 0;
   const peerSpend = [...aggregateLatestMonthByUser(data).values()]
     .map((u) => u.totalCost)
     .filter((v) => Number.isFinite(v));
+  // Compute peer median/avg locally from the combined (Claude + Cursor)
+  // per-user totals so the number reflects the whole company, not
+  // whichever single-category row Mode happened to return first.
+  const sortedPeerSpend = [...peerSpend].sort((a, b) => a - b);
+  const peerMedianCost =
+    sortedPeerSpend.length === 0
+      ? 0
+      : sortedPeerSpend.length % 2 === 1
+        ? sortedPeerSpend[Math.floor(sortedPeerSpend.length / 2)]
+        : (sortedPeerSpend[sortedPeerSpend.length / 2 - 1] +
+            sortedPeerSpend[sortedPeerSpend.length / 2]) /
+          2;
+  const peerAvgCost =
+    peerSpend.length === 0
+      ? 0
+      : peerSpend.reduce((sum, v) => sum + v, 0) / peerSpend.length;
 
   return {
     latestMonthStart: latestMonth.monthStart,

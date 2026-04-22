@@ -12,6 +12,20 @@ import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getContentBoxWidth } from "./chart-utils";
 
+/**
+ * Minimal HTML escape for the tooltip. Labels come from series config today
+ * (hard-coded "Claude"/"Cursor"), but this keeps us safe if the component is
+ * ever reused with labels sourced from Mode query results.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export interface StackedAreaSeries {
   key: string;
   label: string;
@@ -262,19 +276,19 @@ export function StackedAreaChart({
         crosshair.attr("x1", cx).attr("x2", cx).style("opacity", 1);
 
         let total = 0;
-        let html = `<div style="font-size:11px;color:#999;margin-bottom:4px">${timeFormat("%b %d, %Y")(d._date)}</div>`;
+        let html = `<div style="font-size:11px;color:#999;margin-bottom:4px">${escapeHtml(timeFormat("%b %d, %Y")(d._date))}</div>`;
         for (const s of series) {
           const v = Number(d[s.key] ?? 0);
           total += v;
           html += `<div style="display:flex;align-items:center;gap:6px;font-size:12px">
-            <span style="width:10px;height:10px;background:${s.color};border-radius:2px"></span>
-            <span style="color:#666">${s.label}:</span>
-            <span style="font-weight:600;color:#333">${yFormat(v)}</span>
+            <span style="width:10px;height:10px;background:${escapeHtml(s.color)};border-radius:2px"></span>
+            <span style="color:#666">${escapeHtml(s.label)}:</span>
+            <span style="font-weight:600;color:#333">${escapeHtml(yFormat(v))}</span>
           </div>`;
         }
         html += `<div style="border-top:1px solid #eee;margin-top:4px;padding-top:4px;font-size:12px;display:flex;justify-content:space-between;gap:12px">
           <span style="color:#666">Total</span>
-          <span style="font-weight:700;color:#111">${yFormat(total)}</span>
+          <span style="font-weight:700;color:#111">${escapeHtml(yFormat(total))}</span>
         </div>`;
 
         tooltip

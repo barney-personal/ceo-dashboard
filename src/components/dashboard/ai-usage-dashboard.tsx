@@ -14,10 +14,6 @@ interface WeeklyCategoryRow {
   totalTokens: number;
 }
 
-interface WeeklyModelRow extends WeeklyCategoryRow {
-  modelName: string;
-}
-
 interface MonthlyModelRow {
   monthStart: string;
   category: string;
@@ -134,7 +130,6 @@ export function AiUsageDashboard({
   canViewProfiles = false,
 }: {
   weeklyByCategory: WeeklyCategoryRow[];
-  weeklyByModel?: WeeklyModelRow[];
   monthlyByModel: MonthlyModelRow[];
   monthlyByUser: MonthlyUserRow[];
   userTrends: Record<string, UserMonthlyTrendEntry[]>;

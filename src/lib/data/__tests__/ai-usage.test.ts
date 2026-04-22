@@ -309,7 +309,8 @@ describe("summariseTotals — trailing 30d + user counts", () => {
     const data = await getAiUsageData();
     const totals = summariseTotals(data);
 
-    // Only 3 week buckets in fixture — trailing 4 sums them all: 1500+3700+1200 = 6400
+    // 3 rows across 2 distinct weekStarts (2026-04-06 + 2026-04-13).
+    // Trailing 4 sums all weeks present: 1500 + 3700 + 1200 = 6400.
     expect(totals.trailing30DayCost).toBe(6400);
     // No weeks before that window, so prior-30d is 0.
     expect(totals.prior30DayCost).toBe(0);

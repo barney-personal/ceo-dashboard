@@ -254,12 +254,13 @@ describe("getEngineerAiUsage", () => {
     expect(await getEngineerAiUsage("alice@meetcleo.com")).toBeNull();
   });
 
-  it("combines Claude + Cursor rows for the latest month and exposes peer stats", async () => {
+  it("combines Claude + Cursor rows for the latest month and computes peer stats locally", async () => {
     mockGetAiUsageData.mockResolvedValue({
       weeklyByCategory: [],
       weeklyByModel: [],
       monthlyByModel: [],
       monthlyByUser: [
+        // Alice — both tools, latest month → combined 620
         {
           monthStart: "2026-04-01",
           category: "claude",
@@ -270,8 +271,10 @@ describe("getEngineerAiUsage", () => {
           totalTokens: 800_000_000,
           medianTokensPerPerson: 30_000_000,
           avgTokensPerPerson: 80_000_000,
-          avgCostPerPerson: 40,
-          medianCost: 25,
+          // Mode's per-category numbers — intentionally divergent so a
+          // bug taking row[0].medianCost would surface as a wrong value.
+          avgCostPerPerson: 999,
+          medianCost: 999,
         },
         {
           monthStart: "2026-04-01",
@@ -283,8 +286,36 @@ describe("getEngineerAiUsage", () => {
           totalTokens: 200_000_000,
           medianTokensPerPerson: 30_000_000,
           avgTokensPerPerson: 80_000_000,
-          avgCostPerPerson: 40,
-          medianCost: 25,
+          avgCostPerPerson: 7,
+          medianCost: 7,
+        },
+        // Bob — cursor only, latest month → 60
+        {
+          monthStart: "2026-04-01",
+          category: "cursor",
+          userEmail: "bob@meetcleo.com",
+          nDays: 4,
+          nModelsUsed: 1,
+          totalCost: 60,
+          totalTokens: 100_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 7,
+          medianCost: 7,
+        },
+        // Carol — claude only, latest month → 200
+        {
+          monthStart: "2026-04-01",
+          category: "claude",
+          userEmail: "carol@meetcleo.com",
+          nDays: 6,
+          nModelsUsed: 1,
+          totalCost: 200,
+          totalTokens: 250_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 999,
+          medianCost: 999,
         },
         {
           monthStart: "2026-03-01",
@@ -311,8 +342,14 @@ describe("getEngineerAiUsage", () => {
     expect(result?.latestMonthTokens).toBe(1_000_000_000);
     expect(result?.nDays).toBe(10);
     expect(result?.byCategory).toHaveLength(2);
-    expect(result?.peerMedianCost).toBe(25);
-    expect(result?.peerAvgCost).toBe(40);
+    // Peer combined-spend distribution: [60, 200, 620].
+    // Median = 200, mean = 880/3 ≈ 293.33. Crucially, NEITHER matches the
+    // Mode-supplied medianCost (7 or 999) — proving local computation.
+    expect(result?.peerSpend).toEqual(
+      expect.arrayContaining([60, 200, 620]),
+    );
+    expect(result?.peerMedianCost).toBe(200);
+    expect(result?.peerAvgCost).toBeCloseTo(293.33, 1);
     expect(result?.monthlyTrend.map((t) => t.monthStart)).toEqual([
       "2026-03-01",
       "2026-04-01",

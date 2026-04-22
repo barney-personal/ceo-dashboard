@@ -153,8 +153,15 @@ export async function getAiUsageData(): Promise<AiUsageData> {
 }
 
 export interface AiUsageTotals {
+  /** All-time spend across every weekly Overall row. */
   totalCost: number;
+  /** All-time token count across every weekly Overall row. */
   totalTokens: number;
+  /**
+   * Distinct user emails that have *ever* appeared in the Query 3 data —
+   * cumulative since data collection began. Use `latestMonthUsers` for the
+   * "active this month" headline.
+   */
   totalUsers: number;
   /** Latest complete week/month totals for headline cards. */
   latestWeekStart: string | null;

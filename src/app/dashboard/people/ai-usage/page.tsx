@@ -219,7 +219,6 @@ export default async function PeopleAiUsagePage() {
       {hasAnyData ? (
         <AiUsageDashboard
           weeklyByCategory={usage.weeklyByCategory}
-          weeklyByModel={usage.weeklyByModel}
           monthlyByModel={usage.monthlyByModel}
           monthlyByUser={usage.monthlyByUser}
           userTrends={userTrendsRecord}
