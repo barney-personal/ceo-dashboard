@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseCsv } from "../swarmia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getPullRequestMetrics, parseCsv, SwarmiaApiError } from "../swarmia";
 
 describe("parseCsv", () => {
   it("parses a simple DORA-shaped response", () => {
@@ -62,5 +62,64 @@ describe("parseCsv", () => {
       { a: "1", b: "2" },
       { a: "3", b: "4" },
     ]);
+  });
+});
+
+describe("fetchSwarmia 5xx retry", () => {
+  const originalToken = process.env.SWARMIA_API_TOKEN;
+
+  beforeEach(() => {
+    process.env.SWARMIA_API_TOKEN = "tok";
+    // Short-circuit the 1s backoff between attempts so the test runs fast.
+    vi.spyOn(global, "setTimeout").mockImplementation(((
+      fn: () => void,
+    ) => {
+      fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+  });
+
+  afterEach(() => {
+    process.env.SWARMIA_API_TOKEN = originalToken;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const csvOk = "Author,PRs merged\nalice,4";
+
+  it("retries once after a 502 and returns the retry's body on success", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>502</html>", { status: 502 }))
+      .mockResolvedValueOnce(new Response(csvOk, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rows = await getPullRequestMetrics("last_90_days");
+    expect(rows).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up and throws SwarmiaApiError after two consecutive 5xx responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("<html>502</html>", { status: 502 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPullRequestMetrics("last_90_days")).rejects.toBeInstanceOf(
+      SwarmiaApiError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 4xx responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPullRequestMetrics("last_90_days")).rejects.toBeInstanceOf(
+      SwarmiaApiError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

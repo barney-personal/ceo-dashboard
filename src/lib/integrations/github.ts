@@ -1,5 +1,17 @@
 import * as Sentry from "@sentry/nextjs";
 
+export class GitHubApiError extends Error {
+  status: number;
+  path: string;
+
+  constructor(status: number, path: string, body: string) {
+    super(`GitHub API error ${status}: ${body}`);
+    this.name = "GitHubApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 30_000;
 const GITHUB_MAX_RETRIES = 5;
@@ -101,7 +113,7 @@ async function githubRequest<T>(
           throw error;
         }
 
-        const error = new Error(`GitHub API error ${res.status}: ${body}`);
+        const error = new GitHubApiError(res.status, path, body);
         if (
           attempt < GITHUB_MAX_RETRIES &&
           (isRateLimit || res.status >= 500)
@@ -240,8 +252,7 @@ export async function getUserProfileOrNull(
   try {
     return await getUserProfile(login, opts);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/GitHub API error 404/.test(message)) {
+    if (error instanceof GitHubApiError && error.status === 404) {
       return null;
     }
     throw error;

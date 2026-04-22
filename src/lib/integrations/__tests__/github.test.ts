@@ -6,7 +6,11 @@ vi.mock("@sentry/nextjs", () => ({
   captureMessage: vi.fn(),
 }));
 
-import { fetchMergedPRRecords } from "../github";
+import {
+  fetchMergedPRRecords,
+  getUserProfileOrNull,
+  GitHubApiError,
+} from "../github";
 
 interface FakeNode {
   number: number;
@@ -192,5 +196,72 @@ describe("fetchMergedPRRecords pagination", () => {
 
     const result = await fetchMergedPRRecords(since, { repos: ["r1"] });
     expect(result.total).toBe(1);
+  });
+});
+
+describe("getUserProfileOrNull", () => {
+  const originalToken = process.env.GITHUB_API_TOKEN;
+  const originalOrg = process.env.GITHUB_ORG;
+
+  beforeEach(() => {
+    process.env.GITHUB_API_TOKEN = "tok";
+    process.env.GITHUB_ORG = "acme";
+  });
+
+  afterEach(() => {
+    process.env.GITHUB_API_TOKEN = originalToken;
+    process.env.GITHUB_ORG = originalOrg;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null when the GitHub user has been deleted (404)", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const profile = await getUserProfileOrNull("ghost-user");
+    expect(profile).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the profile for a 200 response", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ login: "alice", name: "Alice", email: "alice@example.com" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const profile = await getUserProfileOrNull("alice");
+    expect(profile).toMatchObject({ login: "alice", name: "Alice" });
+  });
+
+  it("re-throws non-404 errors as GitHubApiError", async () => {
+    // 502 is retryable — serve a fresh Response on every call so the body
+    // isn't consumed twice.
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response("upstream bad gateway", { status: 502 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    // Short-circuit the retry backoff so the test finishes in well under a
+    // second rather than waiting on real exponential backoff.
+    vi.spyOn(global, "setTimeout").mockImplementation(((
+      fn: () => void,
+    ) => {
+      fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    await expect(getUserProfileOrNull("alice")).rejects.toBeInstanceOf(
+      GitHubApiError,
+    );
   });
 });

@@ -176,6 +176,20 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  // Surface truncation even when the partial output happens to parse as valid
+  // JSON — the returned matches would silently be a prefix of the real set.
+  if (response.stop_reason === "max_tokens") {
+    Sentry.captureMessage("LLM employee match hit max_tokens", {
+      level: "warning",
+      tags: { integration: "github", llm_truncated: "true" },
+      extra: {
+        operation: "llmMatchEmployees",
+        stopReason: response.stop_reason,
+        unmatchedCount: unmatched.length,
+      },
+    });
+  }
+
   let rawParsed: unknown;
   try {
     const jsonStr = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();

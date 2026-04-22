@@ -20,7 +20,9 @@ Sentry.init({
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
 
-  // "Error: aborted" from node:_http_server abortIncoming fires when a client
-  // disconnects mid-stream — it has no stack in our code and no user impact.
-  ignoreErrors: ["Error: aborted"],
+  // node:_http_server abortIncoming throws Error("aborted") when a client
+  // disconnects mid-stream. The regex is anchored so it doesn't also swallow
+  // the several intentional `"<X> request was aborted"` errors our integrations
+  // emit for our own AbortController-driven cancellations.
+  ignoreErrors: [/^aborted$/],
 });
