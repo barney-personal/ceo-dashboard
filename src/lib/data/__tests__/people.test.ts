@@ -110,6 +110,19 @@ describe("selectModeFteActive", () => {
     expect(selectModeFteActive(rows, undefined, "Contractor")).toHaveLength(1);
   });
 
+  it("includes rehires whose termination_date predates the current start_date", () => {
+    // HiBob carries the prior stint's termination_date forward onto the
+    // rehired row. If we treat it literally the rehire is filtered out.
+    expect(
+      selectModeFteActive([
+        fte({
+          start_date: "2025-07-21T00:00:00Z",
+          termination_date: "2024-11-15T00:00:00Z",
+        }),
+      ]),
+    ).toHaveLength(1);
+  });
+
   it("respects an explicit asOf date", () => {
     const rows = [
       fte({
