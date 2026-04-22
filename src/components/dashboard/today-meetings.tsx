@@ -22,6 +22,8 @@ function extractLinks(text: string): { url: string; label: string }[] {
   return links;
 }
 
+// Pinned to company timezone (London). Without it, SSR renders in the
+// server's UTC and `suppressHydrationWarning` freezes that value on the client.
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", {
     hour: "2-digit",
