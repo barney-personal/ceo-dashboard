@@ -483,6 +483,7 @@ const COLS: {
   { key: "peerRatio90d", label: "% of peer", sort: "num", num: true },
   { key: "impact30d", label: "Impact 30d", sort: "num", num: true },
   { key: "trajectoryRatio", label: "Traj.", sort: "num", num: true },
+  { key: "aiSpend", label: "AI $/mo", sort: "num", num: true },
   { key: "flags", label: "Flags", sort: "none" },
 ];
 
@@ -623,6 +624,15 @@ export function WatchlistTable({
                       ? r.trajectoryRatio.toFixed(2)
                       : "—"}
                   </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
+                    {r.aiSpend == null
+                      ? "—"
+                      : r.aiSpend === 0
+                        ? "$0"
+                        : r.aiSpend >= 100
+                          ? `$${Math.round(r.aiSpend)}`
+                          : `$${r.aiSpend.toFixed(0)}`}
+                  </td>
                   <td className="px-3 py-2 text-xs">
                     {r.severity === "severe" && (
                       <span className="mr-1 rounded-full bg-negative/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-negative">
@@ -635,8 +645,20 @@ export function WatchlistTable({
                       </span>
                     )}
                     {r.declining && (
-                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-primary">
+                      <span className="mr-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-primary">
                         declining
+                      </span>
+                    )}
+                    {/* AI coaching hint: low impact + zero/no AI = a
+                        plausible "have you tried Cursor / Claude Code?"
+                        conversation. Not a fitness signal — many great
+                        engineers ship without AI tools. */}
+                    {(r.aiSpend == null || r.aiSpend === 0) && (
+                      <span
+                        className="rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-medium text-primary/80"
+                        title="No AI usage recorded for the latest month — consider an onboarding chat about Claude Code / Cursor"
+                      >
+                        try AI?
                       </span>
                     )}
                   </td>

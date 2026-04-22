@@ -22,6 +22,10 @@ import { db } from "@/lib/db";
 import { githubPrs, githubEmployeeMap } from "@/lib/db/schema";
 import { gte, eq, sql, and, inArray } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
+import {
+  aggregateLatestMonthByUser,
+  getAiUsageData,
+} from "@/lib/data/ai-usage";
 
 const MS_PER_DAY = 86_400_000;
 export const BUCKET_DAYS = 30;
@@ -56,6 +60,17 @@ export interface ImpactEngineer {
   prs30d: number;
   prs90d: number;
   prs180d: number;
+  /** AI tooling spend (Claude + Cursor, USD) for the latest month in the
+   *  AI Model Usage Mode dashboard. Null when no AI data has been recorded
+   *  for this engineer's email — distinguish from $0 (no usage), since the
+   *  AI dataset only began on 2026-03-23 and many engineers may not be
+   *  matched yet. */
+  aiSpend: number | null;
+  /** Total AI tokens used in the latest month, sums Claude + Cursor.
+   *  Same null semantics as `aiSpend`. */
+  aiTokens: number | null;
+  /** ISO date (YYYY-MM-DD) of the AI usage month represented above. */
+  aiMonthStart: string | null;
 }
 
 export interface ImpactTenureBucket {
@@ -83,6 +98,13 @@ export interface ImpactMetadata {
   impactFormula: string;
   modeLastSync: string | null;
   dataQualityNote: string;
+  /** Number of engineers with AI usage data for the latest month — used in
+   *  the page header strip so readers know how broad the AI cohort is. */
+  aiMatchedEngineers: number;
+  /** ISO date for the AI usage month being shown. */
+  aiMonthStart: string | null;
+  /** ISO date when the AI data collection became reliable. */
+  aiDataStart: string;
 }
 
 export interface ImpactAnalysis {
@@ -266,6 +288,30 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
     prsByLogin.set(pr.authorLogin, bucket);
   }
 
+  // Join AI usage by lowercase email. Mode outages are degraded to "no
+  // AI data" — the impact page is not gated on AI being available.
+  let aiUsageByEmail = new Map<
+    string,
+    { totalCost: number; totalTokens: number; latestMonthStart: string }
+  >();
+  let aiMonthStartIso: string | null = null;
+  try {
+    const aiData = await getAiUsageData();
+    aiUsageByEmail = new Map(
+      [...aggregateLatestMonthByUser(aiData).entries()].map(([email, u]) => [
+        email,
+        {
+          totalCost: u.totalCost,
+          totalTokens: u.totalTokens,
+          latestMonthStart: u.latestMonthStart,
+        },
+      ]),
+    );
+    aiMonthStartIso = aiUsageByEmail.values().next().value?.latestMonthStart ?? null;
+  } catch {
+    // Mode unreachable / report missing → engineers get null AI fields.
+  }
+
   const now = Date.now();
   const endMs = dataEnd.getTime();
   const startMsBounds = dataStart.getTime();
@@ -355,6 +401,8 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
       }
     }
 
+    const aiUsage = aiUsageByEmail.get(email);
+
     engineers.push({
       email,
       name: emp.preferred_name ?? emp.rp_full_name ?? email,
@@ -382,6 +430,9 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
       prs30d: windows["30d"].prs,
       prs90d: windows["90d"].prs,
       prs180d: windows["180d"].prs,
+      aiSpend: aiUsage?.totalCost ?? null,
+      aiTokens: aiUsage?.totalTokens ?? null,
+      aiMonthStart: aiUsage?.latestMonthStart ?? null,
     });
   }
 
@@ -405,6 +456,11 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
       ? new Date(headcountQuery.syncedAt).toISOString()
       : null,
     dataQualityNote: `GitHub sync coverage was incomplete before ${dataStart.toISOString().slice(0, 10)}. Monthly PR volumes below ${Math.round(reliableThreshold)} (40% of median) are treated as unreliable and excluded from tenure-windowed analysis.`,
+    aiMatchedEngineers: engineers.filter((e) => e.aiSpend != null).length,
+    aiMonthStart: aiMonthStartIso,
+    // Per the source dashboard: Bedrock (Claude) data is reliable from
+    // 23-Mar-2026; Cursor data goes back further. Use the conservative date.
+    aiDataStart: "2026-03-23",
   };
 
   return { metadata, engineers, tenureBuckets };

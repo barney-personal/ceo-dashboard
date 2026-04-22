@@ -2,13 +2,7 @@
 
 import type { ImpactAnalysis } from "@/lib/data/engineering-impact";
 import { ImpactFindings } from "./findings";
-import {
-  DistCleveland,
-  DistHistogram,
-  DistRidgeline,
-  DistViolins,
-  DistHeatmap,
-} from "./distribution";
+import { DistCleveland, DistHistogram } from "./distribution";
 import {
   RampUpMain,
   RampUpSpaghetti,
@@ -22,6 +16,21 @@ import {
   WatchlistCaveat,
   WatchlistTable,
 } from "./watchlist";
+import {
+  AiAdoptionByTenure,
+  AiSpendVsImpactScatter,
+  RampUpByAiUsage,
+} from "./ai-tooling";
+
+function aiMonthLabel(iso: string | null): string {
+  if (!iso) return "latest month";
+  const d = new Date(`${iso}T00:00:00Z`);
+  return d.toLocaleDateString("en-GB", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
 
 function SectionHead({
   letter,
@@ -79,6 +88,12 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
           <span>
             <span className="text-primary">› </span>mode sync{" "}
             {fmtDate(metadata.modeLastSync)}
+          </span>
+        )}
+        {metadata.aiMatchedEngineers > 0 && (
+          <span>
+            <span className="text-primary">› </span>
+            {metadata.aiMatchedEngineers} engineers w/ AI data
           </span>
         )}
       </div>
@@ -150,11 +165,16 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
           title="Distribution of impact"
           lede="Before we talk about ramp-up, we need to see the shape of the metric itself. Where do engineers sit, and how wide is the spread?"
         />
+        {/* The Cleveland dot plot already shows every individual engineer
+            and the histogram shows the binned shape — together they answer
+            "where do people sit?" and "how skewed is the distribution?".
+            Earlier iterations also rendered ridgelines, violins, and a
+            heatmap of the same numbers; with ~150 ICs the extra views
+            mostly restated the same shape, so we cut them per Tufte's
+            data-density principle. The cohort-by-cohort view lives in
+            Section B (ramp-up) and Section C (pillar). */}
         <DistCleveland engineers={engineers} />
         <DistHistogram engineers={engineers} />
-        <DistRidgeline engineers={engineers} />
-        <DistViolins engineers={engineers} />
-        <DistHeatmap engineers={engineers} />
       </section>
 
       {/* Section B */}
@@ -193,6 +213,18 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
         <BottomPerformers engineers={engineers} />
         <TrajectoryScatter engineers={engineers} />
         <WatchlistTable engineers={engineers} />
+      </section>
+
+      {/* Section E */}
+      <section className="space-y-6">
+        <SectionHead
+          letter="E"
+          title="AI tooling — does it move the needle?"
+          lede={`Three lenses on whether AI usage shows up in shipping output. Cohort: ICs with AI usage rows in the ${aiMonthLabel(metadata.aiMonthStart)} (${metadata.aiMatchedEngineers} of ${metadata.matchedEngineers} matched engineers).`}
+        />
+        <AiSpendVsImpactScatter engineers={engineers} />
+        <RampUpByAiUsage engineers={engineers} buckets={tenureBuckets} />
+        <AiAdoptionByTenure engineers={engineers} />
       </section>
 
       {/* Methodology appendix */}
@@ -261,6 +293,17 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
               %) map to a GitHub login. The remaining{" "}
               {metadata.unmatchedEngineers} are bots, new starters, or
               low-confidence LLM matches.
+            </p>
+            <p>
+              <strong>AI usage join.</strong> Section E joins{" "}
+              <code>aggregateLatestMonthByUser()</code> from the AI Model
+              Usage Mode dashboard by lowercase email — combining Claude
+              and Cursor spend per engineer. Bedrock data is reliable
+              from <code>{metadata.aiDataStart}</code>; engineers with
+              no usage row in {aiMonthLabel(metadata.aiMonthStart)} are
+              treated as <em>no AI</em> in E.2 / E.3 (rather than $0,
+              which would conflate &ldquo;chose not to use&rdquo; with
+              &ldquo;not yet matched in the dataset&rdquo;).
             </p>
           </div>
         </div>
