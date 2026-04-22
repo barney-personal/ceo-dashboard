@@ -11,24 +11,36 @@ import {
   getSlackMessageUrl,
 } from "@/lib/data/okrs";
 import { getLatestTerminalSyncRun } from "@/lib/data/mode";
+import { getModeOkrs } from "@/lib/data/okr-mode";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function OKRsPage() {
-  const [okrsByPillarResult, countsResult, latestSyncRunResult] =
-    await Promise.all([
-      safeLoad(
-        () => getLatestOkrUpdates(),
-        new Map() as Awaited<ReturnType<typeof getLatestOkrUpdates>>,
-      ),
-      safeLoad(() => getOkrStatusCounts(), {
-        onTrack: 0,
-        atRisk: 0,
-        behind: 0,
-        total: 0,
-      }),
-      safeLoad(() => getLatestTerminalSyncRun("slack"), null),
-    ]);
+  const [
+    okrsByPillarResult,
+    countsResult,
+    latestSyncRunResult,
+    modeOkrsResult,
+  ] = await Promise.all([
+    safeLoad(
+      () => getLatestOkrUpdates(),
+      new Map() as Awaited<ReturnType<typeof getLatestOkrUpdates>>,
+    ),
+    safeLoad(() => getOkrStatusCounts(), {
+      onTrack: 0,
+      atRisk: 0,
+      behind: 0,
+      total: 0,
+    }),
+    safeLoad(() => getLatestTerminalSyncRun("slack"), null),
+    safeLoad(() => getModeOkrs(), {
+      company: [],
+      pillar: [],
+      squad: [],
+      bySquad: new Map(),
+      lastSync: null,
+    } as Awaited<ReturnType<typeof getModeOkrs>>),
+  ]);
 
   const firstUnavailable =
     okrsByPillarResult.error ?? countsResult.error ?? latestSyncRunResult.error;
@@ -36,6 +48,7 @@ export default async function OKRsPage() {
   const okrsByPillar = okrsByPillarResult.data;
   const counts = countsResult.data;
   const latestSyncRun = latestSyncRunResult.data;
+  const modeOkrs = modeOkrsResult.data;
 
   const okrCharts = getChartEmbeds("okrs", "company");
   const hasData = counts.total > 0;
@@ -77,6 +90,11 @@ export default async function OKRsPage() {
       })),
     }));
 
+  const modeSquadKrCounts: Record<string, number> = {};
+  for (const [squadName, krs] of modeOkrs.bySquad.entries()) {
+    modeSquadKrCounts[squadName] = krs.length;
+  }
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
       <PageHeader
@@ -90,7 +108,13 @@ export default async function OKRsPage() {
       />
 
       {hasData ? (
-        <OkrView pillars={pillars} counts={counts} />
+        <OkrView
+          pillars={pillars}
+          counts={counts}
+          companyKrs={modeOkrs.company}
+          squadKrs={modeOkrs.squad}
+          modeSquadKrCounts={modeSquadKrCounts}
+        />
       ) : (
         <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
           <p className="text-sm text-muted-foreground">
