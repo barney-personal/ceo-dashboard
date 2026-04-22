@@ -331,6 +331,20 @@ describe("AiUsageMetricCard", () => {
     );
     expect(down.innerHTML).toContain("text-positive");
   });
+
+  it("inverts delta color when higherIsBetter", () => {
+    const { container: up } = render(
+      <AiUsageMetricCard label="X" value="1" deltaPct={25} higherIsBetter />,
+    );
+    expect(up.innerHTML).toContain("text-positive");
+    expect(up.innerHTML).not.toContain("text-amber-700");
+
+    const { container: down } = render(
+      <AiUsageMetricCard label="X" value="1" deltaPct={-25} higherIsBetter />,
+    );
+    expect(down.innerHTML).toContain("text-amber-700");
+    expect(down.innerHTML).not.toContain("text-positive");
+  });
 });
 
 describe("PeerDistributionStrip", () => {
