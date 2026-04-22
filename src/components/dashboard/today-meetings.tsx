@@ -97,7 +97,7 @@ export function TodayMeetings({ day, calendarConnected }: TodayMeetingsProps) {
                   )}
                 >
                   <div className="mt-0.5 flex flex-col items-center">
-                    <span className="text-xs font-semibold tabular-nums text-foreground" suppressHydrationWarning>
+                    <span className="text-xs font-semibold tabular-nums text-foreground">
                       {formatTime(m.startTime)}
                     </span>
                   </div>
