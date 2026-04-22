@@ -22,6 +22,10 @@ import {
   RampUpByAiUsage,
 } from "./ai-tooling";
 
+// Long-form variant for prose ("April 2026"). The chart in
+// ai-tooling.tsx has its own short-form variant ("Apr 26") that fits
+// inside an axis label — keeping them as two single-line helpers reads
+// better than one helper with a `variant` argument.
 function aiMonthLabel(iso: string | null): string {
   if (!iso) return "latest month";
   const d = new Date(`${iso}T00:00:00Z`);

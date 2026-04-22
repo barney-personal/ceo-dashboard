@@ -155,8 +155,10 @@ export function PillarBoxes({
         .attr("stroke", color)
         .attr("stroke-width", 2);
 
-      // Visual-only jitter so overlapping dots resolve. d3-random isn't
-      // installed in this worktree's node_modules — use Math.random instead.
+      // Visual-only jitter so overlapping dots resolve. Math.random()
+      // is fine here — d3-random's `randomUniform` was overkill for a
+      // one-line uniform draw and avoiding the import keeps the chart
+      // self-contained.
       const jitter = () => (Math.random() - 0.5) * 14;
       g.append("g")
         .selectAll("circle")

@@ -69,6 +69,10 @@ export function AiSpendVsImpactScatter({
   const svgRef = useRef<SVGSVGElement>(null);
   const width = useContainerWidth(containerRef);
 
+  // Only ICs with positive AI spend in the latest month — engineers
+  // matched at $0 are interesting for E.3 (adoption) but here they'd
+  // pile up at the log-scale floor (x = $1) and can't be coloured by
+  // efficiency. Keeping the filter symmetric with the median below.
   const points = useMemo(
     () =>
       engineers.filter(
@@ -76,6 +80,7 @@ export function AiSpendVsImpactScatter({
           e.isMatched &&
           e.levelTrack === "IC" &&
           e.aiSpend != null &&
+          e.aiSpend > 0 &&
           e.tenureMonthsNow >= 1,
       ),
     [engineers],
@@ -104,10 +109,12 @@ export function AiSpendVsImpactScatter({
     const yMax = Math.max(10, Math.max(...points.map((p) => p.impact90d)) * 1.05);
     const y = scaleLinear().domain([0, yMax]).range([innerH, 0]);
 
-    const medSpend = median(
-      points.filter((p) => (p.aiSpend ?? 0) > 0).map((p) => p.aiSpend!),
-    );
-    const medImpact = median(points.map((p) => p.impact90d));
+    // `points` is already filtered to aiSpend > 0 — guard against the
+    // empty case anyway so a degenerate dataset produces an invisible
+    // crosshair (NaN) instead of a NaN-positioned line.
+    const spendValues = points.map((p) => p.aiSpend!);
+    const medSpend = spendValues.length ? median(spendValues) : xMin;
+    const medImpact = points.length ? median(points.map((p) => p.impact90d)) : 0;
 
     // Quadrant background tint (very subtle so the dots remain primary)
     g.append("rect")
@@ -270,7 +277,7 @@ export function AiSpendVsImpactScatter({
   return (
     <ChartFrame
       title="E.1 — AI spend vs impact_90d"
-      caption="ICs only, latest AI usage month, log-scaled x. Crosshairs are the medians; the four quadrants suggest different coaching responses (top-right = power user; top-left = shipping without AI; bottom-right = high spend, low yield → review prompt habits; bottom-left = potential AI onboarding opportunity)."
+      caption="ICs with positive AI spend in the latest month, log-scaled x. Crosshairs are the medians of plotted dots; the four quadrants suggest different coaching responses (top-right = power user; top-left = shipping without AI; bottom-right = high spend, low yield → review prompt habits; bottom-left = potential AI onboarding opportunity). Engineers matched at $0 spend are not plotted here — see E.3 for adoption rates."
     >
       <div ref={containerRef} className="w-full">
         <svg ref={svgRef} role="img" />

@@ -307,7 +307,12 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
         },
       ]),
     );
-    aiMonthStartIso = aiUsageByEmail.values().next().value?.latestMonthStart ?? null;
+    // `aggregateLatestMonthByUser` pins every entry to the same
+    // latestMonthStart by construction, so picking any value works.
+    // If the map is empty (Mode returned data but no monthlyByUser
+    // rows), `next().value` is undefined and we fall back to null.
+    aiMonthStartIso =
+      aiUsageByEmail.values().next().value?.latestMonthStart ?? null;
   } catch {
     // Mode unreachable / report missing → engineers get null AI fields.
   }
