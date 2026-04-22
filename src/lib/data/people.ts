@@ -5,7 +5,6 @@ import {
   isProductPillar,
   normalizeJobTitle,
   normalizeDepartment,
-  normalizeLevel,
   resolveEngineerDiscipline,
 } from "@/lib/config/people";
 
@@ -119,11 +118,9 @@ function ssotRowToPerson(
   fte?: Record<string, unknown>,
 ): Person {
   const startDate = rowStr(ssot, "start_date");
-  const rawLevel = rowStr(ssot, "hb_level");
   const specialisation = rowStr(ssot, "rp_specialisation");
   const jobTitle = resolveEngineerDiscipline(
     normalizeJobTitle(rowStr(ssot, "job_title")),
-    rawLevel,
     specialisation,
   );
   const fteFunction = fte ? rowStr(fte, "function_name") : "";
@@ -134,10 +131,10 @@ function ssotRowToPerson(
     name: rowStr(ssot, "preferred_name") || "Unknown",
     email: rowStr(ssot, "email"),
     jobTitle,
-    level: normalizeLevel(rawLevel, jobTitle),
+    level: rowStr(ssot, "hb_level"),
     squad: fteSquad || "no squad",
     pillar: ftePillar || "no pillar",
-    function: normalizeDepartment(func, jobTitle),
+    function: normalizeDepartment(func, jobTitle, specialisation),
     manager: rowStr(ssot, "manager") || (fte ? rowStr(fte, "line_manager_email") : ""),
     startDate,
     location: rowStr(ssot, "work_location"),
@@ -393,17 +390,16 @@ export function getMonthlyMovementPeople(
     if (rowStr(r, "headcount_label") !== "FTE") continue;
     const name = rowStr(r, "preferred_name") || "Unknown";
     const email = rowStr(r, "email");
-    const rawLevel = rowStr(r, "hb_level");
+    const level = rowStr(r, "hb_level");
     const specialisation = rowStr(r, "rp_specialisation");
     const jobTitle = resolveEngineerDiscipline(
       normalizeJobTitle(rowStr(r, "job_title")),
-      rawLevel,
       specialisation,
     );
-    const level = normalizeLevel(rawLevel, jobTitle);
     const func = normalizeDepartment(
       rowStr(r, "hb_function") || "Unassigned",
       jobTitle,
+      specialisation,
     );
 
     // Past dates only — pre-employment FTEs would otherwise show as joiners

@@ -627,14 +627,14 @@ describe("getMonthlyMovementPeople", () => {
     expect(departures).toHaveLength(0);
   });
 
-  it("applies job title and level normalization", () => {
+  it("resolves job title from rp_specialisation and passes level through", () => {
     const rows = [
       {
         preferred_name: "Eve",
         email: "eve@co.com",
-        job_title: "Senior Backend Engineer",
-        hb_level: "SE3",
-        rp_specialisation: "Backend",
+        job_title: "Senior Software Engineer",
+        hb_level: "L3",
+        rp_specialisation: "Backend Engineer",
         hb_squad: "Payments",
         hb_function: "Engineering",
         manager: "Frank",
@@ -645,7 +645,8 @@ describe("getMonthlyMovementPeople", () => {
     ];
     const { joiners } = getMonthlyMovementPeople(rows);
     expect(joiners[0].jobTitle).toBe("Backend Engineer");
-    expect(joiners[0].level).toBe("B3");
+    // Levels are now canonical L1-L8 at source — we pass them through unchanged.
+    expect(joiners[0].level).toBe("L3");
   });
 
   it("applies department normalization", () => {

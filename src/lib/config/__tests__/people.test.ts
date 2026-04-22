@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeJobTitle, normalizeDepartment, resolveEngineerDiscipline, normalizeLevel } from "../people";
+import { normalizeJobTitle, normalizeDepartment, resolveEngineerDiscipline } from "../people";
 
 describe("normalizeJobTitle", () => {
   it("returns empty string for empty/whitespace input", () => {
@@ -177,48 +177,26 @@ describe("normalizeJobTitle", () => {
 });
 
 describe("resolveEngineerDiscipline", () => {
-  describe("rp_specialisation (primary signal)", () => {
-    it("uses Backend Engineer specialisation", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "SE3", "Backend Engineer")).toBe("Backend Engineer");
-    });
-
-    it("uses Frontend Engineer specialisation", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "SE4", "Frontend Engineer")).toBe("Frontend Engineer");
-    });
-
-    it("specialisation takes priority over level prefix", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "F4", "Backend Engineer")).toBe("Backend Engineer");
-    });
+  it("returns the canonical rp_specialisation value when present", () => {
+    expect(resolveEngineerDiscipline("Software Engineer", "Backend Engineer")).toBe("Backend Engineer");
+    expect(resolveEngineerDiscipline("Software Engineer", "Frontend Engineer")).toBe("Frontend Engineer");
+    expect(resolveEngineerDiscipline("Software Engineer", "Machine Learning Engineer")).toBe("Machine Learning Engineer");
+    expect(resolveEngineerDiscipline("Software Engineer", "Engineering Manager")).toBe("Engineering Manager");
   });
 
-  describe("level prefix (fallback)", () => {
-    it("refines with B-prefix level when no specialisation", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "B2")).toBe("Backend Engineer");
-      expect(resolveEngineerDiscipline("Software Engineer", "B4")).toBe("Backend Engineer");
-    });
-
-    it("refines with BE-prefix level", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "BE1")).toBe("Backend Engineer");
-    });
-
-    it("refines with F-prefix level", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "F4")).toBe("Frontend Engineer");
-    });
-
-    it("keeps Software Engineer for SE-prefix levels", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "SE3")).toBe("Software Engineer");
-      expect(resolveEngineerDiscipline("Software Engineer", "SE4")).toBe("Software Engineer");
-    });
-
-    it("keeps Software Engineer when level is empty", () => {
-      expect(resolveEngineerDiscipline("Software Engineer", "")).toBe("Software Engineer");
-    });
+  it("applies aliases to rp_specialisation values", () => {
+    expect(resolveEngineerDiscipline("Software Engineer", "Python Engineer")).toBe("Backend Engineer");
+    expect(resolveEngineerDiscipline("Product Manager", "Data Scientist")).toBe("Machine Learning");
   });
 
-  it("does not change non-Software Engineer titles", () => {
-    expect(resolveEngineerDiscipline("Backend Engineer", "SE3")).toBe("Backend Engineer");
-    expect(resolveEngineerDiscipline("Frontend Engineer", "B2")).toBe("Frontend Engineer");
-    expect(resolveEngineerDiscipline("Product Manager", "B2", "Product Manager")).toBe("Product Manager");
+  it("falls back to the normalised title when specialisation is missing", () => {
+    expect(resolveEngineerDiscipline("Software Engineer", "")).toBe("Software Engineer");
+    expect(resolveEngineerDiscipline("Backend Engineer")).toBe("Backend Engineer");
+    expect(resolveEngineerDiscipline("Product Manager", undefined)).toBe("Product Manager");
+  });
+
+  it("trims whitespace-only specialisation", () => {
+    expect(resolveEngineerDiscipline("Software Engineer", "   ")).toBe("Software Engineer");
   });
 });
 
@@ -280,52 +258,27 @@ describe("normalizeDepartment", () => {
   });
 });
 
-describe("normalizeLevel", () => {
-  it("normalizes SE-prefix to B for Backend Engineers", () => {
-    expect(normalizeLevel("SE3", "Backend Engineer")).toBe("B3");
-    expect(normalizeLevel("SE4", "Backend Engineer")).toBe("B4");
+describe("normalizeDepartment (with rp_specialisation signal)", () => {
+  it("uses rp_specialisation to split Data Science → Machine Learning", () => {
+    expect(normalizeDepartment("Data Science", "", "Machine Learning Engineer")).toBe("Machine Learning");
+    expect(normalizeDepartment("Data Science", "", "ML Ops Engineer")).toBe("Machine Learning");
+    expect(normalizeDepartment("Data Science", "", "Head of Machine Learning")).toBe("Machine Learning");
   });
 
-  it("normalizes BE-prefix to B for Backend Engineers", () => {
-    expect(normalizeLevel("BE1", "Backend Engineer")).toBe("B1");
+  it("uses rp_specialisation to send Data Science analysts → Analytics", () => {
+    expect(normalizeDepartment("Data Science", "", "Product Analyst (Technical)")).toBe("Analytics");
+    expect(normalizeDepartment("Data Science", "", "Analytics Engineer")).toBe("Analytics");
   });
 
-  it("normalizes DS-prefix to B for Backend Engineers", () => {
-    expect(normalizeLevel("DS3", "Backend Engineer")).toBe("B3");
+  it("prefers specialisation over title when both are provided", () => {
+    // Title says ML but specialisation is analyst → Analytics (specialisation wins)
+    expect(normalizeDepartment("Data Science", "Machine Learning Engineer", "Product Analyst")).toBe("Analytics");
   });
 
-  it("keeps B-prefix unchanged for Backend Engineers", () => {
-    expect(normalizeLevel("B2", "Backend Engineer")).toBe("B2");
-    expect(normalizeLevel("B4", "Backend Engineer")).toBe("B4");
-  });
-
-  it("normalizes SE-prefix to F for Frontend Engineers", () => {
-    expect(normalizeLevel("SE3", "Frontend Engineer")).toBe("F3");
-    expect(normalizeLevel("SE4", "Frontend Engineer")).toBe("F4");
-  });
-
-  it("normalizes FE-prefix to F for Frontend Engineers", () => {
-    expect(normalizeLevel("FE2", "Frontend Engineer")).toBe("F2");
-  });
-
-  it("keeps F-prefix unchanged for Frontend Engineers", () => {
-    expect(normalizeLevel("F4", "Frontend Engineer")).toBe("F4");
-  });
-
-  it("does not change levels for non-engineering titles", () => {
-    expect(normalizeLevel("SE3", "Product Manager")).toBe("SE3");
-    expect(normalizeLevel("B2", "Product Manager")).toBe("B2");
-  });
-
-  it("does not change levels for Software Engineer", () => {
-    expect(normalizeLevel("SE3", "Software Engineer")).toBe("SE3");
-  });
-
-  it("returns empty string for empty level", () => {
-    expect(normalizeLevel("", "Backend Engineer")).toBe("");
-  });
-
-  it("returns level unchanged if no numeric suffix", () => {
-    expect(normalizeLevel("Manager", "Backend Engineer")).toBe("Manager");
+  it("aliases legacy specialisation values before checking the signal", () => {
+    // Legacy HiBob value "Data Scientist" (pre-standardisation) — still aliases to
+    // Machine Learning via JOB_TITLE_ALIASES, so it must still route correctly.
+    expect(normalizeDepartment("Data Science", "", "Data Scientist")).toBe("Machine Learning");
+    expect(normalizeDepartment("Data Science", "", "Data Science Manager")).toBe("Machine Learning");
   });
 });

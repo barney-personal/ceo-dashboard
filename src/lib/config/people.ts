@@ -93,79 +93,75 @@ export function normalizeJobTitle(raw: string): string {
 }
 
 /**
- * Refine a generic "Software Engineer" title using available signals.
- * Priority: rp_specialisation (from Rev) → level prefix (B/BE/F/FE).
- * Only applies to "Software Engineer" — titles already resolved to
- * "Backend Engineer" or "Frontend Engineer" pass through.
+ * Resolve a person's engineering discipline from the standardised
+ * `rp_specialisation` field in the Mode Headcount SSoT.
+ *
+ * The People team standardised `rp_specialisation` in April 2026 so it carries
+ * the canonical discipline without seniority prefix ("Backend Engineer",
+ * "Frontend Engineer", "Machine Learning Engineer", etc.). When that signal is
+ * present we trust it directly and ignore the normalised job title. Falling
+ * back to the title only matters for stragglers whose `rp_specialisation` is
+ * blank.
  */
 export function resolveEngineerDiscipline(
   normalizedTitle: string,
-  level: string,
   specialisation?: string,
 ): string {
-  if (normalizedTitle !== "Software Engineer") return normalizedTitle;
-
-  // Rev specialisation is the most reliable signal
-  if (specialisation) {
-    const specLower = specialisation.toLowerCase();
-    if (specLower.includes("backend")) return "Backend Engineer";
-    if (specLower.includes("frontend")) return "Frontend Engineer";
+  const spec = (specialisation ?? "").trim();
+  if (spec) {
+    const aliased = JOB_TITLE_ALIASES[spec.toLowerCase()];
+    if (aliased) return aliased;
+    return spec;
   }
-
-  // Fall back to level prefix
-  const prefix = level.replace(/\d+$/, "").toUpperCase();
-  if (prefix === "B" || prefix === "BE") return "Backend Engineer";
-  if (prefix === "F" || prefix === "FE") return "Frontend Engineer";
   return normalizedTitle;
 }
 
 /**
- * Reassign people to the correct department based on their normalised job title.
+ * Reassign people to the correct department based on their specialisation.
  *
- * - "Data Science" → split into "Analytics" or "Machine Learning"
- * - "Product" → move analysts to Analytics, marketing roles to Marketing,
- *   design roles to Experience
+ * The People team split "Data Science" into "Analytics" and "Machine Learning"
+ * at source, but some HiBob rows still carry `hb_function = "Data Science"`
+ * during the transition. We route them based on `rp_specialisation` first
+ * (canonical), then fall back to the normalised job title.
+ *
+ * "Product" rows whose specialisation/title is analyst, marketing, or design
+ * belong in their functional department.
  */
-export function normalizeDepartment(department: string, normalizedJobTitle: string): string {
-  if (!normalizedJobTitle) return department;
-  const lower = normalizedJobTitle.toLowerCase();
+export function normalizeDepartment(
+  department: string,
+  normalizedJobTitle: string,
+  specialisation?: string,
+): string {
+  // Apply the same alias map to the raw specialisation so legacy values like
+  // "Data Scientist" still route to Machine Learning. Without this, a signal
+  // of "data scientist" doesn't match "machine learning" and would fall
+  // through to Analytics for any HiBob row that hasn't been updated to the
+  // canonical value yet.
+  const rawSpec = (specialisation ?? "").trim();
+  const aliasedSpec = rawSpec
+    ? (JOB_TITLE_ALIASES[rawSpec.toLowerCase()] ?? rawSpec)
+    : "";
+  const signal = (aliasedSpec || normalizedJobTitle || "").toLowerCase();
+  if (!signal) return department;
 
   if (department === "Data Science") {
-    if (lower.includes("machine learning") || lower.includes("data engineer")) {
+    if (
+      signal.includes("machine learning") ||
+      signal.includes("ml ops") ||
+      signal.includes("data engineer")
+    ) {
       return "Machine Learning";
     }
     return "Analytics";
   }
 
   if (department === "Product") {
-    if (lower.includes("analyst")) return "Analytics";
-    if (lower.includes("marketing")) return "Marketing";
-    if (lower.includes("design")) return "Experience";
+    if (signal.includes("analyst")) return "Analytics";
+    if (signal.includes("marketing")) return "Marketing";
+    if (signal.includes("design")) return "Experience";
   }
 
   return department;
-}
-
-/**
- * Normalise a raw level code so the prefix matches the person's discipline.
- * Backend Engineers → B-prefix (e.g. SE3 → B3, BE1 → B1, DS3 → B3).
- * Frontend Engineers → F-prefix (e.g. SE4 → F4, FE2 → F2).
- * All other titles are left unchanged.
- */
-export function normalizeLevel(level: string, normalizedJobTitle: string): string {
-  const trimmed = level.trim();
-  if (!trimmed) return trimmed;
-
-  const match = trimmed.match(/^([A-Za-z]+)(\d+)$/);
-  if (!match) return trimmed;
-
-  const [, , num] = match;
-  const titleLower = normalizedJobTitle.toLowerCase();
-
-  if (titleLower === "backend engineer") return `B${num}`;
-  if (titleLower === "frontend engineer") return `F${num}`;
-
-  return trimmed;
 }
 
 function toTitleCase(s: string): string {
