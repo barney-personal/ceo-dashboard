@@ -105,7 +105,14 @@ export function buildModeKrs(rows: RawRow[]): ModeKr[] {
       if (acc.target == null && target != null) acc.target = target;
     }
 
-    if (month && current != null) {
+    // Rows are processed newest-first, so the first snapshot we see for a
+    // given month is the authoritative one — skip any later row that repeats
+    // the same month to guard against duplicate appends from Mode re-runs.
+    if (
+      month &&
+      current != null &&
+      !acc.snapshots.some((s) => s.month === month)
+    ) {
       acc.snapshots.push({ month, value: current });
     }
   }

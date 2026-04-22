@@ -92,6 +92,22 @@ describe("buildModeKrs", () => {
     expect(krs[0].current).toBeNull();
   });
 
+  it("deduplicates snapshots when the same reporting_month appears twice", () => {
+    const krs = buildModeKrs([
+      row({
+        reporting_month: "2026-01-01T00:00:00.000Z",
+        kr_current_value: 240000,
+      }),
+      // duplicate month, different value — first-seen (after newest-first sort) wins
+      row({
+        reporting_month: "2026-01-01T00:00:00.000Z",
+        kr_current_value: 230000,
+      }),
+    ]);
+    expect(krs[0].snapshots).toHaveLength(1);
+    expect(krs[0].snapshots[0].value).toBe(240000);
+  });
+
   it("uses baseline/target from the latest dated row when they differ across months", () => {
     // Jan has the original target (300k), Feb is a revision (400k). Regardless
     // of input order, the latest dated row's values should win.
