@@ -608,17 +608,6 @@ export async function runSlackSync(
     .filter(Boolean);
 
   if (channelIds.length === 0) {
-    Sentry.captureMessage("Slack sync completed", {
-      level: "info",
-      tags: {
-        sync_source: "slack",
-        status: "success",
-      },
-      extra: {
-        runId: run.id,
-        recordsSynced: 0,
-      },
-    });
     return { status: "success", recordsSynced: 0, errors: [] };
   }
 
@@ -809,20 +798,6 @@ export async function runSlackSync(
     }
 
     const status = determineSyncStatus(errors, succeededChannels);
-    if (status === "success" || status === "partial") {
-      Sentry.captureMessage("Slack sync completed", {
-        level: "info",
-        tags: {
-          sync_source: "slack",
-          status,
-        },
-        extra: {
-          runId: run.id,
-          recordsSynced: totalRecords,
-        },
-      });
-    }
-
     return { status, recordsSynced: totalRecords, errors };
   } catch (error) {
     if (error instanceof SyncDeadlineExceededError) {

@@ -1,5 +1,17 @@
 import * as Sentry from "@sentry/nextjs";
 
+export class GitHubApiError extends Error {
+  status: number;
+  path: string;
+
+  constructor(status: number, path: string, body: string) {
+    super(`GitHub API error ${status}: ${body}`);
+    this.name = "GitHubApiError";
+    this.status = status;
+    this.path = path;
+  }
+}
+
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_TIMEOUT_MS = 30_000;
 const GITHUB_MAX_RETRIES = 5;
@@ -101,7 +113,7 @@ async function githubRequest<T>(
           throw error;
         }
 
-        const error = new Error(`GitHub API error ${res.status}: ${body}`);
+        const error = new GitHubApiError(res.status, path, body);
         if (
           attempt < GITHUB_MAX_RETRIES &&
           (isRateLimit || res.status >= 500)
@@ -227,6 +239,24 @@ export async function getUserProfile(
   return githubRequest<GitHubUser>(`/users/${login}`, {
     signal: opts.signal,
   });
+}
+
+// Variant that returns null for deleted/renamed GitHub accounts (HTTP 404)
+// instead of throwing. Callers iterating over a list of historical logins
+// shouldn't treat an absent user as an error — the employee-match flow
+// previously produced ~27 Sentry issues per week from such lookups.
+export async function getUserProfileOrNull(
+  login: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<GitHubUser | null> {
+  try {
+    return await getUserProfile(login, opts);
+  } catch (error) {
+    if (error instanceof GitHubApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export async function getOrgRepos(opts: {

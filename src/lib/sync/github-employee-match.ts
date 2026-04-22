@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { githubPrs, githubEmployeeMap, modeReportData } from "@/lib/db/schema";
-import { getUserProfile } from "@/lib/integrations/github";
+import { getUserProfileOrNull } from "@/lib/integrations/github";
 import {
   SyncCancelledError,
   SyncDeadlineExceededError,
@@ -133,7 +133,11 @@ async function llmMatchEmployees(
   const response = await client.messages.create(
     {
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      // Each match row is ~40 tokens; with ~150+ unmatched logins the response
+      // can exceed 4k and truncate mid-entry, producing invalid JSON. Give the
+      // model enough headroom that truncation only happens in pathological
+      // cases and is detected via stop_reason below.
+      max_tokens: 16384,
       messages: [
         {
           role: "user",
@@ -172,6 +176,20 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  // Surface truncation even when the partial output happens to parse as valid
+  // JSON — the returned matches would silently be a prefix of the real set.
+  if (response.stop_reason === "max_tokens") {
+    Sentry.captureMessage("LLM employee match hit max_tokens", {
+      level: "warning",
+      tags: { integration: "github", llm_truncated: "true" },
+      extra: {
+        operation: "llmMatchEmployees",
+        stopReason: response.stop_reason,
+        unmatchedCount: unmatched.length,
+      },
+    });
+  }
+
   let rawParsed: unknown;
   try {
     const jsonStr = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
@@ -182,7 +200,11 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
       tags: { integration: "github", llm_parse_invalid: "true" },
       extra: {
         operation: "llmMatchEmployees",
-        reason: "invalid_json",
+        reason:
+          response.stop_reason === "max_tokens"
+            ? "truncated_by_max_tokens"
+            : "invalid_json",
+        stopReason: response.stop_reason,
         responseText: text.slice(0, 500),
       },
     });
@@ -282,13 +304,16 @@ export async function runGitHubEmployeeMapping(
       continue;
     }
 
-    // Fetch GitHub profile for display name
+    // Fetch GitHub profile for display name. 404s (deleted / renamed logins)
+    // return null rather than throwing so they don't flood Sentry.
     let githubName: string | null = null;
     let githubEmail: string | null = null;
     try {
-      const profile = await getUserProfile(login, opts);
-      githubName = profile.name;
-      githubEmail = profile.email;
+      const profile = await getUserProfileOrNull(login, opts);
+      if (profile) {
+        githubName = profile.name;
+        githubEmail = profile.email;
+      }
     } catch (error) {
       // Re-throw cancellation/deadline errors
       if (

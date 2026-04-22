@@ -19,4 +19,10 @@ Sentry.init({
   // Enable sending user PII (Personally Identifiable Information)
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
+
+  // node:_http_server abortIncoming throws Error("aborted") when a client
+  // disconnects mid-stream. The regex is anchored so it doesn't also swallow
+  // the several intentional `"<X> request was aborted"` errors our integrations
+  // emit for our own AbortController-driven cancellations.
+  ignoreErrors: [/^aborted$/],
 });

@@ -1244,20 +1244,6 @@ export async function runModeSync(
       heapMb: getHeapMb(),
     });
 
-    if (status === "success" || status === "partial") {
-      Sentry.captureMessage("Mode sync completed", {
-        level: "info",
-        tags: {
-          sync_source: "mode",
-          status,
-        },
-        extra: {
-          runId: run.id,
-          recordsSynced: totalRecords,
-        },
-      });
-    }
-
     return {
       status,
       recordsSynced: totalRecords,
