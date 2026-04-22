@@ -3,7 +3,21 @@
 import { useMemo, useState } from "react";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { RagBar } from "@/components/dashboard/rag-bar";
-import { ExternalLink, ArrowLeft } from "lucide-react";
+import { OkrCompanyKrCard } from "@/components/dashboard/okr-company-kr-card";
+import {
+  ExternalLink,
+  ArrowLeft,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertTriangle,
+} from "lucide-react";
+import {
+  formatKrValue,
+  krTrend,
+  progressTowardTarget,
+  type ModeKr,
+} from "@/lib/data/okr-mode-shared";
 import {
   STALE_DAYS,
   daysSince,
@@ -33,6 +47,14 @@ interface PillarData {
 interface OkrViewProps {
   pillars: PillarData[];
   counts: { onTrack: number; atRisk: number; behind: number; total: number };
+  /** Company KRs with numeric data, pre-sorted worst-first by the server. */
+  companyKrs: ModeKr[];
+  /** Company KRs defined in Mode but not yet reporting a current value. */
+  untrackedCompanyKrs: ModeKr[];
+  /** Count of tracked Company KRs that are trending down or below 50% progress. */
+  companyAttentionCount: number;
+  squadKrs: ModeKr[];
+  modeSquadKrCounts: Record<string, number>;
 }
 
 function statusToType(status: string) {
@@ -64,7 +86,15 @@ function groupBySquad(okrs: OkrKr[]) {
   return [...map.entries()];
 }
 
-export function OkrView({ pillars, counts }: OkrViewProps) {
+export function OkrView({
+  pillars,
+  counts,
+  companyKrs,
+  untrackedCompanyKrs,
+  companyAttentionCount,
+  squadKrs,
+  modeSquadKrCounts,
+}: OkrViewProps) {
   const [selectedPillar, setSelectedPillar] = useState<string | null>(null);
 
   const pillarStats = useMemo(
@@ -88,6 +118,17 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
     (sum, p) => sum + p.staleSquadCount,
     0,
   );
+
+  const squadKrsBySquad = useMemo(() => {
+    const map = new Map<string, ModeKr[]>();
+    for (const kr of squadKrs) {
+      if (!kr.squad) continue;
+      const existing = map.get(kr.squad) ?? [];
+      existing.push(kr);
+      map.set(kr.squad, existing);
+    }
+    return map;
+  }, [squadKrs]);
 
   return (
     <div className="space-y-6">
@@ -128,6 +169,70 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
         red={counts.behind}
         grey={counts.total - counts.onTrack - counts.atRisk - counts.behind}
       />
+
+      {/* Company KRs: numeric truth from Mode */}
+      {!selectedPillar && (companyKrs.length > 0 || untrackedCompanyKrs.length > 0) && (
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              Company KRs
+            </h3>
+            <span className="text-[10px] text-muted-foreground/60">
+              {companyKrs.length > 0
+                ? "Worst first · baseline → current → target from Mode"
+                : "From Mode"}
+            </span>
+          </div>
+
+          {companyAttentionCount > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span>
+                <span className="font-semibold">
+                  {companyAttentionCount} of {companyKrs.length}
+                </span>{" "}
+                Company {companyAttentionCount === 1 ? "KR needs" : "KRs need"} attention —
+                trending away from target or below 50% progress.
+              </span>
+            </div>
+          )}
+
+          {companyKrs.length > 0 && (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {companyKrs.map((kr, i) => (
+                <OkrCompanyKrCard
+                  key={`${kr.krType}::${kr.description}`}
+                  kr={kr}
+                  delay={i * 40}
+                />
+              ))}
+            </div>
+          )}
+
+          {untrackedCompanyKrs.length > 0 && (
+            <div className="rounded-lg border border-dashed border-border/50 bg-muted/10 px-4 py-3">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
+                  Not yet tracked in Mode
+                </span>
+                <span className="text-[10px] text-muted-foreground/50">
+                  {untrackedCompanyKrs.length}
+                </span>
+              </div>
+              <ul className="space-y-0.5">
+                {untrackedCompanyKrs.map((kr) => (
+                  <li
+                    key={`${kr.krType}::${kr.description}`}
+                    className="text-xs text-muted-foreground/70"
+                  >
+                    {kr.description}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Overview: pillar cards */}
       {!selectedPillar && (
@@ -186,6 +291,11 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
                     const days = daysSince(krs[0].postedAt);
                     const isStale = days > STALE_DAYS;
                     const toneClasses = staleToneClasses(days);
+                    // Badge joins on the squad name string. Mode strips the
+                    // "Squad - " prefix from kr_type; Slack uses the squad name
+                    // as posted. A whitespace/casing mismatch silently hides the
+                    // badge — if that happens, add a mapping to src/lib/config.
+                    const modeCount = modeSquadKrCounts[squad] ?? 0;
                     return (
                       <div key={squad} className="flex items-center gap-2">
                         <span
@@ -195,6 +305,14 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
                         >
                           {squad}
                         </span>
+                        {modeCount > 0 && (
+                          <span
+                            className="shrink-0 rounded-full border border-border/50 px-1.5 py-0 font-mono text-[9px] tabular-nums text-muted-foreground/70"
+                            title={`${modeCount} KR${modeCount === 1 ? "" : "s"} tracked in Mode`}
+                          >
+                            {modeCount} KR
+                          </span>
+                        )}
                         <span
                           className={`shrink-0 font-mono text-[10px] tabular-nums ${toneClasses}`}
                           title={`Last posted ${formatAbsoluteDate(krs[0].postedAt)} (${formatUpdatedAgo(days)})`}
@@ -256,6 +374,7 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
           {activePillarStats.squads.map(([squad, krs]) => {
             const days = daysSince(krs[0].postedAt);
             const isStale = days > STALE_DAYS;
+            const modeKrs = squadKrsBySquad.get(squad) ?? [];
             return (
               <div
                 key={squad}
@@ -341,10 +460,93 @@ export function OkrView({ pillars, counts }: OkrViewProps) {
                     </div>
                   ))}
                 </div>
+                {modeKrs.length > 0 && (
+                  <div className="border-t border-border/40 bg-muted/10 px-5 py-4">
+                    <div className="mb-2 flex items-baseline justify-between gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                        Numeric KRs (Mode)
+                      </span>
+                      <span className="text-[10px] text-muted-foreground/50">
+                        {modeKrs.length} tracked
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {modeKrs.map((kr) => (
+                        <ModeKrRow
+                          key={`${kr.krType}::${kr.description}`}
+                          kr={kr}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+function ModeKrRow({ kr }: { kr: ModeKr }) {
+  const progress = progressTowardTarget(kr);
+  const trend = krTrend(kr);
+  const TrendIcon =
+    trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
+  const trendColor =
+    trend === "up"
+      ? "text-positive"
+      : trend === "down"
+        ? "text-negative"
+        : "text-muted-foreground/60";
+
+  const barColor =
+    progress == null
+      ? "bg-muted-foreground/20"
+      : progress >= 0.95
+        ? "bg-positive"
+        : progress >= 0.6
+          ? "bg-primary"
+          : progress >= 0.25
+            ? "bg-warning"
+            : "bg-negative";
+
+  return (
+    <div className="flex items-center gap-3 rounded-md px-1 py-1.5 text-xs">
+      <span className="flex-1 truncate text-muted-foreground">
+        {kr.description}
+      </span>
+      {progress != null && (
+        <div className="hidden h-1 w-20 shrink-0 overflow-hidden rounded-full bg-muted/40 sm:block">
+          <div
+            className={`h-full rounded-full ${barColor}`}
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </div>
+      )}
+      <span className="w-28 shrink-0 text-right font-mono tabular-nums text-muted-foreground">
+        {formatKrValue(kr.current, kr.format)}
+        {kr.target != null && (
+          <span className="text-muted-foreground/50">
+            {" / "}
+            {formatKrValue(kr.target, kr.format)}
+          </span>
+        )}
+      </span>
+      {kr.previous != null && kr.current != null && (
+        <span
+          className={`flex w-6 shrink-0 items-center justify-end ${trendColor}`}
+          aria-label={
+            trend === "up"
+              ? "improving"
+              : trend === "down"
+                ? "worsening"
+                : "flat"
+          }
+        >
+          <TrendIcon className="h-3 w-3" aria-hidden="true" />
+        </span>
       )}
     </div>
   );

@@ -11,34 +11,60 @@ import {
   getSlackMessageUrl,
 } from "@/lib/data/okrs";
 import { getLatestTerminalSyncRun } from "@/lib/data/mode";
+import { getModeOkrs } from "@/lib/data/okr-mode";
+import {
+  hasCurrentValue,
+  needsAttention,
+  progressTowardTarget,
+} from "@/lib/data/okr-mode-shared";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import { getChartEmbeds } from "@/lib/integrations/mode-config";
 
 export default async function OKRsPage() {
-  const [okrsByPillarResult, countsResult, latestSyncRunResult] =
-    await Promise.all([
-      safeLoad(
-        () => getLatestOkrUpdates(),
-        new Map() as Awaited<ReturnType<typeof getLatestOkrUpdates>>,
-      ),
-      safeLoad(() => getOkrStatusCounts(), {
-        onTrack: 0,
-        atRisk: 0,
-        behind: 0,
-        total: 0,
-      }),
-      safeLoad(() => getLatestTerminalSyncRun("slack"), null),
-    ]);
+  const [
+    okrsByPillarResult,
+    countsResult,
+    latestSyncRunResult,
+    modeOkrsResult,
+  ] = await Promise.all([
+    safeLoad(
+      () => getLatestOkrUpdates(),
+      new Map() as Awaited<ReturnType<typeof getLatestOkrUpdates>>,
+    ),
+    safeLoad(() => getOkrStatusCounts(), {
+      onTrack: 0,
+      atRisk: 0,
+      behind: 0,
+      total: 0,
+    }),
+    safeLoad(() => getLatestTerminalSyncRun("slack"), null),
+    safeLoad(() => getModeOkrs(), {
+      company: [],
+      pillar: [],
+      squad: [],
+      bySquad: new Map(),
+      lastSync: null,
+    } as Awaited<ReturnType<typeof getModeOkrs>>),
+  ]);
 
+  // Mode OKR numerics are additive — a Mode load failure should render the
+  // page without the KR cards rather than marking the whole page unavailable,
+  // which would hide the Slack narrative too. Deliberately excluded here.
   const firstUnavailable =
     okrsByPillarResult.error ?? countsResult.error ?? latestSyncRunResult.error;
 
   const okrsByPillar = okrsByPillarResult.data;
   const counts = countsResult.data;
   const latestSyncRun = latestSyncRunResult.data;
+  const modeOkrs = modeOkrsResult.data;
 
   const okrCharts = getChartEmbeds("okrs", "company");
-  const hasData = counts.total > 0;
+  const hasSlackData = counts.total > 0;
+  const hasModeData =
+    modeOkrs.company.length > 0 ||
+    modeOkrs.pillar.length > 0 ||
+    modeOkrs.squad.length > 0;
+  const hasData = hasSlackData || hasModeData;
 
   const pageState = resolveDataState({
     source: "slack",
@@ -77,6 +103,29 @@ export default async function OKRsPage() {
       })),
     }));
 
+  const modeSquadKrCounts: Record<string, number> = {};
+  for (const [squadName, krs] of modeOkrs.bySquad.entries()) {
+    modeSquadKrCounts[squadName] = krs.length;
+  }
+
+  // Sort Company KRs so CEO triage reads top-down. Tracked KRs with a current
+  // value come first, ordered by progress ascending (worst first). KRs with no
+  // current value drop to a secondary "not tracked" list.
+  const trackedCompanyKrs = modeOkrs.company
+    .filter(hasCurrentValue)
+    .slice()
+    .sort((a, b) => {
+      const pa = progressTowardTarget(a) ?? 1;
+      const pb = progressTowardTarget(b) ?? 1;
+      if (pa !== pb) return pa - pb;
+      return a.description.localeCompare(b.description);
+    });
+  const untrackedCompanyKrs = modeOkrs.company
+    .filter((kr) => !hasCurrentValue(kr))
+    .slice()
+    .sort((a, b) => a.description.localeCompare(b.description));
+  const companyAttentionCount = trackedCompanyKrs.filter(needsAttention).length;
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
       <PageHeader
@@ -90,11 +139,20 @@ export default async function OKRsPage() {
       />
 
       {hasData ? (
-        <OkrView pillars={pillars} counts={counts} />
+        <OkrView
+          pillars={pillars}
+          counts={counts}
+          companyKrs={trackedCompanyKrs}
+          untrackedCompanyKrs={untrackedCompanyKrs}
+          companyAttentionCount={companyAttentionCount}
+          squadKrs={modeOkrs.squad}
+          modeSquadKrCounts={modeSquadKrCounts}
+        />
       ) : (
         <div className="rounded-xl border border-dashed border-border/50 p-8 text-center">
           <p className="text-sm text-muted-foreground">
-            No OKR updates synced yet. Trigger a sync to pull updates from Slack.
+            No OKR data synced yet. Trigger the Slack and Mode syncs to pull
+            updates and numeric KRs.
           </p>
         </div>
       )}
