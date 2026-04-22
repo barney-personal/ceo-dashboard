@@ -131,6 +131,7 @@ export function AiUsageDashboard({
   modelTrends,
   people,
   claudeDataStart,
+  canViewProfiles = false,
 }: {
   weeklyByCategory: WeeklyCategoryRow[];
   weeklyByModel?: WeeklyModelRow[];
@@ -141,6 +142,10 @@ export function AiUsageDashboard({
   people: PersonLookup[];
   /** ISO date for the vertical annotation on the weekly area chart. */
   claudeDataStart?: string;
+  /** When true, render user names as links to `/dashboard/people/${slug}`.
+   *  That route is manager-gated, so non-managers see plain names and no
+   *  dead-end link. */
+  canViewProfiles?: boolean;
 }) {
   const peopleByEmail = useMemo(
     () => new Map(people.map((p) => [p.email, p])),
@@ -562,7 +567,7 @@ export function AiUsageDashboard({
                       </td>
                       <td className="px-5 py-2.5">
                         <div className="flex flex-col">
-                          {user.name !== user.email ? (
+                          {canViewProfiles && user.name !== user.email ? (
                             <Link
                               href={`/dashboard/people/${user.slug}`}
                               className="font-medium text-foreground hover:text-primary"
@@ -570,7 +575,9 @@ export function AiUsageDashboard({
                               {user.name}
                             </Link>
                           ) : (
-                            <span className="text-foreground">{user.name}</span>
+                            <span className="font-medium text-foreground">
+                              {user.name}
+                            </span>
                           )}
                           <span className="text-[11px] text-muted-foreground">
                             {user.jobTitle ?? user.email}

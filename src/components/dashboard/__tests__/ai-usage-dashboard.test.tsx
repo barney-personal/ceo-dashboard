@@ -239,6 +239,37 @@ describe("AiUsageDashboard", () => {
     expect(sparklines.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("only links user names to /dashboard/people/[slug] when canViewProfiles is true", () => {
+    // Non-manager view: names render as plain text, no anchor tag.
+    const { container: nonMgr } = render(
+      <AiUsageDashboard
+        weeklyByCategory={WEEKLY_CATEGORY}
+        monthlyByModel={MONTHLY_MODEL}
+        monthlyByUser={MONTHLY_USER}
+        userTrends={USER_TRENDS}
+        modelTrends={MODEL_TRENDS}
+        people={PEOPLE}
+        canViewProfiles={false}
+      />,
+    );
+    expect(nonMgr.textContent).toContain("Alice");
+    expect(nonMgr.querySelector("a[href*='/dashboard/people/alice']")).toBeNull();
+
+    // Manager view: names become anchor links.
+    const { container: mgr } = render(
+      <AiUsageDashboard
+        weeklyByCategory={WEEKLY_CATEGORY}
+        monthlyByModel={MONTHLY_MODEL}
+        monthlyByUser={MONTHLY_USER}
+        userTrends={USER_TRENDS}
+        modelTrends={MODEL_TRENDS}
+        people={PEOPLE}
+        canViewProfiles={true}
+      />,
+    );
+    expect(mgr.querySelector("a[href='/dashboard/people/alice']")).toBeTruthy();
+  });
+
   it("caps leaderboard to the Top 15 default and exposes the selector", () => {
     const { container, getByDisplayValue } = render(
       <AiUsageDashboard

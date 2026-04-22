@@ -20,10 +20,25 @@ import {
   resolveModeStaleReason,
 } from "@/lib/data/mode";
 import { getModeReportLink } from "@/lib/integrations/mode-config";
+import { getCurrentUserRole } from "@/lib/auth/roles.server";
+import { hasAccess } from "@/lib/auth/roles";
 
 const CLAUDE_DATA_START_ISO = "2026-03-23";
 
 export default async function PeopleAiUsagePage() {
+  // The page itself is everyone-accessible (layout gates to "everyone").
+  // The user leaderboard can link through to /dashboard/people/${slug},
+  // which is manager-gated — so only render those links when the viewer
+  // can actually reach that page. Non-managers still see the full data,
+  // just no dead-end profile links.
+  let canViewProfiles = false;
+  try {
+    const role = await getCurrentUserRole();
+    canViewProfiles = hasAccess(role, "manager");
+  } catch {
+    // Clerk hiccup → degrade to non-linking names rather than breaking.
+  }
+
   const [usageResult, employeesResult, latestSyncRunResult] = await Promise.all(
     [
       safeLoad(() => getAiUsageData(), {
@@ -211,6 +226,7 @@ export default async function PeopleAiUsagePage() {
           modelTrends={modelTrends}
           people={peopleList}
           claudeDataStart={CLAUDE_DATA_START_ISO}
+          canViewProfiles={canViewProfiles}
         />
       ) : (
         <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border/50">
