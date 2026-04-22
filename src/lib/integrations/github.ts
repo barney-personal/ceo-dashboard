@@ -229,6 +229,25 @@ export async function getUserProfile(
   });
 }
 
+// Variant that returns null for deleted/renamed GitHub accounts (HTTP 404)
+// instead of throwing. Callers iterating over a list of historical logins
+// shouldn't treat an absent user as an error — the employee-match flow
+// previously produced ~27 Sentry issues per week from such lookups.
+export async function getUserProfileOrNull(
+  login: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<GitHubUser | null> {
+  try {
+    return await getUserProfile(login, opts);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/GitHub API error 404/.test(message)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function getOrgRepos(opts: {
   signal?: AbortSignal;
 } = {}): Promise<GitHubRepo[]> {

@@ -63,21 +63,39 @@ async function fetchSwarmia(
     if (v !== undefined) url.searchParams.set(k, v);
   }
 
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${getToken()}` },
-    next: { revalidate: CACHE_SECONDS, tags: ["swarmia"] },
-  });
+  // Swarmia's CSV endpoints occasionally return transient 5xx during their
+  // own report regeneration. Retry once after a short delay before bubbling
+  // the error up — this reduces Sentry noise without hiding real outages.
+  const MAX_ATTEMPTS = 2;
+  let lastRes: Response | null = null;
+  let lastBody = "";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      next: { revalidate: CACHE_SECONDS, tags: ["swarmia"] },
+    });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new SwarmiaApiError(
-      `Swarmia ${path} returned ${res.status}: ${body.slice(0, 200)}`,
-      res.status,
-      path
-    );
+    if (res.ok) {
+      return res.text();
+    }
+
+    lastRes = res;
+    lastBody = await res.text().catch(() => "");
+
+    const retryable = res.status >= 500 && res.status < 600;
+    if (retryable && attempt < MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      continue;
+    }
+    break;
   }
 
-  return res.text();
+  const status = lastRes?.status ?? 0;
+  throw new SwarmiaApiError(
+    `Swarmia ${path} returned ${status}: ${lastBody.slice(0, 200)}`,
+    status,
+    path
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -334,20 +334,6 @@ export async function runManagementAccountsSync(
     }
 
     const status = determineSyncStatus(errors, count);
-    if (status === "success" || status === "partial") {
-      Sentry.captureMessage("Management accounts sync completed", {
-        level: "info",
-        tags: {
-          sync_source: "management-accounts",
-          status,
-        },
-        extra: {
-          runId: run.id,
-          recordsSynced: count,
-        },
-      });
-    }
-
     return { status, recordsSynced: count, errors };
   } catch (error) {
     if (error instanceof SyncDeadlineExceededError) {

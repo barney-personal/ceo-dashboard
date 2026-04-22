@@ -2,11 +2,20 @@ import { redirect } from "next/navigation";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { getProbeStatusSummary, getProbeTimeline } from "@/lib/data/probes";
+import {
+  getSchemaCompatibilityMessage,
+  isSchemaCompatibilityError,
+} from "@/lib/db/errors";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { ProbeSummary } from "./_components/ProbeSummary";
 import { ProbeTimeline } from "./_components/ProbeTimeline";
-import { serializeSummary, serializeTimelineRun } from "./_components/format";
+import {
+  serializeSummary,
+  serializeTimelineRun,
+  type SerializedProbeCheckSummary,
+  type SerializedTimelineRun,
+} from "./_components/format";
 
 const KNOWN_CHECKS = ["ceo-ping-auth"];
 
@@ -18,13 +27,23 @@ export default async function ProbesPage() {
   }
 
   const now = new Date();
-  const [summaries, timelineRuns] = await Promise.all([
-    getProbeStatusSummary(KNOWN_CHECKS, now),
-    getProbeTimeline(24),
-  ]);
+  let serializedSummaries: SerializedProbeCheckSummary[] = [];
+  let serializedTimeline: SerializedTimelineRun[] = [];
+  let schemaWarning: string | null = null;
 
-  const serializedSummaries = summaries.map(serializeSummary);
-  const serializedTimeline = timelineRuns.map(serializeTimelineRun);
+  try {
+    const [summaries, timelineRuns] = await Promise.all([
+      getProbeStatusSummary(KNOWN_CHECKS, now),
+      getProbeTimeline(24),
+    ]);
+    serializedSummaries = summaries.map(serializeSummary);
+    serializedTimeline = timelineRuns.map(serializeTimelineRun);
+  } catch (error) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+    schemaWarning = getSchemaCompatibilityMessage(error);
+  }
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
@@ -32,6 +51,12 @@ export default async function ProbesPage() {
         title="Production Probes"
         description="Automated health checks, uptime, latency, and incident status"
       />
+
+      {schemaWarning && (
+        <div className="rounded-md border border-warning/50 bg-warning/10 px-4 py-3 text-sm text-warning-foreground">
+          {schemaWarning}
+        </div>
+      )}
 
       <SectionCard
         title="Check Status"

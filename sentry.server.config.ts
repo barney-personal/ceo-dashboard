@@ -19,4 +19,8 @@ Sentry.init({
   // Enable sending user PII (Personally Identifiable Information)
   // https://docs.sentry.io/platforms/javascript/guides/nextjs/configuration/options/#sendDefaultPii
   sendDefaultPii: true,
+
+  // "Error: aborted" from node:_http_server abortIncoming fires when a client
+  // disconnects mid-stream — it has no stack in our code and no user impact.
+  ignoreErrors: ["Error: aborted"],
 });
