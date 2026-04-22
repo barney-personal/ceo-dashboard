@@ -72,6 +72,7 @@ export default async function OKRsPage() {
         actual: okr.actual,
         target: okr.target,
         userName: okr.userName,
+        postedAt: okr.postedAt.toISOString(),
         slackUrl: getSlackMessageUrl(okr.channelId, okr.slackTs),
       })),
     }));
