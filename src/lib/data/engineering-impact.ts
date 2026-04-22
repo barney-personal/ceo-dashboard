@@ -115,11 +115,32 @@ function classifyLevel(raw: string | null): {
   return { track: "IC", num, label: `L${num}` };
 }
 
+// `rp_specialisation` is the authoritative signal post-April-2026 standardisation.
+// Values are canonical role names ("Backend Engineer", "Machine Learning Engineer",
+// etc.) with no seniority prefix, so exact matches are cheap and reliable. The
+// substring fallback catches anyone whose `rp_specialisation` is still blank
+// during the HiBob rollout.
+const DISCIPLINE_BY_SPECIALISATION: Record<string, Discipline> = {
+  "backend engineer": "BE",
+  "python engineer": "BE",
+  "frontend engineer": "FE",
+  "engineering manager": "EM",
+  "qa engineer": "QA",
+  "machine learning engineer": "ML",
+  "ml ops engineer": "ML",
+  "head of machine learning": "ML",
+  "machine learning engineering manager": "ML",
+  "technical operations": "Ops",
+};
+
 function classifyDiscipline(
   spec: string | null,
   jobTitle: string | null,
 ): Discipline {
-  const s = (spec ?? "").toLowerCase();
+  const s = (spec ?? "").trim().toLowerCase();
+  const exact = DISCIPLINE_BY_SPECIALISATION[s];
+  if (exact) return exact;
+
   const j = (jobTitle ?? "").toLowerCase();
   if (s.includes("backend") || j.includes("backend")) return "BE";
   if (s.includes("frontend") || j.includes("frontend")) return "FE";

@@ -89,77 +89,52 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
     issues: unassigned.sort((a, b) => a.person.localeCompare(b.person)),
   });
 
-  // 2. Job title inconsistencies (seniority in title, non-standard naming)
+  // 2. Missing or inconsistent role_specialisation. The People team publishes
+  // the canonical role (no seniority) in `rp_specialisation`; `job_title` keeps
+  // the external seniority-prefixed title. We flag rows where `rp_specialisation`
+  // is blank, or where the normalised job title disagrees with it after
+  // stripping seniority — both indicate a HiBob entry the People team needs
+  // to standardise.
   const titleIssues: DataIssue[] = [];
   for (const [email, r] of hcByEmail) {
     const rawTitle = rowStr(r, "job_title");
     if (!rawTitle) continue;
-    const level = rowStr(r, "hb_level");
-    const specialisation = rowStr(r, "rp_specialisation");
-    const normalised = resolveEngineerDiscipline(normalizeJobTitle(rawTitle), level, specialisation);
-    if (rawTitle !== normalised) {
+    const specialisation = rowStr(r, "rp_specialisation").trim();
+    const normalisedTitle = normalizeJobTitle(rawTitle);
+    if (!specialisation) {
       titleIssues.push({
         person: rowStr(r, "preferred_name") || "Unknown",
         email,
-        field: "job_title",
-        currentValue: rawTitle,
-        suggestedValue: normalised,
+        field: "rp_specialisation",
+        currentValue: "(empty)",
+        suggestedValue: normalisedTitle,
+      });
+      continue;
+    }
+    const canonical = resolveEngineerDiscipline(normalisedTitle, specialisation);
+    if (canonical !== specialisation && normalisedTitle !== specialisation) {
+      titleIssues.push({
+        person: rowStr(r, "preferred_name") || "Unknown",
+        email,
+        field: "rp_specialisation",
+        currentValue: specialisation,
+        suggestedValue: canonical,
       });
     }
   }
   categories.push({
-    id: "job-titles",
-    title: "Non-Standard Job Titles",
-    description: "Job titles should not include seniority prefixes (Senior, Junior, etc.) — the level field handles that. Variants like \"Backend Engineer\" and \"Software Engineer\" should use a single canonical name per discipline.",
+    id: "role-specialisation",
+    title: "Missing or Inconsistent Role Specialisation",
+    description: "`rp_specialisation` holds the canonical role without seniority (e.g. \"Backend Engineer\"). `job_title` keeps the external title with seniority (e.g. \"Senior Backend Engineer\") — these two are expected to differ. This flags rows where the specialisation is blank or disagrees with the stripped job title.",
     severity: "medium",
-    issues: titleIssues.sort((a, b) => a.currentValue.localeCompare(b.currentValue)),
+    issues: titleIssues.sort((a, b) => a.person.localeCompare(b.person)),
   });
 
-  // 3. Level prefix mismatches (e.g. SE level for a known Backend Engineer)
-  const levelIssues: DataIssue[] = [];
-  for (const [email, r] of hcByEmail) {
-    const rawTitle = rowStr(r, "job_title");
-    const level = rowStr(r, "hb_level");
-    const specialisation = rowStr(r, "rp_specialisation");
-    if (!level || !rawTitle) continue;
-
-    const prefix = level.replace(/\d+$/, "").toUpperCase();
-    const specLower = (specialisation || "").toLowerCase();
-    const titleLower = rawTitle.toLowerCase();
-
-    // Backend engineer with non-B level
-    const isBackend = titleLower.includes("backend") || specLower.includes("backend");
-    if (isBackend && prefix !== "B" && prefix !== "BE") {
-      levelIssues.push({
-        person: rowStr(r, "preferred_name") || "Unknown",
-        email,
-        field: "hb_level",
-        currentValue: level,
-        suggestedValue: level.replace(/^[A-Z]+/, "B"),
-      });
-    }
-
-    // Frontend engineer with non-F level
-    const isFrontend = titleLower.includes("frontend") || titleLower.includes("front-end") || specLower.includes("frontend");
-    if (isFrontend && prefix !== "F" && prefix !== "FE") {
-      levelIssues.push({
-        person: rowStr(r, "preferred_name") || "Unknown",
-        email,
-        field: "hb_level",
-        currentValue: level,
-        suggestedValue: level.replace(/^[A-Z]+/, "F"),
-      });
-    }
-  }
-  categories.push({
-    id: "level-prefixes",
-    title: "Level Prefix Mismatches",
-    description: "Backend engineers should have B-prefixed levels (e.g. B3) and frontend engineers should have F-prefixed levels (e.g. F3). Many currently use the generic SE prefix.",
-    severity: "low",
-    issues: levelIssues.sort((a, b) => a.person.localeCompare(b.person)),
-  });
-
-  // 4. Department mismatches (Data Science should be Analytics or ML, Product mis-assignments)
+  // 3. Function mismatches in Rev (the canonical source for dashboards).
+  // We deliberately do not flag `hb_function` drift in HiBob — the People team
+  // considers that migration done, Rev's `function_name` is the authoritative
+  // field, and HiBob lag isn't breaking any downstream view because loaders
+  // prefer `function_name`.
   const deptIssues: DataIssue[] = [];
   for (const r of fteRows) {
     const email = rowStr(r, "employee_email").toLowerCase();
@@ -168,10 +143,9 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
 
     const hc = hcByEmail.get(email);
     const rawTitle = hc ? rowStr(hc, "job_title") : "";
-    const level = hc ? rowStr(hc, "hb_level") : "";
     const specialisation = hc ? rowStr(hc, "rp_specialisation") : "";
-    const normalizedTitle = rawTitle ? resolveEngineerDiscipline(normalizeJobTitle(rawTitle), level, specialisation) : "";
-    const normalizedDept = normalizeDepartment(func, normalizedTitle);
+    const normalizedTitle = rawTitle ? resolveEngineerDiscipline(normalizeJobTitle(rawTitle), specialisation) : "";
+    const normalizedDept = normalizeDepartment(func, normalizedTitle, specialisation);
 
     if (normalizedDept !== func) {
       deptIssues.push({
@@ -183,28 +157,10 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
       });
     }
   }
-  // Also flag anyone in headcount with hb_function = "Data Science"
-  for (const [email, r] of hcByEmail) {
-    if (rowStr(r, "hb_function") !== "Data Science") continue;
-    if (deptIssues.some((i) => i.email.toLowerCase() === email)) continue; // already flagged via FTE
-    const rawTitle = rowStr(r, "job_title");
-    const level = rowStr(r, "hb_level");
-    const specialisation = rowStr(r, "rp_specialisation");
-    const normalizedTitle = rawTitle ? resolveEngineerDiscipline(normalizeJobTitle(rawTitle), level, specialisation) : "";
-    const target = normalizeDepartment("Data Science", normalizedTitle);
-    if (target === "Data Science") continue; // no-op when title is missing — nothing actionable
-    deptIssues.push({
-      person: rowStr(r, "preferred_name") || "Unknown",
-      email,
-      field: "hb_function",
-      currentValue: "Data Science",
-      suggestedValue: target,
-    });
-  }
   categories.push({
     id: "departments",
-    title: "Department Misassignments",
-    description: "\"Data Science\" should be split into \"Analytics\" and \"Machine Learning\". Some Product roles (analysts, designers, marketing) belong in their functional department.",
+    title: "Function Mismatch in Rev",
+    description: "Rev's `function_name` disagrees with the canonical role in `rp_specialisation` (e.g. a Product Marketing role under Product should be Marketing). Rev is the authoritative source for function-level reporting, so these should be corrected at source.",
     severity: "medium",
     issues: deptIssues.sort((a, b) => a.currentValue.localeCompare(b.currentValue) || a.person.localeCompare(b.person)),
   });
@@ -268,7 +224,7 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
         email,
         field: "hb_level",
         currentValue: "(empty)",
-        suggestedValue: "Set level in HiBob (e.g. B3, F4, SE3)",
+        suggestedValue: "Set level in HiBob (e.g. L3, EM4)",
       });
     }
   }
@@ -302,19 +258,20 @@ export async function detectDataIssues(): Promise<DataCleanupResult> {
     issues: missingFunction.sort((a, b) => a.person.localeCompare(b.person)),
   });
 
-  // 9. Missing manager
+  // 9. Missing manager — CEO sits at the top of the hierarchy and has no
+  // manager by design, so skip rows tagged as CEO rather than flag them.
   const missingManager: DataIssue[] = [];
   for (const [email, r] of hcByEmail) {
     const manager = rowStr(r, "manager").trim();
-    if (!manager) {
-      missingManager.push({
-        person: rowStr(r, "preferred_name") || "Unknown",
-        email,
-        field: "manager",
-        currentValue: "(empty)",
-        suggestedValue: "Set reporting manager in HiBob",
-      });
-    }
+    if (manager) continue;
+    if (rowStr(r, "rp_specialisation").trim().toLowerCase() === "ceo") continue;
+    missingManager.push({
+      person: rowStr(r, "preferred_name") || "Unknown",
+      email,
+      field: "manager",
+      currentValue: "(empty)",
+      suggestedValue: "Set reporting manager in HiBob",
+    });
   }
   categories.push({
     id: "missing-manager",
