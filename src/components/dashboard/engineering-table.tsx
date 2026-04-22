@@ -33,6 +33,9 @@ interface EngineerRow {
   tenureMonths: number | null;
   tenureDays: number | null;
   silent: boolean;
+  aiSpend: number | null;
+  aiTokens: number | null;
+  aiMonthStart: string | null;
 }
 
 type SortKey =
@@ -42,7 +45,8 @@ type SortKey =
   | "additions"
   | "deletions"
   | "netLines"
-  | "changedFiles";
+  | "changedFiles"
+  | "aiSpend";
 
 const COLUMNS: {
   key: SortKey;
@@ -80,6 +84,28 @@ const COLUMNS: {
   { key: "deletions", label: "Lines Deleted", format: (v) => v.toLocaleString() },
   { key: "netLines", label: "Net Lines", format: (v) => (v >= 0 ? `+${v.toLocaleString()}` : v.toLocaleString()) },
   { key: "changedFiles", label: "Files Changed", format: (v) => v.toLocaleString() },
+  {
+    key: "aiSpend",
+    label: "AI Spend",
+    format: (v) =>
+      v <= 0
+        ? "—"
+        : v >= 1000
+          ? `$${Math.round(v).toLocaleString()}`
+          : `$${v.toFixed(2)}`,
+    info: (
+      <>
+        <p>
+          Total Claude + Cursor spend (USD) for the current month, sourced from
+          the AI Model Usage dashboard. Sums across all models and tools.
+        </p>
+        <p>
+          Blank means either no AI usage this month or the engineer&apos;s
+          HiBob email hasn&apos;t been matched against Bedrock/Cursor login.
+        </p>
+      </>
+    ),
+  },
 ];
 
 function formatTenure(months: number): string {
@@ -172,7 +198,9 @@ export function EngineeringTable({
     return result.map((r) => {
       const outputScore = computeImpact(r.prsCount, r.additions, r.deletions);
       const isNewHire = r.tenureDays != null && r.tenureDays < periodDays;
-      return { ...r, outputScore, isNewHire };
+      // Use 0 for sort so null rows fall to the bottom when sorting desc.
+      const aiSpendForSort = r.aiSpend ?? 0;
+      return { ...r, outputScore, isNewHire, aiSpendForSort };
     });
   }, [ranked, filters, periodDays]);
 
@@ -188,7 +216,9 @@ export function EngineeringTable({
   const sorted = useMemo(
     () =>
       [...filtered].sort((a, b) => {
-        const diff = a[sortKey] - b[sortKey];
+        const aVal = sortKey === "aiSpend" ? a.aiSpendForSort : a[sortKey];
+        const bVal = sortKey === "aiSpend" ? b.aiSpendForSort : b[sortKey];
+        const diff = aVal - bVal;
         return sortDir === "desc" ? -diff : diff;
       }),
     [filtered, sortKey, sortDir]
@@ -359,24 +389,30 @@ export function EngineeringTable({
                     <td className="hidden md:table-cell px-4 py-3 text-xs text-muted-foreground">
                       {row.jobTitle ?? "—"}
                     </td>
-                    {COLUMNS.map((col) => (
-                      <td
-                        key={col.key}
-                        className={cn(
-                          "px-4 py-3 text-right tabular-nums font-medium",
-                          col.key === "netLines" &&
-                            row.netLines > 0 &&
-                            "text-positive",
-                          col.key === "netLines" &&
-                            row.netLines < 0 &&
-                            "text-negative",
-                          col.key === "deletions" && "text-negative/70",
-                          row.isNewHire && "text-muted-foreground/70 italic"
-                        )}
-                      >
-                        {col.format(row[col.key])}
-                      </td>
-                    ))}
+                    {COLUMNS.map((col) => {
+                      const raw =
+                        col.key === "aiSpend" ? row.aiSpend : row[col.key];
+                      const isMissingAi = col.key === "aiSpend" && raw == null;
+                      return (
+                        <td
+                          key={col.key}
+                          className={cn(
+                            "px-4 py-3 text-right tabular-nums font-medium",
+                            col.key === "netLines" &&
+                              row.netLines > 0 &&
+                              "text-positive",
+                            col.key === "netLines" &&
+                              row.netLines < 0 &&
+                              "text-negative",
+                            col.key === "deletions" && "text-negative/70",
+                            row.isNewHire && "text-muted-foreground/70 italic",
+                            isMissingAi && "text-muted-foreground/40"
+                          )}
+                        >
+                          {isMissingAi ? "—" : col.format(raw as number)}
+                        </td>
+                      );
+                    })}
                     <td className="hidden md:table-cell px-4 py-3">
                       {row.squad ? (
                         <span className="rounded-md bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">

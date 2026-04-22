@@ -10,6 +10,12 @@ import { getActiveEmployees, type Person } from "./people";
 import { groupLatestOkrRows, type OkrSummary } from "./okrs";
 import { getPerformanceData, type PerformanceRating } from "./performance";
 import type { PeriodDays } from "./engineering";
+import {
+  aggregateLatestMonthByUser,
+  getAiUsageData,
+  getUserTrend,
+  type AiUsageData,
+} from "./ai-usage";
 
 export interface EngineerProfile {
   login: string;
@@ -200,6 +206,98 @@ export async function getEngineerPerformanceRatings(
     // Mode data unavailable — render page without the performance section
     return null;
   }
+}
+
+export interface EngineerAiUsage {
+  latestMonthStart: string;
+  latestMonthCost: number;
+  latestMonthTokens: number;
+  nDays: number;
+  byCategory: Array<{ category: string; cost: number; tokens: number }>;
+  monthlyTrend: Array<{ monthStart: string; totalCost: number; totalTokens: number }>;
+  costSeries: Array<{ date: string; value: number }>;
+  tokenSeries: Array<{ date: string; value: number }>;
+  /** Company-wide median cost for the latest month (from Mode). */
+  peerMedianCost: number;
+  /** Company-wide average cost for the latest month (from Mode). */
+  peerAvgCost: number;
+  /** All peers' latest-month spend (one entry per user, incl. this user)
+   *  for a distribution strip plot. */
+  peerSpend: number[];
+}
+
+/**
+ * Load the AI Model Usage rollup for a single engineer by email.
+ * Returns null when no AI usage rows exist for this user.
+ */
+export async function getEngineerAiUsage(
+  email: string | null,
+): Promise<EngineerAiUsage | null> {
+  if (!email) return null;
+  let data: AiUsageData;
+  try {
+    data = await getAiUsageData();
+  } catch {
+    return null;
+  }
+
+  const normalizedEmail = email.toLowerCase();
+  const userRows = data.monthlyByUser.filter(
+    (r) => r.userEmail === normalizedEmail,
+  );
+  if (userRows.length === 0) return null;
+
+  const trend = getUserTrend(data, normalizedEmail);
+  const latestMonth = trend.at(-1);
+  if (!latestMonth) return null;
+
+  const latestRows = userRows.filter(
+    (r) => r.monthStart === latestMonth.monthStart,
+  );
+  const nDays = Math.max(...latestRows.map((r) => r.nDays), 0);
+  const peerSpend = [...aggregateLatestMonthByUser(data).values()]
+    .map((u) => u.totalCost)
+    .filter((v) => Number.isFinite(v));
+  // Compute peer median/avg locally from the combined (Claude + Cursor)
+  // per-user totals so the number reflects the whole company, not
+  // whichever single-category row Mode happened to return first.
+  const sortedPeerSpend = [...peerSpend].sort((a, b) => a - b);
+  const peerMedianCost =
+    sortedPeerSpend.length === 0
+      ? 0
+      : sortedPeerSpend.length % 2 === 1
+        ? sortedPeerSpend[Math.floor(sortedPeerSpend.length / 2)]
+        : (sortedPeerSpend[sortedPeerSpend.length / 2 - 1] +
+            sortedPeerSpend[sortedPeerSpend.length / 2]) /
+          2;
+  const peerAvgCost =
+    peerSpend.length === 0
+      ? 0
+      : peerSpend.reduce((sum, v) => sum + v, 0) / peerSpend.length;
+
+  return {
+    latestMonthStart: latestMonth.monthStart,
+    latestMonthCost: latestMonth.totalCost,
+    latestMonthTokens: latestMonth.totalTokens,
+    nDays,
+    byCategory: latestMonth.byCategory,
+    monthlyTrend: trend.map((t) => ({
+      monthStart: t.monthStart,
+      totalCost: t.totalCost,
+      totalTokens: t.totalTokens,
+    })),
+    costSeries: trend.map((t) => ({
+      date: t.monthStart,
+      value: t.totalCost,
+    })),
+    tokenSeries: trend.map((t) => ({
+      date: t.monthStart,
+      value: t.totalTokens,
+    })),
+    peerMedianCost,
+    peerAvgCost,
+    peerSpend,
+  };
 }
 
 export interface EmployeeOption {

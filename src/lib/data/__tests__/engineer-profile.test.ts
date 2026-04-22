@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetPerformanceData, mockGetActiveEmployees } = vi.hoisted(() => ({
-  mockGetPerformanceData: vi.fn(),
-  mockGetActiveEmployees: vi.fn(),
-}));
+const { mockGetPerformanceData, mockGetActiveEmployees, mockGetAiUsageData } =
+  vi.hoisted(() => ({
+    mockGetPerformanceData: vi.fn(),
+    mockGetActiveEmployees: vi.fn(),
+    mockGetAiUsageData: vi.fn(),
+  }));
 
 vi.mock("../performance", async () => {
   const actual = await vi.importActual<typeof import("../performance")>(
@@ -24,10 +26,19 @@ vi.mock("../people", () => ({
 vi.mock("../okrs", () => ({
   groupLatestOkrRows: vi.fn(() => new Map()),
 }));
+vi.mock("../ai-usage", async () => {
+  const actual =
+    await vi.importActual<typeof import("../ai-usage")>("../ai-usage");
+  return {
+    ...actual,
+    getAiUsageData: mockGetAiUsageData,
+  };
+});
 
 import {
   getEmployeeOptions,
   getEngineerPerformanceRatings,
+  getEngineerAiUsage,
 } from "../engineer-profile";
 import type { Person } from "../people";
 import type { PersonPerformance } from "../performance";
@@ -211,5 +222,138 @@ describe("getEmployeeOptions", () => {
       expect.any(Error)
     );
     consoleError.mockRestore();
+  });
+});
+
+describe("getEngineerAiUsage", () => {
+  beforeEach(() => {
+    mockGetAiUsageData.mockReset();
+  });
+
+  it("returns null when email is missing", async () => {
+    const result = await getEngineerAiUsage(null);
+    expect(result).toBeNull();
+    expect(mockGetAiUsageData).not.toHaveBeenCalled();
+  });
+
+  it("returns null when Mode throws (graceful fallback)", async () => {
+    mockGetAiUsageData.mockRejectedValue(new Error("Mode unavailable"));
+    const result = await getEngineerAiUsage("alice@meetcleo.com");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the engineer has no monthly usage rows", async () => {
+    mockGetAiUsageData.mockResolvedValue({
+      weeklyByCategory: [],
+      weeklyByModel: [],
+      monthlyByModel: [],
+      monthlyByUser: [],
+      syncedAt: new Date("2026-04-22T06:00:00Z"),
+      missing: [],
+    });
+    expect(await getEngineerAiUsage("alice@meetcleo.com")).toBeNull();
+  });
+
+  it("combines Claude + Cursor rows for the latest month and computes peer stats locally", async () => {
+    mockGetAiUsageData.mockResolvedValue({
+      weeklyByCategory: [],
+      weeklyByModel: [],
+      monthlyByModel: [],
+      monthlyByUser: [
+        // Alice — both tools, latest month → combined 620
+        {
+          monthStart: "2026-04-01",
+          category: "claude",
+          userEmail: "alice@meetcleo.com",
+          nDays: 10,
+          nModelsUsed: 2,
+          totalCost: 500,
+          totalTokens: 800_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          // Mode's per-category numbers — intentionally divergent so a
+          // bug taking row[0].medianCost would surface as a wrong value.
+          avgCostPerPerson: 999,
+          medianCost: 999,
+        },
+        {
+          monthStart: "2026-04-01",
+          category: "cursor",
+          userEmail: "alice@meetcleo.com",
+          nDays: 8,
+          nModelsUsed: 1,
+          totalCost: 120,
+          totalTokens: 200_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 7,
+          medianCost: 7,
+        },
+        // Bob — cursor only, latest month → 60
+        {
+          monthStart: "2026-04-01",
+          category: "cursor",
+          userEmail: "bob@meetcleo.com",
+          nDays: 4,
+          nModelsUsed: 1,
+          totalCost: 60,
+          totalTokens: 100_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 7,
+          medianCost: 7,
+        },
+        // Carol — claude only, latest month → 200
+        {
+          monthStart: "2026-04-01",
+          category: "claude",
+          userEmail: "carol@meetcleo.com",
+          nDays: 6,
+          nModelsUsed: 1,
+          totalCost: 200,
+          totalTokens: 250_000_000,
+          medianTokensPerPerson: 30_000_000,
+          avgTokensPerPerson: 80_000_000,
+          avgCostPerPerson: 999,
+          medianCost: 999,
+        },
+        {
+          monthStart: "2026-03-01",
+          category: "cursor",
+          userEmail: "alice@meetcleo.com",
+          nDays: 20,
+          nModelsUsed: 3,
+          totalCost: 300,
+          totalTokens: 500_000_000,
+          medianTokensPerPerson: 27_000_000,
+          avgTokensPerPerson: 70_000_000,
+          avgCostPerPerson: 35,
+          medianCost: 20,
+        },
+      ],
+      syncedAt: new Date("2026-04-22T06:00:00Z"),
+      missing: [],
+    });
+
+    const result = await getEngineerAiUsage("ALICE@meetcleo.com");
+    expect(result).toBeDefined();
+    expect(result?.latestMonthStart).toBe("2026-04-01");
+    expect(result?.latestMonthCost).toBe(620);
+    expect(result?.latestMonthTokens).toBe(1_000_000_000);
+    expect(result?.nDays).toBe(10);
+    expect(result?.byCategory).toHaveLength(2);
+    // Peer combined-spend distribution: [60, 200, 620].
+    // Median = 200, mean = 880/3 ≈ 293.33. Crucially, NEITHER matches the
+    // Mode-supplied medianCost (7 or 999) — proving local computation.
+    expect(result?.peerSpend).toEqual(
+      expect.arrayContaining([60, 200, 620]),
+    );
+    expect(result?.peerMedianCost).toBe(200);
+    expect(result?.peerAvgCost).toBeCloseTo(293.33, 1);
+    expect(result?.monthlyTrend.map((t) => t.monthStart)).toEqual([
+      "2026-03-01",
+      "2026-04-01",
+    ]);
+    expect(result?.costSeries).toHaveLength(2);
   });
 });

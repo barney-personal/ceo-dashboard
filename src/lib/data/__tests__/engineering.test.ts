@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { mockSelect, mockGetActiveEmployees } = vi.hoisted(() => ({
-  mockSelect: vi.fn(),
-  mockGetActiveEmployees: vi.fn(),
-}));
+const { mockSelect, mockGetActiveEmployees, mockGetAiUsageData } = vi.hoisted(
+  () => ({
+    mockSelect: vi.fn(),
+    mockGetActiveEmployees: vi.fn(),
+    mockGetAiUsageData: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/db", () => ({
   db: { select: mockSelect },
@@ -14,6 +17,15 @@ vi.mock("../people", async () => {
   return {
     ...actual,
     getActiveEmployees: mockGetActiveEmployees,
+  };
+});
+
+vi.mock("../ai-usage", async () => {
+  const actual =
+    await vi.importActual<typeof import("../ai-usage")>("../ai-usage");
+  return {
+    ...actual,
+    getAiUsageData: mockGetAiUsageData,
   };
 });
 
@@ -65,7 +77,20 @@ import { getEngineeringRankings, computeImpact } from "../engineering";
 afterEach(() => {
   mockSelect.mockReset();
   mockGetActiveEmployees.mockReset();
+  mockGetAiUsageData.mockReset();
 });
+
+/** Default no-data AI usage payload — overridable per-test. */
+function emptyAiUsage() {
+  return {
+    weeklyByCategory: [],
+    weeklyByModel: [],
+    monthlyByModel: [],
+    monthlyByUser: [],
+    syncedAt: null,
+    missing: [],
+  };
+}
 
 /** Build a drizzle-query-shaped thenable whose `await` resolves with `rows`. */
 function chainResolving(rows: unknown) {
@@ -140,6 +165,7 @@ describe("getEngineeringRankings", () => {
 
   it("excludes non-engineering functions from the ranking", async () => {
     mockDb({});
+    mockGetAiUsageData.mockResolvedValue(emptyAiUsage());
     mockGetActiveEmployees.mockResolvedValue({
       employees: [
         person({ email: "eng@x.com", function: "Engineering" }),
@@ -183,6 +209,7 @@ describe("getEngineeringRankings", () => {
         },
       ],
     });
+    mockGetAiUsageData.mockResolvedValue(emptyAiUsage());
     mockGetActiveEmployees.mockResolvedValue({
       employees: [
         person({ email: "alice@x.com", name: "Alice" }),
@@ -213,6 +240,7 @@ describe("getEngineeringRankings", () => {
 
   it("flags unmapped engineers with githubMapped=false", async () => {
     mockDb({ ghMapRows: [] });
+    mockGetAiUsageData.mockResolvedValue(emptyAiUsage());
     mockGetActiveEmployees.mockResolvedValue({
       employees: [person({ email: "nomap@x.com" })],
       unassigned: [],
@@ -232,6 +260,7 @@ describe("getEngineeringRankings", () => {
 
   it("returns tenureDays computed from startDate, and null for unparseable dates", async () => {
     mockDb({});
+    mockGetAiUsageData.mockResolvedValue(emptyAiUsage());
     const fiveDaysAgoIso = new Date(Date.now() - 5 * 86_400_000)
       .toISOString()
       .slice(0, 10);
@@ -262,6 +291,7 @@ describe("getEngineeringRankings", () => {
 
   it("does not leak startDate into the returned payload", async () => {
     mockDb({});
+    mockGetAiUsageData.mockResolvedValue(emptyAiUsage());
     mockGetActiveEmployees.mockResolvedValue({
       employees: [person({ startDate: "2021-06-15" })],
       unassigned: [],
@@ -274,6 +304,98 @@ describe("getEngineeringRankings", () => {
     const result = await getEngineeringRankings(30);
     expect(result).toHaveLength(1);
     expect(result[0]).not.toHaveProperty("startDate");
+  });
+
+  it("joins AI usage onto each engineer by lowercase email", async () => {
+    mockDb({});
+    // Two engineers, only Alice has AI usage rows for the latest month.
+    // Bob has none → his row should carry null AI fields, not undefined or 0.
+    mockGetAiUsageData.mockResolvedValue({
+      weeklyByCategory: [],
+      weeklyByModel: [],
+      monthlyByModel: [],
+      monthlyByUser: [
+        {
+          monthStart: "2026-04-01",
+          category: "claude",
+          userEmail: "alice@x.com",
+          nDays: 12,
+          nModelsUsed: 2,
+          totalCost: 400,
+          totalTokens: 600_000_000,
+          medianTokensPerPerson: 0,
+          avgTokensPerPerson: 0,
+          avgCostPerPerson: 0,
+          medianCost: 0,
+        },
+        {
+          monthStart: "2026-04-01",
+          category: "cursor",
+          userEmail: "alice@x.com",
+          nDays: 8,
+          nModelsUsed: 1,
+          totalCost: 60,
+          totalTokens: 90_000_000,
+          medianTokensPerPerson: 0,
+          avgTokensPerPerson: 0,
+          avgCostPerPerson: 0,
+          medianCost: 0,
+        },
+      ],
+      syncedAt: new Date("2026-04-22T06:00:00Z"),
+      missing: [],
+    });
+    mockGetActiveEmployees.mockResolvedValue({
+      // Mixed-case email proves the join is case-insensitive.
+      employees: [
+        person({ email: "ALICE@x.com", name: "Alice" }),
+        person({ email: "bob@x.com", name: "Bob" }),
+      ],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    const byEmail = Object.fromEntries(
+      result.map((r) => [(r.employeeEmail ?? "").toLowerCase(), r]),
+    );
+
+    // Alice's AI fields combine claude + cursor rows for the latest month.
+    expect(byEmail["alice@x.com"]).toMatchObject({
+      aiSpend: 460, // 400 + 60
+      aiTokens: 690_000_000,
+      aiMonthStart: "2026-04-01",
+    });
+    // Bob has no AI usage → fields should be null, NOT 0 (so the column
+    // can render "—" instead of misleadingly saying "$0").
+    expect(byEmail["bob@x.com"]).toMatchObject({
+      aiSpend: null,
+      aiTokens: null,
+      aiMonthStart: null,
+    });
+  });
+
+  it("degrades to null AI fields when getAiUsageData throws", async () => {
+    mockDb({});
+    mockGetAiUsageData.mockRejectedValue(new Error("Mode unreachable"));
+    mockGetActiveEmployees.mockResolvedValue({
+      employees: [person({ email: "alice@x.com" })],
+      unassigned: [],
+      partTimeChampions: [],
+      contractors: [],
+      allRows: [],
+      lastSync: null,
+    });
+
+    const result = await getEngineeringRankings(30);
+    expect(result[0]).toMatchObject({
+      aiSpend: null,
+      aiTokens: null,
+      aiMonthStart: null,
+    });
   });
 
   it("surfaces Postgres outages as DatabaseUnavailableError", async () => {
