@@ -335,42 +335,46 @@ export function buildRecruiterSummaries(
 }
 
 /**
- * Build a `recruiter → EmploymentRecord` map from the raw HR employees
- * query. Matches on full display name plus a `first last` fallback so small
- * variations (middle names, "Senior" suffixes) still resolve.
+ * Raw HR row going into the employment index. `status` is pre-classified by
+ * the caller because different Mode queries express it differently — e.g.
+ * headcount SSoT has a first-class `lifecycle_status` column, while the
+ * attrition `employees` query relies on the termination date. Names to
+ * match against include the primary display plus any aliases (preferred
+ * name vs. Greenhouse full name, etc.).
+ */
+export interface HrEmploymentRecord {
+  displayName: string;
+  aliases?: string[];
+  status: "active" | "departed";
+  terminationDate: string | null;
+  department: string | null;
+}
+
+/**
+ * Build a `recruiter → EmploymentRecord` map from pre-classified HR rows.
+ * Matches on the display name, any caller-supplied aliases, and a
+ * `first last` fallback so minor variations (middle names, "Senior"
+ * suffixes) still resolve.
+ *
+ * When two HR rows share a matching name, active records win over
+ * departed ones — that handles re-hires (same person's old termination
+ * record plus a new active one).
  */
 export function buildEmploymentIndex(
-  employees: Array<{
-    displayName: string;
-    startDate: string | null;
-    terminationDate: string | null;
-    department: string | null;
-  }>,
+  records: HrEmploymentRecord[],
   recruiterNames: Iterable<string>,
-  now: Date = new Date(),
 ): Record<string, EmploymentRecord> {
-  const todayIso = now.toISOString().slice(0, 10);
-  const byVariant = new Map<
-    string,
-    {
-      displayName: string;
-      terminationDate: string | null;
-      department: string | null;
+  const byVariant = new Map<string, HrEmploymentRecord>();
+
+  for (const rec of records) {
+    const keys = new Set<string>();
+    for (const name of [rec.displayName, ...(rec.aliases ?? [])]) {
+      for (const v of nameVariants(name ?? "")) keys.add(v);
     }
-  >();
-  for (const e of employees) {
-    const display = (e.displayName ?? "").trim();
-    if (!display) continue;
-    for (const variant of nameVariants(display)) {
-      // Prefer records with no termination date (active) over older terminated
-      // records for the same name.
-      const existing = byVariant.get(variant);
-      if (!existing || (existing.terminationDate && !e.terminationDate)) {
-        byVariant.set(variant, {
-          displayName: display,
-          terminationDate: e.terminationDate,
-          department: e.department,
-        });
+    for (const key of keys) {
+      const existing = byVariant.get(key);
+      if (!existing || (existing.status === "departed" && rec.status === "active")) {
+        byVariant.set(key, rec);
       }
     }
   }
@@ -380,7 +384,7 @@ export function buildEmploymentIndex(
     const trimmed = recruiter.trim();
     if (!trimmed) continue;
 
-    let match: ReturnType<typeof byVariant.get> | undefined;
+    let match: HrEmploymentRecord | undefined;
     for (const variant of nameVariants(trimmed)) {
       match = byVariant.get(variant);
       if (match) break;
@@ -391,12 +395,8 @@ export function buildEmploymentIndex(
       continue;
     }
 
-    // Notice periods (future termination date) still count as active today.
-    const isDeparted =
-      !!match.terminationDate && match.terminationDate.slice(0, 10) <= todayIso;
-
     result[recruiter] = {
-      status: isDeparted ? "departed" : "active",
+      status: match.status,
       terminationDate: match.terminationDate
         ? match.terminationDate.slice(0, 10)
         : null,

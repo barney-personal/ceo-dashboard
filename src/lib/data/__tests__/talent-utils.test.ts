@@ -210,36 +210,35 @@ describe("currentMonthKey", () => {
 });
 
 describe("buildEmploymentIndex", () => {
-  const today = new Date("2026-04-23T00:00:00Z");
-
-  const employees = [
+  const records = [
     {
       displayName: "Lucy Lynn",
-      startDate: "2021-01-15",
+      status: "active" as const,
       terminationDate: null,
       department: "People",
     },
     {
       displayName: "Chris Rea",
-      startDate: "2023-05-01",
+      status: "departed" as const,
       terminationDate: "2025-09-22",
       department: "Talent",
     },
     {
       displayName: "Florian Rose",
-      startDate: "2023-05-01",
-      // Future termination date — still active today.
+      status: "active" as const,
+      // Notice period — HR marks lifecycle_status as "garden leave" which
+      // we classify as active even though a termination date is set.
       terminationDate: "2026-06-17",
       department: "People",
     },
   ];
 
-  it("flags past termination dates as departed and future ones as active", () => {
-    const idx = buildEmploymentIndex(
-      employees,
-      ["Lucy Lynn", "Chris Rea", "Florian Rose"],
-      today,
-    );
+  it("uses the caller-supplied status to classify each recruiter", () => {
+    const idx = buildEmploymentIndex(records, [
+      "Lucy Lynn",
+      "Chris Rea",
+      "Florian Rose",
+    ]);
     expect(idx["Lucy Lynn"]?.status).toBe("active");
     expect(idx["Chris Rea"]?.status).toBe("departed");
     expect(idx["Chris Rea"]?.terminationDate).toBe("2025-09-22");
@@ -248,7 +247,7 @@ describe("buildEmploymentIndex", () => {
   });
 
   it("returns unknown for recruiters with no match", () => {
-    const idx = buildEmploymentIndex(employees, ["Someone External"], today);
+    const idx = buildEmploymentIndex(records, ["Someone External"]);
     expect(idx["Someone External"]?.status).toBe("unknown");
   });
 
@@ -257,37 +256,52 @@ describe("buildEmploymentIndex", () => {
       [
         {
           displayName: "Jamie A. Davies",
-          startDate: "2022-01-01",
+          status: "departed" as const,
           terminationDate: "2025-07-11",
           department: "Talent",
         },
       ],
       ["Jamie Davies"],
-      today,
     );
     expect(idx["Jamie Davies"]?.status).toBe("departed");
     expect(idx["Jamie Davies"]?.terminationDate).toBe("2025-07-11");
   });
 
-  it("prefers a record without termination over one with when the same name exists twice", () => {
-    // E.g. someone who left and was later rehired — the active record should win.
+  it("matches on alias names (e.g. Greenhouse full name vs. preferred name)", () => {
+    const idx = buildEmploymentIndex(
+      [
+        {
+          displayName: "Liv Smith",
+          aliases: ["Olivia Smith"],
+          status: "active" as const,
+          terminationDate: null,
+          department: "People",
+        },
+      ],
+      ["Olivia Smith"],
+    );
+    expect(idx["Olivia Smith"]?.status).toBe("active");
+    expect(idx["Olivia Smith"]?.matchedName).toBe("Liv Smith");
+  });
+
+  it("prefers an active record over a departed one when the same name appears twice", () => {
+    // E.g. someone who left and was later re-hired — the active record wins.
     const idx = buildEmploymentIndex(
       [
         {
           displayName: "Angela Komornik",
-          startDate: "2022-01-01",
+          status: "departed" as const,
           terminationDate: "2024-05-01",
           department: "Talent",
         },
         {
           displayName: "Angela Komornik",
-          startDate: "2025-01-01",
+          status: "active" as const,
           terminationDate: null,
           department: "Talent",
         },
       ],
       ["Angela Komornik"],
-      today,
     );
     expect(idx["Angela Komornik"]?.status).toBe("active");
   });

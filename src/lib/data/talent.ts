@@ -9,6 +9,7 @@ import {
 } from "./mode";
 import { buildEmploymentIndex } from "./talent-utils";
 import type {
+  HrEmploymentRecord,
   TalentData,
   TalentHireRow,
   TalentTargetRow,
@@ -23,6 +24,7 @@ export {
   type RecruiterSummary,
   type EmploymentStatus,
   type EmploymentRecord,
+  type HrEmploymentRecord,
   aggregateHiresByRecruiterMonth,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
@@ -52,12 +54,24 @@ const TARGET_COLUMNS = [
   "team_qtd",
 ] as const;
 
-const EMPLOYEES_COLUMNS = [
-  "display_name",
-  "start_date",
+const HEADCOUNT_COLUMNS = [
+  "preferred_name",
+  "rp_full_name",
+  "lifecycle_status",
   "termination_date",
-  "department",
+  "hb_function",
+  "rp_department_name",
 ] as const;
+
+// Lifecycle values come from HiBob via Mode. Anything not marked as
+// "terminated" is treated as still at Cleo — `hired` (offer accepted,
+// not started), `employed`, and `garden leave` (notice period) all
+// remain active for the purposes of the recruiter roster.
+const ACTIVE_LIFECYCLE_STATUSES = new Set([
+  "employed",
+  "hired",
+  "garden leave",
+]);
 
 type ModeQueryData = Awaited<ReturnType<typeof getReportData>>[number];
 
@@ -78,12 +92,14 @@ function validatedQuery<TColumn extends string>(
 }
 
 export async function getTalentData(): Promise<TalentData> {
-  // Attrition 'employees' is HR's canonical FTE list with termination dates —
-  // we join it against all_hires.hired_by to flag recruiters who've left so
-  // the UI can filter them out.
-  const [talentData, attritionData] = await Promise.all([
+  // Headcount SSoT is HR's canonical employee list with HiBob's
+  // `lifecycle_status` column (employed / hired / garden leave / terminated)
+  // — far truthier than `termination_date IS NULL`, which misses people
+  // whose leave date hasn't been captured yet. We join it against
+  // all_hires.hired_by so the UI can filter departed recruiters.
+  const [talentData, headcountData] = await Promise.all([
     getReportData("people", "talent", ["all_hires", "target qtd team"]),
-    getReportData("people", "attrition", ["employees"]),
+    getReportData("people", "headcount", ["headcount"]),
   ]);
 
   const allHires = validatedQuery(talentData, "all_hires", ALL_HIRES_COLUMNS);
@@ -92,10 +108,10 @@ export async function getTalentData(): Promise<TalentData> {
     "target qtd team",
     TARGET_COLUMNS,
   );
-  const employeesQuery = validatedQuery(
-    attritionData,
-    "employees",
-    EMPLOYEES_COLUMNS,
+  const headcountQuery = validatedQuery(
+    headcountData,
+    "headcount",
+    HEADCOUNT_COLUMNS,
   );
 
   // `all_hires` is one row per hire with `hire_attribution` as a fractional
@@ -141,15 +157,29 @@ export async function getTalentData(): Promise<TalentData> {
     if (t.recruiter) recruiterNames.add(t.recruiter);
   }
 
-  const employees = (employeesQuery?.rows ?? []).map((row) => ({
-    displayName: rowStr(row, "display_name"),
-    startDate: rowStr(row, "start_date") || null,
-    terminationDate: rowStr(row, "termination_date") || null,
-    department: rowStr(row, "department") || null,
-  }));
+  const headcountRecords: HrEmploymentRecord[] = (headcountQuery?.rows ?? [])
+    .map((row) => {
+      const preferred = rowStr(row, "preferred_name");
+      const greenhouse = rowStr(row, "rp_full_name");
+      const status = rowStr(row, "lifecycle_status").toLowerCase();
+      const aliases = [greenhouse].filter((v) => v && v !== preferred);
+      return {
+        displayName: preferred || greenhouse,
+        aliases,
+        status: ACTIVE_LIFECYCLE_STATUSES.has(status)
+          ? ("active" as const)
+          : ("departed" as const),
+        terminationDate: rowStr(row, "termination_date") || null,
+        department:
+          rowStr(row, "hb_function") ||
+          rowStr(row, "rp_department_name") ||
+          null,
+      };
+    })
+    .filter((r) => Boolean(r.displayName));
 
   const employmentByRecruiter = buildEmploymentIndex(
-    employees,
+    headcountRecords,
     recruiterNames,
   );
 

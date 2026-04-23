@@ -57,34 +57,49 @@ async function main() {
     console.log(`  ${m.month}  → ${m.hires.toFixed(2)}`);
   }
 
-  const summaries = buildRecruiterSummaries(histories, data.targets);
-  console.log("\nTop 10 recruiters by hires L12m:");
+  const summaries = buildRecruiterSummaries(
+    histories,
+    data.targets,
+    undefined,
+    data.employmentByRecruiter,
+  );
+  console.log("\nAll recruiters by hires L12m (with employment status):");
   console.log(
     [
       "recruiter",
+      "status",
+      "term",
       "tech",
-      "hiresL12m",
-      "trailing3m",
-      "proj3m",
+      "L12m",
+      "t3m",
       "qtd",
       "target",
       "attain",
     ].join("\t"),
   );
-  for (const s of summaries.slice(0, 10)) {
+  for (const s of summaries) {
     console.log(
       [
         s.recruiter,
+        s.employment.status,
+        s.employment.terminationDate ?? "-",
         s.tech ?? "-",
-        s.hiresLast12m,
+        s.hiresLast12m.toFixed(1),
         s.trailing3mAvg.toFixed(2),
-        s.projectedNext3m.toFixed(2),
         s.hiresQtd ?? "-",
         s.targetQtd ?? "-",
-        s.attainmentQtd == null ? "-" : `${(s.attainmentQtd * 100).toFixed(0)}%`,
+        s.attainmentQtd == null
+          ? "-"
+          : `${(s.attainmentQtd * 100).toFixed(0)}%`,
       ].join("\t"),
     );
   }
+
+  const counts: Record<string, number> = {};
+  for (const s of summaries) {
+    counts[s.employment.status] = (counts[s.employment.status] ?? 0) + 1;
+  }
+  console.log("\nStatus counts:", counts);
   process.exit(0);
 }
 
