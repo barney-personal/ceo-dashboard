@@ -5,6 +5,8 @@ import { FeatureImportanceChart } from "./feature-importance-chart";
 import { ActualVsPredicted } from "./actual-vs-predicted";
 import { GroupBars } from "./group-bars";
 import { OutlierTable } from "./outlier-table";
+import { ShapWaterfall } from "./shap-waterfall";
+import { GroupedImportanceChart } from "./grouped-importance-chart";
 
 function MetricTile({
   label,
@@ -269,9 +271,32 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
         <SectionHead
           letter="B"
           title="Which features move the needle?"
-          lede="Permutation importance (darker bar) is the drop in performance when we shuffle that single feature across engineers — the honest test. Impurity (lighter) is the split-based importance most textbooks show."
+          lede="Three views of the same question, from least to most intuitive: grouped categories (top), individual features (middle), and per-engineer reasoning (below)."
         />
+
+        {/* Grouped importance */}
         <div className="mt-6 rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+          <div className="mb-3 flex items-start justify-between gap-4">
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                Feature groups — share of model reasoning
+              </div>
+              <p className="mt-2 max-w-xl text-[12px] leading-relaxed text-muted-foreground">
+                Every feature bucketed by source. Percentages show what share
+                of the model's reasoning comes from each category. If Tenure
+                dominates, the model is mostly an experience-predictor; if
+                Slack engagement is big, it's picking up work-style signals.
+              </p>
+            </div>
+          </div>
+          <GroupedImportanceChart data={model.grouped_importance} />
+        </div>
+
+        {/* Individual feature importance */}
+        <div className="mt-4 rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+          <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Individual features — permutation &amp; impurity
+          </div>
           <FeatureImportanceChart features={features} topN={18} />
           {topFeature && (
             <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
@@ -283,16 +308,34 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
               <span className="font-mono">
                 {topFeature.permutation_mean.toFixed(3)}
               </span>{" "}
-              (log-R² units).
+              (log-R² units). Permutation importance (darker) is the honest
+              test — how much worse the model does when that feature is
+              shuffled. Impurity (lighter) is the split-based importance most
+              textbooks show.
             </p>
           )}
+        </div>
+      </section>
+
+      {/* Per-engineer SHAP waterfall */}
+      <section>
+        <SectionHead
+          letter="C"
+          title="Why did the model predict this for a specific engineer?"
+          lede="Pick an engineer below to see the exact path from the baseline prediction to their final score. Each step is one feature's contribution — green up, red down. This is how the model 'explains itself'."
+        />
+        <div className="mt-6">
+          <ShapWaterfall
+            engineers={engineers}
+            expectedImpact={model.shap.expected_impact}
+          />
         </div>
       </section>
 
       {/* Actual vs Predicted */}
       <section>
         <SectionHead
-          letter="C"
+          letter="D"
           title="Does the model rank engineers well?"
           lede="Each dot is one engineer. Points on the dashed line are perfectly predicted. Above the line: the model over-predicted. Below: it under-predicted. Colour = discipline."
         />
@@ -304,7 +347,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Group stats */}
       <section>
         <SectionHead
-          letter="D"
+          letter="E"
           title="Where does impact concentrate?"
           lede="Group median and mean impact. Bar = median (robust to outliers), line = mean (sensitive to top-end)."
         />
@@ -318,7 +361,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Outliers */}
       <section>
         <SectionHead
-          letter="E"
+          letter="F"
           title="Who surprises the model?"
           lede="The ten engineers whose actual output most diverged from the prediction. These are where the model's features don't tell the whole story — worth investigating."
         />
@@ -330,7 +373,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Methodology */}
       <section>
         <SectionHead
-          letter="F"
+          letter="G"
           title="Methodology"
           lede="Training pipeline, so you can re-run or replace it."
         />

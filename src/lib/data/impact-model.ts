@@ -7,6 +7,14 @@ export interface ImpactFeatureImportance {
   permutation_std: number;
 }
 
+export interface ImpactShapContribution {
+  feature: string;
+  group: string;
+  shap: number;
+  pct_multiplier: number;
+  value: number | null;
+}
+
 export interface ImpactEngineerPrediction {
   name: string;
   email: string;
@@ -20,6 +28,12 @@ export interface ImpactEngineerPrediction {
   slack_msgs_per_day: number;
   ai_tokens: number;
   latest_rating: number | null;
+  shap_contributions: ImpactShapContribution[];
+}
+
+export interface ImpactGroupedImportance {
+  group: string;
+  mean_abs_shap: number;
 }
 
 export interface ImpactGroupStat {
@@ -55,6 +69,11 @@ export interface ImpactModel {
     p95: number;
     max: number;
   };
+  shap: {
+    expected_log: number;
+    expected_impact: number;
+  };
+  grouped_importance: ImpactGroupedImportance[];
   features: ImpactFeatureImportance[];
   engineers: ImpactEngineerPrediction[];
   by_discipline: ImpactGroupStat[];
