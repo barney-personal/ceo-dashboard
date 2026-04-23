@@ -295,9 +295,10 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
               </div>
               <p className="mt-2 max-w-xl text-[12px] leading-relaxed text-muted-foreground">
                 Every feature bucketed by source. Percentages show what share
-                of the model's reasoning comes from each category. If Tenure
-                dominates, the model is mostly an experience-predictor; if
-                Slack engagement is big, it's picking up work-style signals.
+                of the model&rsquo;s reasoning comes from each category. If
+                Tenure dominates, the model is mostly an experience-predictor;
+                if Slack engagement is big, it&rsquo;s picking up work-style
+                signals.
               </p>
             </div>
           </div>

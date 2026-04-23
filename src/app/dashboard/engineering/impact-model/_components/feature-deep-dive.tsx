@@ -35,7 +35,6 @@ function describeShape(pdp: ImpactPartialDependence): string {
   const peak = Math.max(...pdp_mean);
   const trough = Math.min(...pdp_mean);
   const peakIdx = pdp_mean.indexOf(peak);
-  const troughIdx = pdp_mean.indexOf(trough);
   const spread = peak - trough;
   const mid = (peak + trough) / 2;
   const direction = end > start ? "up" : end < start ? "down" : "flat";
@@ -55,7 +54,6 @@ function describeShape(pdp: ImpactPartialDependence): string {
   }
   // Non-monotonic: describe the shape
   const peakVal = Math.round(grid[peakIdx]);
-  const troughVal = Math.round(grid[troughIdx]);
   if (peakIdx > 2 && peakIdx < pdp_mean.length - 3 && peak > mid) {
     return `Non-monotonic — impact peaks around ${pdp.label.toLowerCase()} = ${peakVal} (predicted ~${Math.round(peak).toLocaleString()}), then tapers off. Neither very low nor very high values are optimal.`;
   }

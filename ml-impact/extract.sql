@@ -111,21 +111,36 @@ commit_agg AS (
 slack_latest_window AS (
   SELECT MAX(window_start) AS ws FROM slack_member_snapshots
 ),
+-- Aggregate Slack rows per employee. Some engineers have more than one Slack
+-- user mapped to their email (bot accounts, old handles, etc). Without this
+-- SUM, the final LEFT JOIN would duplicate the engineer row and inflate both
+-- the training set and the reported group stats.
 slack_agg AS (
   SELECT
-    lower(sem.employee_email) AS email,
-    sms.days_active,
-    sms.days_active_desktop,
-    sms.messages_posted,
-    sms.messages_posted_in_channels,
-    sms.reactions_added,
-    sms.window_end - sms.window_start AS window_interval,
-    EXTRACT(EPOCH FROM (sms.window_end - sms.window_start)) / 86400 AS window_days,
-    EXTRACT(EPOCH FROM (sms.window_end - sms.last_active_at)) / 86400 AS days_since_active
-  FROM slack_member_snapshots sms
-  JOIN slack_employee_map sem ON sem.slack_user_id = sms.slack_user_id
-  WHERE sms.window_start = (SELECT ws FROM slack_latest_window)
-    AND sem.employee_email IS NOT NULL
+    email,
+    SUM(days_active) AS days_active,
+    SUM(days_active_desktop) AS days_active_desktop,
+    SUM(messages_posted) AS messages_posted,
+    SUM(messages_posted_in_channels) AS messages_posted_in_channels,
+    SUM(reactions_added) AS reactions_added,
+    AVG(window_days) AS window_days,
+    MIN(days_since_active) AS days_since_active
+  FROM (
+    SELECT
+      lower(sem.employee_email) AS email,
+      sms.days_active,
+      sms.days_active_desktop,
+      sms.messages_posted,
+      sms.messages_posted_in_channels,
+      sms.reactions_added,
+      EXTRACT(EPOCH FROM (sms.window_end - sms.window_start)) / 86400 AS window_days,
+      EXTRACT(EPOCH FROM (sms.window_end - sms.last_active_at)) / 86400 AS days_since_active
+    FROM slack_member_snapshots sms
+    JOIN slack_employee_map sem ON sem.slack_user_id = sms.slack_user_id
+    WHERE sms.window_start = (SELECT ws FROM slack_latest_window)
+      AND sem.employee_email IS NOT NULL
+  ) per_user
+  GROUP BY email
 ),
 
 -- AI usage per user: aggregated across all months in Query 3
