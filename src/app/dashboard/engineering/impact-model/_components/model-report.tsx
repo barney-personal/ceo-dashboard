@@ -365,8 +365,8 @@ export function ImpactModelReport({
       <section>
         <SectionHead
           letter="C"
-          title="What exactly did the model learn about each feature?"
-          lede="For every top feature, a curve showing how the prediction changes as that feature sweeps from low to high. This is where you see the actual learned relationship — is it linear, does it plateau, where's the sweet spot?"
+          title="Which things in an engineer's work move the model's prediction?"
+          lede="One card per feature. Each answers: as this thing goes up, does the model expect more impact, less, or does it peak somewhere in the middle? Features with no clear story on their own are listed at the bottom rather than charted."
         />
         <div className="mt-6">
           <FeatureDeepDive
