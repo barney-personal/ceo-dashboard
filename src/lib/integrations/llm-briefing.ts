@@ -150,6 +150,8 @@ function formatContextJson(ctx: BriefingContext): string {
           function: ctx.person.function,
           tenureMonths: ctx.person.tenureMonths,
           role: ctx.person.role,
+          // Keep this threshold aligned with the manager role promotion logic
+          // in `roles.server.ts` and the report-count helpers in `managers.ts`.
           isManager:
             ctx.person.role === "manager" ||
             ctx.person.role === "leadership" ||
