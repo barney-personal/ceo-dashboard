@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import shap
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold, cross_val_predict
@@ -238,8 +239,82 @@ def main():
     ]
     feats.sort(key=lambda f: f["permutation_mean"], reverse=True)
 
+    # SHAP values — per-engineer feature contributions in log(1+impact) space.
+    # TreeExplainer gives exact Shapley values for tree ensembles.
+    print("Computing SHAP values...")
+    explainer = shap.TreeExplainer(chosen_model)
+    shap_values = explainer.shap_values(X)
+    # expected_value can be scalar or 1-element array depending on model — normalise
+    ev = explainer.expected_value
+    if hasattr(ev, "__len__"):
+        ev = np.asarray(ev).flatten()[0]
+    expected_log = float(ev)
+    expected_impact = float(np.expm1(expected_log))
+
+    # Feature-group buckets for aggregated importance.
+    def feature_group(name: str) -> str:
+        lower = name.lower()
+        if lower.startswith("slack_"):
+            return "Slack engagement"
+        if lower.startswith("ai_"):
+            return "AI usage"
+        if lower.startswith("latest_rating") or lower.startswith("avg_rating") or lower == "rating_count":
+            return "Performance review"
+        if lower == "tenure_months":
+            return "Tenure"
+        if lower == "level_num" or lower.startswith("level_track_"):
+            return "Level"
+        if lower.startswith("discipline_"):
+            return "Discipline"
+        if lower.startswith("pillar_"):
+            return "Pillar"
+        if lower.startswith("gender_"):
+            return "Gender"
+        if lower.startswith("location_"):
+            return "Location"
+        return "Other"
+
+    group_importance = {}
+    # Magnitude of mean-abs SHAP aggregated per group (log-space units)
+    mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
+    for i, fname in enumerate(feature_names):
+        g = feature_group(fname)
+        group_importance[g] = group_importance.get(g, 0.0) + float(mean_abs_shap[i])
+    grouped_importance = sorted(
+        [{"group": g, "mean_abs_shap": v} for g, v in group_importance.items()],
+        key=lambda d: d["mean_abs_shap"],
+        reverse=True,
+    )
+
     engineers = []
-    for i, (_, r) in enumerate(df.reset_index(drop=True).iterrows()):
+    df_reset = df.reset_index(drop=True)
+    for i, (_, r) in enumerate(df_reset.iterrows()):
+        # Per-engineer SHAP: feature, raw contribution (log units), % multiplier (exp(shap)-1)
+        eng_shap = shap_values[i]
+        contributions = []
+        for j, fname in enumerate(feature_names):
+            shap_val = float(eng_shap[j])
+            if abs(shap_val) < 1e-4:
+                continue
+            # Skip one-hot features with value 0 (they don't "apply" to this engineer)
+            try:
+                feat_val = float(X.iloc[i, j])
+            except (ValueError, TypeError):
+                feat_val = None
+            is_onehot = fname.startswith(
+                ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+            )
+            if is_onehot and feat_val == 0:
+                continue
+            contributions.append({
+                "feature": fname,
+                "group": feature_group(fname),
+                "shap": round(shap_val, 4),
+                "pct_multiplier": round((float(np.exp(shap_val)) - 1) * 100, 1),
+                "value": round(feat_val, 3) if feat_val is not None else None,
+            })
+        contributions.sort(key=lambda c: abs(c["shap"]), reverse=True)
+
         engineers.append(
             {
                 "name": r["name"],
@@ -254,6 +329,7 @@ def main():
                 "slack_msgs_per_day": round(float(r["slack_msgs_per_day"]), 2),
                 "ai_tokens": int(r["ai_tokens"]),
                 "latest_rating": float(r["latest_rating"]) if pd.notna(r["latest_rating"]) else None,
+                "shap_contributions": contributions[:12],
             }
         )
 
@@ -292,6 +368,11 @@ def main():
             "p95": float(np.percentile(y, 95)),
             "max": float(y.max()),
         },
+        "shap": {
+            "expected_log": expected_log,
+            "expected_impact": expected_impact,
+        },
+        "grouped_importance": grouped_importance,
         "features": feats,
         "engineers": engineers,
         "by_discipline": grouped_stats("discipline"),
