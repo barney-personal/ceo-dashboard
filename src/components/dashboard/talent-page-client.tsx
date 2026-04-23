@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { LineChart } from "@/components/charts/line-chart";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import {
   aggregateHiresByRecruiterMonth,
   buildRecruiterSummaries,
@@ -77,7 +77,125 @@ function TalentEmpty({ reason }: { reason: string }) {
   );
 }
 
+type SortKey =
+  | "recruiter"
+  | "tech"
+  | "hiresLast12m"
+  | "trailing3mAvg"
+  | "projectedNext3m"
+  | "hiresQtd"
+  | "targetQtd"
+  | "attainmentQtd";
+
+type SortDirection = "asc" | "desc";
+
+interface SortState {
+  key: SortKey;
+  direction: SortDirection;
+}
+
+const DEFAULT_DIRECTION_BY_KEY: Record<SortKey, SortDirection> = {
+  recruiter: "asc",
+  tech: "asc",
+  hiresLast12m: "desc",
+  trailing3mAvg: "desc",
+  projectedNext3m: "desc",
+  hiresQtd: "desc",
+  targetQtd: "desc",
+  attainmentQtd: "desc",
+};
+
+function compareNullable(
+  a: number | string | null,
+  b: number | string | null,
+  direction: SortDirection,
+): number {
+  // Nulls always sink to the bottom regardless of sort direction — they
+  // represent missing data, not a min/max value.
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  const mult = direction === "asc" ? 1 : -1;
+  if (typeof a === "string" && typeof b === "string") {
+    return a.localeCompare(b) * mult;
+  }
+  return (Number(a) - Number(b)) * mult;
+}
+
+function sortSummaries(
+  summaries: RecruiterSummary[],
+  sort: SortState,
+): RecruiterSummary[] {
+  return [...summaries].sort((a, b) => {
+    const aVal = a[sort.key];
+    const bVal = b[sort.key];
+    const primary = compareNullable(
+      aVal as number | string | null,
+      bVal as number | string | null,
+      sort.direction,
+    );
+    if (primary !== 0) return primary;
+    // Stable tiebreak on recruiter name for predictable ordering.
+    return a.recruiter.localeCompare(b.recruiter);
+  });
+}
+
+interface SortableHeaderProps {
+  label: string;
+  sortKey: SortKey;
+  active: SortState;
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+}
+
+function SortableHeader({ label, sortKey, active, onSort, align = "left" }: SortableHeaderProps) {
+  const isActive = active.key === sortKey;
+  const Icon = !isActive ? ArrowUpDown : active.direction === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th
+      scope="col"
+      className={`px-4 py-2.5 font-medium ${align === "right" ? "text-right" : "text-left"}`}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex items-center gap-1 whitespace-nowrap transition-colors hover:text-foreground ${
+          isActive ? "text-foreground" : ""
+        } ${align === "right" ? "flex-row-reverse" : ""}`}
+        aria-sort={
+          isActive
+            ? active.direction === "asc"
+              ? "ascending"
+              : "descending"
+            : "none"
+        }
+      >
+        <Icon
+          className={`h-3 w-3 ${isActive ? "opacity-100" : "opacity-40"}`}
+          aria-hidden
+        />
+        <span>{label}</span>
+      </button>
+    </th>
+  );
+}
+
 function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
+  const [sort, setSort] = useState<SortState>({
+    key: "hiresLast12m",
+    direction: "desc",
+  });
+
+  const sorted = useMemo(() => sortSummaries(summaries, sort), [summaries, sort]);
+
+  function handleSort(key: SortKey) {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, direction: prev.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: DEFAULT_DIRECTION_BY_KEY[key] },
+    );
+  }
+
   if (summaries.length === 0) return null;
 
   return (
@@ -89,31 +207,31 @@ function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
         <p className="mt-0.5 text-xs text-muted-foreground">
           Last 12 months of activity, per-recruiter trailing-3-month average,
           projected next {PROJECTION_MONTHS} months, and current-quarter hires vs
-          target.
+          target. Click any column header to sort.
         </p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-left text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <thead className="bg-muted/40 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
             <tr>
-              <th className="px-4 py-2.5 font-medium">Recruiter</th>
-              <th className="px-4 py-2.5 font-medium">Pillar</th>
-              <th className="px-4 py-2.5 text-right font-medium">
-                Hires L12m
-              </th>
-              <th className="px-4 py-2.5 text-right font-medium">
-                Trailing 3mo
-              </th>
-              <th className="px-4 py-2.5 text-right font-medium">
-                Proj. next {PROJECTION_MONTHS}mo
-              </th>
-              <th className="px-4 py-2.5 text-right font-medium">QTD</th>
-              <th className="px-4 py-2.5 text-right font-medium">Target</th>
-              <th className="px-4 py-2.5 text-right font-medium">Attainment</th>
+              <SortableHeader label="Recruiter" sortKey="recruiter" active={sort} onSort={handleSort} />
+              <SortableHeader label="Pillar" sortKey="tech" active={sort} onSort={handleSort} />
+              <SortableHeader label="Hires L12m" sortKey="hiresLast12m" active={sort} onSort={handleSort} align="right" />
+              <SortableHeader label="Trailing 3mo" sortKey="trailing3mAvg" active={sort} onSort={handleSort} align="right" />
+              <SortableHeader
+                label={`Proj. next ${PROJECTION_MONTHS}mo`}
+                sortKey="projectedNext3m"
+                active={sort}
+                onSort={handleSort}
+                align="right"
+              />
+              <SortableHeader label="QTD" sortKey="hiresQtd" active={sort} onSort={handleSort} align="right" />
+              <SortableHeader label="Target" sortKey="targetQtd" active={sort} onSort={handleSort} align="right" />
+              <SortableHeader label="Attainment" sortKey="attainmentQtd" active={sort} onSort={handleSort} align="right" />
             </tr>
           </thead>
           <tbody>
-            {summaries.map((s) => (
+            {sorted.map((s) => (
               <tr
                 key={s.recruiter}
                 className="border-t border-border/40 hover:bg-muted/30"
@@ -125,7 +243,7 @@ function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
                   {s.tech ?? "—"}
                 </td>
                 <td className="px-4 py-2.5 text-right tabular-nums">
-                  {s.hiresLast12m}
+                  {formatNumber(s.hiresLast12m, 0)}
                 </td>
                 <td className="px-4 py-2.5 text-right tabular-nums">
                   {formatNumber(s.trailing3mAvg)}

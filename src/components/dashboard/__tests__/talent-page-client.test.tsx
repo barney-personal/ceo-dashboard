@@ -1,4 +1,4 @@
-import { render, within } from "@testing-library/react";
+import { render, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { TalentPageClient } from "../talent-page-client";
 import type { TalentHireRow, TalentTargetRow } from "@/lib/data/talent-utils";
@@ -126,6 +126,52 @@ describe("TalentPageClient", () => {
 
     // 4 hires QTD / 5 target = 80% attainment shown
     expect(container.textContent).toContain("80%");
+  });
+
+  it("sorts the recruiter table when a column header is clicked", () => {
+    const hireRows: TalentHireRow[] = [
+      hire("Lucy", "2025-11", 1),
+      hire("Lucy", "2025-12", 2),
+      hire("Lucy", "2026-01", 1),
+      hire("Ellis", "2025-12", 1),
+      hire("Ellis", "2026-01", 2),
+      hire("Beth", "2025-12", 4),
+      hire("Beth", "2026-01", 4),
+    ];
+    const targets: TalentTargetRow[] = [
+      { recruiter: "Lucy", tech: "Tech", hiresQtd: 4, targetQtd: 5, teamQtd: 20 },
+      { recruiter: "Ellis", tech: "Data", hiresQtd: 3, targetQtd: 4, teamQtd: 20 },
+      { recruiter: "Beth", tech: "Data", hiresQtd: 8, targetQtd: 6, teamQtd: 20 },
+    ];
+
+    const { container, getByRole } = render(
+      <TalentPageClient
+        hireRows={hireRows}
+        targets={targets}
+        modeUrl="https://app.mode.com/cleoai/reports/e9766a6cd260"
+        emptyReason={null}
+      />,
+    );
+
+    const rowNames = () =>
+      Array.from(container.querySelectorAll("tbody tr td:first-child"))
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean);
+
+    // Default sort: hires L12m desc → Beth, Lucy, Ellis
+    expect(rowNames()).toEqual(["Beth", "Lucy", "Ellis"]);
+
+    // Click Recruiter header → alphabetical asc: Beth, Ellis, Lucy
+    fireEvent.click(getByRole("button", { name: /recruiter/i }));
+    expect(rowNames()).toEqual(["Beth", "Ellis", "Lucy"]);
+
+    // Click again → alphabetical desc: Lucy, Ellis, Beth
+    fireEvent.click(getByRole("button", { name: /recruiter/i }));
+    expect(rowNames()).toEqual(["Lucy", "Ellis", "Beth"]);
+
+    // Click Attainment → attainment desc: Beth 133%, Lucy 80%, Ellis 75%
+    fireEvent.click(getByRole("button", { name: /attainment/i }));
+    expect(rowNames()).toEqual(["Beth", "Lucy", "Ellis"]);
   });
 
   it("renders an empty state when emptyReason is provided", () => {
