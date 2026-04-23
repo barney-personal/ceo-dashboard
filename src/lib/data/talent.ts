@@ -7,7 +7,7 @@ import {
   rowNum,
   validateModeColumns,
 } from "./mode";
-import { buildEmploymentIndex } from "./talent-utils";
+import { buildEmploymentIndex, classifyRole } from "./talent-utils";
 import type {
   HrEmploymentRecord,
   TalentData,
@@ -25,6 +25,7 @@ export {
   type EmploymentStatus,
   type EmploymentRecord,
   type HrEmploymentRecord,
+  type RecruiterRole,
   aggregateHiresByRecruiterMonth,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
@@ -32,6 +33,7 @@ export {
   buildRecruiterSummaries,
   trailing3mAvg,
   onlyHires,
+  classifyRole,
 } from "./talent-utils";
 
 const ALL_HIRES_COLUMNS = [
@@ -61,7 +63,23 @@ const HEADCOUNT_COLUMNS = [
   "termination_date",
   "hb_function",
   "rp_department_name",
+  "job_title",
 ] as const;
+
+/**
+ * `hired_by` in all_hires occasionally contains data-entry placeholders
+ * rather than a real person. We drop those outright so they don't clutter
+ * the table or the Other filter.
+ */
+function isJunkRecruiterName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+  const lower = trimmed.toLowerCase();
+  if (lower === "n/a" || lower === "na" || lower === "-") return true;
+  // Shared-credit placeholders like "Lucy/Vic", "Annie/Jamie D", "Jamie T/Glen"
+  if (trimmed.includes("/")) return true;
+  return false;
+}
 
 // Lifecycle values come from HiBob via Mode. Anything not marked as
 // "terminated" is treated as still at Cleo — `hired` (offer accepted,
@@ -116,9 +134,11 @@ export async function getTalentData(): Promise<TalentData> {
 
   // `all_hires` is one row per hire with `hire_attribution` as a fractional
   // weight when credit is shared across multiple people. We normalise into
-  // `TalentHireRow` so the talent-utils aggregators treat it uniformly.
+  // `TalentHireRow` so the talent-utils aggregators treat it uniformly, and
+  // drop junk `hired_by` placeholders ("n/a", "Lucy/Vic", etc.).
   const hireRows: TalentHireRow[] = (allHires?.rows ?? [])
     .filter((row) => rowStr(row, "is_hired") === "Yes")
+    .filter((row) => !isJunkRecruiterName(rowStr(row, "hired_by")))
     .map((row) => ({
       recruiter: rowStr(row, "hired_by"),
       actionType: "hires",
@@ -162,6 +182,7 @@ export async function getTalentData(): Promise<TalentData> {
       const preferred = rowStr(row, "preferred_name");
       const greenhouse = rowStr(row, "rp_full_name");
       const status = rowStr(row, "lifecycle_status").toLowerCase();
+      const jobTitle = rowStr(row, "job_title") || null;
       const aliases = [greenhouse].filter((v) => v && v !== preferred);
       return {
         displayName: preferred || greenhouse,
@@ -169,11 +190,13 @@ export async function getTalentData(): Promise<TalentData> {
         status: ACTIVE_LIFECYCLE_STATUSES.has(status)
           ? ("active" as const)
           : ("departed" as const),
+        role: classifyRole(jobTitle),
         terminationDate: rowStr(row, "termination_date") || null,
         department:
           rowStr(row, "hb_function") ||
           rowStr(row, "rp_department_name") ||
           null,
+        jobTitle,
       };
     })
     .filter((r) => Boolean(r.displayName));
@@ -181,6 +204,9 @@ export async function getTalentData(): Promise<TalentData> {
   const employmentByRecruiter = buildEmploymentIndex(
     headcountRecords,
     recruiterNames,
+    // Names on the target QTD roster are canonical recruiters — if HR has
+    // no record for them (external contractors), still treat them as TPs.
+    targets.map((t) => t.recruiter),
   );
 
   const syncedAt =

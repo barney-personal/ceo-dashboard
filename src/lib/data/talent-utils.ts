@@ -33,6 +33,7 @@ export interface RecruiterHistory {
 }
 
 export type EmploymentStatus = "active" | "departed" | "unknown";
+export type RecruiterRole = "talent_partner" | "sourcer" | "other";
 
 export interface EmploymentRecord {
   /** "active" = currently at Cleo (or on notice with future termination date).
@@ -40,6 +41,12 @@ export interface EmploymentRecord {
    *  "unknown" = no match in the HR employees query — likely external or
    *  spelled differently than HR has them. */
   status: EmploymentStatus;
+  /** "talent_partner" = HR job title matches Talent Partner / Talent Lead /
+   *  Head of Talent / Talent Acquisition. "sourcer" = title contains
+   *  "Sourc". "other" = everyone else (hiring managers, execs, PMs who got
+   *  attributed a hire, etc.). Unknowns default to "talent_partner" when
+   *  they're on the canonical target roster, otherwise "other". */
+  role: RecruiterRole;
   /** Present for status = "departed". ISO `YYYY-MM-DD`. */
   terminationDate: string | null;
   /** Display name as HR has it (may differ slightly from the recruiter name). */
@@ -47,6 +54,22 @@ export interface EmploymentRecord {
   /** Department from HR — useful for distinguishing People-team recruiters
    *  from hiring managers who happen to have been attributed hires. */
   department: string | null;
+  /** Raw job title from HR, kept for display. */
+  jobTitle: string | null;
+}
+
+export function classifyRole(jobTitle: string | null): RecruiterRole {
+  if (!jobTitle) return "other";
+  const normalised = jobTitle.toLowerCase();
+  if (/\bsourc/.test(normalised)) return "sourcer";
+  if (
+    /\btalent\s+(partner|lead|acquisition|manager)|\bhead\s+of\s+talent|\brecruit(er|ing)\b/.test(
+      normalised,
+    )
+  ) {
+    return "talent_partner";
+  }
+  return "other";
 }
 
 export interface RecruiterSummary {
@@ -60,6 +83,7 @@ export interface RecruiterSummary {
   targetQtd: number | null;
   attainmentQtd: number | null;
   employment: EmploymentRecord;
+  role: RecruiterRole;
 }
 
 export interface TalentData {
@@ -276,9 +300,11 @@ export function buildTeamChartSeries(
 
 const UNKNOWN_EMPLOYMENT: EmploymentRecord = {
   status: "unknown",
+  role: "talent_partner", // see comment in buildEmploymentIndex — unknowns on the target roster default to TP
   terminationDate: null,
   matchedName: null,
   department: null,
+  jobTitle: null,
 };
 
 /**
@@ -329,6 +355,7 @@ export function buildRecruiterSummaries(
             : null,
         employment:
           employmentByRecruiter[h.recruiter] ?? UNKNOWN_EMPLOYMENT,
+        role: (employmentByRecruiter[h.recruiter] ?? UNKNOWN_EMPLOYMENT).role,
       };
     })
     .sort((a, b) => b.hiresLast12m - a.hiresLast12m);
@@ -346,8 +373,10 @@ export interface HrEmploymentRecord {
   displayName: string;
   aliases?: string[];
   status: "active" | "departed";
+  role: RecruiterRole;
   terminationDate: string | null;
   department: string | null;
+  jobTitle: string | null;
 }
 
 /**
@@ -363,6 +392,13 @@ export interface HrEmploymentRecord {
 export function buildEmploymentIndex(
   records: HrEmploymentRecord[],
   recruiterNames: Iterable<string>,
+  /**
+   * Names to treat as talent partners when HR has no record — typically the
+   * canonical target roster. Without this hint, unknown recruiters default
+   * to "other" which is probably correct for junk placeholder names but
+   * wrong for external contractor TPs like Beth Baron or Mario Tavares.
+   */
+  talentPartnerRoster: Iterable<string> = [],
 ): Record<string, EmploymentRecord> {
   const byVariant = new Map<string, HrEmploymentRecord>();
 
@@ -379,6 +415,11 @@ export function buildEmploymentIndex(
     }
   }
 
+  const rosterVariants = new Set<string>();
+  for (const name of talentPartnerRoster) {
+    for (const v of nameVariants(name)) rosterVariants.add(v);
+  }
+
   const result: Record<string, EmploymentRecord> = {};
   for (const recruiter of recruiterNames) {
     const trimmed = recruiter.trim();
@@ -391,17 +432,25 @@ export function buildEmploymentIndex(
     }
 
     if (!match) {
-      result[recruiter] = UNKNOWN_EMPLOYMENT;
+      const onRoster = nameVariants(trimmed).some((v) =>
+        rosterVariants.has(v),
+      );
+      result[recruiter] = {
+        ...UNKNOWN_EMPLOYMENT,
+        role: onRoster ? "talent_partner" : "other",
+      };
       continue;
     }
 
     result[recruiter] = {
       status: match.status,
+      role: match.role,
       terminationDate: match.terminationDate
         ? match.terminationDate.slice(0, 10)
         : null,
       matchedName: match.displayName,
       department: match.department,
+      jobTitle: match.jobTitle,
     };
   }
   return result;

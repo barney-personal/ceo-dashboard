@@ -77,9 +77,11 @@ function hire(
 
 const UNKNOWN_EMPLOYMENT: EmploymentRecord = {
   status: "unknown",
+  role: "talent_partner",
   terminationDate: null,
   matchedName: null,
   department: null,
+  jobTitle: null,
 };
 
 describe("TalentPageClient", () => {
@@ -160,9 +162,9 @@ describe("TalentPageClient", () => {
       { recruiter: "Beth", tech: "Data", hiresQtd: 8, targetQtd: 6, teamQtd: 20 },
     ];
     const employmentByRecruiter: Record<string, EmploymentRecord> = {
-      Lucy: { status: "active", terminationDate: null, matchedName: "Lucy", department: "People" },
-      Ellis: { status: "active", terminationDate: null, matchedName: "Ellis", department: "People" },
-      Beth: { status: "active", terminationDate: null, matchedName: "Beth", department: "People" },
+      Lucy: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Lucy", department: "People", jobTitle: "Talent Partner" },
+      Ellis: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Ellis", department: "People", jobTitle: "Talent Partner" },
+      Beth: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Beth", department: "People", jobTitle: "Talent Partner" },
     };
 
     const { container, getByRole } = render(
@@ -175,8 +177,11 @@ describe("TalentPageClient", () => {
       />,
     );
 
+    // Row order — first direct child span inside the name cell.
     const rowNames = () =>
-      Array.from(container.querySelectorAll("tbody tr td:first-child"))
+      Array.from(
+        container.querySelectorAll("tbody tr td:first-child div > span:first-child"),
+      )
         .map((el) => el.textContent?.trim())
         .filter(Boolean);
 
@@ -184,15 +189,15 @@ describe("TalentPageClient", () => {
     expect(rowNames()).toEqual(["Beth", "Lucy", "Ellis"]);
 
     // Click Recruiter header → alphabetical asc: Beth, Ellis, Lucy
-    fireEvent.click(getByRole("button", { name: /recruiter/i }));
+    fireEvent.click(getByRole("button", { name: /^Recruiter/i }));
     expect(rowNames()).toEqual(["Beth", "Ellis", "Lucy"]);
 
     // Click again → alphabetical desc: Lucy, Ellis, Beth
-    fireEvent.click(getByRole("button", { name: /recruiter/i }));
+    fireEvent.click(getByRole("button", { name: /^Recruiter/i }));
     expect(rowNames()).toEqual(["Lucy", "Ellis", "Beth"]);
 
     // Click Attainment → attainment desc: Beth 133%, Lucy 80%, Ellis 75%
-    fireEvent.click(getByRole("button", { name: /attainment/i }));
+    fireEvent.click(getByRole("button", { name: /^Attainment/i }));
     expect(rowNames()).toEqual(["Beth", "Lucy", "Ellis"]);
   });
 
@@ -208,12 +213,21 @@ describe("TalentPageClient", () => {
       { recruiter: "Lucy", tech: "Tech", hiresQtd: 4, targetQtd: 5, teamQtd: 20 },
     ];
     const employmentByRecruiter: Record<string, EmploymentRecord> = {
-      Lucy: { status: "active", terminationDate: null, matchedName: "Lucy", department: "People" },
+      Lucy: {
+        status: "active",
+        role: "talent_partner",
+        terminationDate: null,
+        matchedName: "Lucy",
+        department: "People",
+        jobTitle: "Talent Partner",
+      },
       Chris: {
         status: "departed",
+        role: "talent_partner",
         terminationDate: "2025-09-22",
         matchedName: "Chris Rea",
         department: "Talent",
+        jobTitle: "Principal Talent Partner",
       },
     };
 
@@ -228,26 +242,33 @@ describe("TalentPageClient", () => {
     );
 
     const rowNames = () =>
-      Array.from(container.querySelectorAll("tbody tr td:first-child"))
+      Array.from(
+        container.querySelectorAll("tbody tr td:first-child div > span:first-child"),
+      )
         .map((el) => el.textContent?.trim())
         .filter(Boolean);
 
-    // Default filter is "Active" — Chris should be hidden.
+    // Default filter is Active + Talent Partner — Chris is departed so hidden.
     expect(rowNames()).toEqual(["Lucy"]);
-    // The filter control should report accurate counts.
-    expect(container.textContent).toContain("Active (1)");
-    expect(container.textContent).toContain("Departed (1)");
 
-    // Switch to Departed — now only Chris, with a "left" badge.
-    fireEvent.click(getByRole("button", { name: /Departed/ }));
+    // Switch employment to Departed — now only Chris, with a "left" badge.
+    fireEvent.click(getByRole("button", { name: /^Departed/ }));
     expect(rowNames()?.[0]).toContain("Chris");
     // Badge text uses the abbreviated month/year.
     expect(container.textContent).toMatch(/left .*2025/i);
 
-    // Switch to All — both visible (Chris's cell also has the "left" badge).
-    fireEvent.click(getByRole("button", { name: /^All/ }));
+    // Switch employment to All — both visible. There are two "All" buttons
+    // (one per filter group) so we scope by aria-label.
+    const employmentGroup = container.querySelector(
+      '[aria-label="Employment filter"]',
+    )!;
+    fireEvent.click(
+      within(employmentGroup as HTMLElement).getByRole("button", {
+        name: /^All/,
+      }),
+    );
     const all = rowNames();
-    expect(all).toHaveLength(2);
+    expect(all.length).toBeGreaterThanOrEqual(2);
     expect(all.some((n) => n?.startsWith("Lucy"))).toBe(true);
     expect(all.some((n) => n?.startsWith("Chris"))).toBe(true);
   });

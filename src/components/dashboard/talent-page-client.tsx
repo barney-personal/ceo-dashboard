@@ -13,6 +13,7 @@ import {
   predictHiresPerRecruiter,
   sumToTeamMonthly,
   type EmploymentRecord,
+  type RecruiterRole,
   type RecruiterSummary,
   type TalentHireRow,
   type TalentTargetRow,
@@ -27,6 +28,7 @@ interface TalentPageClientProps {
 }
 
 type EmploymentFilter = "active" | "all" | "departed";
+type RoleFilter = RecruiterRole | "all";
 
 const PROJECTION_MONTHS = 3;
 
@@ -83,6 +85,7 @@ function TalentEmpty({ reason }: { reason: string }) {
 
 type SortKey =
   | "recruiter"
+  | "role"
   | "tech"
   | "hiresLast12m"
   | "trailing3mAvg"
@@ -100,6 +103,7 @@ interface SortState {
 
 const DEFAULT_DIRECTION_BY_KEY: Record<SortKey, SortDirection> = {
   recruiter: "asc",
+  role: "asc",
   tech: "asc",
   hiresLast12m: "desc",
   trailing3mAvg: "desc",
@@ -193,6 +197,72 @@ const EMPLOYMENT_FILTERS: {
   { value: "departed", label: "Departed" },
 ];
 
+const ROLE_FILTERS: { value: RoleFilter; label: string }[] = [
+  { value: "talent_partner", label: "Talent Partner" },
+  { value: "sourcer", label: "Sourcer" },
+  { value: "other", label: "Other" },
+  { value: "all", label: "All" },
+];
+
+const ROLE_LABELS: Record<RecruiterRole, string> = {
+  talent_partner: "Talent Partner",
+  sourcer: "Sourcer",
+  other: "Other",
+};
+
+interface FilterButtonGroupProps<T extends string> {
+  ariaLabel: string;
+  legend: string;
+  options: { value: T; label: string }[];
+  value: T;
+  counts: Record<T, number>;
+  onChange: (next: T) => void;
+}
+
+function FilterButtonGroup<T extends string>({
+  ariaLabel,
+  legend,
+  options,
+  value,
+  counts,
+  onChange,
+}: FilterButtonGroupProps<T>) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/80">
+        {legend}
+      </span>
+      <div
+        role="group"
+        aria-label={ariaLabel}
+        className="inline-flex shrink-0 rounded-md border border-border/60 bg-background"
+      >
+        {options.map((opt, i) => {
+          const active = opt.value === value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onChange(opt.value)}
+              className={`px-3 py-1.5 font-medium transition-colors ${
+                active
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              } ${i !== 0 ? "border-l border-border/60" : ""}`}
+              aria-pressed={active}
+            >
+              {opt.label}{" "}
+              <span className={active ? "opacity-70" : "opacity-60"}>
+                ({counts[opt.value] ?? 0})
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function filterByEmployment(
   summaries: RecruiterSummary[],
   filter: EmploymentFilter,
@@ -205,6 +275,14 @@ function filterByEmployment(
     return summaries.filter((s) => s.employment.status !== "departed");
   }
   return summaries.filter((s) => s.employment.status === "departed");
+}
+
+function filterByRole(
+  summaries: RecruiterSummary[],
+  filter: RoleFilter,
+): RecruiterSummary[] {
+  if (filter === "all") return summaries;
+  return summaries.filter((s) => s.role === filter);
 }
 
 function formatTerminationLabel(iso: string | null): string {
@@ -224,18 +302,22 @@ function formatTerminationLabel(iso: string | null): string {
 
 interface RecruiterTableProps {
   summaries: RecruiterSummary[];
-  activeCount: number;
-  departedCount: number;
-  filter: EmploymentFilter;
-  onFilterChange: (filter: EmploymentFilter) => void;
+  employmentCounts: Record<EmploymentFilter, number>;
+  roleCounts: Record<RoleFilter, number>;
+  employmentFilter: EmploymentFilter;
+  roleFilter: RoleFilter;
+  onEmploymentChange: (filter: EmploymentFilter) => void;
+  onRoleChange: (filter: RoleFilter) => void;
 }
 
 function RecruiterTable({
   summaries,
-  activeCount,
-  departedCount,
-  filter,
-  onFilterChange,
+  employmentCounts,
+  roleCounts,
+  employmentFilter,
+  roleFilter,
+  onEmploymentChange,
+  onRoleChange,
 }: RecruiterTableProps) {
   const [sort, setSort] = useState<SortState>({
     key: "hiresLast12m",
@@ -252,15 +334,9 @@ function RecruiterTable({
     );
   }
 
-  const countByFilter: Record<EmploymentFilter, number> = {
-    active: activeCount,
-    departed: departedCount,
-    all: activeCount + departedCount,
-  };
-
   return (
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-warm">
-      <div className="flex flex-col gap-3 border-b border-border/50 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 border-b border-border/50 px-5 py-3">
         <div>
           <span className="text-sm font-semibold text-foreground">
             Recruiter performance
@@ -271,36 +347,23 @@ function RecruiterTable({
             hires vs target. Click any column header to sort.
           </p>
         </div>
-        <div
-          role="group"
-          aria-label="Employment status filter"
-          className="inline-flex shrink-0 self-start rounded-md border border-border/60 bg-background text-xs"
-        >
-          {EMPLOYMENT_FILTERS.map((opt, i) => {
-            const active = opt.value === filter;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => onFilterChange(opt.value)}
-                className={`px-3 py-1.5 font-medium transition-colors ${
-                  active
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                } ${i !== 0 ? "border-l border-border/60" : ""}`}
-                aria-pressed={active}
-              >
-                {opt.label}{" "}
-                <span
-                  className={
-                    active ? "opacity-70" : "opacity-60"
-                  }
-                >
-                  ({countByFilter[opt.value]})
-                </span>
-              </button>
-            );
-          })}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <FilterButtonGroup
+            ariaLabel="Role filter"
+            legend="Role"
+            options={ROLE_FILTERS}
+            value={roleFilter}
+            counts={roleCounts}
+            onChange={onRoleChange}
+          />
+          <FilterButtonGroup
+            ariaLabel="Employment filter"
+            legend="Status"
+            options={EMPLOYMENT_FILTERS}
+            value={employmentFilter}
+            counts={employmentCounts}
+            onChange={onEmploymentChange}
+          />
         </div>
       </div>
       {summaries.length === 0 ? (
@@ -313,6 +376,7 @@ function RecruiterTable({
             <thead className="bg-muted/40 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
               <tr>
                 <SortableHeader label="Recruiter" sortKey="recruiter" active={sort} onSort={handleSort} />
+                <SortableHeader label="Role" sortKey="role" active={sort} onSort={handleSort} />
                 <SortableHeader label="Pillar" sortKey="tech" active={sort} onSort={handleSort} />
                 <SortableHeader label="Hires L12m" sortKey="hiresLast12m" active={sort} onSort={handleSort} align="right" />
                 <SortableHeader label="Trailing 3mo" sortKey="trailing3mAvg" active={sort} onSort={handleSort} align="right" />
@@ -349,6 +413,14 @@ function RecruiterTable({
                           </span>
                         )}
                       </div>
+                      {s.employment.jobTitle && (
+                        <div className="mt-0.5 text-[11px] font-normal text-muted-foreground/80">
+                          {s.employment.jobTitle}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">
+                      {ROLE_LABELS[s.role]}
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground">
                       {s.tech ?? "—"}
@@ -395,16 +467,9 @@ export function TalentPageClient({
 }: TalentPageClientProps) {
   const [employmentFilter, setEmploymentFilter] =
     useState<EmploymentFilter>("active");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("talent_partner");
 
-  const {
-    histories,
-    teamActual,
-    teamProjection,
-    summaries,
-    latestMonth,
-    activeSummaryCount,
-    departedSummaryCount,
-  } =
+  const { histories, teamActual, teamProjection, summaries, latestMonth } =
     useMemo(() => {
       const now = currentMonthKey();
       const histories = aggregateHiresByRecruiterMonth(hireRows);
@@ -419,24 +484,39 @@ export function TalentPageClient({
         employmentByRecruiter,
       );
       const latestMonth = lastActualMonth(hireRows);
-      const activeSummaryCount = summaries.filter(
-        (s) => s.employment.status !== "departed",
-      ).length;
-      const departedSummaryCount = summaries.length - activeSummaryCount;
       return {
         histories,
         teamActual,
         teamProjection,
         summaries,
         latestMonth,
-        activeSummaryCount,
-        departedSummaryCount,
       };
     }, [hireRows, targets, employmentByRecruiter]);
 
+  // Counts are computed against the *other* dimension so each filter row
+  // shows how many would match if you switched only it.
+  const employmentCounts = useMemo(() => {
+    const scoped = filterByRole(summaries, roleFilter);
+    return {
+      active: scoped.filter((s) => s.employment.status !== "departed").length,
+      departed: scoped.filter((s) => s.employment.status === "departed").length,
+      all: scoped.length,
+    };
+  }, [summaries, roleFilter]);
+
+  const roleCounts = useMemo(() => {
+    const scoped = filterByEmployment(summaries, employmentFilter);
+    return {
+      talent_partner: scoped.filter((s) => s.role === "talent_partner").length,
+      sourcer: scoped.filter((s) => s.role === "sourcer").length,
+      other: scoped.filter((s) => s.role === "other").length,
+      all: scoped.length,
+    };
+  }, [summaries, employmentFilter]);
+
   const filteredSummaries = useMemo(
-    () => filterByEmployment(summaries, employmentFilter),
-    [summaries, employmentFilter],
+    () => filterByRole(filterByEmployment(summaries, employmentFilter), roleFilter),
+    [summaries, employmentFilter, roleFilter],
   );
 
   if (emptyReason) {
@@ -522,10 +602,12 @@ export function TalentPageClient({
 
       <RecruiterTable
         summaries={filteredSummaries}
-        activeCount={activeSummaryCount}
-        departedCount={departedSummaryCount}
-        filter={employmentFilter}
-        onFilterChange={setEmploymentFilter}
+        employmentCounts={employmentCounts}
+        roleCounts={roleCounts}
+        employmentFilter={employmentFilter}
+        roleFilter={roleFilter}
+        onEmploymentChange={setEmploymentFilter}
+        onRoleChange={setRoleFilter}
       />
 
       {histories.length === 0 && (

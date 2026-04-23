@@ -5,6 +5,7 @@ import {
   buildEmploymentIndex,
   buildRecruiterSummaries,
   buildTeamChartSeries,
+  classifyRole,
   currentMonthKey,
   monthKey,
   monthsBetween,
@@ -214,22 +215,28 @@ describe("buildEmploymentIndex", () => {
     {
       displayName: "Lucy Lynn",
       status: "active" as const,
+      role: "talent_partner" as const,
       terminationDate: null,
       department: "People",
+      jobTitle: "Head of Talent",
     },
     {
       displayName: "Chris Rea",
       status: "departed" as const,
+      role: "talent_partner" as const,
       terminationDate: "2025-09-22",
       department: "Talent",
+      jobTitle: "Principal Talent Partner",
     },
     {
       displayName: "Florian Rose",
       status: "active" as const,
+      role: "talent_partner" as const,
       // Notice period — HR marks lifecycle_status as "garden leave" which
       // we classify as active even though a termination date is set.
       terminationDate: "2026-06-17",
       department: "People",
+      jobTitle: "Talent Lead",
     },
   ];
 
@@ -246,9 +253,16 @@ describe("buildEmploymentIndex", () => {
     expect(idx["Florian Rose"]?.terminationDate).toBe("2026-06-17");
   });
 
-  it("returns unknown for recruiters with no match", () => {
+  it("defaults unknown recruiters to role=other", () => {
     const idx = buildEmploymentIndex(records, ["Someone External"]);
     expect(idx["Someone External"]?.status).toBe("unknown");
+    expect(idx["Someone External"]?.role).toBe("other");
+  });
+
+  it("promotes unknown recruiters on the target roster to role=talent_partner", () => {
+    const idx = buildEmploymentIndex(records, ["Beth Baron"], ["Beth Baron"]);
+    expect(idx["Beth Baron"]?.status).toBe("unknown");
+    expect(idx["Beth Baron"]?.role).toBe("talent_partner");
   });
 
   it("matches on first/last name variants when middle names differ", () => {
@@ -257,8 +271,10 @@ describe("buildEmploymentIndex", () => {
         {
           displayName: "Jamie A. Davies",
           status: "departed" as const,
+          role: "talent_partner" as const,
           terminationDate: "2025-07-11",
           department: "Talent",
+          jobTitle: "Principal Talent Partner",
         },
       ],
       ["Jamie Davies"],
@@ -274,8 +290,10 @@ describe("buildEmploymentIndex", () => {
           displayName: "Liv Smith",
           aliases: ["Olivia Smith"],
           status: "active" as const,
+          role: "talent_partner" as const,
           terminationDate: null,
           department: "People",
+          jobTitle: "Talent Partner",
         },
       ],
       ["Olivia Smith"],
@@ -291,19 +309,49 @@ describe("buildEmploymentIndex", () => {
         {
           displayName: "Angela Komornik",
           status: "departed" as const,
+          role: "talent_partner" as const,
           terminationDate: "2024-05-01",
           department: "Talent",
+          jobTitle: "Talent Partner",
         },
         {
           displayName: "Angela Komornik",
           status: "active" as const,
+          role: "talent_partner" as const,
           terminationDate: null,
           department: "Talent",
+          jobTitle: "Talent Partner",
         },
       ],
       ["Angela Komornik"],
     );
     expect(idx["Angela Komornik"]?.status).toBe("active");
+  });
+});
+
+describe("classifyRole", () => {
+  it("matches Talent Partner job titles", () => {
+expect(classifyRole("Senior Talent Partner")).toBe("talent_partner");
+    expect(classifyRole("Talent Partner II")).toBe("talent_partner");
+    expect(classifyRole("Head of Talent")).toBe("talent_partner");
+    expect(classifyRole("Principal Talent Partner")).toBe("talent_partner");
+    expect(classifyRole("Talent Lead - Data & Machine Learning")).toBe(
+      "talent_partner",
+    );
+    expect(classifyRole("Talent Acquisition Lead")).toBe("talent_partner");
+    expect(classifyRole("Recruiter")).toBe("talent_partner");
+  });
+
+  it("matches Sourcer job titles", () => {
+expect(classifyRole("Talent Sourcer")).toBe("sourcer");
+    expect(classifyRole("Sourcing Partner")).toBe("sourcer");
+  });
+
+  it("classifies non-recruiter titles as other", () => {
+expect(classifyRole("SVP of Technology")).toBe("other");
+    expect(classifyRole("Product Director")).toBe("other");
+    expect(classifyRole("Strategy & Operations Manager")).toBe("other");
+    expect(classifyRole(null)).toBe("other");
   });
 });
 
