@@ -1,7 +1,11 @@
 import * as Sentry from "@sentry/nextjs";
 import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { githubPrs, prReviewAnalyses } from "@/lib/db/schema";
+import {
+  githubEmployeeMap,
+  githubPrs,
+  prReviewAnalyses,
+} from "@/lib/db/schema";
 import {
   RUBRIC_VERSION,
   analysePR,
@@ -91,6 +95,19 @@ export async function runCodeReviewAnalysis(
     .where(gte(githubPrs.mergedAt, since))
     .orderBy(desc(githubPrs.mergedAt));
 
+  // Load DB-flagged bots once so we can filter them at sync time rather than
+  // at display time. Without this, a bot with a clean-looking login (e.g. a
+  // release bot named `acme-releaser`) has its PRs fetched + sent to Claude
+  // + stored, only to be silently dropped on page load — wasted LLM budget.
+  const botLogins = new Set(
+    (
+      await db
+        .select({ githubLogin: githubEmployeeMap.githubLogin })
+        .from(githubEmployeeMap)
+        .where(eq(githubEmployeeMap.isBot, true))
+    ).map((r) => r.githubLogin.toLowerCase()),
+  );
+
   const skipped: AnalyseRunResult["skipped"] = [];
   const failed: AnalyseRunResult["failed"] = [];
   let cached = 0;
@@ -99,7 +116,7 @@ export async function runCodeReviewAnalysis(
   // Find which (repo, prNumber) pairs already have a current-rubric analysis —
   // batch lookup so we don't N+1 select.
   const eligible = candidates.filter((c) => {
-    if (isBotAuthor(c.authorLogin)) {
+    if (isBotAuthor(c.authorLogin) || botLogins.has(c.authorLogin.toLowerCase())) {
       skipped.push({ repo: c.repo, prNumber: c.prNumber, reason: "bot author" });
       return false;
     }
@@ -143,8 +160,16 @@ export async function runCodeReviewAnalysis(
   const toRun = eligible.slice(0, limit);
   // githubPrs.repo is the bare repo name (e.g. "mobile-app") — the GitHub
   // sync drops the org to match its per-repo metric schema. We need the
-  // full "owner/repo" for the API, so prefix with GITHUB_ORG here.
-  const org = process.env.GITHUB_ORG ?? "";
+  // full "owner/repo" for the API, so prefix with GITHUB_ORG here. Throw
+  // loudly if the env var is missing rather than producing "/reponame"
+  // URLs that yield silent GitHub 404s per-PR.
+  const org = process.env.GITHUB_ORG;
+  if (!org && toRun.some((c) => !c.repo.includes("/"))) {
+    throw new Error(
+      "GITHUB_ORG is not set but one or more PRs store a bare repo name. " +
+        "Set GITHUB_ORG in Doppler (dev + prd) to resolve repo full names.",
+    );
+  }
   function fullName(repo: string): string {
     return repo.includes("/") ? repo : `${org}/${repo}`;
   }
@@ -259,17 +284,30 @@ export const CODE_REVIEW_CRON_COOLDOWN_MS = 6.5 * 24 * 60 * 60 * 1000;
 
 /**
  * Cron-friendly wrapper. Skips when a run happened within the cooldown.
- * Returns `null` instead of a result object when skipped so the caller can
- * include it in the fan-out response without blowing up on a non-result.
+ * Returns `{ skippedBy: "cooldown" }` instead of a result object when
+ * skipped so the caller can include it in the fan-out response without
+ * blowing up on a non-result. On every non-skipped run it also prunes
+ * old rows to keep the table bounded.
  */
 export async function maybeRunCodeReviewFromCron(): Promise<
-  (AnalyseRunResult & { skippedBy: "cooldown" }) | AnalyseRunResult | { skippedBy: "cooldown" }
+  | (AnalyseRunResult & { pruned?: number })
+  | { skippedBy: "cooldown" }
 > {
   const sinceLast = await msSinceLastAnalysis();
   if (sinceLast !== null && sinceLast < CODE_REVIEW_CRON_COOLDOWN_MS) {
     return { skippedBy: "cooldown" };
   }
-  return runCodeReviewAnalysis();
+  const result = await runCodeReviewAnalysis();
+  // Prune before returning so the table doesn't grow indefinitely under
+  // multi-rubric-version history. Errors here shouldn't fail the cron —
+  // Sentry captures and we serve the run result anyway.
+  let pruned: number | undefined;
+  try {
+    pruned = await pruneOldAnalyses();
+  } catch (err) {
+    Sentry.captureException(err, { tags: { feature: "code-review", step: "prune" } });
+  }
+  return { ...result, pruned };
 }
 
 /** Surface reachable for tests without going through a cron handler. */

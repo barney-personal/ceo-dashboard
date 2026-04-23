@@ -175,6 +175,20 @@ describe("getCodeReviewView", () => {
     expect(view.engineers[0].flags).toContain("has_concerning_pr");
   });
 
+  it("flags quality_variance_high when ≥5 PRs have stdev(quality) ≥ 1.2", async () => {
+    // Quality spread from 1 to 5 on a single author — classic "inconsistent"
+    // pattern that the diagnostic exists to catch.
+    const qualities = [1, 2, 3, 4, 5, 3];
+    mockChain(
+      qualities.map((q, i) =>
+        row({ authorLogin: "mallory", prNumber: 700 + i, complexity: 3, quality: q }),
+      ),
+      [],
+    );
+    const view = await getCodeReviewView();
+    expect(view.engineers[0].flags).toContain("quality_variance_high");
+  });
+
   it("flags all_tiny_prs when ≥5 PRs all have complexity ≤2", async () => {
     const rows = Array.from({ length: 6 }).map((_, i) =>
       row({ authorLogin: "ivan", prNumber: 500 + i, complexity: 1, quality: 3 }),

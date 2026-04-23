@@ -55,12 +55,18 @@ export async function GET(request: NextRequest) {
     // via a DB-driven cooldown rather than a separate cron schedule so we
     // still get an opportunistic run if the cron misses a window. Errors
     // here must never block the rest of the fan-out.
-    let codeReview: Awaited<ReturnType<typeof maybeRunCodeReviewFromCron>> | null = null;
+    // `{ skippedBy: "cooldown" }` and `{ skippedBy: "error" }` are
+    // deliberately distinct sentinels so on-call / observability can
+    // tell "nothing to do" from "something blew up" without grepping Sentry.
+    let codeReview:
+      | Awaited<ReturnType<typeof maybeRunCodeReviewFromCron>>
+      | { skippedBy: "error" }
+      | null = null;
     try {
       codeReview = await maybeRunCodeReviewFromCron();
     } catch (error) {
       Sentry.captureException(error, { tags: { feature: "code-review" } });
-      codeReview = { skippedBy: "cooldown" }; // serialise as "nothing to show"
+      codeReview = { skippedBy: "error" };
     }
 
     const allResults = [mode, slack, managementAccounts, meetings, github];

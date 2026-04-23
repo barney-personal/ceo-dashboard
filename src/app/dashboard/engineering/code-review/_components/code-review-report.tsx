@@ -118,8 +118,14 @@ function Header({ view }: { view: CodeReviewView }) {
         setError(body.error ?? `HTTP ${res.status}`);
         return;
       }
+      const remaining =
+        body.candidatesConsidered - body.cached - body.analysed;
+      const suffix =
+        remaining > 0
+          ? ` · ${remaining} PR${remaining === 1 ? "" : "s"} still pending (click again or wait for the weekly cron).`
+          : "";
       setStatus(
-        `Analysed ${body.analysed}, cached ${body.cached}, failed ${body.failed.length}.`,
+        `Analysed ${body.analysed}, cached ${body.cached}, failed ${body.failed.length}.${suffix}`,
       );
       startTransition(() => router.refresh());
     } catch (err) {

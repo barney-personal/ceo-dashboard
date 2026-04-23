@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { githubEmployeeMap, prReviewAnalyses } from "@/lib/db/schema";
 import {
@@ -85,11 +85,10 @@ function stdev(values: number[]): number {
 }
 
 /** Bucket PRs into weekly composite totals, oldest→newest, across the window.
- * Window sizes that don't divide evenly into 7 round down — `windowDays=30`
- * yields 5 buckets covering ~28 days (the trailing partial week is merged
- * into the most-recent bucket so every day is represented). */
+ * `windowDays=30` yields 5 buckets (`ceil(30/7) = 5`) each covering ~6 days
+ * so every day in the window maps to exactly one bucket. */
 function bucketWeekly(prs: PrReviewEntry[], windowDays: number): number[] {
-  const buckets = Math.max(1, Math.floor(windowDays / 7));
+  const buckets = Math.max(1, Math.ceil(windowDays / 7));
   const totals = new Array<number>(buckets).fill(0);
   const windowStart = Date.now() - windowDays * 24 * 60 * 60 * 1000;
   const bucketMs = (windowDays * 24 * 60 * 60 * 1000) / buckets;
@@ -190,11 +189,9 @@ export async function getCodeReviewView(
         and(
           eq(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
           gte(prReviewAnalyses.mergedAt, prevStart),
-          // mergedAt < prevEnd  — drizzle's `lt` would need an extra import
-          // and we already have `and`/`gte`. Use a raw compare instead:
+          lt(prReviewAnalyses.mergedAt, prevEnd),
         ),
       );
-    prevRows = prevRows.filter((r) => r.mergedAt < prevEnd);
   }
 
   const rollupByAuthor = new Map<
@@ -228,11 +225,12 @@ export async function getCodeReviewView(
       caveats: (row.caveats as string[] | null) ?? [],
       standout: (row.standout as AnalysisStandout | null) ?? null,
       // Stored repo may be a bare name (matches githubPrs schema); prepend
-      // the org so the link actually resolves. This mirrors the fullName
-      // helper in the sync runner.
+      // the org so the link actually resolves. GITHUB_ORG is a required
+      // Doppler secret — we'd rather a visibly broken link than a
+      // hardcoded fallback that silently points at the wrong GitHub org.
       githubUrl: row.repo.includes("/")
         ? `https://github.com/${row.repo}/pull/${row.prNumber}`
-        : `https://github.com/${process.env.GITHUB_ORG ?? "meetcleo"}/${row.repo}/pull/${row.prNumber}`,
+        : `https://github.com/${process.env.GITHUB_ORG ?? ""}/${row.repo}/pull/${row.prNumber}`,
     };
     bucket.prs.push(entry);
     bucket.repos.add(row.repo);
@@ -293,12 +291,20 @@ export async function getCodeReviewView(
     e.flags.includes("low_evidence"),
   );
 
-  const latestRow = rows[0];
+  // rows is sorted by mergedAt desc — not the same thing as "most recently
+  // analysed". Walk the set to find the true max analysedAt so the page
+  // header accurately reflects when the last LLM call completed.
+  let analysedAtLatest: Date | null = null;
+  for (const r of rows) {
+    if (!analysedAtLatest || r.analysedAt > analysedAtLatest) {
+      analysedAtLatest = r.analysedAt;
+    }
+  }
 
   return {
     windowDays,
     rubricVersion: RUBRIC_VERSION,
-    analysedAtLatest: latestRow ? latestRow.analysedAt : null,
+    analysedAtLatest,
     engineers,
     lowEvidenceEngineers,
     totalPrs: rows.length,
