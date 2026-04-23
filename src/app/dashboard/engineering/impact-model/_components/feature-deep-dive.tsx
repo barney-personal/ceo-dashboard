@@ -150,7 +150,6 @@ function analyseFeature(
   baseline: number,
 ): FeatureInsight {
   const { grid, pdp_mean, feature } = pdp;
-  const plain = plainLabel(feature, pdp.label);
   const start = pdp_mean[0];
   const end = pdp_mean[pdp_mean.length - 1];
   const peak = Math.max(...pdp_mean);
