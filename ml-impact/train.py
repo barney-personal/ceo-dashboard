@@ -422,10 +422,9 @@ def main():
             return "Discipline"
         if lower.startswith("pillar_"):
             return "Pillar"
-        if lower.startswith("gender_"):
-            return "Gender"
-        if lower.startswith("location_"):
-            return "Location"
+        # NOTE: gender_* and location_* can never appear here because those
+        # columns are excluded from the feature set (see categorical_features
+        # above). Kept out of this dispatch to avoid implying they're live.
         return "Other"
 
     group_importance = {}

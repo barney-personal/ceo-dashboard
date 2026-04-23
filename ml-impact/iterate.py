@@ -155,6 +155,11 @@ BASE_NUMERIC = [
     "pr_slope_per_week",
     "commits_per_pr",
 ]
+# NOTE: this is the historical 5-round shootout script. gender + location are
+# left in BASE_CATEGORICAL here to preserve the numbers reported in the PR
+# narrative, but the production train.py EXCLUDES them — see train.py's
+# categorical_features and the README. Re-running this script today would
+# produce numbers that differ slightly from the shipped model on purpose.
 BASE_CATEGORICAL = ["level_track", "discipline", "pillar", "gender", "location"]
 
 MONOTONE_PRIORS = {
