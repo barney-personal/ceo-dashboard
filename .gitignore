@@ -10,6 +10,7 @@ token.pickle
 
 # === Python ===
 .venv/
+.venv-ml/
 venv/
 __pycache__/
 *.pyc
@@ -27,6 +28,11 @@ node_modules/
 # === Runtime data ===
 /data/
 .probe-reports/
+
+# === ML outputs (regenerated via ml-impact/train.py) ===
+ml-impact/features.csv
+ml-impact/extract.err
+ml-impact/model.json
 
 # === Claude Code worktrees ===
 .claude/worktrees/

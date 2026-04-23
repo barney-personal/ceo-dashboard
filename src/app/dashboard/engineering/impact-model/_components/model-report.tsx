@@ -1,0 +1,337 @@
+"use client";
+
+import type { ImpactModel } from "@/lib/data/impact-model";
+import { FeatureImportanceChart } from "./feature-importance-chart";
+import { ActualVsPredicted } from "./actual-vs-predicted";
+import { GroupBars } from "./group-bars";
+import { OutlierTable } from "./outlier-table";
+
+function MetricTile({
+  label,
+  value,
+  unit,
+  hint,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  hint?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-5 shadow-warm ${
+        highlight
+          ? "border-primary/50 bg-primary/5"
+          : "border-border/60 bg-card"
+      }`}
+    >
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-2 flex items-baseline gap-2">
+        <span className="font-display text-4xl italic tracking-tight text-foreground">
+          {value}
+        </span>
+        {unit && <span className="text-xs text-muted-foreground">{unit}</span>}
+      </div>
+      {hint && (
+        <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SectionHead({
+  letter,
+  title,
+  lede,
+}: {
+  letter: string;
+  title: string;
+  lede: string;
+}) {
+  return (
+    <div className="flex items-start gap-5 border-b border-border/60 pb-4">
+      <span className="font-display text-6xl italic leading-none text-primary">
+        {letter}
+      </span>
+      <div className="pt-1">
+        <h2 className="font-display text-3xl italic tracking-tight text-foreground">
+          {title}
+        </h2>
+        <p className="mt-1 max-w-2xl text-sm italic text-muted-foreground">
+          {lede}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export function ImpactModelReport({ model }: { model: ImpactModel }) {
+  const { metrics, model_comparison, target, features, engineers } = model;
+
+  const generatedAt = new Date(model.generated_at).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+  const topFeature = features[0];
+
+  return (
+    <div className="space-y-10">
+      {/* Metadata strip */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-y border-border/60 py-3 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+        <span>
+          <span className="text-primary">› </span>trained {generatedAt}
+        </span>
+        <span>
+          <span className="text-primary">› </span>
+          {model.n_engineers} engineers
+        </span>
+        <span>
+          <span className="text-primary">› </span>
+          {model.n_features} features
+        </span>
+        <span>
+          <span className="text-primary">› </span>model{" "}
+          {model.chosen_model.replace("_", " ")}
+        </span>
+        <span>
+          <span className="text-primary">› </span>5-fold CV
+        </span>
+      </div>
+
+      {/* Hero */}
+      <section>
+        <SectionHead
+          letter="A"
+          title="Can we predict engineering impact?"
+          lede={`We regress each engineer's 360-day impact score against ${model.n_features} demographic, Slack-engagement, AI-usage, and performance features. The metrics below are held-out, cross-validated.`}
+        />
+        <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+          <MetricTile
+            label="R²"
+            value={metrics.r2.toFixed(3)}
+            hint={`Explains ${Math.round(metrics.r2 * 100)}% of impact variance vs baseline (mean).`}
+            highlight
+          />
+          <MetricTile
+            label="Spearman ρ"
+            value={metrics.spearman.toFixed(3)}
+            hint={`Rank correlation — the model ranks engineers in roughly ${
+              metrics.spearman > 0.7 ? "strong" : "moderate"
+            } agreement with their actual output.`}
+            highlight
+          />
+          <MetricTile
+            label="MAE"
+            value={Math.round(metrics.mae).toLocaleString()}
+            unit="impact pts"
+            hint={`Typical absolute error. Baseline (predicting the mean) would miss by ${Math.round(metrics.baseline_mae).toLocaleString()}.`}
+          />
+          <MetricTile
+            label="RMSE"
+            value={Math.round(metrics.rmse).toLocaleString()}
+            unit="impact pts"
+            hint={`Root mean squared error. Penalises large misses. Baseline RMSE: ${Math.round(metrics.baseline_rmse).toLocaleString()}.`}
+          />
+        </div>
+        <div className="mt-4 rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-xs leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">Target:</span>{" "}
+          <code className="rounded bg-muted/50 px-1 py-0.5 font-mono text-[11px]">
+            {target.formula}
+          </code>{" "}
+          computed over the last 360 days of merged PRs. Mean ={" "}
+          <span className="font-mono">{Math.round(target.mean).toLocaleString()}</span>,
+          median ={" "}
+          <span className="font-mono">{Math.round(target.median).toLocaleString()}</span>,
+          p95 =
+          <span className="font-mono"> {Math.round(target.p95).toLocaleString()}</span>.
+          Long-tailed, so we train on log(1 + impact) and exponentiate back.
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-border/40 bg-muted/10 p-4">
+            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Random Forest (chosen)
+            </div>
+            <div className="mt-1 flex items-baseline gap-4">
+              <span className="font-mono text-sm">
+                R² <span className="font-medium">{model_comparison.random_forest.r2.toFixed(3)}</span>
+              </span>
+              <span className="font-mono text-sm">
+                ρ{" "}
+                <span className="font-medium">
+                  {model_comparison.random_forest.spearman.toFixed(3)}
+                </span>
+              </span>
+            </div>
+          </div>
+          <div className="rounded-lg border border-border/40 bg-muted/10 p-4">
+            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Gradient Boosting (compared)
+            </div>
+            <div className="mt-1 flex items-baseline gap-4">
+              <span className="font-mono text-sm">
+                R² <span className="font-medium">{model_comparison.gradient_boosting.r2.toFixed(3)}</span>
+              </span>
+              <span className="font-mono text-sm">
+                ρ{" "}
+                <span className="font-medium">
+                  {model_comparison.gradient_boosting.spearman.toFixed(3)}
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Feature importance */}
+      <section>
+        <SectionHead
+          letter="B"
+          title="Which features move the needle?"
+          lede="Permutation importance (darker bar) is the drop in performance when we shuffle that single feature across engineers — the honest test. Impurity (lighter) is the split-based importance most textbooks show."
+        />
+        <div className="mt-6 rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+          <FeatureImportanceChart features={features} topN={18} />
+          {topFeature && (
+            <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+              Top predictor:{" "}
+              <span className="font-medium text-foreground">
+                {topFeature.name.replace(/_/g, " ")}
+              </span>
+              . Removing it from the model drops performance by{" "}
+              <span className="font-mono">
+                {topFeature.permutation_mean.toFixed(3)}
+              </span>{" "}
+              (log-R² units).
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Actual vs Predicted */}
+      <section>
+        <SectionHead
+          letter="C"
+          title="Does the model rank engineers well?"
+          lede="Each dot is one engineer. Points on the dashed line are perfectly predicted. Above the line: the model over-predicted. Below: it under-predicted. Colour = discipline."
+        />
+        <div className="mt-6 rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+          <ActualVsPredicted engineers={engineers} />
+        </div>
+      </section>
+
+      {/* Group stats */}
+      <section>
+        <SectionHead
+          letter="D"
+          title="Where does impact concentrate?"
+          lede="Group median and mean impact. Bar = median (robust to outliers), line = mean (sensitive to top-end)."
+        />
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <GroupBars data={model.by_discipline} title="By discipline" />
+          <GroupBars data={model.by_level_track} title="By level track" />
+          <GroupBars data={model.by_pillar} title="By pillar" />
+        </div>
+      </section>
+
+      {/* Outliers */}
+      <section>
+        <SectionHead
+          letter="E"
+          title="Who surprises the model?"
+          lede="The ten engineers whose actual output most diverged from the prediction. These are where the model's features don't tell the whole story — worth investigating."
+        />
+        <div className="mt-6">
+          <OutlierTable engineers={engineers} />
+        </div>
+      </section>
+
+      {/* Methodology */}
+      <section>
+        <SectionHead
+          letter="F"
+          title="Methodology"
+          lede="Training pipeline, so you can re-run or replace it."
+        />
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Data sources
+            </div>
+            <ul className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
+              <li>
+                • <span className="text-foreground">Mode headcount SSoT</span> — active FTE engineers:
+                tenure, level, specialisation, squad, pillar, gender, location.
+              </li>
+              <li>
+                • <span className="text-foreground">GitHub PR history</span> — 360-day PR count &
+                lines changed per engineer, joined via github_employee_map.
+              </li>
+              <li>
+                • <span className="text-foreground">Slack member snapshot</span> — messages,
+                reactions, active-day rate, desktop share, channel share.
+              </li>
+              <li>
+                • <span className="text-foreground">AI usage (Mode Query 3)</span> — total tokens,
+                cost, distinct-days, models used per email.
+              </li>
+              <li>
+                • <span className="text-foreground">Performance ratings</span> — avg & latest rating
+                across review cycles.
+              </li>
+            </ul>
+          </div>
+          <div className="rounded-xl border border-border/60 bg-card p-5 shadow-warm">
+            <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Training pipeline
+            </div>
+            <ol className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
+              <li>
+                <span className="font-mono text-[11px] text-foreground">1.</span> Extract features
+                with <code className="rounded bg-muted/50 px-1 font-mono text-[11px]">
+                  ml-impact/extract.sql
+                </code>{" "}
+                against prod Postgres.
+              </li>
+              <li>
+                <span className="font-mono text-[11px] text-foreground">2.</span> Train & evaluate
+                with{" "}
+                <code className="rounded bg-muted/50 px-1 font-mono text-[11px]">
+                  ml-impact/train.py
+                </code>{" "}
+                (RF + GBM, 5-fold CV, permutation importance).
+              </li>
+              <li>
+                <span className="font-mono text-[11px] text-foreground">3.</span> Log-transform
+                target (impact is long-tailed), pick the model with higher Spearman ρ.
+              </li>
+              <li>
+                <span className="font-mono text-[11px] text-foreground">4.</span> Emit{" "}
+                <code className="rounded bg-muted/50 px-1 font-mono text-[11px]">
+                  src/data/impact-model.json
+                </code>{" "}
+                — this page reads it directly.
+              </li>
+            </ol>
+          </div>
+        </div>
+        <div className="mt-4 rounded-lg border border-amber-200/50 bg-amber-50/40 p-4 text-xs leading-relaxed text-amber-950/70">
+          <span className="font-medium">Caveats.</span> n = {model.n_engineers} is small. Only
+          engineers who shipped at least one PR in the window are included. Impact rewards PR
+          volume × log(lines changed), which under-credits review/design work. Perf-rating
+          features are imputed with the median when missing, which dilutes their signal. Causal
+          interpretations not warranted — treat high-permutation-importance features as{" "}
+          <em>correlates</em> of impact, not levers.
+        </div>
+      </section>
+    </div>
+  );
+}
