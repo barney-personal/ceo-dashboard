@@ -362,7 +362,7 @@ function deriveAgreementLevel(
   return "material_adjustment";
 }
 
-function computeOutcomeScore(payload: PRAnalysisPayload): number {
+export function computeOutcomeScore(payload: PRAnalysisPayload): number {
   let score = 75;
 
   score += Math.min(10, payload.review.approvalCount * 4);
@@ -371,6 +371,7 @@ function computeOutcomeScore(payload: PRAnalysisPayload): number {
   score -= Math.min(12, Math.max(0, payload.review.reviewRounds - 1) * 6);
   score -= Math.min(8, payload.review.reviewCommentCount * 0.5);
   if (payload.review.revertWithin14d) score -= 35;
+  if (payload.review.revertWithin14d) score = Math.min(score, 40);
 
   return Math.max(0, Math.min(100, Math.round(score)));
 }
@@ -392,13 +393,17 @@ export async function analysePR(
   const rawModelReviews: CodeReviewModelReview[] = [primary];
 
   if (secondOpinionReasons.length > 0) {
-    const adjudicated = await adjudicateWithOpenAi(payload, primary, opts);
-    rawModelReviews.push(adjudicated);
-    agreementLevel = deriveAgreementLevel(primary, adjudicated);
-    finalReview =
-      agreementLevel === "confirmed"
-        ? mergeConfirmedConfidence(primary, adjudicated)
-        : adjudicated;
+    try {
+      const adjudicated = await adjudicateWithOpenAi(payload, primary, opts);
+      rawModelReviews.push(adjudicated);
+      agreementLevel = deriveAgreementLevel(primary, adjudicated);
+      finalReview =
+        agreementLevel === "confirmed"
+          ? mergeConfirmedConfidence(primary, adjudicated)
+          : adjudicated;
+    } catch (error) {
+      console.warn("OpenAI adjudication failed; using primary review", error);
+    }
   }
 
   return {

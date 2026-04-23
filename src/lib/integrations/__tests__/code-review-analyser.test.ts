@@ -17,7 +17,7 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { analysePR } from "../code-review-analyser";
+import { analysePR, computeOutcomeScore } from "../code-review-analyser";
 import type { PRAnalysisPayload } from "../github";
 
 function makePayload(
@@ -166,11 +166,126 @@ describe("analysePR", () => {
     expect(result.agreementLevel).not.toBe("single_model");
   });
 
+  it("falls back to the primary review when OpenAI adjudication fails", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    mockAnthropicToolUse({
+      technicalDifficulty: 4,
+      executionQuality: 2,
+      testAdequacy: 2,
+      riskHandling: 2,
+      reviewability: 2,
+      analysisConfidencePct: 40,
+      category: "feature",
+      summary: "Adds a feature under low-confidence evidence.",
+      caveats: ["Diff was truncated"],
+      standout: "concerning",
+    });
+    openaiCreate.mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }));
+
+    const result = await analysePR(
+      makePayload({
+        files: [
+          {
+            filename: "src/feature.ts",
+            status: "modified",
+            additions: 80,
+            deletions: 10,
+            patch: null,
+            truncated: true,
+            skipped: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.secondOpinionUsed).toBe(false);
+    expect(result.secondOpinionReasons).toContain("truncated_diff");
+    expect(result.executionQuality).toBe(2);
+    expect(result.agreementLevel).toBe("single_model");
+    expect(result.rawModelReviews).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("throws when Claude omits the required tool call", async () => {
     anthropicCreate.mockResolvedValueOnce({
       stop_reason: "end_turn",
       content: [{ type: "text", text: "I don't want to score this." }],
     });
     await expect(analysePR(makePayload())).rejects.toThrow(/submit_review/);
+  });
+
+  it("returns a neutral outcome score when review signals are absent", () => {
+    const payload = makePayload({
+      review: {
+        approvalCount: 0,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 0,
+        timeToFirstReviewHours: 0,
+        timeToMergeHours: 0,
+        commitCount: 0,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: false,
+      },
+    });
+
+    expect(computeOutcomeScore(payload)).toBe(75);
+  });
+
+  it("caps reverted PR outcome scores at 40", () => {
+    const payload = makePayload({
+      review: {
+        approvalCount: 3,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 1,
+        timeToFirstReviewHours: 1,
+        timeToMergeHours: 12,
+        commitCount: 3,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: true,
+      },
+    });
+
+    expect(computeOutcomeScore(payload)).toBe(40);
+  });
+
+  it("rewards smooth review outcomes and clamps heavily negative cases to zero", () => {
+    const strongPayload = makePayload({
+      review: {
+        approvalCount: 3,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 1,
+        timeToFirstReviewHours: 1,
+        timeToMergeHours: 12,
+        commitCount: 3,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: false,
+      },
+    });
+    const poorPayload = makePayload({
+      review: {
+        approvalCount: 0,
+        changeRequestCount: 8,
+        reviewCommentCount: 99,
+        conversationCommentCount: 0,
+        reviewRounds: 8,
+        timeToFirstReviewHours: 24,
+        timeToMergeHours: 72,
+        commitCount: 12,
+        commitsAfterFirstReview: 9,
+        revertWithin14d: true,
+      },
+    });
+
+    expect(computeOutcomeScore(strongPayload)).toBeGreaterThan(80);
+    expect(computeOutcomeScore(poorPayload)).toBe(0);
   });
 });

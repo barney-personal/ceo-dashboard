@@ -163,7 +163,7 @@ function stdev(values: number[]): number {
   return Math.sqrt(variance);
 }
 
-function percentileRank(value: number, values: number[]): number {
+export function percentileRank(value: number, values: number[]): number {
   if (values.length <= 1) return 50;
   const sorted = [...values].sort((a, b) => a - b);
   let lower = 0;
@@ -650,6 +650,7 @@ function buildRollupSet(
       0.15 * rollup.reliabilityPercentile +
       0.15 * rollup.reviewHealthPercentile +
       0.1 * rollup.throughputPercentile;
+    // Shrink sparse samples toward a neutral prior of 8 effective PRs at score 50.
     rollup.finalScore =
       (8 * 50 + rollup.effectivePrCount * rollup.rawScore) /
       (8 + rollup.effectivePrCount);

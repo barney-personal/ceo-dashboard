@@ -187,4 +187,61 @@ describe("getCodeReviewView", () => {
       view.engineers[0].weeklyScore.reduce((sum, value) => sum + value, 0),
     ).toBeGreaterThan(0);
   });
+
+  it("returns neutral percentiles for a single-engineer cohort", async () => {
+    mockChain([row({ authorLogin: "solo", prNumber: 400 })], []);
+
+    const view = await getCodeReviewView();
+    expect(view.engineers).toHaveLength(1);
+    expect(view.engineers[0].qualityPercentile).toBe(50);
+    expect(view.engineers[0].difficultyPercentile).toBe(50);
+    expect(view.engineers[0].reliabilityPercentile).toBe(50);
+    expect(view.engineers[0].reviewHealthPercentile).toBe(50);
+    expect(view.engineers[0].throughputPercentile).toBe(50);
+    expect(view.engineers[0].finalScore).toBe(50);
+  });
+
+  it("returns neutral percentiles when cohort members have identical scores", async () => {
+    const mergedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    mockChain(
+      [
+        row({ authorLogin: "alice", prNumber: 500, mergedAt }),
+        row({ authorLogin: "bob", prNumber: 501, mergedAt }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    expect(view.engineers).toHaveLength(2);
+    expect(view.engineers.map((engineer) => engineer.qualityPercentile)).toEqual([
+      50, 50,
+    ]);
+    expect(view.engineers.map((engineer) => engineer.difficultyPercentile)).toEqual([
+      50, 50,
+    ]);
+    expect(view.engineers.map((engineer) => engineer.reliabilityPercentile)).toEqual([
+      50, 50,
+    ]);
+    expect(view.engineers.map((engineer) => engineer.reviewHealthPercentile)).toEqual([
+      50, 50,
+    ]);
+    expect(view.engineers.map((engineer) => engineer.throughputPercentile)).toEqual([
+      50, 50,
+    ]);
+  });
+
+  it("uses the general percentile path for two-engineer cohorts", async () => {
+    mockChain(
+      [
+        row({ authorLogin: "high", prNumber: 600, executionQuality: 5, testAdequacy: 5, outcomeScore: 95 }),
+        row({ authorLogin: "low", prNumber: 601, executionQuality: 2, testAdequacy: 2, outcomeScore: 60 }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    expect(view.engineers).toHaveLength(2);
+    expect(view.engineers[0].qualityPercentile).toBe(100);
+    expect(view.engineers[1].qualityPercentile).toBe(0);
+  });
 });
