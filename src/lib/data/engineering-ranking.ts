@@ -68,11 +68,17 @@ export interface EngineerRankingEntry {
  * Canonical squad metadata sourced from the `squads` registry at request
  * time. Attached to an eligibility entry only when the server loader
  * actually fetched the registry and the engineer's squad name matches.
+ *
+ * `channelId` is included so the page's "Slack channel joined at request
+ * time" provenance claim is truthful — the field must actually travel from
+ * the registry through the snapshot to the page. A null value means the
+ * matched squad row has no channel configured, not that the join failed.
  */
 export interface CanonicalSquadMetadata {
   name: string;
   pillar: string;
   pmName: string | null;
+  channelId: string | null;
 }
 
 /**
@@ -269,6 +275,13 @@ export interface EligibilitySquadsRegistryRow {
   name: string;
   pillar: string;
   pmName: string | null;
+  /**
+   * Slack channel id for the squad, if configured on the `squads` row. Kept
+   * optional at the row level but rendered into `CanonicalSquadMetadata` as
+   * `channelId: string | null` so the page can truthfully claim the channel
+   * is part of the joined provenance.
+   */
+  channelId: string | null;
   isActive: boolean;
 }
 
@@ -344,7 +357,14 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     inputs.impactModel.engineers.map((e) => e.email_hash),
   );
 
-  const squadsRegistryPresent = Array.isArray(inputs.squads);
+  // Registry is "present" only when the caller supplied a non-empty list.
+  // An empty array provides no rows to join and is observationally
+  // indistinguishable from not fetching — both the coverage flag and the
+  // source-notes text must agree on this so the page never claims a joined
+  // source in one panel and an unfetched source in the next.
+  const squadsRegistryPresent = Boolean(
+    inputs.squads && inputs.squads.length > 0,
+  );
   const squadByName = new Map<string, EligibilitySquadsRegistryRow>();
   if (inputs.squads) {
     for (const s of inputs.squads) {
@@ -514,7 +534,12 @@ function resolveCanonicalSquad(
   if (!raw) return null;
   const match = squadByName.get(raw.toLowerCase());
   if (!match) return null;
-  return { name: match.name, pillar: match.pillar, pmName: match.pmName };
+  return {
+    name: match.name,
+    pillar: match.pillar,
+    pmName: match.pmName,
+    channelId: match.channelId,
+  };
 }
 
 /**
@@ -531,16 +556,19 @@ export const RANKING_SOURCE_NOTES_BASE: readonly string[] = [
 
 /**
  * Compute the provenance notes for a given preflight. The squads-registry
- * note is only added when the caller actually supplied a `squads` input —
- * otherwise the page would claim a live source that was never fetched.
+ * note is only added when the caller supplied a non-empty `squads` input —
+ * otherwise the page would claim a live source that was never fetched. An
+ * empty array is treated the same as absent so this gate stays in lock-step
+ * with `coverage.squadsRegistryPresent`.
  */
 export function buildSourceNotes(inputs: EligibilityInputs): string[] {
   const notes = [...RANKING_SOURCE_NOTES_BASE];
-  if (inputs.squads && inputs.squads.length > 0) {
+  const hasSquads = Boolean(inputs.squads && inputs.squads.length > 0);
+  if (hasSquads) {
     notes.splice(
       3,
       0,
-      "Squads registry (`squads` table): canonical squad name, pillar, PM, and Slack channel joined at request time by lowercased `hb_squad`. Does not provide manager chain.",
+      "Squads registry (`squads` table): canonical squad name, pillar, PM, and Slack channel id joined at request time by lowercased `hb_squad`. Does not provide manager chain.",
     );
   } else {
     notes.push(
@@ -568,9 +596,9 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
     note: "Manager and manager-email fields originate here (via `src/lib/data/people.ts`), not the squads registry.",
   },
   {
-    name: "Squads registry (squad name, pillar, PM, Slack channel)",
+    name: "Squads registry (squad name, pillar, PM, Slack channel id)",
     state: "available",
-    note: "`squads` table stores squad name, pillar, PM, channel, and active state only. It does not contain manager or manager-email fields.",
+    note: "`squads` table supplies squad name, pillar, PM name, and Slack `channel_id`. All four are threaded through the eligibility snapshot when the registry is fetched. Does not contain manager or manager-email fields.",
   },
   {
     name: "Swarmia DORA — squad/pillar context, not individual signal",

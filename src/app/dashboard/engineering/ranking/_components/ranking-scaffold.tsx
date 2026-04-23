@@ -205,6 +205,11 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
                         ? ` · PM ${e.canonicalSquad.pmName}`
                         : ""}
                     </div>
+                    <div className="text-[10px] normal-case tracking-normal text-muted-foreground/80">
+                      {e.canonicalSquad.channelId
+                        ? `Slack: ${e.canonicalSquad.channelId}`
+                        : "No Slack channel on squads row"}
+                    </div>
                   </>
                 ) : e.squad ? (
                   <>

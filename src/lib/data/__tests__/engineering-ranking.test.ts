@@ -528,6 +528,7 @@ describe("M5 squads-registry provenance + future-start policy", () => {
       name: "Platform",
       pillar: "Engineering",
       pmName: "Pat Manager",
+      channelId: "C123PLATFORM",
       isActive: true,
       ...overrides,
     };
@@ -569,7 +570,7 @@ describe("M5 squads-registry provenance + future-start policy", () => {
       inputs({
         headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Platform" })],
         githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
-        squads: [squad({ name: "Platform" })],
+        squads: [squad({ name: "Platform", channelId: "C123PLATFORM" })],
       }),
     );
     const haystack = snapshot.eligibility.sourceNotes.join(" | ").toLowerCase();
@@ -581,6 +582,7 @@ describe("M5 squads-registry provenance + future-start policy", () => {
       name: "Platform",
       pillar: "Engineering",
       pmName: "Pat Manager",
+      channelId: "C123PLATFORM",
     });
     expect(snapshot.eligibility.coverage.squadRegistryUnmatched).toBe(0);
   });
@@ -684,5 +686,190 @@ describe("M5 squads-registry provenance + future-start policy", () => {
     expect(withEmptySquads.join(" ").toLowerCase()).toMatch(
       /squads registry was not fetched/,
     );
+  });
+});
+
+describe("M6 squads-registry channel provenance + empty-registry consistency", () => {
+  const NOW = new Date("2026-04-24T00:00:00Z");
+
+  function row(
+    overrides: Partial<EligibilityHeadcountRow> = {},
+  ): EligibilityHeadcountRow {
+    return {
+      email: "eng@meetcleo.com",
+      preferred_name: "Eng",
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: "platform",
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Finance Pillar",
+      job_title: "Senior Backend Engineer",
+      manager: "Boss",
+      line_manager_email: "boss@meetcleo.com",
+      start_date: "2024-01-01",
+      termination_date: null,
+      ...overrides,
+    };
+  }
+
+  function map(
+    overrides: Partial<EligibilityGithubMapRow> = {},
+  ): EligibilityGithubMapRow {
+    return {
+      githubLogin: "eng",
+      employeeEmail: "eng@meetcleo.com",
+      isBot: false,
+      ...overrides,
+    };
+  }
+
+  function squad(
+    overrides: Partial<EligibilitySquadsRegistryRow> = {},
+  ): EligibilitySquadsRegistryRow {
+    return {
+      name: "Platform",
+      pillar: "Engineering",
+      pmName: "Pat Manager",
+      channelId: "C123PLATFORM",
+      isActive: true,
+      ...overrides,
+    };
+  }
+
+  function inputs(
+    overrides: Partial<EligibilityInputs> = {},
+  ): EligibilityInputs {
+    const base: EligibilityInputs = {
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] } as EligibilityImpactModelView,
+      now: NOW,
+    };
+    return { ...base, ...overrides };
+  }
+
+  it("threads squads.channelId into canonicalSquad when the squad has one", () => {
+    const { entries } = buildEligibleRoster(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Platform" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [squad({ name: "Platform", channelId: "C123PLATFORM" })],
+      }),
+    );
+    expect(entries[0].canonicalSquad?.channelId).toBe("C123PLATFORM");
+  });
+
+  it("preserves a null channelId when the matched squad has no Slack channel configured", () => {
+    const { entries } = buildEligibleRoster(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Platform" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [squad({ name: "Platform", channelId: null })],
+      }),
+    );
+    // A matched squad is still a match; channelId === null is legitimate
+    // for squads that have not configured a Slack channel. The distinction
+    // between "no match" (canonicalSquad === null) and "matched, no channel"
+    // (canonicalSquad.channelId === null) must be preserved.
+    expect(entries[0].canonicalSquad).not.toBeNull();
+    expect(entries[0].canonicalSquad?.channelId).toBeNull();
+  });
+
+  it("positive squads-registry provenance note lists exactly name, pillar, PM, and Slack channel id", () => {
+    const notes = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      squads: [squad()],
+    });
+    const positive = notes.find((n) =>
+      n.toLowerCase().includes("canonical squad name"),
+    );
+    expect(positive).toBeDefined();
+    const p = (positive ?? "").toLowerCase();
+    // Each of the four fields actually threaded through must be named.
+    expect(p).toMatch(/squad name/);
+    expect(p).toMatch(/pillar/);
+    // Either "PM" or "pm name" — relax to a case-insensitive pm check.
+    expect(p).toMatch(/\bpm\b/);
+    expect(p).toMatch(/slack channel id/);
+    // The note may mention manager chain only to deny it as a source;
+    // any positive attribution (e.g. "provides manager chain") is wrong.
+    expect(p).not.toMatch(/provides manager chain/);
+    expect(p).toMatch(/does not provide manager chain/);
+  });
+
+  it("does not mention Slack channel on a snapshot whose squads input is absent", () => {
+    const snapshot = buildRankingSnapshot(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+      }),
+    );
+    const notesHaystack = snapshot.eligibility.sourceNotes
+      .join(" | ")
+      .toLowerCase();
+    // The live provenance must not claim a Slack channel when the squads
+    // registry was not fetched — the "not fetched" line stands alone.
+    expect(notesHaystack).not.toMatch(/slack channel/);
+    // And the canonical squad is null so no downstream renderer can invent
+    // a channel from the snapshot.
+    expect(snapshot.eligibility.entries[0].canonicalSquad).toBeNull();
+  });
+
+  it("empty squads input produces coverage and source notes that agree (both treat as not fetched)", () => {
+    const { coverage } = buildEligibleRoster(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [],
+      }),
+    );
+    expect(coverage.squadsRegistryPresent).toBe(false);
+
+    const notes = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      squads: [],
+    });
+    const haystack = notes.join(" ").toLowerCase();
+    expect(haystack).toMatch(/squads registry was not fetched/);
+    expect(haystack).not.toMatch(/canonical squad name/);
+  });
+
+  it("non-empty squads input produces coverage and source notes that agree (both treat as joined)", () => {
+    const { coverage } = buildEligibleRoster(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Platform" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [squad({ name: "Platform" })],
+      }),
+    );
+    expect(coverage.squadsRegistryPresent).toBe(true);
+
+    const notes = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      squads: [squad()],
+    });
+    const haystack = notes.join(" ").toLowerCase();
+    expect(haystack).not.toMatch(/squads registry was not fetched/);
+    expect(haystack).toMatch(/canonical squad name/);
+  });
+
+  it("planned-signals squads entry names the channel id field and matches what is actually threaded", async () => {
+    const { plannedSignals } = await getEngineeringRanking();
+    const squadsSignal = plannedSignals.find((s) =>
+      s.name.toLowerCase().includes("squads registry"),
+    );
+    expect(squadsSignal).toBeDefined();
+    const haystack =
+      `${squadsSignal?.name ?? ""} ${squadsSignal?.note ?? ""}`.toLowerCase();
+    // The planned signal must explicitly name channel id / `channel_id` —
+    // a generic "Slack channel" without the id qualifier risks claiming
+    // channel names/webhooks/metadata that we do not actually thread.
+    expect(haystack).toMatch(/channel[_\s]?id/);
   });
 });

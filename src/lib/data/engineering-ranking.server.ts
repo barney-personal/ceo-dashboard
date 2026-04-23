@@ -54,6 +54,7 @@ async function fetchSquadsRegistry(): Promise<EligibilitySquadsRegistryRow[]> {
       name: squads.name,
       pillar: squads.pillar,
       pmName: squads.pmName,
+      channelId: squads.channelId,
       isActive: squads.isActive,
     })
     .from(squads)
@@ -63,6 +64,7 @@ async function fetchSquadsRegistry(): Promise<EligibilitySquadsRegistryRow[]> {
     name: r.name,
     pillar: r.pillar,
     pmName: r.pmName,
+    channelId: r.channelId,
     isActive: r.isActive,
   }));
 }
