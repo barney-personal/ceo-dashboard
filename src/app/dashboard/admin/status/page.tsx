@@ -232,6 +232,22 @@ export default async function DataStatusPage() {
     { key: "MODE_WORKSPACE", label: "Mode Workspace", required: false },
     { key: "SLACK_BOT_TOKEN", label: "Slack Bot Token", required: false },
     { key: "ANTHROPIC_API_KEY", label: "Anthropic API Key", required: false },
+    { key: "OPENAI_API_KEY", label: "OpenAI API Key", required: false },
+    {
+      key: "CODE_REVIEW_OPENAI_MODEL",
+      label: "Code Review OpenAI Model",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION",
+      label: "Code Review OpenAI Toggle",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_REASONING_EFFORT",
+      label: "Code Review OpenAI Reasoning",
+      required: false,
+    },
     { key: "HIBOB_API_TOKEN", label: "HiBob API Token", required: false },
     { key: "CRON_SECRET", label: "Cron Secret", required: false },
   ];

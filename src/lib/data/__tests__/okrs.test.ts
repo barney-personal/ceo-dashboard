@@ -19,6 +19,7 @@ vi.mock("drizzle-orm", () => ({
   desc: vi.fn((v) => v),
   eq: vi.fn(),
   gte: vi.fn(),
+  sql: vi.fn(() => ({})),
 }));
 
 import {

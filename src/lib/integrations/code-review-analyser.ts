@@ -1,246 +1,420 @@
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import type { ReasoningEffort } from "openai/resources/shared";
 import type { PRAnalysisPayload } from "./github";
+import {
+  ADJUDICATION_SYSTEM_PROMPT,
+  PRIMARY_REVIEW_SYSTEM_PROMPT,
+  REVIEW_OUTPUT_JSON_SCHEMA,
+  type CodeReviewAnalysis,
+  type CodeReviewModelReview,
+  type ModelAgreementLevel,
+  type SecondOpinionReason,
+  normalizeModelReview,
+  renderReviewPayload,
+} from "./code-review-rubric";
 
-/**
- * Bump this when the rubric/system-prompt OR the scoring model changes.
- * Cached analyses keyed by (repo, prNumber, rubricVersion) — a bump forces
- * re-analysis without invalidating older results (useful if you want to
- * compare two rubric versions side-by-side). The suffix after the version
- * records the model family so you can tell at a glance which LLM produced
- * a given row.
- */
-export const RUBRIC_VERSION = "v1.1-opus";
-
-export const ANALYSIS_CATEGORIES = [
-  "bug_fix",
-  "feature",
-  "refactor",
-  "infra",
-  "test",
-  "docs",
-  "chore",
-] as const;
-export type AnalysisCategory = (typeof ANALYSIS_CATEGORIES)[number];
-
-export const ANALYSIS_STANDOUTS = [
-  "notably_complex",
-  "notably_high_quality",
-  "notably_low_quality",
-  "concerning",
-] as const;
-export type AnalysisStandout = (typeof ANALYSIS_STANDOUTS)[number];
-
-export interface CodeReviewAnalysis {
-  complexity: number; // 1-5
-  quality: number; // 1-5
-  category: AnalysisCategory;
-  summary: string; // one-line plain English
-  caveats: string[];
-  standout: AnalysisStandout | null;
-}
-
-const SYSTEM_PROMPT = `You are a senior engineer performing a structured rubric-based review of a single merged pull request. Your job is to score it consistently, not to write a narrative review.
-
-Scoring axes (both 1–5 integers):
-
-COMPLEXITY — how hard was this work?
-  1 = Trivial. Config change, constant bump, one-liner, test fixture tweak, doc typo.
-  2 = Small. A bug fix in a known area, small feature toggle, mechanical refactor.
-  3 = Moderate. A self-contained feature, a non-obvious bug fix that required understanding of the system, a meaningful refactor.
-  4 = Hard. Cross-module design, tricky concurrency/state, meaningful migration, new integration with careful edge-case handling.
-  5 = Very hard. Novel work, cross-system impact, subtle correctness, new architecture primitives, or something you'd cite in a promo case.
-
-QUALITY — how well-executed is this PR?
-  1 = Low. Missing obvious error handling, fragile, no tests where tests clearly belong, poor naming, unclear intent, copy-paste duplication.
-  2 = Below bar. Works but rough — mixing concerns, testable code left untested, signs of rush.
-  3 = Solid. Clean-enough, mostly idiomatic, appropriate tests, reasonable naming.
-  4 = Strong. Thoughtful structure, good test coverage for the risk, clear comments where non-obvious, readable diff.
-  5 = Exemplary. Would use as a reference for how to do this kind of work.
-
-CATEGORY — primary intent of the PR. Pick exactly one of:
-  bug_fix | feature | refactor | infra | test | docs | chore.
-
-SUMMARY — one sentence, plain English, describing what the PR does. Avoid filename/line detail; say what the change accomplishes.
-
-CAVEATS — short strings noting things that should modify how a reader weights this PR. Examples:
-  "Large diff, mostly generated code"
-  "Primarily test file changes"
-  "Co-authored — solo effort unclear"
-  "Critical-path code (auth/payments)"
-  "Reverts prior commit"
-  "Drive-by comment; small scope"
-Omit if none apply.
-
-STANDOUT — null unless the PR is genuinely remarkable on one of these axes:
-  "notably_complex" — exceptional COMPLEXITY worth surfacing
-  "notably_high_quality" — exceptional QUALITY worth citing
-  "notably_low_quality" — QUALITY concerns severe enough to flag
-  "concerning" — broader concerns (safety, compliance, tests removed, gating weakened, etc.)
-
-Calibration anchors — be consistent:
-  - Do NOT let large diff size → higher complexity. Complexity is about the problem, not the LOC.
-  - Do NOT reward tiny PRs with high quality by default — judge appropriateness to scope.
-  - Ignore CI / formatting / auto-generated churn.
-  - Truncated diffs: score within what's visible and add a caveat.
-  - If the PR body is empty and the change is non-trivial, include "No PR description" as a caveat.
-
-Return your judgement by calling the provided tool. Never respond with prose outside the tool call.`;
-
-const RUBRIC_TOOL = {
-  name: "submit_review",
-  description:
-    "Submit the structured review for this PR. Must be called exactly once.",
-  input_schema: {
-    type: "object" as const,
-    required: ["complexity", "quality", "category", "summary", "caveats", "standout"],
-    additionalProperties: false,
-    properties: {
-      complexity: { type: "integer", minimum: 1, maximum: 5 },
-      quality: { type: "integer", minimum: 1, maximum: 5 },
-      category: { type: "string", enum: [...ANALYSIS_CATEGORIES] },
-      summary: { type: "string", minLength: 3, maxLength: 400 },
-      caveats: {
-        type: "array",
-        items: { type: "string", minLength: 1, maxLength: 200 },
-        maxItems: 6,
-      },
-      standout: {
-        anyOf: [
-          { type: "null" },
-          { type: "string", enum: [...ANALYSIS_STANDOUTS] },
-        ],
-      },
-    },
-  },
-};
+export { RUBRIC_VERSION } from "./code-review-rubric";
+export type {
+  AnalysisCategory,
+  AnalysisStandout,
+  CodeReviewAnalysis,
+  CodeReviewModelReview,
+  CodeReviewSurface,
+  ModelAgreementLevel,
+  SecondOpinionReason,
+} from "./code-review-rubric";
 
 const LLM_CALL_TIMEOUT_MS = 90_000;
 const LLM_MAX_ATTEMPTS = 3;
+const OPENAI_DEFAULT_MODEL = "gpt-5.4";
 
-function renderPayload(payload: PRAnalysisPayload): string {
-  const filesBlock = payload.files
-    .map((f) => {
-      if (f.skipped) {
-        return `--- ${f.filename} (skipped: ${f.skipReason}, +${f.additions}/-${f.deletions}) ---`;
-      }
-      if (f.truncated && !f.patch) {
-        return `--- ${f.filename} (patch omitted — truncation budget exhausted, +${f.additions}/-${f.deletions}) ---`;
-      }
-      return `--- ${f.filename} (${f.status}, +${f.additions}/-${f.deletions}) ---\n${f.patch ?? ""}`;
-    })
-    .join("\n\n");
+const ANTHROPIC_TOOL = {
+  name: "submit_review",
+  description:
+    "Submit the structured code-review judgement for this merged pull request.",
+  input_schema: REVIEW_OUTPUT_JSON_SCHEMA as unknown as {
+    type: "object";
+    required: string[];
+    additionalProperties: boolean;
+    properties: Record<string, unknown>;
+  },
+};
 
-  return [
-    `Repository: ${payload.repo}`,
-    `PR #${payload.prNumber}: ${payload.title}`,
-    `Size: +${payload.additions} / -${payload.deletions} across ${payload.changedFiles} files`,
-    payload.prNotes.length > 0 ? `Notes: ${payload.prNotes.join(" ")}` : "",
-    "",
-    "PR description:",
-    payload.body || "(empty)",
-    "",
-    "File patches:",
-    filesBlock,
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
+function composeAbortSignal(
+  timeoutMs: number,
+  parentSignal?: AbortSignal,
+  timeoutMessage = "LLM review timed out",
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(parentSignal?.reason);
+
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutId = setTimeout(
+    () => controller.abort(new Error(timeoutMessage)),
+    timeoutMs,
+  );
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      parentSignal?.removeEventListener("abort", onAbort);
+    },
+  };
 }
 
-function clampScore(value: unknown): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 3;
-  return Math.max(1, Math.min(5, Math.round(n)));
+function abortReasonToError(reason: unknown, fallback: string): Error {
+  return reason instanceof Error ? reason : new Error(fallback);
 }
 
-/**
- * Run Claude against a single PR payload and return the structured analysis.
- * Throws on unrecoverable failure (auth, persistent API error, malformed tool
- * response after retries). Callers should catch + continue the batch.
- */
-export async function analysePR(
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(abortReasonToError(signal.reason, "LLM review aborted"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortReasonToError(signal?.reason, "LLM review aborted"));
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  let trimmed = text.trim();
+  if (trimmed.startsWith("```")) {
+    trimmed = trimmed
+      .replace(/^```(?:json)?\n?/, "")
+      .replace(/\n?```$/, "")
+      .trim();
+  }
+
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+    }
+    throw new Error("Model response did not contain valid JSON");
+  }
+}
+
+function isRetryableStatus(status: unknown): boolean {
+  return typeof status === "number" && (status === 408 || status === 409 || status === 429 || status >= 500);
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as { status?: unknown };
+  return typeof candidate.status === "number" ? candidate.status : null;
+}
+
+function isRetryableAnthropicError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    status?: unknown;
+    type?: unknown;
+    error?: { type?: unknown };
+  };
+  const status =
+    typeof candidate.status === "number" ? candidate.status : undefined;
+  const type =
+    typeof candidate.type === "string"
+      ? candidate.type
+      : typeof candidate.error?.type === "string"
+      ? candidate.error.type
+      : undefined;
+  return status === 429 || status === 529 || type === "overloaded_error";
+}
+
+function getAnthropicClient(): Anthropic {
+  return new Anthropic({
+    maxRetries: 0,
+  });
+}
+
+async function reviewWithAnthropic(
   payload: PRAnalysisPayload,
   opts: { signal?: AbortSignal } = {},
-): Promise<CodeReviewAnalysis> {
-  const client = new Anthropic();
-
-  const content = renderPayload(payload);
-
+): Promise<CodeReviewModelReview> {
+  const content = renderReviewPayload(payload);
   let lastError: unknown;
+
   for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(new Error("LLM call timed out")),
+    const { signal, cleanup } = composeAbortSignal(
       LLM_CALL_TIMEOUT_MS,
+      opts.signal,
+      "Anthropic code-review call timed out",
     );
-    const combinedSignal = opts.signal
-      ? AbortSignal.any([controller.signal, opts.signal])
-      : controller.signal;
 
     try {
-      const response = await client.messages.create(
+      const response = await getAnthropicClient().messages.create(
         {
-          // Opus 4.7 for the scoring — more expensive than Sonnet but this is
-          // a calibration-grade judgement used as perf-review input, so the
-          // per-PR cost bump (~$0.05 vs ~$0.01) buys meaningfully better
-          // consistency on the harder rubric calls (sweet-spot vs monotonic,
-          // quality vs complexity disambiguation).
           model: "claude-opus-4-7",
-          max_tokens: 1024,
-          // `temperature` is deprecated on Opus 4.7. Determinism comes from
-          // the tool_choice pin + strict input_schema + identical system
-          // prompt; re-running the same PR yields ≥95% identical scores in
-          // practice (re-analyses live under the same rubricVersion key so
-          // drift is capped — the cache key doesn't change within a version).
-          system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
-          tools: [RUBRIC_TOOL],
-          tool_choice: { type: "tool", name: RUBRIC_TOOL.name },
+          max_tokens: 1200,
+          system: [
+            {
+              type: "text",
+              text: PRIMARY_REVIEW_SYSTEM_PROMPT,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+          tools: [ANTHROPIC_TOOL],
+          tool_choice: { type: "tool", name: ANTHROPIC_TOOL.name },
           messages: [{ role: "user", content }],
         },
-        { signal: combinedSignal },
+        { signal },
       );
 
       const toolUse = response.content.find(
         (block): block is Extract<typeof block, { type: "tool_use" }> =>
-          block.type === "tool_use" && block.name === RUBRIC_TOOL.name,
+          block.type === "tool_use" && block.name === ANTHROPIC_TOOL.name,
       );
       if (!toolUse) {
         throw new Error(
-          `Claude returned no ${RUBRIC_TOOL.name} tool call (stop_reason=${response.stop_reason})`,
+          `Claude returned no ${ANTHROPIC_TOOL.name} tool call (stop_reason=${response.stop_reason})`,
         );
       }
-      const raw = toolUse.input as Record<string, unknown>;
 
-      const category = ANALYSIS_CATEGORIES.includes(raw.category as AnalysisCategory)
-        ? (raw.category as AnalysisCategory)
-        : "chore";
-      const standout =
-        raw.standout && ANALYSIS_STANDOUTS.includes(raw.standout as AnalysisStandout)
-          ? (raw.standout as AnalysisStandout)
-          : null;
-
-      return {
-        complexity: clampScore(raw.complexity),
-        quality: clampScore(raw.quality),
-        category,
-        summary: String(raw.summary ?? "").slice(0, 400) || "(no summary)",
-        caveats: Array.isArray(raw.caveats)
-          ? (raw.caveats as unknown[])
-              .filter((c): c is string => typeof c === "string")
-              .slice(0, 6)
-          : [],
-        standout,
-      };
-    } catch (err) {
-      lastError = err;
-      if (attempt === LLM_MAX_ATTEMPTS) break;
-      const backoff = 1000 * Math.pow(2, attempt - 1);
-      await new Promise((r) => setTimeout(r, backoff));
+      return normalizeModelReview(
+        "anthropic",
+        "claude-opus-4-7",
+        toolUse.input as Record<string, unknown>,
+      );
+    } catch (error) {
+      lastError = error;
+      if (signal.aborted) {
+        throw abortReasonToError(signal.reason, "Anthropic code-review call aborted");
+      }
+      if (!isRetryableAnthropicError(error) || attempt === LLM_MAX_ATTEMPTS) break;
+      await sleep(1000 * Math.pow(2, attempt - 1), opts.signal);
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 
   throw lastError instanceof Error
     ? lastError
-    : new Error(`LLM analysis failed: ${String(lastError)}`);
+    : new Error(`Anthropic review failed: ${String(lastError)}`);
+}
+
+function hasOpenAiSecondOpinion(): boolean {
+  return (
+    process.env.CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION !== "0" &&
+    !!process.env.OPENAI_API_KEY
+  );
+}
+
+function getOpenAiModel(): string {
+  return process.env.CODE_REVIEW_OPENAI_MODEL?.trim() || OPENAI_DEFAULT_MODEL;
+}
+
+function getOpenAiReasoningEffort(): ReasoningEffort {
+  const raw = process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT?.trim();
+  switch (raw) {
+    case "none":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return raw;
+    default:
+      return "xhigh";
+  }
+}
+
+async function adjudicateWithOpenAi(
+  payload: PRAnalysisPayload,
+  primary: CodeReviewModelReview,
+  opts: { signal?: AbortSignal } = {},
+): Promise<CodeReviewModelReview> {
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    maxRetries: 0,
+  });
+  const model = getOpenAiModel();
+  const content = renderReviewPayload(payload, { primaryReview: primary });
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
+    const { signal, cleanup } = composeAbortSignal(
+      LLM_CALL_TIMEOUT_MS,
+      opts.signal,
+      "OpenAI code-review call timed out",
+    );
+
+    try {
+      const response = await client.responses.create(
+        {
+          model,
+          instructions: ADJUDICATION_SYSTEM_PROMPT,
+          input: content,
+          reasoning: { effort: getOpenAiReasoningEffort() },
+        },
+        { signal },
+      );
+      const raw = parseJsonObject(response.output_text);
+      return normalizeModelReview("openai", model, raw);
+    } catch (error) {
+      lastError = error;
+      if (signal.aborted) {
+        throw abortReasonToError(signal.reason, "OpenAI code-review call aborted");
+      }
+      if (attempt === LLM_MAX_ATTEMPTS) break;
+      const status = getErrorStatus(error);
+      if (status !== null && !isRetryableStatus(status)) break;
+      await sleep(1000 * Math.pow(2, attempt - 1), opts.signal);
+    } finally {
+      cleanup();
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`OpenAI adjudication failed: ${String(lastError)}`);
+}
+
+function getSecondOpinionReasons(
+  payload: PRAnalysisPayload,
+  primary: CodeReviewModelReview,
+): SecondOpinionReason[] {
+  if (!hasOpenAiSecondOpinion()) return [];
+
+  const reasons: SecondOpinionReason[] = [];
+  if (payload.files.some((file) => file.truncated)) reasons.push("truncated_diff");
+  if (
+    payload.changedFiles >= 20 ||
+    payload.additions + payload.deletions >= 2000 ||
+    payload.review.commitCount >= 12
+  ) {
+    reasons.push("large_pr");
+  }
+  if (primary.analysisConfidencePct < 72) reasons.push("low_confidence");
+  if (primary.standout === "concerning" || primary.executionQuality <= 2) {
+    reasons.push("concerning_flag");
+  }
+  if (
+    payload.review.changeRequestCount >= 2 ||
+    payload.review.reviewRounds >= 3 ||
+    payload.review.commitsAfterFirstReview >= 3
+  ) {
+    reasons.push("review_churn");
+  }
+  if (payload.review.revertWithin14d) reasons.push("revert_signal");
+
+  return [...new Set(reasons)];
+}
+
+function measureDisagreement(
+  primary: CodeReviewModelReview,
+  adjudicated: CodeReviewModelReview,
+): number {
+  const deltas = [
+    Math.abs(primary.technicalDifficulty - adjudicated.technicalDifficulty),
+    Math.abs(primary.executionQuality - adjudicated.executionQuality),
+    Math.abs(primary.testAdequacy - adjudicated.testAdequacy),
+    Math.abs(primary.riskHandling - adjudicated.riskHandling),
+    Math.abs(primary.reviewability - adjudicated.reviewability),
+  ];
+  const numericMean = deltas.reduce((sum, delta) => sum + delta, 0) / deltas.length;
+  const categoryPenalty = primary.category === adjudicated.category ? 0 : 0.5;
+  const standoutPenalty = primary.standout === adjudicated.standout ? 0 : 0.5;
+  return numericMean + categoryPenalty + standoutPenalty;
+}
+
+function mergeConfirmedConfidence(
+  primary: CodeReviewModelReview,
+  adjudicated: CodeReviewModelReview,
+): CodeReviewModelReview {
+  return {
+    ...primary,
+    analysisConfidencePct: Math.min(
+      100,
+      Math.round((primary.analysisConfidencePct + adjudicated.analysisConfidencePct) / 2),
+    ),
+  };
+}
+
+function deriveAgreementLevel(
+  primary: CodeReviewModelReview,
+  adjudicated: CodeReviewModelReview,
+): ModelAgreementLevel {
+  const disagreement = measureDisagreement(primary, adjudicated);
+  if (disagreement <= 0.4) return "confirmed";
+  if (disagreement <= 1.2) return "minor_adjustment";
+  return "material_adjustment";
+}
+
+export function computeOutcomeScore(payload: PRAnalysisPayload): number {
+  let score = 75;
+
+  score += Math.min(10, payload.review.approvalCount * 4);
+  score -= Math.min(16, payload.review.changeRequestCount * 8);
+  score -= Math.min(15, payload.review.commitsAfterFirstReview * 4);
+  score -= Math.min(12, Math.max(0, payload.review.reviewRounds - 1) * 6);
+  score -= Math.min(8, payload.review.reviewCommentCount * 0.5);
+  if (payload.review.revertWithin14d) score -= 35;
+  if (payload.review.revertWithin14d) score = Math.min(score, 40);
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/**
+ * Run the primary Anthropic review, then optionally invoke OpenAI as a
+ * selective adjudicator when the PR looks ambiguous, truncated, or otherwise
+ * high-impact enough to justify a second opinion.
+ */
+export async function analysePR(
+  payload: PRAnalysisPayload,
+  opts: { signal?: AbortSignal } = {},
+): Promise<CodeReviewAnalysis> {
+  const primary = await reviewWithAnthropic(payload, opts);
+  const secondOpinionReasons = getSecondOpinionReasons(payload, primary);
+
+  let finalReview = primary;
+  let agreementLevel: ModelAgreementLevel = "single_model";
+  const rawModelReviews: CodeReviewModelReview[] = [primary];
+
+  if (secondOpinionReasons.length > 0) {
+    try {
+      const adjudicated = await adjudicateWithOpenAi(payload, primary, opts);
+      rawModelReviews.push(adjudicated);
+      agreementLevel = deriveAgreementLevel(primary, adjudicated);
+      finalReview =
+        agreementLevel === "confirmed"
+          ? mergeConfirmedConfidence(primary, adjudicated)
+          : adjudicated;
+    } catch (error) {
+      console.warn("OpenAI adjudication failed; using primary review", error);
+    }
+  }
+
+  return {
+    ...finalReview,
+    complexity: finalReview.technicalDifficulty,
+    quality: finalReview.executionQuality,
+    primarySurface: payload.primarySurface,
+    secondOpinionUsed: rawModelReviews.length > 1,
+    secondOpinionReasons,
+    agreementLevel,
+    outcomeScore: computeOutcomeScore(payload),
+    rawModelReviews,
+  };
 }
