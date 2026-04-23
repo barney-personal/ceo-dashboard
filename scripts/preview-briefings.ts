@@ -55,7 +55,7 @@ async function previewOne(email: string, role: Role): Promise<void> {
   console.log(`▸ ${email}  (role=${role})`);
   console.log("=".repeat(72));
 
-  const context = await getBriefingContext({ email, role });
+  const context = await getBriefingContext({ emails: [email], role });
   if (!context.person) {
     console.log("  (not found in Headcount SSoT — skipping)");
     return;

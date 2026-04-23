@@ -81,11 +81,21 @@ export default async function DashboardOverview() {
 
   const currentUserLookup = await getCurrentUserWithTimeout();
   // Briefing is always the real viewer's briefing — impersonation is for UI
-  // role-gating, not identity takeover.
-  const briefingEmail =
+  // role-gating, not identity takeover. Pass the full email set so a user
+  // whose company address is a secondary Clerk email still matches SSoT.
+  const briefingEmails: string[] =
     currentUserLookup.status === "authenticated"
-      ? currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null
-      : null;
+      ? (() => {
+          const primary =
+            currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null;
+          const all = (currentUserLookup.user.emailAddresses ?? []).map(
+            (e) => e.emailAddress,
+          );
+          // Keep primary first (it's the cache key), then other unique addresses.
+          const ordered = primary ? [primary, ...all.filter((e) => e !== primary)] : all;
+          return ordered.filter((e): e is string => !!e);
+        })()
+      : [];
 
   // Today's date range for meetings
   const now = new Date();
@@ -167,7 +177,7 @@ export default async function DashboardOverview() {
       {/* Personalised daily briefing — streams in so it doesn't block the rest */}
       <Suspense fallback={<DailyBriefingSkeleton />}>
         <DailyBriefing
-          email={briefingEmail}
+          emails={briefingEmails}
           role={role}
           userId={effectiveUserId}
         />

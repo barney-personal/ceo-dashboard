@@ -1,4 +1,4 @@
-import { safeLoad } from "@/lib/data/data-state";
+import * as Sentry from "@sentry/nextjs";
 import { getActiveEmployees, type Person } from "@/lib/data/people";
 import { getHeadcountMetrics } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
@@ -7,6 +7,29 @@ import { getLatestOkrUpdates, type OkrSummary } from "@/lib/data/okrs";
 import { getMeetingsForRange } from "@/lib/data/meetings";
 import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import type { Role } from "@/lib/auth/roles";
+
+/**
+ * Like `safeLoad` but swallows any error, not just `DatabaseUnavailableError`.
+ * The briefing pipeline intentionally degrades on any failure — a Slack or
+ * management-accounts outage shouldn't kill the whole briefing for every
+ * user. Errors still go to Sentry so they're not silently lost.
+ */
+async function tolerantLoad<T>(
+  label: string,
+  fn: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    Sentry.captureException(error, {
+      tags: { integration: "llm-briefing" },
+      extra: { step: "tolerantLoad", loader: label },
+      level: "warning",
+    });
+    return fallback;
+  }
+}
 
 export interface BriefingPerson {
   firstName: string;
@@ -284,40 +307,49 @@ async function loadTodayMeetings({
  * still generates — the LLM is prompted to acknowledge what it doesn't have.
  */
 export async function getBriefingContext({
-  email,
+  emails,
   role,
   userId,
 }: {
-  email: string;
+  /**
+   * Candidate emails to match against the Headcount SSoT. Pass the user's
+   * full email set from Clerk so a secondary company email still resolves
+   * to their SSoT row. Order is preference-for-cache-key only — matching
+   * iterates all of them.
+   */
+  emails: string[];
   role: Role;
   userId?: string | null;
 }): Promise<BriefingContext> {
-  const lowerEmail = email.toLowerCase();
+  const candidateEmails = emails.map((e) => e.toLowerCase());
+  const candidateSet = new Set(candidateEmails);
 
   const [
-    employeesResult,
-    headcountResult,
-    ltvCacResult,
-    mauResult,
-    arrResult,
-    okrsResult,
+    employees,
+    headcount,
+    ltvCac,
+    mau,
+    arr,
+    okrsByPillar,
     meetings,
   ] = await Promise.all([
-    safeLoad(() => getActiveEmployees(), null),
-    safeLoad(() => getHeadcountMetrics(), null),
-    safeLoad(() => getLatestLtvCacRatio(), null),
-    safeLoad(() => getLatestMAU(), null),
-    safeLoad(() => getLatestARR(), null),
-    safeLoad(() => getLatestOkrUpdates(), new Map<string, OkrSummary[]>()),
+    tolerantLoad("getActiveEmployees", () => getActiveEmployees(), null),
+    tolerantLoad("getHeadcountMetrics", () => getHeadcountMetrics(), null),
+    tolerantLoad("getLatestLtvCacRatio", () => getLatestLtvCacRatio(), null),
+    tolerantLoad("getLatestMAU", () => getLatestMAU(), null),
+    tolerantLoad("getLatestARR", () => getLatestARR(), null),
+    tolerantLoad(
+      "getLatestOkrUpdates",
+      () => getLatestOkrUpdates(),
+      new Map<string, OkrSummary[]>(),
+    ),
     loadTodayMeetings({ userId: userId ?? null }),
   ]);
 
-  const allEmployees = employeesResult.data?.employees ?? [];
+  const allEmployees = employees?.employees ?? [];
   const me =
-    allEmployees.find((p) => p.email.toLowerCase() === lowerEmail) ??
-    employeesResult.data?.unassigned.find(
-      (p) => p.email.toLowerCase() === lowerEmail,
-    ) ??
+    allEmployees.find((p) => candidateSet.has(p.email.toLowerCase())) ??
+    employees?.unassigned.find((p) => candidateSet.has(p.email.toLowerCase())) ??
     null;
 
   const person: BriefingPerson | null = me
@@ -335,16 +367,15 @@ export async function getBriefingContext({
       }
     : null;
 
-  const okrsByPillar = okrsResult.data ?? new Map<string, OkrSummary[]>();
   const pillarLevelOkrs = person
     ? collectOkrsForPillar(okrsByPillar, person.pillar)
     : [];
 
   const company: BriefingCompanyMetrics = {
-    ltvPaidCacRatio: ltvCacResult.data ?? null,
-    mau: mauResult.data ?? null,
-    headcount: headcountResult.data?.total ?? null,
-    arrUsd: arrResult.data?.value ?? null,
+    ltvPaidCacRatio: ltvCac ?? null,
+    mau: mau ?? null,
+    headcount: headcount?.total ?? null,
+    arrUsd: arr?.value ?? null,
   };
 
   const personSquad = person?.squad ?? "";

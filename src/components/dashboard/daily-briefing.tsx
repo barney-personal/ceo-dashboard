@@ -3,7 +3,11 @@ import { getOrGenerateBriefing } from "@/lib/data/briefing";
 import type { Role } from "@/lib/auth/roles";
 
 interface DailyBriefingProps {
-  email: string | null;
+  /**
+   * All email addresses the Clerk user has. First entry is used as the
+   * per-day cache key; every entry is checked against the Headcount SSoT.
+   */
+  emails: string[];
   role: Role;
   userId: string | null;
 }
@@ -40,10 +44,10 @@ function formatFreshness(generatedAt: Date): string {
   });
 }
 
-export async function DailyBriefing({ email, role, userId }: DailyBriefingProps) {
-  if (!email) return null;
+export async function DailyBriefing({ emails, role, userId }: DailyBriefingProps) {
+  if (emails.length === 0) return null;
 
-  const briefing = await getOrGenerateBriefing({ email, role, userId });
+  const briefing = await getOrGenerateBriefing({ emails, role, userId });
   if (!briefing) return null;
 
   // Split on blank lines so multi-paragraph briefings render as separate <p>.

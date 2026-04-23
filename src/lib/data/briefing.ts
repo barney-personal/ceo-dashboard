@@ -27,15 +27,20 @@ function todayUtcDate(): string {
  * a graceful placeholder instead of breaking the overview page.
  */
 export async function getOrGenerateBriefing({
-  email,
+  emails,
   role,
   userId,
 }: {
-  email: string;
+  /**
+   * All email addresses the Clerk user has — passed through to the context
+   * gatherer for SSoT matching. The first entry is used as the cache key.
+   */
+  emails: string[];
   role: Role;
   userId?: string | null;
 }): Promise<DailyBriefing | null> {
-  const lowerEmail = email.toLowerCase();
+  if (emails.length === 0) return null;
+  const cacheKeyEmail = emails[0].toLowerCase();
   const briefingDate = todayUtcDate();
 
   try {
@@ -44,7 +49,7 @@ export async function getOrGenerateBriefing({
       .from(userBriefings)
       .where(
         and(
-          eq(userBriefings.userEmail, lowerEmail),
+          eq(userBriefings.userEmail, cacheKeyEmail),
           eq(userBriefings.briefingDate, briefingDate),
         ),
       )
@@ -65,18 +70,18 @@ export async function getOrGenerateBriefing({
     );
     Sentry.captureException(normalized, {
       tags: { integration: "llm-briefing" },
-      extra: { step: "cache_read", email: lowerEmail },
+      extra: { step: "cache_read", email: cacheKeyEmail },
     });
     // Cache miss by design — fall through and generate fresh.
   }
 
   let context;
   try {
-    context = await getBriefingContext({ email: lowerEmail, role, userId });
+    context = await getBriefingContext({ emails, role, userId });
   } catch (error) {
     Sentry.captureException(error, {
       tags: { integration: "llm-briefing" },
-      extra: { step: "context_gather", email: lowerEmail },
+      extra: { step: "context_gather", email: cacheKeyEmail },
     });
     return null;
   }
@@ -91,7 +96,7 @@ export async function getOrGenerateBriefing({
   } catch (error) {
     Sentry.captureException(error, {
       tags: { integration: "llm-briefing" },
-      extra: { step: "llm_generate", email: lowerEmail },
+      extra: { step: "llm_generate", email: cacheKeyEmail },
     });
     return null;
   }
@@ -102,7 +107,7 @@ export async function getOrGenerateBriefing({
     await db
       .insert(userBriefings)
       .values({
-        userEmail: lowerEmail,
+        userEmail: cacheKeyEmail,
         briefingDate,
         briefingText: result.text,
         contextJson: context,
@@ -135,7 +140,7 @@ export async function getOrGenerateBriefing({
     );
     Sentry.captureException(normalized, {
       tags: { integration: "llm-briefing" },
-      extra: { step: "cache_write", email: lowerEmail },
+      extra: { step: "cache_write", email: cacheKeyEmail },
     });
   }
 
