@@ -49,10 +49,61 @@ pr_agg AS (
     COALESCE(SUM(p.additions), 0)::bigint AS add_360d,
     COALESCE(SUM(p.deletions), 0)::bigint AS del_360d,
     COUNT(*) FILTER (WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '90 days')::int AS prs_90d,
-    COUNT(*) FILTER (WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '30 days')::int AS prs_30d
+    COUNT(*) FILTER (WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '30 days')::int AS prs_30d,
+    -- PR size characteristics (robust stats over the full 360d window)
+    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY p.additions + p.deletions), 0)::bigint AS pr_size_median,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY p.additions + p.deletions), 0)::bigint AS pr_size_p90,
+    -- Codebase breadth: distinct repos touched
+    COUNT(DISTINCT p.repo) FILTER (WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days')::int AS distinct_repos_180d,
+    -- Weekend PRs (Sat=6, Sun=0) and off-hours PRs (outside 08-18 UTC)
+    (COUNT(*) FILTER (
+      WHERE EXTRACT(DOW FROM p.merged_at) IN (0, 6)
+        AND p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days'
+    ))::numeric / NULLIF((COUNT(*) FILTER (
+      WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days'
+    ))::numeric, 0) AS weekend_pr_share,
+    (COUNT(*) FILTER (
+      WHERE (EXTRACT(HOUR FROM p.merged_at) < 8 OR EXTRACT(HOUR FROM p.merged_at) >= 18)
+        AND p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days'
+    ))::numeric / NULLIF((COUNT(*) FILTER (
+      WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days'
+    ))::numeric, 0) AS offhours_pr_share
   FROM github_prs p
   JOIN github_employee_map gem ON gem.github_login = p.author_login AND gem.is_bot = false
   WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '360 days'
+  GROUP BY gem.employee_email
+),
+
+-- Activity trend: weekly PR count slope via linreg over last 90 days.
+-- Positive slope = heating up; negative = cooling down.
+pr_weekly AS (
+  SELECT
+    gem.employee_email AS email,
+    date_trunc('week', p.merged_at) AS wk,
+    COUNT(*)::numeric AS n
+  FROM github_prs p
+  JOIN github_employee_map gem ON gem.github_login = p.author_login AND gem.is_bot = false
+  WHERE p.merged_at >= (SELECT end_ts FROM pr_window) - INTERVAL '90 days'
+  GROUP BY 1, 2
+),
+pr_slope AS (
+  SELECT
+    email,
+    regr_slope(n, EXTRACT(EPOCH FROM wk) / 604800)::numeric AS slope_prs_per_week,
+    COUNT(*)::int AS weeks_observed
+  FROM pr_weekly
+  GROUP BY email
+  HAVING COUNT(*) >= 3
+),
+
+-- Commit cadence: commits per PR (rework proxy) + weekly commits variance
+commit_agg AS (
+  SELECT
+    gem.employee_email AS email,
+    COUNT(*)::int AS commits_180d
+  FROM github_commits c
+  JOIN github_employee_map gem ON gem.github_login = c.author_login AND gem.is_bot = false
+  WHERE c.committed_at >= (SELECT end_ts FROM pr_window) - INTERVAL '180 days'
   GROUP BY gem.employee_email
 ),
 
@@ -129,6 +180,17 @@ SELECT
   COALESCE(pa.prs_30d, 0) AS prs_30d,
   COALESCE(pa.add_360d, 0) AS add_360d,
   COALESCE(pa.del_360d, 0) AS del_360d,
+  COALESCE(pa.pr_size_median, 0) AS pr_size_median,
+  COALESCE(pa.pr_size_p90, 0) AS pr_size_p90,
+  COALESCE(pa.distinct_repos_180d, 0) AS distinct_repos_180d,
+  COALESCE(pa.weekend_pr_share, 0) AS weekend_pr_share,
+  COALESCE(pa.offhours_pr_share, 0) AS offhours_pr_share,
+  COALESCE(ps.slope_prs_per_week, 0) AS pr_slope_per_week,
+  COALESCE(ps.weeks_observed, 0) AS pr_slope_weeks,
+  COALESCE(ca.commits_180d, 0) AS commits_180d,
+  CASE WHEN COALESCE(pa.prs_360d, 0) > 0
+       THEN COALESCE(ca.commits_180d, 0)::numeric / pa.prs_360d
+       ELSE 0 END AS commits_per_pr,
   COALESCE(sa.days_active, 0) AS slack_days_active,
   COALESCE(sa.days_active_desktop, 0) AS slack_days_desktop,
   COALESCE(sa.messages_posted, 0) AS slack_messages,
@@ -145,6 +207,8 @@ SELECT
   COALESCE(pr.rating_count, 0) AS rating_count
 FROM active_engineers ae
 LEFT JOIN pr_agg pa ON pa.email = ae.email
+LEFT JOIN pr_slope ps ON ps.email = ae.email
+LEFT JOIN commit_agg ca ON ca.email = ae.email
 LEFT JOIN slack_agg sa ON sa.email = ae.email
 LEFT JOIN ai_agg ai ON ai.email = ae.email
 LEFT JOIN perf_agg pr ON pr.email = ae.email
