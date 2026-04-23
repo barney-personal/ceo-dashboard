@@ -267,11 +267,6 @@ function WaterfallChart({
 
       // Connector line between step and next step's bar start
       if (i < rows.length - 1) {
-        const next = rows[i + 1];
-        const nextStart =
-          next.feature === "base" || next.feature === "final"
-            ? 0
-            : Math.min(x(next.startImpact), x(next.endImpact));
         const currentEnd =
           r.feature === "base" || r.feature === "final"
             ? x(r.endImpact)
@@ -453,10 +448,10 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
         <span className="font-medium text-foreground">Reading the waterfall.</span>{" "}
         Start with the base prediction of{" "}
         <span className="font-mono">{Math.round(expectedImpact).toLocaleString()}</span>{" "}
-        — that's what the model would guess for an "average" engineer with no
-        information. Each feature then moves the prediction up or down, based on
-        this engineer's actual values. The final bar is the model's prediction
-        for {engineer.name.split(" ")[0]}:{" "}
+        — that&rsquo;s what the model would guess for an &ldquo;average&rdquo;
+        engineer with no information. Each feature then moves the prediction up
+        or down, based on this engineer&rsquo;s actual values. The final bar is
+        the model&rsquo;s prediction for {engineer.name.split(" ")[0]}:{" "}
         <span className="font-mono">{explainedPrediction.toLocaleString()}</span> —{" "}
         {Math.abs(pctVsBaseline)}% {direction} baseline.
       </div>

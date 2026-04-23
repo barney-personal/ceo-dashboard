@@ -28,6 +28,10 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 HERE = Path(__file__).parent
 CSV_PATH = HERE / "features.csv"
 OUT_PATH = HERE / "model.json"
+# Anonymised copy intended for the committed bundle consumed by the
+# dashboard page. Strips names + emails — the page still shows everything
+# via an opaque "Engineer NNN" label.
+PUBLIC_OUT_PATH = HERE.parent / "src" / "data" / "impact-model.json"
 
 RANDOM_STATE = 42
 
@@ -636,7 +640,25 @@ def main():
     }
 
     OUT_PATH.write_text(json.dumps(output, indent=2))
-    print(f"\nWrote {OUT_PATH}")
+    print(f"\nWrote {OUT_PATH} (full, gitignored)")
+
+    # Anonymised version for commit: strip names + emails, replace with stable
+    # pseudonyms derived from a sort-by-email-hash index. The UI stays fully
+    # functional — the waterfall picker + outlier table just show "Engineer NNN".
+    import copy, hashlib
+    public = copy.deepcopy(output)
+    sorted_indices = sorted(
+        range(len(public["engineers"])),
+        key=lambda i: hashlib.sha256(public["engineers"][i]["email"].encode()).hexdigest(),
+    )
+    rank_by_pos = {orig_i: rank + 1 for rank, orig_i in enumerate(sorted_indices)}
+    for i, e in enumerate(public["engineers"]):
+        rank = rank_by_pos[i]
+        e["name"] = f"Engineer {rank:03d}"
+        e["email"] = f"anon-{rank:03d}"
+    PUBLIC_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PUBLIC_OUT_PATH.write_text(json.dumps(public, indent=2))
+    print(f"Wrote {PUBLIC_OUT_PATH} (anonymised, committed)")
 
     print("\nTop 15 features by permutation importance:")
     for f in feats[:15]:
