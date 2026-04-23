@@ -127,6 +127,13 @@
       "when": 1776955667739,
       "tag": "0017_add_pr_review_analyses",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776962175986,
+      "tag": "0018_add_user_briefings",
+      "breakpoints": true
     }
   ]
 }

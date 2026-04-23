@@ -1,10 +1,16 @@
+import { Suspense } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { getCurrentUserRole, getImpersonation } from "@/lib/auth/roles.server";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { TodayMeetings } from "@/components/dashboard/today-meetings";
+import {
+  DailyBriefing,
+  DailyBriefingSkeleton,
+} from "@/components/dashboard/daily-briefing";
 import {
   ArrowUpRight,
   Calculator,
@@ -72,6 +78,14 @@ export default async function DashboardOverview() {
   const accessToken = effectiveUserId
     ? await getUserGoogleAccessToken(effectiveUserId)
     : null;
+
+  const currentUserLookup = await getCurrentUserWithTimeout();
+  // Briefing is always the real viewer's briefing — impersonation is for UI
+  // role-gating, not identity takeover.
+  const briefingEmail =
+    currentUserLookup.status === "authenticated"
+      ? currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null
+      : null;
 
   // Today's date range for meetings
   const now = new Date();
@@ -149,6 +163,11 @@ export default async function DashboardOverview() {
           description="Some overview metrics are temporarily unavailable while the database is unreachable. Retry the page or wait for the next sync cycle."
         />
       ) : null}
+
+      {/* Personalised daily briefing — streams in so it doesn't block the rest */}
+      <Suspense fallback={<DailyBriefingSkeleton />}>
+        <DailyBriefing email={briefingEmail} role={role} />
+      </Suspense>
 
       {/* Hero metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
