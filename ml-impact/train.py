@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import shap
+import lightgbm as lgb
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold, cross_val_predict
@@ -175,6 +176,13 @@ def main():
     X_cat = pd.get_dummies(df[categorical_features], prefix=categorical_features)
     X_num = df[numeric_features].fillna(0)
     X = pd.concat([X_num, X_cat], axis=1)
+    # Sanitize feature names — LightGBM rejects special JSON chars like spaces,
+    # commas, quotes, colons, etc. Keep the mapping so we can pretty-print in UI.
+    import re as _re
+    def _safe_name(s: str) -> str:
+        return _re.sub(r"[^A-Za-z0-9_]+", "_", s).strip("_")
+    raw_to_safe = {c: _safe_name(c) for c in X.columns}
+    X = X.rename(columns=raw_to_safe)
     feature_names = list(X.columns)
 
     y = df["impact_360d"].astype(float).values
@@ -216,19 +224,61 @@ def main():
     rho_rf = spearmanr(y, y_pred_rf).statistic
     print(f"\nRandom Forest: R²={r2_rf:.3f}  Spearman={rho_rf:.3f}")
 
-    # Pick the better model by Spearman (robust to outliers)
-    if rho_rf > rho_cv:
-        chosen = "random_forest"
-        chosen_model = rf
-        y_pred_final = y_pred_rf
-        r2_final, rho_final = r2_rf, rho_rf
-        mae_final = mean_absolute_error(y, y_pred_rf)
-        rmse_final = math.sqrt(mean_squared_error(y, y_pred_rf))
-    else:
-        chosen = "gradient_boosting"
-        chosen_model = model_cv
-        y_pred_final = y_pred_cv
-        r2_final, rho_final, mae_final, rmse_final = r2_cv, rho_cv, mae_cv, rmse_cv
+    # LightGBM with monotonic constraints on "more-is-better" features.
+    # Monotone enforces the learned shape: tenure can only push predictions up,
+    # AI usage only up, latest_rating only up, slack_days_since_active only down.
+    # This kills spurious zigzags in PDPs and makes the model more defensible.
+    monotone_map = {
+        "tenure_months": 1,
+        "ai_tokens_log": 1,
+        "ai_cost_log": 1,
+        "ai_n_days": 1,
+        "ai_max_models": 1,
+        "latest_rating": 1,
+        "avg_rating": 1,
+        "rating_count": 1,
+        "slack_msgs_per_day": 1,
+        "slack_reactions_per_day": 1,
+        "slack_active_day_rate": 1,
+        "slack_days_since_active": -1,
+        "level_num": 1,
+    }
+    monotone_constraints = [
+        monotone_map.get(f, 0) for f in feature_names
+    ]
+    n_monotone = sum(1 for m in monotone_constraints if m != 0)
+    print(f"LightGBM: enforcing {n_monotone} monotone constraints")
+    lgbm = lgb.LGBMRegressor(
+        n_estimators=500,
+        learning_rate=0.03,
+        num_leaves=15,
+        min_child_samples=5,
+        reg_lambda=1.0,
+        monotone_constraints=monotone_constraints,
+        monotone_constraints_method="advanced",
+        random_state=RANDOM_STATE,
+        verbose=-1,
+        n_jobs=-1,
+    )
+    y_pred_lgbm_log = cross_val_predict(lgbm, X, y_log, cv=kf)
+    y_pred_lgbm = np.expm1(y_pred_lgbm_log)
+    r2_lgbm = r2_score(y, y_pred_lgbm)
+    rho_lgbm = spearmanr(y, y_pred_lgbm).statistic
+    mae_lgbm = mean_absolute_error(y, y_pred_lgbm)
+    rmse_lgbm = math.sqrt(mean_squared_error(y, y_pred_lgbm))
+    print(f"LightGBM:      R²={r2_lgbm:.3f}  Spearman={rho_lgbm:.3f}  MAE={mae_lgbm:.0f}")
+
+    # Pick the best model by Spearman (robust to outliers)
+    candidates = [
+        ("gradient_boosting", model_cv, y_pred_cv, r2_cv, rho_cv, mae_cv, rmse_cv),
+        ("random_forest", rf, y_pred_rf, r2_rf, rho_rf,
+         mean_absolute_error(y, y_pred_rf),
+         math.sqrt(mean_squared_error(y, y_pred_rf))),
+        ("lightgbm_monotonic", lgbm, y_pred_lgbm, r2_lgbm, rho_lgbm, mae_lgbm, rmse_lgbm),
+    ]
+    chosen, chosen_model, y_pred_final, r2_final, rho_final, mae_final, rmse_final = max(
+        candidates, key=lambda c: c[4]  # spearman
+    )
     print(f"\nChosen model: {chosen}")
 
     # Fit on full data to extract feature importances
@@ -280,7 +330,11 @@ def main():
             return "Performance review"
         if lower == "tenure_months":
             return "Tenure"
-        if lower == "level_num" or lower.startswith("level_track_"):
+        if (
+            lower == "level_num"
+            or lower.startswith("level_track_")
+            or lower.startswith("level_label_")
+        ):
             return "Level"
         if lower.startswith("discipline_"):
             return "Discipline"
@@ -318,7 +372,7 @@ def main():
             return None
         col = X[fname].values
         is_onehot = fname.startswith(
-            ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+            ("pillar_", "discipline_", "gender_", "location_", "level_track_", "level_label_")
         )
         if is_onehot:
             return None
@@ -360,7 +414,7 @@ def main():
         )
         if not any(
             f.startswith(p)
-            for p in ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+            for p in ("pillar_", "discipline_", "gender_", "location_", "level_track_", "level_label_")
         )
     ][:10]
     print(f"\nComputing partial dependence for {len(ranked_numeric)} features...")
@@ -415,7 +469,7 @@ def main():
             except (ValueError, TypeError):
                 feat_val = None
             is_onehot = fname.startswith(
-                ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+                ("pillar_", "discipline_", "gender_", "location_", "level_track_", "level_label_")
             )
             is_inapplicable_onehot = is_onehot and feat_val == 0
             is_trivial = abs(shap_val) < 5e-3
@@ -485,6 +539,7 @@ def main():
         "model_comparison": {
             "gradient_boosting": {"r2": round(r2_cv, 4), "spearman": round(rho_cv, 4)},
             "random_forest": {"r2": round(r2_rf, 4), "spearman": round(rho_rf, 4)},
+            "lightgbm_monotonic": {"r2": round(r2_lgbm, 4), "spearman": round(rho_lgbm, 4)},
         },
         "target": {
             "name": "impact_360d",

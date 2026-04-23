@@ -32,7 +32,7 @@ function prettyName(raw: string): string {
   const idx = raw.indexOf("_");
   if (idx > 0) {
     const prefix = raw.slice(0, idx);
-    const value = raw.slice(idx + 1);
+    const value = raw.slice(idx + 1).replace(/_/g, " ");
     return `${prefix[0].toUpperCase()}${prefix.slice(1)}: ${value}`;
   }
   return raw;
