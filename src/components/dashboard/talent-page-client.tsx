@@ -21,6 +21,7 @@ import {
   forecastFromActiveCapacity,
   totalForecastOverRange,
 } from "@/lib/data/talent-forecast";
+import { forecastFromRoster } from "@/lib/data/talent-forecast-roster";
 import { TALENT_ROSTER_AS_OF } from "@/lib/config/talent-roster";
 
 interface TalentPageClientProps {
@@ -82,13 +83,15 @@ function formatMonthLabel(month: string | null): string {
 
 function ForecastMethodologyCard({
   activeTpCount,
-  windowMonths,
+  eligibleTpCount,
+  nonRosterGap,
   forecast2026H2,
   forecast2027,
   forecastMonth,
 }: {
   activeTpCount: number;
-  windowMonths: number;
+  eligibleTpCount: number;
+  nonRosterGap: number;
   forecast2026H2: { low: number; mid: number; high: number } | null;
   forecast2027: { low: number; mid: number; high: number } | null;
   forecastMonth: { low: number; mid: number; high: number } | null | undefined;
@@ -110,9 +113,13 @@ function ForecastMethodologyCard({
             <span className="font-semibold text-foreground">
               {activeTpCount} active Talent Partners
             </span>{" "}
-            (Lucy&apos;s Apr 23 roster, overriding HiBob for recent exits).
-            Each contributes their trailing {windowMonths}-month hire rate
-            and individual volatility.
+            on Lucy&apos;s Apr 23 roster.{" "}
+            <span className="font-semibold text-foreground">
+              {eligibleTpCount}
+            </span>{" "}
+            have ≥3 months of post-ramp history (first 2 months of tenure
+            dropped to strip ramp-up noise); the rest contribute what partial
+            post-ramp data they have.
           </p>
         </div>
         <div>
@@ -120,10 +127,20 @@ function ForecastMethodologyCard({
             Model
           </div>
           <p className="mt-1">
-            Sum of per-TP means → team capacity per month, held flat through
-            the horizon. 80% interval from per-person σ summed in quadrature.
-            Assumes the current roster stays intact — no backfills, no
-            further exits.
+            For each TP: <span className="font-semibold text-foreground">median</span>{" "}
+            of their post-ramp monthly hires (robust to one-off spikes).
+            Summed across all active TPs, plus a{" "}
+            <span className="font-semibold text-foreground">
+              {nonRosterGap.toFixed(1)} hires/mo
+            </span>{" "}
+            non-roster gap (sourcers, managers, departed TPs, alias mismatches —
+            historically observed in the last 6 months).
+          </p>
+          <p className="mt-2 text-[11px] text-muted-foreground/80">
+            Per-TP backtest MAE at h=3:{" "}
+            <span className="font-mono text-foreground">~2.5 hires/mo</span>{" "}
+            — ~3× tighter than the previous team-total ensemble, which
+            over-extrapolated from a single spike month.
           </p>
         </div>
         <div className="space-y-2 rounded-lg bg-muted/40 p-3">
@@ -131,7 +148,7 @@ function ForecastMethodologyCard({
             Forecast band · P10 — P50 — P90
           </div>
           <ForecastRow
-            label="Per month (steady state)"
+            label="Next month"
             data={forecastMonth ?? null}
           />
           <div className="h-px bg-border/50" />
@@ -139,8 +156,9 @@ function ForecastMethodologyCard({
           <ForecastRow label="2027 · full year" data={forecast2027} />
         </div>
         <div className="text-[11px] italic text-muted-foreground/70">
-          New joiners ramp over time, so the P50 may be slightly conservative.
-          Widen assumptions if Lucy backfills recent exits.
+          Flat by design — respects the domain prior that the current roster
+          won&apos;t ramp further. New joiners lift the forecast as they
+          accumulate post-ramp history; departures drop it immediately.
         </div>
       </div>
     </div>
@@ -273,6 +291,13 @@ function SortableHeader({ label, sortKey, active, onSort, align = "left" }: Sort
   return (
     <th
       scope="col"
+      aria-sort={
+        isActive
+          ? active.direction === "asc"
+            ? "ascending"
+            : "descending"
+          : "none"
+      }
       className={`px-4 py-2.5 font-medium ${align === "right" ? "text-right" : "text-left"}`}
     >
       <button
@@ -281,13 +306,6 @@ function SortableHeader({ label, sortKey, active, onSort, align = "left" }: Sort
         className={`inline-flex items-center gap-1 whitespace-nowrap transition-colors hover:text-foreground ${
           isActive ? "text-foreground" : ""
         } ${align === "right" ? "flex-row-reverse" : ""}`}
-        aria-sort={
-          isActive
-            ? active.direction === "asc"
-              ? "ascending"
-              : "descending"
-            : "none"
-        }
       >
         <Icon
           className={`h-3 w-3 ${isActive ? "opacity-100" : "opacity-40"}`}
@@ -604,6 +622,7 @@ export function TalentPageClient({
     summaries,
     latestMonth,
     forecast,
+    roster,
     activeTpCount,
     teamMeanMonthly,
     forecast2026H2,
@@ -620,17 +639,31 @@ export function TalentPageClient({
     );
     const latestMonth = lastActualMonth(hireRows);
 
-    // Capacity forecast = sum of each currently-active Talent Partner's
-    // trailing productivity. Excludes departed people, sourcers, and
-    // other roles so the number reflects Lucy's actual roster.
+    // Headline forecast: roster-anchored, per-TP median of post-ramp history
+    // (first 2 months of each TP's tenure dropped), summed across today's 17
+    // active Talent Partners, plus a historical non-roster gap (sourcers,
+    // departed TPs who hired before leaving, managers). Per-TP backtest at
+    // h=3 gives team MAE ≈ 2.5 hires/mo — ~3× tighter than the team-total
+    // trend-aware model (which over-extrapolates March's spike). See
+    // scripts/backtest-per-tp.ts.
     const activeTpNames = summaries
       .filter(
         (s) => s.employment.status !== "departed" && s.role === "talent_partner",
       )
       .map((s) => s.recruiter);
-
     const forecastStart = addMonths(latestMonth ?? now, 1);
-    const { forecast, teamMeanMonthly } = forecastFromActiveCapacity(
+    const roster = forecastFromRoster(
+      histories,
+      activeTpNames,
+      forecastStart,
+      FORECAST_THROUGH,
+      { currentMonth: now },
+    );
+    const forecast = roster.forecast;
+
+    // Secondary view: capacity snapshot (retained for the per-TP breakdown
+    // and the steady-state headline card).
+    const capacity = forecastFromActiveCapacity(
       histories,
       activeTpNames,
       forecastStart,
@@ -656,8 +689,9 @@ export function TalentPageClient({
       summaries,
       latestMonth,
       forecast,
+      roster,
       activeTpCount: activeTpNames.length,
-      teamMeanMonthly,
+      teamMeanMonthly: capacity.teamMeanMonthly,
       forecast2026H2,
       forecast2027,
     };
@@ -693,9 +727,6 @@ export function TalentPageClient({
     return <TalentEmpty reason={emptyReason} />;
   }
 
-  // Forecast-anchored headline: monthly mean of the active-roster capacity
-  // model. Same value for every projected month (flat projection).
-  const trailing3mAvgTeam = teamMeanMonthly;
   const hiresLast12m = teamActual
     .slice(-12)
     .reduce((s, m) => s + m.hires, 0);
@@ -730,7 +761,7 @@ export function TalentPageClient({
         />
         <MetricCard
           label="Steady-state capacity"
-          value={formatNumber(trailing3mAvgTeam)}
+          value={formatNumber(teamMeanMonthly)}
           subtitle={
             forecast[0]
               ? `${formatNumber(forecast[0].low, 0)}–${formatNumber(forecast[0].high, 0)} / mo · ${activeTpCount} active TPs`
@@ -763,14 +794,14 @@ export function TalentPageClient({
 
       <SectionDivider
         title="Team trajectory & forecast"
-        subtitle="Monthly hires through today, with a capacity-aware forecast to the end of 2027."
+        subtitle="Monthly hires through today, with a trend-aware forecast to the end of 2027."
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
         {actualSeries.length > 0 ? (
           <HireForecastChart
             title="Team hires per month"
-            subtitle={`Actual through ${formatMonthLabel(latestMonth)}; forecast held flat at current capacity through Dec 2027. Hover for monthly detail.`}
+            subtitle={`Actual through ${formatMonthLabel(latestMonth)}; forecast = Σ per-TP post-ramp median across ${activeTpCount} active TPs + historical non-roster gap. Per-TP backtest MAE ≈ 2.5 hires/mo at h=3.`}
             actual={actualSeries}
             forecast={forecastSeries}
             yLabel="hires / month"
@@ -781,7 +812,10 @@ export function TalentPageClient({
         )}
         <ForecastMethodologyCard
           activeTpCount={activeTpCount}
-          windowMonths={PRODUCTIVITY_WINDOW_MONTHS}
+          eligibleTpCount={
+            roster.contributors.filter((c) => c.eligible).length
+          }
+          nonRosterGap={roster.nonRosterGap}
           forecast2026H2={forecast2026H2}
           forecast2027={forecast2027}
           forecastMonth={forecast[0]}

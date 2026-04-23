@@ -1,22 +1,21 @@
-// Hire forecast model for the talent dashboard.
+// Hire forecast models for the talent dashboard.
 //
-// Approach: linear regression (OLS) on the last N complete months of
-// team-total monthly hires. Point estimate is the trend line; bounds are
-// the standard prediction interval ±1.28·SE (≈ 80% coverage). SE grows with
-// horizon because of the `(x - x̄)²` term in the prediction formula —
-// uncertainty widens the further out we project.
+// Two production forecasts, each answering a different question:
 //
-// Deliberate simplifications:
-//  - We don't model seasonality. Three years of data with one Sep-2025 dip
-//    isn't enough to fit a reliable 12-month cycle; the residual σ captures
-//    the variance instead.
-//  - We fit on last N months only. Using all history would flatten the
-//    trend as the team scales; the last year reflects current capacity.
-//  - We don't cap by recruiter capacity. The team is hiring at ~40/mo with
-//    ~17 active TPs; extrapolation past 60/mo would require capacity
-//    modelling we're choosing not to do yet.
+//   1. `forecastFromRoster` (production headline; lives in
+//      `talent-forecast-roster.ts`): Σ per-TP post-ramp median across the
+//      current active roster + historical non-roster gap. Flat projection,
+//      backtested per-TP with MAE ≈ 2.5 hires/mo at h=3.
 //
-// Present both the number AND the assumption to the user so they can calibrate.
+//   2. `forecastFromActiveCapacity` (this file): "if today's active roster
+//      keeps hiring at their trailing-N pace, what does the next horizon
+//      look like?" Sum per-TP trailing-3mo means (flat), σ in quadrature.
+//      Conservative counter-factual used by the "steady-state capacity"
+//      card in the dashboard.
+//
+// `forecastTeamHires` (also below) is the old OLS-on-team-totals approach —
+// kept for backward compatibility with any script / test that imports it,
+// not wired into the production page anymore.
 
 import { addMonths } from "./talent-utils";
 import type { MonthlyHires, RecruiterHistory } from "./talent-utils";
@@ -334,3 +333,4 @@ export function totalForecastOverRange(
     high: slice.reduce((s, m) => s + m.high, 0),
   };
 }
+
