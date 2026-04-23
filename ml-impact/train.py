@@ -402,15 +402,37 @@ def main():
     expected_log = float(ev)
     expected_impact = float(np.expm1(expected_log))
 
-    # Feature-group buckets for aggregated importance.
+    # Feature-group buckets for aggregated importance. Splits the old
+    # catch-all "Code style" into "PR cadence" (time-shape of PR activity —
+    # rate, gaps, burstiness, ramp) vs "PR habits" (how/when/where — weekend,
+    # off-hours, rework, breadth). Non-prefix PR features (weekly_*, ramp_*)
+    # are routed explicitly so they don't fall through into "Other".
+    PR_CADENCE_FEATURES = {
+        "pr_slope_per_week",
+        "pr_gap_days",
+        "weekly_pr_cv",
+        "ramp_slope_first90",
+    }
+    PR_HABIT_FEATURES = {
+        "weekend_pr_share",
+        "offhours_pr_share",
+        "commits_per_pr",
+        "distinct_repos_180d",
+        "commits_180d_log",
+        "pr_size_median",
+        "pr_size_p90_log",
+    }
+
     def feature_group(name: str) -> str:
         lower = name.lower()
         if lower.startswith("slack_"):
             return "Slack engagement"
         if lower.startswith("ai_"):
             return "AI usage"
-        if lower.startswith(("pr_", "commits_", "distinct_repos", "weekend_", "offhours_")):
-            return "Code style"
+        if lower in PR_CADENCE_FEATURES:
+            return "PR cadence"
+        if lower in PR_HABIT_FEATURES:
+            return "PR habits"
         if lower.startswith("latest_rating") or lower.startswith("avg_rating") or lower == "rating_count":
             return "Performance review"
         if lower == "tenure_months":

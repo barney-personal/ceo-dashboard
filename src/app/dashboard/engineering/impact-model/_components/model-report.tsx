@@ -325,10 +325,14 @@ export function ImpactModelReport({
                 Feature groups — share of model reasoning
               </div>
               <p className="mt-2 max-w-xl text-[12px] leading-relaxed text-muted-foreground">
-                Every feature bucketed by source. Percentages show what share
-                of the model&rsquo;s reasoning comes from each category. If
-                Tenure dominates, the model is mostly an experience-predictor;
-                if Slack engagement is big, it&rsquo;s picking up work-style
+                Every feature bucketed by what it measures. Percentages show
+                what share of the model&rsquo;s reasoning comes from each
+                category. <span className="font-medium">PR cadence</span> =
+                rate, gaps, ramp, burstiness.{" "}
+                <span className="font-medium">PR habits</span> = weekend/off-hours
+                share, commits-per-PR, breadth of repos. A dominant PR-cadence
+                share means the model is mostly reading off shipping patterns;
+                a dominant Slack / AI share means it&rsquo;s picking up work-style
                 signals.
               </p>
             </div>
