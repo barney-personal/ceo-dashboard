@@ -25,13 +25,14 @@ export default async function ImpactModelPage({
   searchParams: Promise<{ manager?: string }>;
 }) {
   const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
+  if (!hasAccess(role, "manager")) {
     redirect("/dashboard/engineering");
   }
+  const canPickAnyManager = hasAccess(role, "leadership");
   const params = await searchParams;
 
   // Hydrates anonymised snapshot with real employee names via DB join.
-  // Safe at this point: leadership+ is already verified above.
+  // Safe at this point: manager+ is verified above.
   const model = await getImpactModelHydrated();
 
   const userResult = await getCurrentUserWithTimeout();
@@ -42,12 +43,16 @@ export default async function ImpactModelPage({
         )
       : null;
 
-  // All leadership+ viewers get a picker. Default target: the viewer's own
-  // team if they run one; otherwise the first available manager.
-  const allManagers: ManagerInfo[] = await getAllManagers();
+  // Only leadership+ get a manager picker and a list of all managers.
+  // Plain managers see only their own team — the `?manager=` query param
+  // is ignored for them to prevent cross-team inspection.
+  const allManagers: ManagerInfo[] = canPickAnyManager
+    ? await getAllManagers()
+    : [];
+
   let targetEmail: string | null = null;
   let targetName: string | null = null;
-  if (params.manager) {
+  if (canPickAnyManager && params.manager) {
     const candidate = params.manager.toLowerCase();
     const matched = allManagers.find((m) => m.email === candidate);
     if (matched) {
@@ -60,7 +65,7 @@ export default async function ImpactModelPage({
     targetName =
       allManagers.find((m) => m.email === viewerEmail)?.name ?? null;
   }
-  if (!targetEmail && allManagers[0]) {
+  if (!targetEmail && canPickAnyManager && allManagers[0]) {
     targetEmail = allManagers[0].email;
     targetName = allManagers[0].name;
   }
@@ -70,12 +75,28 @@ export default async function ImpactModelPage({
     teamView = await buildTeamView(model, targetEmail, targetName);
   }
 
+  // For plain managers (no leadership access): scope the per-engineer
+  // sections (SHAP waterfall picker, outlier table, actual-vs-predicted
+  // scatter) to their team. Company-wide aggregates (feature importance,
+  // grouped importance, PDPs, headline metrics) remain visible since
+  // they don't identify individuals.
+  let visibleModel = model;
+  if (!canPickAnyManager && teamView) {
+    const teamHashes = new Set(
+      teamView.entries.map((e) => e.engineer.email_hash),
+    );
+    visibleModel = {
+      ...model,
+      engineers: model.engineers.filter((e) => teamHashes.has(e.email_hash)),
+    };
+  }
+
   const isViewerOwnTeam =
     !!viewerEmail && !!targetEmail && viewerEmail === targetEmail;
 
   return (
     <ImpactModelReport
-      model={model}
+      model={visibleModel}
       teamView={teamView}
       allManagers={allManagers.map((m) => ({
         email: m.email,
@@ -84,6 +105,7 @@ export default async function ImpactModelPage({
         jobTitle: m.jobTitle,
       }))}
       isViewerOwnTeam={isViewerOwnTeam}
+      restrictedToTeam={!canPickAnyManager}
     />
   );
 }

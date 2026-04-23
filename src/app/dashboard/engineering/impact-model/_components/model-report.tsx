@@ -93,11 +93,16 @@ export function ImpactModelReport({
   teamView,
   allManagers,
   isViewerOwnTeam,
+  restrictedToTeam,
 }: {
   model: ImpactModel;
   teamView?: TeamViewData | null;
   allManagers?: ManagerOption[];
   isViewerOwnTeam?: boolean;
+  /** True when the viewer is a plain manager (no leadership access) —
+   * `model.engineers` is already scoped to their team upstream, but we
+   * use this flag for copy/UI hints that only make sense in full view. */
+  restrictedToTeam?: boolean;
 }) {
   const { metrics, model_comparison, target, features, engineers } = model;
 
@@ -153,13 +158,24 @@ export function ImpactModelReport({
         </span>
       </div>
 
+      {restrictedToTeam && (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">You&rsquo;re seeing your team&rsquo;s view.</span>{" "}
+          Your team scorecard, the SHAP waterfall, the scatter, and the outlier
+          table are all scoped to your direct reports. Feature importance and
+          PDPs (the &ldquo;what the model learned&rdquo; sections) reflect the
+          full company training set so you can see how the model reasons in
+          general.
+        </div>
+      )}
+
       {/* Manager-scoped team view — placed first because it's the most
           actionable content on the page. The model-wide sections below are
           reference material for understanding how the model works. */}
       {teamView && (
         <TeamView
           team={teamView}
-          canPickAnyManager={true}
+          canPickAnyManager={!restrictedToTeam && (allManagers?.length ?? 0) > 0}
           allManagers={allManagers ?? []}
           isViewerOwnTeam={!!isViewerOwnTeam}
         />
