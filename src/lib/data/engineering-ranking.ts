@@ -89,13 +89,22 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
       "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
       "Ranking math, tenure/role normalisation, and confidence bands are implemented in later milestones. Until then no engineer is ranked.",
       "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
+      "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
       "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
     ],
     plannedSignals: [
       { name: "GitHub PRs + commits (author, merged_at, lines)", state: "available" },
       { name: "SHAP impact model", state: "available" },
-      { name: "Mode headcount / tenure / discipline", state: "available" },
-      { name: "Squads registry (pillar, manager chain)", state: "available" },
+      {
+        name: "Mode Headcount SSoT (tenure, discipline, manager chain)",
+        state: "available",
+        note: "Manager and manager-email fields originate here (via `src/lib/data/people.ts`), not the squads registry.",
+      },
+      {
+        name: "Squads registry (squad name, pillar, PM, Slack channel)",
+        state: "available",
+        note: "`squads` table stores squad name, pillar, PM, channel, and active state only. It does not contain manager or manager-email fields.",
+      },
       {
         name: "Swarmia DORA — squad/pillar context, not individual signal",
         state: "available",

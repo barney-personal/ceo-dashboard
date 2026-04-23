@@ -74,6 +74,30 @@ describe("getEngineeringRanking (M2 signal availability)", () => {
     expect(mentionsMissingReview).toBe(true);
   });
 
+  it("does not attribute manager chain to the squads registry signal", async () => {
+    const { plannedSignals } = await getEngineeringRanking();
+    const squadsRegistry = plannedSignals.filter((s) => {
+      const lower = s.name.toLowerCase();
+      return lower.includes("squads registry") || lower.includes("squad registry");
+    });
+    expect(squadsRegistry.length).toBeGreaterThan(0);
+    for (const signal of squadsRegistry) {
+      const haystack = `${signal.name} ${signal.note ?? ""}`.toLowerCase();
+      expect(haystack).not.toMatch(/manager chain/);
+      expect(haystack.includes("manager email") || haystack.includes("manager_email")).toBe(false);
+    }
+  });
+
+  it("sources manager chain from Mode Headcount SSoT, not squads", async () => {
+    const { plannedSignals } = await getEngineeringRanking();
+    const managerChainSource = plannedSignals.find((s) => {
+      const haystack = `${s.name} ${s.note ?? ""}`.toLowerCase();
+      return haystack.includes("manager chain");
+    });
+    expect(managerChainSource).toBeDefined();
+    expect(managerChainSource?.name.toLowerCase()).toContain("headcount");
+  });
+
   it("never labels any review-related signal as available", async () => {
     const { plannedSignals } = await getEngineeringRanking();
     const reviewishAvailable = plannedSignals.filter((s) => {
