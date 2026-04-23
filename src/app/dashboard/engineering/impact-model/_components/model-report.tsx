@@ -231,39 +231,50 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="rounded-lg border border-border/40 bg-muted/10 p-4">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              Random Forest (chosen)
-            </div>
-            <div className="mt-1 flex items-baseline gap-4">
-              <span className="font-mono text-sm">
-                R² <span className="font-medium">{model_comparison.random_forest.r2.toFixed(3)}</span>
-              </span>
-              <span className="font-mono text-sm">
-                ρ{" "}
-                <span className="font-medium">
-                  {model_comparison.random_forest.spearman.toFixed(3)}
-                </span>
-              </span>
-            </div>
-          </div>
-          <div className="rounded-lg border border-border/40 bg-muted/10 p-4">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              Gradient Boosting (compared)
-            </div>
-            <div className="mt-1 flex items-baseline gap-4">
-              <span className="font-mono text-sm">
-                R² <span className="font-medium">{model_comparison.gradient_boosting.r2.toFixed(3)}</span>
-              </span>
-              <span className="font-mono text-sm">
-                ρ{" "}
-                <span className="font-medium">
-                  {model_comparison.gradient_boosting.spearman.toFixed(3)}
-                </span>
-              </span>
-            </div>
-          </div>
+        <div
+          className="mt-4 grid gap-3"
+          style={{
+            gridTemplateColumns: `repeat(${Math.min(
+              Object.keys(model_comparison).length,
+              3,
+            )}, minmax(0, 1fr))`,
+          }}
+        >
+          {Object.entries(model_comparison).map(([key, metrics]) => {
+            const isChosen = model.chosen_model === key;
+            const displayName = key
+              .split("_")
+              .map((s) => s[0].toUpperCase() + s.slice(1))
+              .join(" ");
+            return (
+              <div
+                key={key}
+                className={`rounded-lg border p-4 ${
+                  isChosen
+                    ? "border-primary/50 bg-primary/5"
+                    : "border-border/40 bg-muted/10"
+                }`}
+              >
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  {displayName} {isChosen ? "(chosen)" : "(compared)"}
+                </div>
+                <div className="mt-1 flex items-baseline gap-4">
+                  <span className="font-mono text-sm">
+                    R²{" "}
+                    <span className="font-medium">
+                      {metrics.r2.toFixed(3)}
+                    </span>
+                  </span>
+                  <span className="font-mono text-sm">
+                    ρ{" "}
+                    <span className="font-medium">
+                      {metrics.spearman.toFixed(3)}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
 
