@@ -28,6 +28,7 @@ node_modules/
 # === Runtime data ===
 /data/
 .probe-reports/
+.context/
 
 # === ML outputs (regenerated via ml-impact/train.py) ===
 ml-impact/features.csv
