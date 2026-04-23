@@ -150,7 +150,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
               What this means in plain English
             </div>
             <p className="mb-3 text-[13px] leading-relaxed text-foreground">
-              Think of 142 runners in a marathon. Using only things like age,
+              Think of {model.n_engineers} runners in a marathon. Using only things like age,
               training hours, and gym visits — not running gait, injury
               history, or sleep — the model tries to guess each runner&rsquo;s
               finish time.
