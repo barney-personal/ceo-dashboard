@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { LineChart } from "@/components/charts/line-chart";
+import { HireForecastChart } from "@/components/charts/hire-forecast-chart";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 import {
   addMonths,
   aggregateHiresByRecruiterMonth,
@@ -78,6 +78,109 @@ function formatMonthLabel(month: string | null): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+function ForecastMethodologyCard({
+  activeTpCount,
+  windowMonths,
+  forecast2026H2,
+  forecast2027,
+  forecastMonth,
+}: {
+  activeTpCount: number;
+  windowMonths: number;
+  forecast2026H2: { low: number; mid: number; high: number } | null;
+  forecast2027: { low: number; mid: number; high: number } | null;
+  forecastMonth: { low: number; mid: number; high: number } | null | undefined;
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-card shadow-warm">
+      <div className="flex items-center gap-2 border-b border-border/50 px-4 py-3">
+        <Info className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-sm font-semibold text-foreground">
+          How the forecast works
+        </span>
+      </div>
+      <div className="space-y-4 px-4 py-4 text-xs leading-relaxed text-muted-foreground">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/70">
+            Inputs
+          </div>
+          <p className="mt-1">
+            <span className="font-semibold text-foreground">
+              {activeTpCount} active Talent Partners
+            </span>{" "}
+            (Lucy&apos;s Apr 23 roster, overriding HiBob for recent exits).
+            Each contributes their trailing {windowMonths}-month hire rate
+            and individual volatility.
+          </p>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/70">
+            Model
+          </div>
+          <p className="mt-1">
+            Sum of per-TP means → team capacity per month, held flat through
+            the horizon. 80% interval from per-person σ summed in quadrature.
+            Assumes the current roster stays intact — no backfills, no
+            further exits.
+          </p>
+        </div>
+        <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/70">
+            Forecast band · P10 — P50 — P90
+          </div>
+          <ForecastRow
+            label="Per month (steady state)"
+            data={forecastMonth ?? null}
+          />
+          <div className="h-px bg-border/50" />
+          <ForecastRow label="2026 H2 · May – Dec" data={forecast2026H2} />
+          <ForecastRow label="2027 · full year" data={forecast2027} />
+        </div>
+        <div className="text-[11px] italic text-muted-foreground/70">
+          New joiners ramp over time, so the P50 may be slightly conservative.
+          Widen assumptions if Lucy backfills recent exits.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ForecastRow({
+  label,
+  data,
+  unit,
+}: {
+  label: string;
+  data: { low: number; mid: number; high: number } | null;
+  unit?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-[11px] text-muted-foreground/80">{label}</span>
+      {data ? (
+        <span className="tabular-nums">
+          <span className="font-mono text-[11px] text-muted-foreground/60">
+            {data.low.toFixed(0)}–
+          </span>
+          <span className="text-sm font-semibold text-foreground">
+            {data.mid.toFixed(0)}
+          </span>
+          <span className="font-mono text-[11px] text-muted-foreground/60">
+            –{data.high.toFixed(0)}
+          </span>
+          {unit && (
+            <span className="ml-1 text-[10px] text-muted-foreground/60">
+              {unit}
+            </span>
+          )}
+        </span>
+      ) : (
+        <span className="text-sm text-muted-foreground/50">—</span>
+      )}
+    </div>
+  );
 }
 
 function TalentEmpty({ reason }: { reason: string }) {
@@ -602,63 +705,19 @@ export function TalentPageClient({
   const qtdAttainment =
     targetQtdTeam > 0 ? hiresQtdTeam / targetQtdTeam : null;
 
-  // Actuals: last 24 months (solid), with an anchor point the dashed forecast
-  // attaches to so the line is continuous.
+  // Chart data for the purpose-built ForecastChart: 24 months of solid
+  // actuals + forecast fan (band + mid line) starting the month after.
   const actualTail = teamActual.slice(-24);
-  const actualData = actualTail.map((m) => ({
+  const actualSeries = actualTail.map((m) => ({
     date: `${m.month}-01`,
     value: m.hires,
   }));
-  const anchor = actualTail[actualTail.length - 1];
-
-  // Three forecast series: mid (colored dashed), low / high (muted dashed).
-  const midData = forecast.map((m) => ({
+  const forecastSeries = forecast.map((m) => ({
     date: `${m.month}-01`,
-    value: m.mid,
+    low: m.low,
+    mid: m.mid,
+    high: m.high,
   }));
-  const lowData = forecast.map((m) => ({
-    date: `${m.month}-01`,
-    value: m.low,
-  }));
-  const highData = forecast.map((m) => ({
-    date: `${m.month}-01`,
-    value: m.high,
-  }));
-  const withAnchor = (
-    data: { date: string; value: number }[],
-  ): { date: string; value: number }[] =>
-    anchor
-      ? [{ date: `${anchor.month}-01`, value: anchor.hires }, ...data]
-      : data;
-
-  const chartSeries =
-    actualData.length === 0
-      ? []
-      : [
-          {
-            label: "Actual",
-            color: "#2563eb",
-            data: actualData,
-          },
-          {
-            label: "Forecast (most likely)",
-            color: "#2563eb",
-            data: withAnchor(midData),
-            dashed: true,
-          },
-          {
-            label: "Low (P10)",
-            color: "#94a3b8",
-            data: withAnchor(lowData),
-            dashed: true,
-          },
-          {
-            label: "High (P90)",
-            color: "#94a3b8",
-            data: withAnchor(highData),
-            dashed: true,
-          },
-        ];
 
   return (
     <>
@@ -704,22 +763,30 @@ export function TalentPageClient({
 
       <SectionDivider
         title="Team trajectory & forecast"
-        subtitle={`Solid: monthly hires summed across all recruiters, through ${formatMonthLabel(
-          latestMonth,
-        )}. Dashed: forecast built from ${activeTpCount} currently-active Talent Partners at their trailing ${PRODUCTIVITY_WINDOW_MONTHS}-month productivity (capacity-aware — ignores hires from recently-departed TPs). 80% interval (P10 / P50 / P90) held flat through Dec 2027.`}
+        subtitle="Monthly hires through today, with a capacity-aware forecast to the end of 2027."
       />
 
-      {chartSeries.length > 0 ? (
-        <LineChart
-          series={chartSeries}
-          title="Team hires per month"
-          yLabel="hires"
-          yFormatType="number"
-          modeUrl={modeUrl}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
+        {actualSeries.length > 0 ? (
+          <HireForecastChart
+            title="Team hires per month"
+            subtitle={`Actual through ${formatMonthLabel(latestMonth)}; forecast held flat at current capacity through Dec 2027. Hover for monthly detail.`}
+            actual={actualSeries}
+            forecast={forecastSeries}
+            yLabel="hires / month"
+            modeUrl={modeUrl}
+          />
+        ) : (
+          <TalentEmpty reason="No hire data to chart yet — refresh the Mode sync." />
+        )}
+        <ForecastMethodologyCard
+          activeTpCount={activeTpCount}
+          windowMonths={PRODUCTIVITY_WINDOW_MONTHS}
+          forecast2026H2={forecast2026H2}
+          forecast2027={forecast2027}
+          forecastMonth={forecast[0]}
         />
-      ) : (
-        <TalentEmpty reason="No hire data to chart yet — refresh the Mode sync." />
-      )}
+      </div>
 
       <SectionDivider
         title="Per-recruiter breakdown"
