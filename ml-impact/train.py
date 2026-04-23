@@ -47,6 +47,14 @@ FEATURE_DISPLAY = {
     "latest_rating": "Latest perf rating",
     "rating_count": "Perf review count",
     "level_num": "Level number",
+    "pr_size_median": "PR size (median)",
+    "pr_size_p90_log": "PR size (p90, log)",
+    "distinct_repos_180d": "Distinct repos (180d)",
+    "weekend_pr_share": "Weekend PR share",
+    "offhours_pr_share": "Off-hours PR share",
+    "pr_slope_per_week": "PR rate slope (weekly)",
+    "commits_180d_log": "Commits (log, 180d)",
+    "commits_per_pr": "Commits per PR",
 }
 
 
@@ -143,6 +151,16 @@ def main():
     df["ai_n_days"] = df["ai_n_days"].fillna(0)
     df["ai_max_models"] = df["ai_max_models"].fillna(0)
 
+    # PR style features (from extended extract.sql)
+    df["pr_size_median"] = df["pr_size_median"].fillna(0)
+    df["pr_size_p90_log"] = np.log1p(df["pr_size_p90"].fillna(0))
+    df["distinct_repos_180d"] = df["distinct_repos_180d"].fillna(0)
+    df["weekend_pr_share"] = df["weekend_pr_share"].fillna(0)
+    df["offhours_pr_share"] = df["offhours_pr_share"].fillna(0)
+    df["pr_slope_per_week"] = df["pr_slope_per_week"].fillna(0)
+    df["commits_180d_log"] = np.log1p(df["commits_180d"].fillna(0))
+    df["commits_per_pr"] = df["commits_per_pr"].fillna(0).clip(upper=50)
+
     # Perf
     df["has_perf_rating"] = df["rating_count"].fillna(0) > 0
     df["avg_rating"] = df["avg_rating"].fillna(df["avg_rating"].median())
@@ -152,7 +170,13 @@ def main():
     df["gender"] = df["gender"].fillna("Unknown")
     df["location"] = df["location"].fillna("Unknown")
 
-    # Feature set
+    # Feature set.
+    # IMPORTANT: impact = prs × log2(1 + (add+del)/prs). PR count and PR size
+    # would be near-perfect proxies for the target → target leakage. We
+    # therefore EXCLUDE pr_size_median, pr_size_p90_log, commits_180d_log.
+    # Kept code-style features are *orthogonal* to PR volume: work-pattern
+    # (weekend/offhours), breadth (distinct repos), trajectory (slope),
+    # rework (commits per PR).
     numeric_features = [
         "tenure_months",
         "level_num",
@@ -169,6 +193,12 @@ def main():
         "avg_rating",
         "latest_rating",
         "rating_count",
+        # Code-style (orthogonal to target)
+        "distinct_repos_180d",
+        "weekend_pr_share",
+        "offhours_pr_share",
+        "pr_slope_per_week",
+        "commits_per_pr",
     ]
     categorical_features = ["level_track", "discipline", "pillar", "gender", "location"]
 
@@ -242,6 +272,11 @@ def main():
         "slack_active_day_rate": 1,
         "slack_days_since_active": -1,
         "level_num": 1,
+        "distinct_repos_180d": 1,     # touching more repos ⇒ higher impact
+        "commits_180d_log": 1,        # more commits ⇒ higher impact
+        "pr_slope_per_week": 1,       # accelerating ⇒ higher impact
+        # NOT constrained: pr_size_median (bigger isn't always better),
+        # weekend_pr_share / offhours_pr_share (ambiguous), commits_per_pr
     }
     monotone_constraints = [
         monotone_map.get(f, 0) for f in feature_names
@@ -326,6 +361,8 @@ def main():
             return "Slack engagement"
         if lower.startswith("ai_"):
             return "AI usage"
+        if lower.startswith(("pr_", "commits_", "distinct_repos", "weekend_", "offhours_")):
+            return "Code style"
         if lower.startswith("latest_rating") or lower.startswith("avg_rating") or lower == "rating_count":
             return "Performance review"
         if lower == "tenure_months":

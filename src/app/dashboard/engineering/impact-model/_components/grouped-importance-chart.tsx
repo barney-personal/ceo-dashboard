@@ -12,6 +12,7 @@ const GROUP_COLOR: Record<string, string> = {
   "Slack engagement": "#3f7ca0",
   "AI usage": "#c4673f",
   "Performance review": "#6a8b4c",
+  "Code style": "#2d6a5c",
   Pillar: "#8b5a9c",
   Discipline: "#9c5d2e",
   Level: "#4a6b7c",
