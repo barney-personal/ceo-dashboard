@@ -28,6 +28,7 @@ import {
   Sparkles,
   Compass,
   UserPlus,
+  ClipboardList,
 } from "lucide-react";
 
 interface NavItem {
@@ -161,6 +162,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/talent",
         requiredRole: "leadership",
         icon: UserPlus,
+      },
+      {
+        label: "Headcount planning",
+        href: "/dashboard/people/headcount-planning",
+        requiredRole: "leadership",
+        icon: ClipboardList,
       },
       {
         label: "AI Usage",

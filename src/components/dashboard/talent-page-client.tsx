@@ -84,14 +84,14 @@ function formatMonthLabel(month: string | null): string {
 function ForecastMethodologyCard({
   activeTpCount,
   eligibleTpCount,
-  nonRosterGap,
+  perTpAverage,
   forecast2026H2,
   forecast2027,
   forecastMonth,
 }: {
   activeTpCount: number;
   eligibleTpCount: number;
-  nonRosterGap: number;
+  perTpAverage: number;
   forecast2026H2: { low: number; mid: number; high: number } | null;
   forecast2027: { low: number; mid: number; high: number } | null;
   forecastMonth: { low: number; mid: number; high: number } | null | undefined;
@@ -118,8 +118,8 @@ function ForecastMethodologyCard({
               {eligibleTpCount}
             </span>{" "}
             have ≥3 months of post-ramp history (first 2 months of tenure
-            dropped to strip ramp-up noise); the rest contribute what partial
-            post-ramp data they have.
+            dropped to strip ramp-up noise); the rest contribute whatever
+            partial post-ramp data they have.
           </p>
         </div>
         <div>
@@ -127,20 +127,20 @@ function ForecastMethodologyCard({
             Model
           </div>
           <p className="mt-1">
-            For each TP: <span className="font-semibold text-foreground">median</span>{" "}
-            of their post-ramp monthly hires (robust to one-off spikes).
-            Summed across all active TPs, plus a{" "}
+            For each TP: <span className="font-semibold text-foreground">EWMA</span>{" "}
+            (half-life 3 months) over their post-ramp monthly hires — weights
+            recent months heavily so the forecast tracks current productivity,
+            not long-past peaks. Summed across the {activeTpCount} active TPs
+            gives{" "}
             <span className="font-semibold text-foreground">
-              {nonRosterGap.toFixed(1)} hires/mo
-            </span>{" "}
-            non-roster gap (sourcers, managers, departed TPs, alias mismatches —
-            historically observed in the last 6 months).
+              {perTpAverage.toFixed(2)} hires/TP/mo
+            </span>
+            .
           </p>
           <p className="mt-2 text-[11px] text-muted-foreground/80">
-            Per-TP backtest MAE at h=3:{" "}
-            <span className="font-mono text-foreground">~2.5 hires/mo</span>{" "}
-            — ~3× tighter than the previous team-total ensemble, which
-            over-extrapolated from a single spike month.
+            TP direct output only — sourcer, manager, and departed-TP
+            attributions are excluded because they&apos;re not reproducible
+            from today&apos;s roster.
           </p>
         </div>
         <div className="space-y-2 rounded-lg bg-muted/40 p-3">
@@ -639,13 +639,11 @@ export function TalentPageClient({
     );
     const latestMonth = lastActualMonth(hireRows);
 
-    // Headline forecast: roster-anchored, per-TP median of post-ramp history
-    // (first 2 months of each TP's tenure dropped), summed across today's 17
-    // active Talent Partners, plus a historical non-roster gap (sourcers,
-    // departed TPs who hired before leaving, managers). Per-TP backtest at
-    // h=3 gives team MAE ≈ 2.5 hires/mo — ~3× tighter than the team-total
-    // trend-aware model (which over-extrapolates March's spike). See
-    // scripts/backtest-per-tp.ts.
+    // Headline forecast: TP-only roster-anchored. Per-TP EWMA (half-life
+    // 3 months) over post-ramp history, summed across today's active
+    // Talent Partners. Excludes sourcer / manager / departed-TP attribution
+    // because Lucy doesn't own those hires and they don't reflect today's
+    // roster capacity.
     const activeTpNames = summaries
       .filter(
         (s) => s.employment.status !== "departed" && s.role === "talent_partner",
@@ -801,7 +799,7 @@ export function TalentPageClient({
         {actualSeries.length > 0 ? (
           <HireForecastChart
             title="Team hires per month"
-            subtitle={`Actual through ${formatMonthLabel(latestMonth)}; forecast = Σ per-TP post-ramp median across ${activeTpCount} active TPs + historical non-roster gap. Per-TP backtest MAE ≈ 2.5 hires/mo at h=3.`}
+            subtitle={`Actual through ${formatMonthLabel(latestMonth)}; forecast = Σ per-TP EWMA (half-life 3mo) over post-ramp months, across ${activeTpCount} active TPs. TP direct output only — excludes non-roster attribution.`}
             actual={actualSeries}
             forecast={forecastSeries}
             yLabel="hires / month"
@@ -815,7 +813,11 @@ export function TalentPageClient({
           eligibleTpCount={
             roster.contributors.filter((c) => c.eligible).length
           }
-          nonRosterGap={roster.nonRosterGap}
+          perTpAverage={
+            activeTpCount > 0
+              ? roster.teamMeanMonthly / activeTpCount
+              : 0
+          }
           forecast2026H2={forecast2026H2}
           forecast2027={forecast2027}
           forecastMonth={forecast[0]}

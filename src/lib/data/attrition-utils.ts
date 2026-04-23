@@ -1,6 +1,25 @@
 // Pure functions for attrition data transformation.
 // Client-safe — no server-only imports (mode.ts, db, etc.).
 
+// ── Tenure bucket classifier ──
+
+/** Classify a Mode tenure-bucket label into <1yr / >=1yr / unknown. Used by
+ *  headcount planning, attrition forecast comparison scripts, and preview
+ *  scripts to collapse Mode's sometimes-granular tenure labels into the two
+ *  buckets the team's HC forecast uses. */
+export type TenureBucketClass = "sub1yr" | "over1yr" | "unknown";
+
+export function classifyTenureBucket(bucket: string): TenureBucketClass {
+  const b = bucket.toLowerCase().trim();
+  if (b.startsWith("<") || b.includes("< 1") || b.includes("<1")) return "sub1yr";
+  if (b.startsWith(">") || b.includes("> 1") || b.includes(">1")) return "over1yr";
+  if (b.includes("1+") || b.includes("1 +")) return "over1yr";
+  // Granular sub-year buckets like "0-3m", "3-6m", "9-12m": digit followed
+  // by 'm' (end-of-string or word boundary) → sub-1yr.
+  if (/\d+\s*m\b/i.test(bucket)) return "sub1yr";
+  return "unknown";
+}
+
 // ── Types ──
 
 export interface AttritionRow {

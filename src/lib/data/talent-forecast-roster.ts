@@ -1,19 +1,22 @@
-// Bottom-up roster forecast.
+// Bottom-up roster forecast — TP direct output only.
 //
-// Motivation: the team-level trend model treats every past month equally,
+// Motivation: the team-level trend model weights every past month equally,
 // including contributions from TPs who've since left, sourcers who got
 // attribution, and ramp-up months of people who'd just joined. When the CEO
-// asks "what will next month look like?" they want a forecast rooted in the
-// *current roster*, not in what the team looked like 18 months ago.
+// asks "what will my Talent Partners deliver next month?" they want a
+// forecast rooted in the *current roster's current productivity*, not in
+// who-attributed-what 18 months ago.
 //
 // This module implements:
 //   - Tenure estimation per TP (first-hire-month proxy, since HR start dates
 //     aren't wired in yet).
 //   - Post-ramp windowing (drop first N months per TP to strip ramp-up noise).
-//   - Per-TP forecasting (trailing-mean or EWMA of post-ramp history).
-//   - Team aggregation = Σ per-TP forecast + a "non-roster" gap that captures
-//     historically-observed hires attributed to sourcers, managers, and
-//     recently-departed TPs.
+//   - Per-TP forecasting via EWMA (half-life 3 months) over post-ramp history
+//     — weights recent months heavily, adapts as productivity shifts.
+//   - Team aggregation = Σ per-TP EWMA productivity. NO non-roster gap:
+//     sourcer-, manager-, and departed-TP-attributed hires are intentionally
+//     excluded because Lucy doesn't own them and they don't reflect the
+//     current roster's capacity.
 //
 // The model is domain-constrained by design: if Lucy's roster wouldn't ramp
 // further, the forecast doesn't either. If a new TP joins, the forecast grows
@@ -24,20 +27,22 @@ import type { MonthlyHires, RecruiterHistory } from "./talent-utils";
 
 export const DEFAULT_RAMP_MONTHS = 2;
 export const DEFAULT_MIN_POST_RAMP_MONTHS = 3;
+export const DEFAULT_EWMA_HALF_LIFE_MONTHS = 3;
 
 export interface TpProductivityProfile {
   recruiter: string;
   firstHireMonth: string | null;
   tenureMonths: number;
   postRampMonths: number;
-  /** Median of post-ramp history. Robust to one-off spikes; chosen by
-   *  per-TP backtest as the best point estimator (MAE 1.43 @ h=1, nearly
-   *  unbiased). See scripts/backtest-per-tp.ts. */
-  median: number;
-  /** Mean over all post-ramp months, for reference / display. */
+  /** EWMA over post-ramp monthly hires (half-life = 3 months by default).
+   *  Captures recent shifts in productivity — if a TP's output has cooled
+   *  in the last quarter, EWMA reflects that quickly while still smoothing
+   *  out single-month spikes. */
+  productivity: number;
+  /** Mean over all post-ramp months, for reference / display alongside. */
   postRampMean: number;
-  /** MAD-based scale estimate ≈ σ under Gaussian assumptions. */
-  madScale: number;
+  /** Exponentially-weighted standard deviation — paired scale estimate. */
+  productivityStd: number;
   /** True if this TP has >= minPostRampMonths of post-ramp data. */
   eligible: boolean;
 }
@@ -45,18 +50,38 @@ export interface TpProductivityProfile {
 function mean(xs: number[]): number {
   return xs.length === 0 ? 0 : xs.reduce((s, x) => s + x, 0) / xs.length;
 }
-function median(xs: number[]): number {
+
+/**
+ * Exponentially-weighted mean over a time-ordered series `xs` (oldest →
+ * newest). Half-life `h` months: the point h months ago carries half the
+ * weight of the most recent observation.
+ */
+function ewmaMean(xs: number[], halfLifeMonths: number): number {
   if (xs.length === 0) return 0;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? (s[m - 1] + s[m]) / 2 : s[m];
+  const lambda = Math.log(2) / halfLifeMonths;
+  let weightSum = 0;
+  let weightedSum = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const w = Math.exp(-lambda * (xs.length - 1 - i));
+    weightSum += w;
+    weightedSum += w * xs[i];
+  }
+  return weightSum === 0 ? 0 : weightedSum / weightSum;
 }
-/** MAD scaled to ≈ σ under Gaussian assumptions. Robust scale estimator. */
-function madScaled(xs: number[]): number {
+
+/** Exponentially-weighted std dev paired with `ewmaMean`. */
+function ewmaStd(xs: number[], halfLifeMonths: number): number {
   if (xs.length < 2) return 0;
-  const med = median(xs);
-  const absDev = xs.map((x) => Math.abs(x - med));
-  return 1.4826 * median(absDev);
+  const mu = ewmaMean(xs, halfLifeMonths);
+  const lambda = Math.log(2) / halfLifeMonths;
+  let weightSum = 0;
+  let weightedSq = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const w = Math.exp(-lambda * (xs.length - 1 - i));
+    weightSum += w;
+    weightedSq += w * (xs[i] - mu) ** 2;
+  }
+  return weightSum === 0 ? 0 : Math.sqrt(weightedSq / weightSum);
 }
 
 /**
@@ -82,6 +107,8 @@ export function postRampSlice(
 export interface ProfileOptions {
   rampMonths?: number;
   minPostRampMonths?: number;
+  /** EWMA half-life in months. Default 3 — ~quarterly responsiveness. */
+  ewmaHalfLifeMonths?: number;
   /** If set, treat this YYYY-MM as the in-progress current month and exclude
    *  it from all profile calculations. */
   currentMonth?: string;
@@ -94,6 +121,7 @@ export function profileTp(
   const rampMonths = options.rampMonths ?? DEFAULT_RAMP_MONTHS;
   const minPostRamp =
     options.minPostRampMonths ?? DEFAULT_MIN_POST_RAMP_MONTHS;
+  const halfLife = options.ewmaHalfLifeMonths ?? DEFAULT_EWMA_HALF_LIFE_MONTHS;
   const currentMonth = options.currentMonth;
 
   const completed = currentMonth
@@ -113,16 +141,14 @@ export function profileTp(
     firstHireMonth,
     tenureMonths: tenure,
     postRampMonths: postRamp.length,
-    median: median(postRampHires),
+    productivity: ewmaMean(postRampHires, halfLife),
     postRampMean: mean(postRampHires),
-    madScale: madScaled(postRampHires),
+    productivityStd: ewmaStd(postRampHires, halfLife),
     eligible: postRamp.length >= minPostRamp,
   };
 }
 
 export interface RosterForecastOptions extends ProfileOptions {
-  /** Calibration window for the non-roster gap (team total − Σ active TP). */
-  gapWindowMonths?: number;
   /** Z-score for the interval. Default: 1.28 (80% band). */
   zScore?: number;
 }
@@ -130,35 +156,28 @@ export interface RosterForecastOptions extends ProfileOptions {
 export interface RosterForecastResult {
   forecast: { month: string; low: number; mid: number; high: number }[];
   contributors: TpProductivityProfile[];
-  /** Historical median of (team total − Σ active TP contributions) over the
-   *  calibration window. Captures hires attributable to sourcers, managers,
-   *  and TPs not in the active roster. Projected flat forward. */
-  nonRosterGap: number;
-  /** MAD scale of the non-roster gap. */
-  nonRosterGapScale: number;
-  /** Sum of per-TP medians + non-roster gap = point forecast per month. */
+  /** Sum of per-TP EWMA productivity = point forecast per month. */
   teamMeanMonthly: number;
-  /** Aggregate scale combining per-TP MAD with non-roster gap MAD in
-   *  quadrature. */
+  /** Aggregate scale: Σ per-TP EWMA std in quadrature. */
   teamSigmaMonthly: number;
 }
 
 /**
- * Roster-anchored forecast.
+ * TP-only roster forecast.
  *
- * Point forecast for each future month = Σ active-TP post-ramp medians +
- * non-roster gap. Median chosen over mean by per-TP backtest — more robust
- * to the occasional 12-hire spike month. Forecast is flat by design: the
- * domain prior (from the CEO) is "current roster won't ramp further."
+ * Point forecast each month = Σ per-TP EWMA productivity (half-life 3mo on
+ * their post-ramp history). Flat projection: the domain prior is "current
+ * roster doesn't ramp further." Hires from sourcers, managers, departed
+ * TPs, and alias mismatches are intentionally excluded — they're not
+ * reproducible output from today's roster.
  *
- * Eligible TPs (≥3 post-ramp months): contribute their post-ramp median.
- * Ineligible TPs (still in ramp): contribute median of whatever post-ramp
- * data they have — zero if they haven't got past month 2 of tenure. This
- * is conservative but honest: we can't predict what a TP will do before
- * they've done anything.
+ * Eligible TPs (≥minPostRampMonths post-ramp months): EWMA uses their full
+ * post-ramp history with half-life decay toward recent.
+ * Ineligible TPs (still in ramp): contribute their partial post-ramp EWMA
+ * if they have any data, else 0.
  *
- * 80% interval is z·σ where σ combines per-TP MAD and gap MAD in quadrature
- * (independence assumption across TPs; documented in methodology).
+ * 80% interval is z × √(Σ per-TP σ²). Between-TP independence is assumed
+ * (slight under-estimate when market conditions shift everyone together).
  */
 export function forecastFromRoster(
   histories: RecruiterHistory[],
@@ -167,7 +186,6 @@ export function forecastFromRoster(
   throughMonth: string,
   options: RosterForecastOptions = {},
 ): RosterForecastResult {
-  const gapWindow = options.gapWindowMonths ?? 6;
   const z = options.zScore ?? 1.28;
 
   const byName = new Map(histories.map((h) => [h.recruiter, h]));
@@ -178,55 +196,13 @@ export function forecastFromRoster(
     ),
   );
 
-  // Team median-sum: each TP contributes their post-ramp median. Ramp-phase
-  // TPs with 0 post-ramp months contribute 0 (honest about uncertainty).
-  const teamMedianSum = contributors.reduce((s, c) => s + c.median, 0);
-  // Aggregate scale in quadrature — acceptable for small-team CIs; between-
-  // TP correlation would widen this slightly.
-  const teamVarMonthly = contributors.reduce(
-    (s, c) => s + c.madScale ** 2,
+  const teamMean = contributors.reduce((s, c) => s + c.productivity, 0);
+  const teamVar = contributors.reduce(
+    (s, c) => s + c.productivityStd ** 2,
     0,
   );
-
-  // Non-roster gap calibration. At each of the recent `gapWindow` months we
-  // compute (team total − Σ active-roster-TP hires). The residual captures:
-  //   - departed TPs who still had hires in that month before leaving,
-  //   - sourcers / hiring managers attributed a hire,
-  //   - ramp-period hires from currently-active TPs (they're part of the
-  //     team total but aren't captured by post-ramp contributions),
-  //   - alias mismatches.
-  // Using the MEDIAN of the gap series instead of the mean keeps it robust.
-  const activeSet = new Set(activeRecruiters);
-  const allMonths: string[] = [];
-  {
-    const seen = new Set<string>();
-    for (const h of histories) for (const m of h.monthly) seen.add(m.month);
-    allMonths.push(...[...seen].sort());
-  }
-  // Exclude the current partial month from the gap calibration.
-  const calibrationMonths = options.currentMonth
-    ? allMonths.filter((m) => m !== options.currentMonth)
-    : allMonths;
-  const recentMonths = calibrationMonths.slice(-gapWindow);
-  const gapResiduals: number[] = [];
-  for (const month of recentMonths) {
-    let teamTotal = 0;
-    let activeTotal = 0;
-    for (const h of histories) {
-      const m = h.monthly.find((x) => x.month === month);
-      if (!m) continue;
-      teamTotal += m.hires;
-      if (activeSet.has(h.recruiter)) activeTotal += m.hires;
-    }
-    gapResiduals.push(teamTotal - activeTotal);
-  }
-  const nonRosterGap = median(gapResiduals);
-  const nonRosterGapScale = madScaled(gapResiduals);
-
-  const combinedMean = teamMedianSum + nonRosterGap;
-  const combinedVar = teamVarMonthly + nonRosterGapScale ** 2;
-  const combinedStd = Math.sqrt(combinedVar);
-  const halfWidth = z * combinedStd;
+  const teamStd = Math.sqrt(teamVar);
+  const halfWidth = z * teamStd;
 
   const forecast: {
     month: string;
@@ -238,9 +214,9 @@ export function forecastFromRoster(
   while (cursor <= throughMonth) {
     forecast.push({
       month: cursor,
-      low: Math.max(0, combinedMean - halfWidth),
-      mid: combinedMean,
-      high: combinedMean + halfWidth,
+      low: Math.max(0, teamMean - halfWidth),
+      mid: teamMean,
+      high: teamMean + halfWidth,
     });
     cursor = addMonths(cursor, 1);
   }
@@ -248,9 +224,7 @@ export function forecastFromRoster(
   return {
     forecast,
     contributors,
-    nonRosterGap,
-    nonRosterGapScale,
-    teamMeanMonthly: combinedMean,
-    teamSigmaMonthly: combinedStd,
+    teamMeanMonthly: teamMean,
+    teamSigmaMonthly: teamStd,
   };
 }
