@@ -382,6 +382,17 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
       },
     ],
   },
+  {
+    // Pass 1: registered so `getModeReportLink("people", "talent")` resolves and
+    // the `mode_reports` row is seeded on next sync. Query profiles are filled
+    // in during Pass 2 once we've inspected the report's actual query shape.
+    reportToken: "e9766a6cd260",
+    name: "Talent",
+    section: "people",
+    category: "talent",
+    syncEnabled: true,
+    queries: [],
+  },
 ];
 
 function toModeReportConfig(profile: ModeSyncProfile): ModeReportConfig {
@@ -522,6 +533,13 @@ export const MODE_CHART_EMBEDS: ModeChartEmbed[] = [
     title: "AI Model Usage Dashboard",
     section: "people",
     category: "ai-usage",
+    height: 800,
+  },
+  {
+    url: buildModeReportUrl("e9766a6cd260"),
+    title: "Talent",
+    section: "people",
+    category: "talent",
     height: 800,
   },
 ];
