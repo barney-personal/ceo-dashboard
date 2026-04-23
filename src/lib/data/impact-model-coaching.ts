@@ -281,13 +281,11 @@ function conversationText(contrib: ImpactShapContribution): string | null {
 }
 
 function signalFrom(contrib: ImpactShapContribution, detail: string): CoachingSignal {
-  // Most `pct_multiplier` values come from the model pre-rounded to a pct
-  // (e.g. 18.4 meaning +18.4%); the trailing "other features" bucket can come
-  // in either shape. Normalise: anything |x|>2 is already in "percent" units,
-  // smaller values are multipliers relative to 1 (e.g. 0.12 → +12%).
-  const pct = Math.abs(contrib.pct_multiplier) > 2
-    ? contrib.pct_multiplier
-    : contrib.pct_multiplier * 100;
+  // `pct_multiplier` in the model JSON is always in "percent" units already
+  // (e.g. 18.4 means +18.4%). train.py rounds SHAP log-contributions into
+  // that unit before serialising, and the JS "+N other features" aggregate
+  // in shap-waterfall.tsx uses the same convention. Pass through untouched.
+  const pct = contrib.pct_multiplier;
   return {
     feature: contrib.feature,
     label: plainLabelFor(contrib.feature),

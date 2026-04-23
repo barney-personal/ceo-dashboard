@@ -63,8 +63,14 @@ api() {
     "https://api.clerk.com/v1${path}" "$@"
 }
 
+# URL-encode a string (handles +, &, spaces, etc. so unusual addresses
+# don't silently break the Clerk lookup or the ticket URL).
+urlencode() {
+  jq -rn --arg v "$1" '$v | @uri'
+}
+
 echo "→ Looking up Clerk user ($EMAIL)…" >&2
-lookup=$(api GET "/users?email_address=${EMAIL}")
+lookup=$(api GET "/users?email_address=$(urlencode "$EMAIL")")
 user_id=$(printf '%s' "$lookup" | jq -r '.[0].id // empty')
 if [[ -z "$user_id" ]]; then
   echo "User ${EMAIL} not found in Clerk dev instance." >&2
@@ -84,7 +90,7 @@ if [[ -z "$token" ]]; then
   exit 1
 fi
 
-url="${BASE_URL}/sign-in?__clerk_ticket=${token}&redirect_url=${TARGET_PATH}"
+url="${BASE_URL}/sign-in?__clerk_ticket=${token}&redirect_url=$(urlencode "$TARGET_PATH")"
 echo "" >&2
 echo "Navigate the preview browser to this URL (1h, single-use):" >&2
 echo "" >&2

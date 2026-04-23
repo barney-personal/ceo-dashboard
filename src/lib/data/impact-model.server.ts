@@ -59,13 +59,30 @@ export async function getImpactModelHydrated(): Promise<ImpactModel> {
       hashToName.set(hashEmail(email, key), name);
     }
 
+    let matches = 0;
     const hydratedEngineers = model.engineers.map((e) => {
       const real = hashToName.get(e.email_hash);
+      if (real) matches++;
       // Deliberately do NOT hydrate `email` — the client component only needs
       // a stable unique id, and `email_hash` already serves that role. Keeps
       // real email addresses out of the page payload entirely.
       return { ...e, name: real ?? e.name };
     });
+
+    // Key-rotation detection: if we had a healthy headcount feed and a
+    // populated model but zero of the JSON's hashes matched, it almost
+    // certainly means IMPACT_MODEL_HASH_KEY was rotated without retraining.
+    // Warn loudly so on-call sees the signal (the page still renders with
+    // pseudonyms — silent degradation was the original complaint).
+    if (
+      matches === 0 &&
+      model.engineers.length > 0 &&
+      hashToName.size >= 10
+    ) {
+      console.warn(
+        `[impact-model] 0/${model.engineers.length} hash matches against ${hashToName.size} headcount emails — likely IMPACT_MODEL_HASH_KEY was rotated without regenerating impact-model.json. See CLAUDE.md.`,
+      );
+    }
 
     return { ...model, engineers: hydratedEngineers };
   } catch (err) {

@@ -9,6 +9,7 @@ import type {
   ImpactPartialDependence,
   ImpactCategoricalEffect,
 } from "@/lib/data/impact-model";
+import { plainLabelFor } from "@/lib/data/impact-model-coaching";
 import { getContentBoxWidth } from "@/components/charts/chart-utils";
 
 const GROUP_COLOR: Record<string, string> = {
@@ -27,36 +28,6 @@ const GROUP_COLOR: Record<string, string> = {
 
 const ABOVE_COLOR = "#2e7d52";
 const BELOW_COLOR = "#b8472a";
-
-// Plain-English feature labels that drop technical suffixes like "(log)" or "(scaled)"
-// and describe what the feature actually measures in human terms.
-const PLAIN_LABEL: Record<string, string> = {
-  tenure_months: "How long they've been here",
-  slack_msgs_per_day: "How many Slack messages per day",
-  slack_reactions_per_day: "How many Slack reactions per day",
-  slack_active_day_rate: "Share of days active on Slack",
-  slack_desktop_share: "Share of Slack activity on desktop",
-  slack_channel_share: "Share of messages in channels vs DMs",
-  slack_days_since_active: "Days since last active on Slack",
-  ai_tokens_log: "How heavily they use AI tools",
-  ai_cost_log: "How much they spend on AI tools",
-  ai_n_days: "Days per month using AI",
-  ai_max_models: "How many different AI models they try",
-  avg_rating: "Average performance rating",
-  latest_rating: "Latest performance rating",
-  rating_count: "Performance reviews received",
-  level_num: "Level (seniority number)",
-  pr_size_median: "Typical PR size",
-  distinct_repos_180d: "How many different repos they touch",
-  weekend_pr_share: "Share of PRs merged on weekends",
-  offhours_pr_share: "Share of PRs merged outside 9–6 UTC",
-  pr_slope_per_week: "Whether their PR rate is speeding up",
-  commits_180d_log: "How many commits they ship",
-  commits_per_pr: "Commits per PR (rework proxy)",
-  pr_gap_days: "Share of PRs that are older than 3 months",
-  weekly_pr_cv: "How steady vs bursty their PR output is",
-  ramp_slope_first90: "Recent PR rate (per tenure-month)",
-};
 
 // Per-feature X-axis unit labels. Shown next to the axis title so readers
 // know whether "0.2" is a fraction, a percentage, a count, or something else.
@@ -111,8 +82,18 @@ const MANAGER_TAKEAWAY: Record<string, string> = {
   weekly_pr_cv: "Bursty output can signal meeting-heavy weeks or cross-team dependencies.",
 };
 
+// Single source of truth for plain-English feature labels lives in
+// impact-model-coaching.ts (plainLabelFor). The `fallback` param is kept
+// for call-sites that want to prefer the PDP's own label field on unknowns,
+// but for known features the shared dictionary wins.
 function plainLabel(feature: string, fallback: string): string {
-  return PLAIN_LABEL[feature] ?? fallback;
+  const known = plainLabelFor(feature);
+  // plainLabelFor returns "feature name" for unknowns (raw-snake → spaces).
+  // If that matches the naive transform exactly, we didn't find a mapping —
+  // fall back to the PDP's label instead, which is more specific than the
+  // raw name (e.g. "Tenure (months)" from train.py's FEATURE_DISPLAY).
+  if (known === feature.replace(/_/g, " ")) return fallback;
+  return known;
 }
 
 function axisUnit(feature: string): string | null {

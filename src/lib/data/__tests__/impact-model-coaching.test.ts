@@ -144,6 +144,22 @@ describe("buildCoachingCard", () => {
     expect(card.conversations.length).toBeLessThanOrEqual(2);
   });
 
+  it("passes pct_multiplier through as-is (already in percent units)", () => {
+    // Guards against reintroducing the >2 threshold heuristic that used to
+    // multiply small percentages by 100 (e.g. 1.0% getting displayed as 100%).
+    const engineer = makeEngineer({
+      shap_contributions: [
+        { feature: "ai_n_days", group: "AI usage", shap: -0.01, pct_multiplier: 1.0, value: 1 },
+        { feature: "tenure_months", group: "Tenure", shap: 0.35, pct_multiplier: 42.5, value: 36 },
+      ],
+    });
+    const card = buildCoachingCard(engineer);
+    const tenure = card.strengths.find((s) => s.feature === "tenure_months");
+    const aiNDays = card.conversations.find((s) => s.feature === "ai_n_days");
+    expect(tenure?.pctMultiplier).toBe(42.5);
+    expect(aiNDays?.pctMultiplier).toBe(1.0);
+  });
+
   it("flags residual direction correctly for below-prediction engineers", () => {
     const engineer = makeEngineer({
       actual: 700,

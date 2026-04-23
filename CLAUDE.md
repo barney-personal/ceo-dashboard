@@ -322,6 +322,7 @@ web service via `fromService:` refs — also no Doppler entry needed.
 - `MODE_API_TOKEN` / `MODE_API_SECRET` / `MODE_WORKSPACE` — Mode Analytics
 - `SLACK_BOT_TOKEN` / `SLACK_OKR_CHANNEL_IDS` / `SLACK_PRE_READS_CHANNEL_ID` — Slack API
 - `ANTHROPIC_API_KEY` — Claude API for OKR and Excel parsing
+- `IMPACT_MODEL_HASH_KEY` — HMAC-SHA256 key linking `src/data/impact-model.json` engineer hashes to real names at request time. **Rotation:** if this key changes, `ml-impact/train.py` must re-run (or the rehash migration) so committed hashes match the live key. Otherwise the Engineering → Impact Model page silently degrades to "Engineer NNN" pseudonyms.
 - `GITHUB_API_TOKEN` / `GITHUB_ORG` / `GITHUB_REPOS` — GitHub engineering metrics
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` / `GOOGLE_CALENDAR_ID` — Google Calendar
 - `GRANOLA_API_TOKEN` — Granola meeting transcripts
