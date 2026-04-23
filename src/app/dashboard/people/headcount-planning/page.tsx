@@ -19,7 +19,10 @@ import {
   buildSurvivalFromRollingRates,
   buildSurvivalCurve,
 } from "@/lib/data/headcount-planning";
-import { buildEmployeeRetentionCohorts } from "@/lib/data/attrition-utils";
+import {
+  buildEmployeeRetentionCohorts,
+  classifyTenureBucket,
+} from "@/lib/data/attrition-utils";
 
 const FORECAST_THROUGH = "2027-12";
 
@@ -44,19 +47,15 @@ function computeRollingRates(
   const rows = rollingAttrition.filter((r) => r.reportingPeriod === latest);
   let sub1Leavers = 0, sub1Hc = 0, over1Leavers = 0, over1Hc = 0;
   for (const r of rows) {
-    const b = r.tenure.toLowerCase().trim();
-    const isSub =
-      b.startsWith("<") ||
-      b.includes("< 1") ||
-      b.includes("<1") ||
-      /m\b/i.test(r.tenure);
-    if (isSub) {
+    const cls = classifyTenureBucket(r.tenure);
+    if (cls === "sub1yr") {
       sub1Leavers += r.leaversL12m;
       sub1Hc += r.avgHeadcountL12m;
-    } else {
+    } else if (cls === "over1yr") {
       over1Leavers += r.leaversL12m;
       over1Hc += r.avgHeadcountL12m;
     }
+    // Unknown buckets are dropped — better than silently coercing.
   }
   return {
     under1yrAnnual: sub1Hc > 0 ? sub1Leavers / sub1Hc : 0.34,

@@ -17,7 +17,10 @@ import {
   buildSurvivalFromRollingRates,
   buildSurvivalCurve,
 } from "@/lib/data/headcount-planning";
-import { buildEmployeeRetentionCohorts } from "@/lib/data/attrition-utils";
+import {
+  buildEmployeeRetentionCohorts,
+  classifyTenureBucket,
+} from "@/lib/data/attrition-utils";
 
 async function main() {
   const [talent, attrition] = await Promise.all([
@@ -62,12 +65,11 @@ async function main() {
   const latestRows = attrition.rollingAttrition.filter((r) => r.reportingPeriod === latestPeriod);
   let sub1Leavers = 0, sub1Hc = 0, over1Leavers = 0, over1Hc = 0;
   for (const r of latestRows) {
-    const b = r.tenure.toLowerCase().trim();
-    const isSub = b.startsWith("<") || b.includes("< 1") || b.includes("<1") || /m\b/i.test(r.tenure);
-    if (isSub) {
+    const cls = classifyTenureBucket(r.tenure);
+    if (cls === "sub1yr") {
       sub1Leavers += r.leaversL12m;
       sub1Hc += r.avgHeadcountL12m;
-    } else {
+    } else if (cls === "over1yr") {
       over1Leavers += r.leaversL12m;
       over1Hc += r.avgHeadcountL12m;
     }

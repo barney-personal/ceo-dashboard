@@ -27,6 +27,12 @@ function formatNumber(n: number, digits = 0): string {
   return n.toFixed(digits);
 }
 
+// Date the MAE/bias numbers in AttritionCrossCheck were computed from a
+// fresh run of scripts/backtest-attrition-curves.ts. If Mode data shifts
+// materially (attrition regime change), re-run the script and bump this
+// date so the staleness is visible to readers.
+const BACKTEST_RUN_DATE = "2026-04-23";
+
 function formatMonth(m: string): string {
   const [y, mo] = m.split("-");
   const names = [
@@ -448,7 +454,9 @@ function AttritionCrossCheck({
           <code className="rounded bg-muted/40 px-1 py-[1px] text-[11px]">
             scripts/backtest-attrition-curves.ts
           </code>
-          .
+          . Numbers above are from a backtest run on{" "}
+          <span className="font-mono">{BACKTEST_RUN_DATE}</span> — re-run
+          the script if Mode data shifts materially.
         </p>
         <p className="mt-2 text-xs italic leading-relaxed text-muted-foreground/80">
           Honest caveat: Dec 2027 is a 20-month-out projection, beyond the

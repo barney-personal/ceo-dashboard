@@ -12,6 +12,7 @@
 // Usage: doppler run -- npx tsx scripts/compare-attrition-forecast.ts
 
 import { getAttritionData } from "@/lib/data/attrition";
+import { classifyTenureBucket } from "@/lib/data/attrition-utils";
 import { buildSurvivalCurve } from "@/lib/data/headcount-planning";
 
 function annualFromMonthly(m: number): number {
@@ -63,26 +64,16 @@ async function main() {
     console.log(`  ${bucket.padEnd(26)}${leavers.toFixed(1).padStart(13)}${hc.toFixed(1).padStart(11)}${(rate * 100).toFixed(1).padStart(7)}%`);
   }
 
-  // Collapse into <1yr vs >1yr to match the team's two buckets. Mode tenure
-  // labels at Cleo: e.g. "0-3m", "3-6m", "6-9m", "9-12m", "1-2y", "2+y" —
-  // we'll detect which contain a dash and "y" (years) or "m" (months).
-  function isSub1Year(bucket: string): boolean | null {
-    const b = bucket.toLowerCase().trim();
-    if (b.startsWith("<") || b.includes("< 1") || b.includes("<1")) return true;
-    if (b.startsWith(">") || b.includes("> 1") || b.includes(">1")) return false;
-    if (b.includes("1+") || b.includes("1 +")) return false;
-    if (/m\b/i.test(bucket)) return true;
-    return null;
-  }
-
+  // Collapse into <1yr vs >1yr to match the team's two buckets via the
+  // shared classifier in attrition-utils.
   let sub1Leavers = 0, sub1Hc = 0, over1Leavers = 0, over1Hc = 0;
   const unknown: string[] = [];
   for (const [bucket, { leavers, hc }] of buckets) {
-    const sub = isSub1Year(bucket);
-    if (sub === true) {
+    const cls = classifyTenureBucket(bucket);
+    if (cls === "sub1yr") {
       sub1Leavers += leavers;
       sub1Hc += hc;
-    } else if (sub === false) {
+    } else if (cls === "over1yr") {
       over1Leavers += leavers;
       over1Hc += hc;
     } else {
