@@ -65,6 +65,17 @@ export interface EngineerRankingEntry {
 }
 
 /**
+ * Canonical squad metadata sourced from the `squads` registry at request
+ * time. Attached to an eligibility entry only when the server loader
+ * actually fetched the registry and the engineer's squad name matches.
+ */
+export interface CanonicalSquadMetadata {
+  name: string;
+  pillar: string;
+  pmName: string | null;
+}
+
+/**
  * Eligibility-preflight entry. One row per engineer in the headcount spine,
  * with a visible reason for their eligibility status. All fields are resolved
  * at request time — this shape is never persisted, so display name, email and
@@ -79,6 +90,14 @@ export interface EligibilityEntry {
   levelLabel: string;
   squad: string | null;
   pillar: string;
+  /**
+   * Squad metadata joined from the `squads` registry. `null` when the
+   * registry was not supplied to the preflight or the engineer's squad
+   * name does not match a registry row. This is the only field that
+   * legitimately carries canonical squad name, pillar, and PM — Mode
+   * headcount owns only the raw `hb_squad` label on `squad`.
+   */
+  canonicalSquad: CanonicalSquadMetadata | null;
   /** Manager email/name as surfaced on the headcount row. */
   manager: string | null;
   startDate: string | null;
@@ -99,7 +118,24 @@ export interface EligibilityCoverage {
   missingRequiredData: number;
   mappedToGitHub: number;
   presentInImpactModel: number;
+  /**
+   * Headcount rows whose `start_date` is in the future relative to the
+   * snapshot `now`. Excluded from `entries` and `totalEngineers` so the
+   * active-roster count mirrors Mode's `selectModeFteActive` policy.
+   * Surfaced in coverage so the preflight is transparent about
+   * exclusions.
+   */
+  excludedFutureStart: number;
+  /**
+   * Engineers whose `hb_squad` did not match a row in the `squads` registry
+   * (including the case where the registry was not supplied). Useful when
+   * the methodology panel wants to attribute any missing canonical squad
+   * metadata to a concrete cause.
+   */
+  squadRegistryUnmatched: number;
   rampUpThresholdDays: number;
+  /** True iff the squads registry was supplied to the preflight. */
+  squadsRegistryPresent: boolean;
 }
 
 export interface EngineeringRankingSnapshot {
@@ -223,10 +259,30 @@ export interface EligibilityImpactModelView {
   engineers: Array<{ email_hash: string }>;
 }
 
+/**
+ * Row shape for the canonical squads registry input. Matches the subset of
+ * `squads` columns the ranking preflight needs — name, pillar, PM name, and
+ * active state. Manager fields are deliberately absent because the `squads`
+ * table does not store them.
+ */
+export interface EligibilitySquadsRegistryRow {
+  name: string;
+  pillar: string;
+  pmName: string | null;
+  isActive: boolean;
+}
+
 export interface EligibilityInputs {
   headcountRows: EligibilityHeadcountRow[];
   githubMap: EligibilityGithubMapRow[];
   impactModel: EligibilityImpactModelView;
+  /**
+   * Optional canonical squads registry. When present the preflight joins
+   * each engineer's `hb_squad` to the registry and surfaces the squads
+   * provenance note. When absent, the page must not claim the squads
+   * registry as a live source.
+   */
+  squads?: EligibilitySquadsRegistryRow[];
   /** Defaults to new Date() — injectable so tests can pin "today". */
   now?: Date;
   /** Defaults to RANKING_RAMP_UP_DAYS. */
@@ -257,11 +313,18 @@ function parseDate(value: string | null | undefined): Date | null {
  * with `hb_function` containing "engineer"). Augmented with:
  * - `githubEmployeeMap` (email → login), filtered to non-bot mappings
  * - impact-model presence (by `email_hash` only — the JSON is anonymised)
+ * - the canonical `squads` registry (when supplied) for squad/pillar/PM
+ *   metadata joined by lowercased squad name
  *
  * No active engineer is dropped silently: unmapped or missing-data engineers
  * still appear in `entries` with an explicit `eligibility` and `reason`.
  * Manager chain is sourced from the headcount row (`manager` with
  * `line_manager_email` fallback), never from the squads registry.
+ *
+ * Rows whose `start_date` is in the future relative to `now` are excluded
+ * from the active roster (mirrors Mode's `selectModeFteActive` policy) so
+ * future hires cannot be counted as negative-tenure ramp-up engineers. The
+ * exclusion count is surfaced on `coverage.excludedFutureStart`.
  */
 export function buildEligibleRoster(inputs: EligibilityInputs): {
   entries: EligibilityEntry[];
@@ -281,7 +344,17 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     inputs.impactModel.engineers.map((e) => e.email_hash),
   );
 
+  const squadsRegistryPresent = Array.isArray(inputs.squads);
+  const squadByName = new Map<string, EligibilitySquadsRegistryRow>();
+  if (inputs.squads) {
+    for (const s of inputs.squads) {
+      if (!s.isActive) continue;
+      squadByName.set(s.name.trim().toLowerCase(), s);
+    }
+  }
+
   const entries: EligibilityEntry[] = [];
+  let excludedFutureStart = 0;
 
   for (const row of inputs.headcountRows) {
     if (!isEngineerRow(row)) continue;
@@ -293,6 +366,8 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
       row.rp_full_name?.trim() ||
       email ||
       "(unknown)";
+
+    const canonicalSquad = resolveCanonicalSquad(row.hb_squad, squadByName);
 
     if (!email || !row.start_date) {
       entries.push({
@@ -307,6 +382,7 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
         levelLabel: classifyLevel(row.hb_level),
         squad: row.hb_squad ?? null,
         pillar: cleanPillar(row.rp_department_name),
+        canonicalSquad,
         manager: row.manager?.trim() || row.line_manager_email?.trim() || null,
         startDate: row.start_date ?? null,
         tenureDays: null,
@@ -321,6 +397,14 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     }
 
     const startDate = parseDate(row.start_date);
+    // Future starts are excluded from the active roster. Mirrors Mode's
+    // `selectModeFteActive` filter (`start_date > asOf` → not active).
+    // Surfaced on coverage.excludedFutureStart rather than emitted as a
+    // negative-tenure ramp-up engineer.
+    if (startDate && startDate.getTime() > now.getTime()) {
+      excludedFutureStart += 1;
+      continue;
+    }
     const termDate = parseDate(row.termination_date);
     const tenureDays = startDate ? diffDays(startDate, now) : null;
     // A termination_date that precedes start_date is a rehire artefact in
@@ -370,6 +454,7 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
       levelLabel: classifyLevel(row.hb_level),
       squad: row.hb_squad ?? null,
       pillar: cleanPillar(row.rp_department_name),
+      canonicalSquad,
       manager: row.manager?.trim() || row.line_manager_email?.trim() || null,
       startDate: row.start_date,
       tenureDays,
@@ -409,20 +494,61 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     ).length,
     mappedToGitHub: entries.filter((e) => e.githubLogin !== null).length,
     presentInImpactModel: entries.filter((e) => e.hasImpactModelRow).length,
+    excludedFutureStart,
+    squadRegistryUnmatched: entries.filter(
+      (e) => e.squad !== null && e.canonicalSquad === null,
+    ).length,
     rampUpThresholdDays: rampUpDays,
+    squadsRegistryPresent,
   };
 
   return { entries, coverage };
 }
 
-/** Provenance notes surfaced above the ranking so readers see each source. */
-export const RANKING_SOURCE_NOTES: readonly string[] = [
+function resolveCanonicalSquad(
+  hbSquad: string | null | undefined,
+  squadByName: Map<string, EligibilitySquadsRegistryRow>,
+): CanonicalSquadMetadata | null {
+  if (squadByName.size === 0) return null;
+  const raw = (hbSquad ?? "").trim();
+  if (!raw) return null;
+  const match = squadByName.get(raw.toLowerCase());
+  if (!match) return null;
+  return { name: match.name, pillar: match.pillar, pmName: match.pmName };
+}
+
+/**
+ * Base provenance notes that are true for every preflight regardless of
+ * which optional inputs were supplied. Exported for tests that want to
+ * assert on the constant surface.
+ */
+export const RANKING_SOURCE_NOTES_BASE: readonly string[] = [
   "Roster spine: Mode Headcount SSoT (engineering rows). Manager chain comes from the `manager` / `line_manager_email` fields on the same row.",
   "GitHub identity: `githubEmployeeMap` (non-bot). Unmapped active engineers surface with `insufficient_mapping`, not silently dropped.",
   "Impact model presence: `src/data/impact-model.json` joined by `email_hash` (SHA-256 of lowercased email, first 16 hex chars).",
-  "Squads registry supplies squad name, pillar, PM, and Slack channel only. It does not provide manager chain.",
   "Display names and emails are resolved at request time and never written into persisted ranking snapshots.",
 ];
+
+/**
+ * Compute the provenance notes for a given preflight. The squads-registry
+ * note is only added when the caller actually supplied a `squads` input —
+ * otherwise the page would claim a live source that was never fetched.
+ */
+export function buildSourceNotes(inputs: EligibilityInputs): string[] {
+  const notes = [...RANKING_SOURCE_NOTES_BASE];
+  if (inputs.squads && inputs.squads.length > 0) {
+    notes.splice(
+      3,
+      0,
+      "Squads registry (`squads` table): canonical squad name, pillar, PM, and Slack channel joined at request time by lowercased `hb_squad`. Does not provide manager chain.",
+    );
+  } else {
+    notes.push(
+      "Squads registry was not fetched for this snapshot; canonical squad metadata is unavailable and any squad/PM fields on the page come from the raw headcount `hb_squad` label only.",
+    );
+  }
+  return notes;
+}
 
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
@@ -504,7 +630,7 @@ export function buildRankingSnapshot(
     eligibility: {
       entries,
       coverage,
-      sourceNotes: [...RANKING_SOURCE_NOTES],
+      sourceNotes: buildSourceNotes(inputs),
     },
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
@@ -521,7 +647,10 @@ function emptyCoverage(): EligibilityCoverage {
     missingRequiredData: 0,
     mappedToGitHub: 0,
     presentInImpactModel: 0,
+    excludedFutureStart: 0,
+    squadRegistryUnmatched: 0,
     rampUpThresholdDays: RANKING_RAMP_UP_DAYS,
+    squadsRegistryPresent: false,
   };
 }
 
@@ -547,7 +676,11 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     eligibility: {
       entries: [],
       coverage: emptyCoverage(),
-      sourceNotes: [...RANKING_SOURCE_NOTES],
+      sourceNotes: buildSourceNotes({
+        headcountRows: [],
+        githubMap: [],
+        impactModel: { engineers: [] },
+      }),
     },
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),

@@ -4,12 +4,14 @@ import {
   RANKING_RAMP_UP_DAYS,
   buildEligibleRoster,
   buildRankingSnapshot,
+  buildSourceNotes,
   getEngineeringRanking,
   hashEmailForRanking,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilityImpactModelView,
   type EligibilityInputs,
+  type EligibilitySquadsRegistryRow,
 } from "../engineering-ranking";
 
 describe("getEngineeringRanking (M2 signal availability)", () => {
@@ -482,5 +484,205 @@ describe("buildRankingSnapshot (M4)", () => {
         n.toLowerCase().includes("mode headcount ssot"),
       ),
     ).toBe(true);
+  });
+});
+
+describe("M5 squads-registry provenance + future-start policy", () => {
+  const NOW = new Date("2026-04-24T00:00:00Z");
+
+  function row(
+    overrides: Partial<EligibilityHeadcountRow> = {},
+  ): EligibilityHeadcountRow {
+    return {
+      email: "eng@meetcleo.com",
+      preferred_name: "Eng",
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: "platform",
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Finance Pillar",
+      job_title: "Senior Backend Engineer",
+      manager: "Boss",
+      line_manager_email: "boss@meetcleo.com",
+      start_date: "2024-01-01",
+      termination_date: null,
+      ...overrides,
+    };
+  }
+
+  function map(
+    overrides: Partial<EligibilityGithubMapRow> = {},
+  ): EligibilityGithubMapRow {
+    return {
+      githubLogin: "eng",
+      employeeEmail: "eng@meetcleo.com",
+      isBot: false,
+      ...overrides,
+    };
+  }
+
+  function squad(
+    overrides: Partial<EligibilitySquadsRegistryRow> = {},
+  ): EligibilitySquadsRegistryRow {
+    return {
+      name: "Platform",
+      pillar: "Engineering",
+      pmName: "Pat Manager",
+      isActive: true,
+      ...overrides,
+    };
+  }
+
+  function inputs(
+    overrides: Partial<EligibilityInputs> = {},
+  ): EligibilityInputs {
+    const base: EligibilityInputs = {
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] } as EligibilityImpactModelView,
+      now: NOW,
+    };
+    return { ...base, ...overrides };
+  }
+
+  it("omits the squads-registry provenance note when squads input is absent", () => {
+    const snapshot = buildRankingSnapshot(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+      }),
+    );
+    const haystack = snapshot.eligibility.sourceNotes.join(" | ").toLowerCase();
+    // The positive claim about the squads registry as a joined source must
+    // not appear when we never fetched it.
+    expect(haystack).not.toMatch(/canonical squad name.*joined at request time/);
+    // Instead, the page must say explicitly that it was not fetched.
+    expect(haystack).toMatch(/squads registry was not fetched/);
+    expect(snapshot.eligibility.coverage.squadsRegistryPresent).toBe(false);
+    // The `canonicalSquad` field must stay null when no registry is joined.
+    const entry = snapshot.eligibility.entries[0];
+    expect(entry.canonicalSquad).toBeNull();
+  });
+
+  it("emits the squads-registry provenance note only when squads input is supplied", () => {
+    const snapshot = buildRankingSnapshot(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Platform" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [squad({ name: "Platform" })],
+      }),
+    );
+    const haystack = snapshot.eligibility.sourceNotes.join(" | ").toLowerCase();
+    expect(haystack).toMatch(/squads registry.*canonical squad name/);
+    expect(haystack).not.toMatch(/squads registry was not fetched/);
+    expect(snapshot.eligibility.coverage.squadsRegistryPresent).toBe(true);
+    const entry = snapshot.eligibility.entries[0];
+    expect(entry.canonicalSquad).toEqual({
+      name: "Platform",
+      pillar: "Engineering",
+      pmName: "Pat Manager",
+    });
+    expect(snapshot.eligibility.coverage.squadRegistryUnmatched).toBe(0);
+  });
+
+  it("joins canonical squad metadata case-insensitively by name", () => {
+    const { entries } = buildEligibleRoster(
+      inputs({
+        headcountRows: [
+          row({ email: "a@meetcleo.com", hb_squad: "platform" }),
+          row({ email: "b@meetcleo.com", hb_squad: "unknown-squad" }),
+        ],
+        githubMap: [
+          map({ employeeEmail: "a@meetcleo.com", githubLogin: "a" }),
+          map({ employeeEmail: "b@meetcleo.com", githubLogin: "b" }),
+        ],
+        squads: [squad({ name: "Platform" })],
+      }),
+    );
+    const a = entries.find((e) => e.email === "a@meetcleo.com")!;
+    const b = entries.find((e) => e.email === "b@meetcleo.com")!;
+    expect(a.canonicalSquad?.name).toBe("Platform");
+    // Headcount's raw hb_squad is preserved for debugging even when the
+    // canonical join fails, so the page can surface the mismatch.
+    expect(b.squad).toBe("unknown-squad");
+    expect(b.canonicalSquad).toBeNull();
+  });
+
+  it("ignores inactive squads registry rows when joining canonical metadata", () => {
+    const { entries } = buildEligibleRoster(
+      inputs({
+        headcountRows: [row({ email: "a@meetcleo.com", hb_squad: "Legacy" })],
+        githubMap: [map({ employeeEmail: "a@meetcleo.com" })],
+        squads: [squad({ name: "Legacy", isActive: false })],
+      }),
+    );
+    expect(entries[0].canonicalSquad).toBeNull();
+  });
+
+  it("excludes future-start headcount rows from the roster (not ramp_up, not competitive)", () => {
+    const future = new Date(
+      NOW.getTime() + 14 * 24 * 60 * 60 * 1000,
+    )
+      .toISOString()
+      .slice(0, 10);
+    const { entries, coverage } = buildEligibleRoster(
+      inputs({
+        headcountRows: [
+          row({
+            email: "future@meetcleo.com",
+            preferred_name: "Future Hire",
+            start_date: future,
+          }),
+          row({ email: "now@meetcleo.com", preferred_name: "Now" }),
+        ],
+        githubMap: [
+          map({ employeeEmail: "future@meetcleo.com", githubLogin: "future" }),
+          map({ employeeEmail: "now@meetcleo.com", githubLogin: "now" }),
+        ],
+      }),
+    );
+    // Future-start engineer is excluded entirely — not ramp_up, not
+    // competitive, not leaver, not missing_required_data.
+    expect(entries.find((e) => e.email === "future@meetcleo.com")).toBeUndefined();
+    expect(entries.map((e) => e.email)).toEqual(["now@meetcleo.com"]);
+    expect(coverage.excludedFutureStart).toBe(1);
+    // The remaining engineer's tenure must never be negative.
+    for (const e of entries) {
+      expect(e.tenureDays === null || e.tenureDays >= 0).toBe(true);
+    }
+    // Eligibility statuses must not include any ramp_up caused by
+    // negative tenure.
+    expect(coverage.rampUp).toBe(0);
+  });
+
+  it("buildSourceNotes gates the squads note on inputs.squads presence", () => {
+    const withoutSquads = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const withSquads = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      squads: [squad()],
+    });
+    const withEmptySquads = buildSourceNotes({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      squads: [],
+    });
+    expect(withoutSquads.join(" ").toLowerCase()).toMatch(
+      /squads registry was not fetched/,
+    );
+    expect(withSquads.join(" ").toLowerCase()).toMatch(
+      /squads registry.*canonical squad name/,
+    );
+    // An empty array is treated the same as absent — no squads actually
+    // available to join, so the positive claim must not appear.
+    expect(withEmptySquads.join(" ").toLowerCase()).toMatch(
+      /squads registry was not fetched/,
+    );
   });
 });

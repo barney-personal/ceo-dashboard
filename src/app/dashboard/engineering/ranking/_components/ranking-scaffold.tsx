@@ -105,6 +105,18 @@ function CoverageSection({
             {coverage.mappedToGitHub} mapped to GitHub ·{" "}
             {coverage.presentInImpactModel} in impact model
           </div>
+          {coverage.excludedFutureStart > 0 && (
+            <div className="mt-1 normal-case tracking-normal text-foreground/70">
+              {coverage.excludedFutureStart} future-start row
+              {coverage.excludedFutureStart === 1 ? "" : "s"} excluded
+              (start_date &gt; today)
+            </div>
+          )}
+          <div className="mt-1 normal-case tracking-normal text-foreground/70">
+            {coverage.squadsRegistryPresent
+              ? `Squads registry joined · ${coverage.squadRegistryUnmatched} unmatched hb_squad label${coverage.squadRegistryUnmatched === 1 ? "" : "s"}`
+              : "Squads registry not fetched for this snapshot"}
+          </div>
         </div>
       </div>
 
@@ -159,6 +171,7 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
           <tr className="border-b border-border/60 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             <th className="py-2 pr-3 font-medium">Engineer</th>
             <th className="py-2 pr-3 font-medium">Discipline</th>
+            <th className="py-2 pr-3 font-medium">Squad</th>
             <th className="py-2 pr-3 font-medium">Tenure</th>
             <th className="py-2 pr-3 font-medium">GitHub</th>
             <th className="py-2 pr-3 font-medium">Impact model</th>
@@ -179,6 +192,30 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
               </td>
               <td className="py-2 pr-3 text-muted-foreground">
                 {e.discipline} · {e.levelLabel}
+              </td>
+              <td className="py-2 pr-3 text-muted-foreground">
+                {e.canonicalSquad ? (
+                  <>
+                    <div className="text-foreground/80">
+                      {e.canonicalSquad.name}
+                    </div>
+                    <div className="text-[10px] uppercase tracking-[0.12em]">
+                      {e.canonicalSquad.pillar}
+                      {e.canonicalSquad.pmName
+                        ? ` · PM ${e.canonicalSquad.pmName}`
+                        : ""}
+                    </div>
+                  </>
+                ) : e.squad ? (
+                  <>
+                    <div>{e.squad}</div>
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-warning">
+                      not in squads registry
+                    </div>
+                  </>
+                ) : (
+                  "—"
+                )}
               </td>
               <td className="py-2 pr-3 text-muted-foreground">
                 {e.tenureDays === null ? "—" : `${e.tenureDays}d`}
