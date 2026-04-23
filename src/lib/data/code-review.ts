@@ -227,7 +227,12 @@ export async function getCodeReviewView(
       summary: row.summary,
       caveats: (row.caveats as string[] | null) ?? [],
       standout: (row.standout as AnalysisStandout | null) ?? null,
-      githubUrl: `https://github.com/${row.repo}/pull/${row.prNumber}`,
+      // Stored repo may be a bare name (matches githubPrs schema); prepend
+      // the org so the link actually resolves. This mirrors the fullName
+      // helper in the sync runner.
+      githubUrl: row.repo.includes("/")
+        ? `https://github.com/${row.repo}/pull/${row.prNumber}`
+        : `https://github.com/${process.env.GITHUB_ORG ?? "meetcleo"}/${row.repo}/pull/${row.prNumber}`,
     };
     bucket.prs.push(entry);
     bucket.repos.add(row.repo);

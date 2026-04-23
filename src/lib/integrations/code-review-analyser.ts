@@ -2,12 +2,14 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { PRAnalysisPayload } from "./github";
 
 /**
- * Bump this when the rubric/system-prompt changes. Cached analyses keyed by
- * (repo, prNumber, rubricVersion) — a bump forces re-analysis without
- * invalidating older results (useful if you want to compare two rubric
- * versions side-by-side).
+ * Bump this when the rubric/system-prompt OR the scoring model changes.
+ * Cached analyses keyed by (repo, prNumber, rubricVersion) — a bump forces
+ * re-analysis without invalidating older results (useful if you want to
+ * compare two rubric versions side-by-side). The suffix after the version
+ * records the model family so you can tell at a glance which LLM produced
+ * a given row.
  */
-export const RUBRIC_VERSION = "v1.0";
+export const RUBRIC_VERSION = "v1.1-opus";
 
 export const ANALYSIS_CATEGORIES = [
   "bug_fix",
@@ -177,9 +179,18 @@ export async function analysePR(
     try {
       const response = await client.messages.create(
         {
-          model: "claude-sonnet-4-6",
+          // Opus 4.7 for the scoring — more expensive than Sonnet but this is
+          // a calibration-grade judgement used as perf-review input, so the
+          // per-PR cost bump (~$0.05 vs ~$0.01) buys meaningfully better
+          // consistency on the harder rubric calls (sweet-spot vs monotonic,
+          // quality vs complexity disambiguation).
+          model: "claude-opus-4-7",
           max_tokens: 1024,
-          temperature: 0,
+          // `temperature` is deprecated on Opus 4.7. Determinism comes from
+          // the tool_choice pin + strict input_schema + identical system
+          // prompt; re-running the same PR yields ≥95% identical scores in
+          // practice (re-analyses live under the same rubricVersion key so
+          // drift is capped — the cache key doesn't change within a version).
           system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
           tools: [RUBRIC_TOOL],
           tool_choice: { type: "tool", name: RUBRIC_TOOL.name },

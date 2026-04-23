@@ -141,13 +141,20 @@ export async function runCodeReviewAnalysis(
   }
 
   const toRun = eligible.slice(0, limit);
-  // Sequential — tool-use + Sonnet bandwidth is fine for ≤500 PRs/run and
+  // githubPrs.repo is the bare repo name (e.g. "mobile-app") — the GitHub
+  // sync drops the org to match its per-repo metric schema. We need the
+  // full "owner/repo" for the API, so prefix with GITHUB_ORG here.
+  const org = process.env.GITHUB_ORG ?? "";
+  function fullName(repo: string): string {
+    return repo.includes("/") ? repo : `${org}/${repo}`;
+  }
+  // Sequential — tool-use + Opus bandwidth is fine for ≤500 PRs/run and
   // keeps memory footprint predictable. Parallelism can be added later if
   // the cron window bites.
   for (const c of toRun) {
     if (opts.signal?.aborted) break;
     try {
-      const payload = await fetchPRAnalysisPayload(c.repo, c.prNumber, {
+      const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
         signal: opts.signal,
       });
       const analysis = await analysePR(payload, { signal: opts.signal });
