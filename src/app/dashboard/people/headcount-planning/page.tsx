@@ -18,11 +18,17 @@ import {
   projectFromCohorts,
   buildSurvivalFromRollingRates,
   buildSurvivalCurve,
+  buildHistoricalHeadcount,
 } from "@/lib/data/headcount-planning";
 import {
   buildEmployeeRetentionCohorts,
   classifyTenureBucket,
 } from "@/lib/data/attrition-utils";
+import {
+  captureIfNeeded,
+  computeForecastAccuracy,
+  getRecentSnapshots,
+} from "@/lib/data/headcount-snapshots";
 
 const FORECAST_THROUGH = "2027-12";
 
@@ -166,6 +172,36 @@ export default async function HeadcountPlanningPage() {
   const isEmpty =
     attrition.employees.length === 0 || talent.hireRows.length === 0;
 
+  // Snapshot today's forecast (idempotent per calendar month) + compute
+  // accuracy vs historical actuals. Best-effort: if the DB is unavailable
+  // we silently skip rather than breaking the page.
+  let accuracy: Awaited<ReturnType<typeof computeForecastAccuracy>> | null =
+    null;
+  let justCaptured = false;
+  if (!isEmpty) {
+    try {
+      const captureResult = await captureIfNeeded({
+        asOfMonth: now,
+        startingHeadcount: projection.startingHeadcount,
+        hireScenarios: scenarios,
+        attritionRates: rollingRates,
+        projection: projection.projection,
+      });
+      justCaptured = captureResult.captured;
+      const snapshots = await getRecentSnapshots(24);
+      // Build actuals map from the historical HC time-series.
+      const actuals = new Map(
+        buildHistoricalHeadcount(attrition.employees).map((row) => [
+          row.month,
+          row.headcount,
+        ]),
+      );
+      accuracy = computeForecastAccuracy(snapshots, actuals);
+    } catch (err) {
+      console.error("forecast-accuracy capture failed:", err);
+    }
+  }
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-10 2xl:max-w-[96rem]">
       <PageHeader
@@ -180,6 +216,8 @@ export default async function HeadcountPlanningPage() {
         rollingRates={rollingRates}
         hireScenarios={scenarios}
         activeTpCount={activeTpNames.length}
+        accuracy={accuracy}
+        justCaptured={justCaptured}
         emptyReason={
           isEmpty
             ? "No data yet — sync the Mode 'Attrition Tracker' and 'Talent' reports."

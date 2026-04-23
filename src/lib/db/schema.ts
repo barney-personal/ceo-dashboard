@@ -515,3 +515,34 @@ export const enpsPrompts = pgTable(
   ]
 );
 
+
+// ---------------------------------------------------------------------------
+// Headcount forecast snapshots — used for forecast accuracy tracking.
+// Snapshotted once per calendar month (idempotent) so we can compare past
+// forecasts against actual headcount as months elapse.
+// ---------------------------------------------------------------------------
+
+export const headcountForecastSnapshots = pgTable(
+  "headcount_forecast_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    /** YYYY-MM — the month when the forecast was captured. One row per
+     *  calendar month enforced by the unique index below. */
+    asOfMonth: text("as_of_month").notNull(),
+    /** Timestamp of capture — useful when diagnosing late-month
+     *  snapshots vs early-month ones. */
+    capturedAt: timestamp("captured_at").defaultNow().notNull(),
+    /** Active FTE count at time of snapshot. */
+    startingHeadcount: integer("starting_headcount").notNull(),
+    /** Hire scenarios (P10/P50/P90 hires-per-month) used in the forecast. */
+    hireScenarios: jsonb("hire_scenarios").notNull(), // { low, mid, high }
+    /** Attrition rates used in the forecast (annualised). */
+    attritionRates: jsonb("attrition_rates").notNull(), // { under1yrAnnual, over1yrAnnual }
+    /** The monthly projection: [{month, low, mid, high, hires, departures, netChange}]. */
+    projection: jsonb("projection").notNull(),
+  },
+  (table) => [
+    unique("headcount_forecast_snapshot_month_uniq").on(table.asOfMonth),
+    index("headcount_forecast_snapshot_captured_idx").on(table.capturedAt),
+  ]
+);

@@ -8,6 +8,7 @@ import type {
   CohortProjectionResult,
   HeadcountProjection,
 } from "@/lib/data/headcount-planning";
+import type { ForecastAccuracy } from "@/lib/data/headcount-snapshots";
 
 interface HeadcountPlanningClientProps {
   projection: HeadcountProjection;
@@ -19,6 +20,8 @@ interface HeadcountPlanningClientProps {
   rollingRates: { under1yrAnnual: number; over1yrAnnual: number };
   hireScenarios: { low: number; mid: number; high: number };
   activeTpCount: number;
+  accuracy: ForecastAccuracy | null;
+  justCaptured: boolean;
   emptyReason: string | null;
 }
 
@@ -50,6 +53,8 @@ export function HeadcountPlanningClient({
   rollingRates,
   hireScenarios,
   activeTpCount,
+  accuracy,
+  justCaptured,
   emptyReason,
 }: HeadcountPlanningClientProps) {
   const { actual, projection: forecast, startingHeadcount } = projection;
@@ -168,6 +173,10 @@ export function HeadcountPlanningClient({
         cohort={cohortProjection}
         rollingRates={rollingRates}
       />
+
+      {accuracy ? (
+        <ForecastAccuracyCard accuracy={accuracy} justCaptured={justCaptured} />
+      ) : null}
 
       <section>
         <h2 className="text-lg font-semibold text-foreground">
@@ -556,6 +565,237 @@ function ThreeWayCard({
         {row("Pooled KM (diag)", km)}
         {row("Per-cohort (diag)", cohort)}
       </div>
+    </div>
+  );
+}
+
+function ForecastAccuracyCard({
+  accuracy,
+  justCaptured,
+}: {
+  accuracy: ForecastAccuracy;
+  justCaptured: boolean;
+}) {
+  const { hits, latestSnapshot, mae, bias, coverage80, nHits } = accuracy;
+
+  // Sort hits by target month desc — most recent verified month first.
+  const sortedHits = [...hits].sort((a, b) =>
+    b.targetMonth.localeCompare(a.targetMonth),
+  );
+  // Collapse to the FIRST forecast we have per target month (longest
+  // horizon) — that's the most honest accuracy measure: "how well did we
+  // predict this when we first had the chance?"
+  const seen = new Set<string>();
+  const byTarget = sortedHits.filter((h) => {
+    if (seen.has(h.targetMonth)) return false;
+    seen.add(h.targetMonth);
+    return true;
+  });
+
+  // Drift flag: any hit where actual fell outside the 80% band. Filter
+  // from `sortedHits` (not raw `hits`) so `driftHits[0]` is the most
+  // recent breach by target month — the raw `hits` order is snapshot
+  // iteration order, not temporal.
+  const driftHits = sortedHits.filter((h) => !h.inBand);
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">
+          Forecast accuracy · tracking vs actuals
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Each month the dashboard snapshots today&apos;s forecast to the DB
+          (idempotent — once per calendar month). As months elapse and
+          actual headcount is known, we compare what we predicted then
+          against what actually happened.{" "}
+          {latestSnapshot ? (
+            <>
+              Latest snapshot:{" "}
+              <span className="font-mono text-foreground">
+                {latestSnapshot.asOfMonth}
+              </span>{" "}
+              captured{" "}
+              {new Date(latestSnapshot.capturedAt).toISOString().slice(0, 10)}.
+              {justCaptured ? " (just written now)" : ""}
+            </>
+          ) : (
+            <>No snapshots yet — this is the first page load of the month.</>
+          )}
+        </p>
+      </div>
+
+      {nHits === 0 ? (
+        <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+          No accuracy data yet — we need at least one past-month snapshot
+          and one elapsed month. The first comparison row will appear next
+          month.
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <AccuracyStat
+              label="Mean absolute error"
+              value={mae != null ? `${mae.toFixed(1)} FTEs` : "—"}
+              hint={`over ${nHits} past-month comparison${nHits === 1 ? "" : "s"}`}
+            />
+            <AccuracyStat
+              label="Bias (avg signed error)"
+              value={
+                bias != null
+                  ? `${bias >= 0 ? "+" : ""}${bias.toFixed(1)} FTEs`
+                  : "—"
+              }
+              hint={
+                bias != null && Math.abs(bias) < 1
+                  ? "essentially unbiased"
+                  : bias != null && bias > 0
+                    ? "forecast is under-predicting actuals"
+                    : "forecast is over-predicting actuals"
+              }
+            />
+            <AccuracyStat
+              label="80% band coverage"
+              value={
+                coverage80 != null
+                  ? `${(coverage80 * 100).toFixed(0)}%`
+                  : "—"
+              }
+              hint={
+                coverage80 != null && coverage80 >= 0.7
+                  ? "well-calibrated"
+                  : "band too narrow"
+              }
+              tone={
+                coverage80 != null && coverage80 < 0.6 ? "warn" : "neutral"
+              }
+            />
+          </div>
+
+          {driftHits.length > 0 ? (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground">
+              <span className="font-semibold">Drift alert:</span>{" "}
+              <span className="text-muted-foreground">
+                {driftHits.length} month
+                {driftHits.length === 1 ? "" : "s"} where actual headcount
+                fell outside the 80% band we forecasted. Most recent:{" "}
+                <span className="font-mono text-foreground">
+                  {driftHits[0].targetMonth}
+                </span>{" "}
+                (actual {driftHits[0].actual}, forecasted{" "}
+                {driftHits[0].forecastedMid.toFixed(0)} with band{" "}
+                {driftHits[0].forecastedLow.toFixed(0)}–
+                {driftHits[0].forecastedHigh.toFixed(0)}).
+              </span>
+            </div>
+          ) : null}
+
+          <div className="overflow-x-auto rounded-xl border border-border/60 bg-card shadow-warm">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30 text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2.5 text-left font-medium">
+                    Target month
+                  </th>
+                  <th className="px-4 py-2.5 text-left font-medium">
+                    Forecasted on
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Horizon
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Forecast P50
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Actual
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    Error
+                  </th>
+                  <th className="px-4 py-2.5 text-right font-medium">
+                    In band
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {byTarget.map((h) => (
+                  <tr
+                    key={`${h.targetMonth}-${h.fromAsOfMonth}`}
+                    className="border-t border-border/40 last:border-b-0"
+                  >
+                    <td className="px-4 py-2 font-semibold text-foreground">
+                      {h.targetMonth}
+                    </td>
+                    <td className="px-4 py-2 font-mono text-xs text-muted-foreground">
+                      {h.fromAsOfMonth}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
+                      {h.horizonMonths}mo
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
+                      {h.forecastedMid.toFixed(0)}
+                    </td>
+                    <td className="px-4 py-2 text-right font-semibold tabular-nums text-foreground">
+                      {h.actual.toFixed(0)}
+                    </td>
+                    <td
+                      className={`px-4 py-2 text-right tabular-nums ${
+                        Math.abs(h.error) > 5
+                          ? "font-semibold"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {h.error >= 0 ? "+" : ""}
+                      {h.error.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      {h.inBand ? (
+                        <span className="text-success">✓</span>
+                      ) : (
+                        <span className="text-warning">✗</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function AccuracyStat({
+  label,
+  value,
+  hint,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "neutral" | "warn";
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-4 shadow-warm ${
+        tone === "warn"
+          ? "border-warning/30 bg-warning/5"
+          : "border-border/60 bg-card"
+      }`}
+    >
+      <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground/70">
+        {label}
+      </div>
+      <div className="mt-2 text-xl font-semibold tabular-nums text-foreground">
+        {value}
+      </div>
+      {hint ? (
+        <div className="mt-1 text-[11px] text-muted-foreground/80">
+          {hint}
+        </div>
+      ) : null}
     </div>
   );
 }
