@@ -63,8 +63,19 @@ export interface AnalyseRunOptions {
   signal?: AbortSignal;
   /** Max PRs to analyse per call (keeps a manual trigger bounded). */
   limit?: number;
+  /** Bounded worker-pool size for parallel PR analysis. */
+  concurrency?: number;
   /** Re-analyse already-cached rows (use sparingly — blows cost). */
   force?: boolean;
+}
+
+const DEFAULT_ANALYSIS_CONCURRENCY = 1;
+const MAX_ANALYSIS_CONCURRENCY = 8;
+
+function getAnalysisConcurrency(override?: number): number {
+  const raw = override ?? Number(process.env.CODE_REVIEW_ANALYSIS_CONCURRENCY ?? "");
+  const parsed = Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_ANALYSIS_CONCURRENCY;
+  return Math.max(1, Math.min(MAX_ANALYSIS_CONCURRENCY, parsed));
 }
 
 /**
@@ -82,6 +93,7 @@ export async function runCodeReviewAnalysis(
   const start = Date.now();
   const windowDays = opts.windowDays ?? CODE_REVIEW_WINDOW_DAYS;
   const limit = opts.limit ?? 500;
+  const concurrency = getAnalysisConcurrency(opts.concurrency);
   const excluded = getExcludedRepos();
 
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
@@ -174,33 +186,39 @@ export async function runCodeReviewAnalysis(
   function fullName(repo: string): string {
     return repo.includes("/") ? repo : `${org}/${repo}`;
   }
-  // Sequential — tool-use + Opus bandwidth is fine for ≤500 PRs/run and
-  // keeps memory footprint predictable. Parallelism can be added later if
-  // the cron window bites.
-  for (const c of toRun) {
-    if (opts.signal?.aborted) break;
-    try {
-      const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
-        signal: opts.signal,
-      });
-      payload.review.revertWithin14d = await detectRevertWithin14d(
-        c.repo,
-        c.prNumber,
-        c.mergedAt,
-        payload.mergeSha,
-        payload.title,
-      );
-      const analysis = await analysePR(payload, { signal: opts.signal });
-      await upsertAnalysis(c, payload, analysis);
-      analysed++;
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
-      Sentry.captureException(err, {
-        tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
-      });
-    }
-  }
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, toRun.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (!opts.signal?.aborted) {
+        const index = nextIndex++;
+        const c = toRun[index];
+        if (!c) return;
+
+        try {
+          const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
+            signal: opts.signal,
+          });
+          payload.review.revertWithin14d = await detectRevertWithin14d(
+            c.repo,
+            c.prNumber,
+            c.mergedAt,
+            payload.mergeSha,
+            payload.title,
+          );
+          const analysis = await analysePR(payload, { signal: opts.signal });
+          await upsertAnalysis(c, payload, analysis);
+          analysed++;
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
+          Sentry.captureException(err, {
+            tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
+          });
+        }
+      }
+    }),
+  );
 
   return {
     candidatesConsidered: candidates.length,
