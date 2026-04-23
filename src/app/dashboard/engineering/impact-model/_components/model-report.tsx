@@ -474,7 +474,14 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
           volume × log(lines changed), which under-credits review/design work. Perf-rating
           features are imputed with the median when missing, which dilutes their signal. Causal
           interpretations not warranted — treat high-permutation-importance features as{" "}
-          <em>correlates</em> of impact, not levers.
+          <em>correlates</em> of impact, not levers.{" "}
+          <span className="font-medium">Protected attributes</span> — gender and work-location are
+          deliberately excluded from the feature set so the model cannot reflect or amplify
+          protected-attribute gaps.{" "}
+          <span className="font-medium">Re-identification</span> — although the committed JSON uses
+          opaque &ldquo;Engineer NNN&rdquo; pseudonyms, the combination of pillar, discipline,
+          level, and tenure-in-months is often unique in a ~141-person org, so a reader who knows
+          the team could cross-reference entries back to individuals. Treat outputs accordingly.
         </div>
       </section>
     </div>
