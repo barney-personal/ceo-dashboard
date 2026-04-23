@@ -166,7 +166,11 @@ export default async function DashboardOverview() {
 
       {/* Personalised daily briefing — streams in so it doesn't block the rest */}
       <Suspense fallback={<DailyBriefingSkeleton />}>
-        <DailyBriefing email={briefingEmail} role={role} />
+        <DailyBriefing
+          email={briefingEmail}
+          role={role}
+          userId={effectiveUserId}
+        />
       </Suspense>
 
       {/* Hero metrics */}

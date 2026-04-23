@@ -5,6 +5,7 @@ import type { Role } from "@/lib/auth/roles";
 interface DailyBriefingProps {
   email: string | null;
   role: Role;
+  userId: string | null;
 }
 
 /**
@@ -39,10 +40,10 @@ function formatFreshness(generatedAt: Date): string {
   });
 }
 
-export async function DailyBriefing({ email, role }: DailyBriefingProps) {
+export async function DailyBriefing({ email, role, userId }: DailyBriefingProps) {
   if (!email) return null;
 
-  const briefing = await getOrGenerateBriefing({ email, role });
+  const briefing = await getOrGenerateBriefing({ email, role, userId });
   if (!briefing) return null;
 
   // Split on blank lines so multi-paragraph briefings render as separate <p>.

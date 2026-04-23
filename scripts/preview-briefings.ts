@@ -67,11 +67,22 @@ async function previewOne(email: string, role: Role): Promise<void> {
       `  ${p.squad} / ${p.pillar} / ${p.function} · tenure ${p.tenureMonths}mo · ${p.directReportCount} direct reports`,
   );
 
+  const sokr = context.squadOkrs;
   const pokr = context.pillarOkrs;
+  console.log(
+    `  Squad OKRs:  ${sokr.total} total — ${sokr.onTrack} on-track / ${sokr.atRisk} at-risk / ${sokr.behind} behind / ${sokr.notStarted} not-started`,
+  );
   console.log(
     `  Pillar OKRs: ${pokr.total} total — ${pokr.onTrack} on-track / ${pokr.atRisk} at-risk / ${pokr.behind} behind / ${pokr.notStarted} not-started`,
   );
-  console.log(`  Squad OKRs in context: ${context.squadOkrs.length}`);
+  if (context.meetings) {
+    console.log(
+      `  Meetings today: ${context.meetings.todayCount}${context.meetings.firstTitle ? ` · next: "${context.meetings.firstTitle}"` : ""}`,
+    );
+  }
+  console.log(
+    `  Sections: ${context.relevantDashboardSections.join(", ")}`,
+  );
 
   const result = await generateBriefing(context);
   const elapsedMs = Date.now() - start;

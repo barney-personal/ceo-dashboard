@@ -104,21 +104,25 @@ function waitForBackoff(ms: number, signal: AbortSignal): Promise<void> {
  */
 const SYSTEM_PROMPT = `You write short, personalised daily briefings for employees of Cleo — a consumer fintech building an AI money assistant.
 
-Your reader has just opened the internal CEO dashboard. Your job is to ground them in the state of the business and what is most relevant to them, specifically.
+Your reader has just opened the internal CEO dashboard. Your job is to ground them in the state of the business and what is most relevant to *them* — their squad first, their pillar second, the company third.
 
 Tone & style:
 - Warm, direct, specific. Write like a trusted chief of staff, not a press release.
 - Address the person by first name in the opening line.
-- 120–180 words. Flowing prose, not bullet points. Markdown allowed for **bold** emphasis on a metric or name.
-- Never invent numbers, squad names, or OKRs. Use only what's in the context JSON.
+- 120–180 words. Flowing prose, not bullet points. Markdown allowed for **bold** emphasis on a metric, KR, or section name.
+- Never invent numbers, squad names, KRs, or meeting titles. Use only what's in the context JSON.
 - If a data point is missing ("null"), gracefully skip it — do not say "data unavailable" or acknowledge gaps.
 - Past tense for what happened, present tense for current state, no filler ("Hope you're well").
 
-Content priority (in this order — include what's relevant, skip what isn't):
-1. Acknowledge their squad/pillar and anchor the briefing around it. If the person is a manager or leadership, reflect that vantage point.
-2. Surface the most pressing OKR signal in their pillar: anything behind/at-risk gets named specifically. If everything in their pillar is on-track, say so and mention a concrete recent KR.
-3. Give one relevant company-level number: LTV:Paid CAC ratio (guardrail is 3x) for commercial/growth-adjacent roles, MAU for product, headcount/hires for people/ops roles, ARR for leadership. Pick the one that best fits their role.
-4. Close with what to look out for today — one specific thing tied to their role.
+Content priority (include what's relevant, skip what isn't):
+1. **Start with their own squad.** The JSON field "squadOkrs" holds KRs for the reader's squad. If there are any behind/at-risk, name them specifically with actual vs target. If everything is on-track, say so and call out a concrete current KR. If squadOkrs is empty, fall through to the pillar.
+2. **Then the rest of their pillar.** "pillarOkrs" holds sibling squads' KRs in the same pillar. Mention the pressing ones briefly — one or two named KRs, or a "X of Y pillar KRs are at risk / behind" summary. Do not dwell here if squadOkrs already gave a strong signal.
+3. **One relevant company number.** Pick the single metric that fits their role best:
+   - LTV:Paid CAC ratio (3x guardrail) for commercial, growth, marketing, finance, leadership
+   - MAU for product, engineering, chat/wealth/credit squads
+   - Headcount / ARR for People & Talent, Ops, Leadership
+4. **Close with what to watch today.** One specific thing tied to their role. You may reference dashboard sections by name — the context JSON lists the ones relevant to this reader under "relevantDashboardSections" (e.g. "Unit Economics", "Engineering", "OKRs"). Refer to them by those exact names. Do not invent URLs.
+5. If "meetings" is present and non-zero, you may reference the number of meetings today, and optionally the first upcoming meeting's title. Keep this to one sentence at most — it's colour, not the point.
 
 Return only the briefing prose. No preamble, no sign-off, no "Here's your briefing:" header.`;
 
@@ -157,6 +161,23 @@ function formatContextJson(ctx: BriefingContext): string {
       headcount: ctx.company.headcount,
       arr: formatUsdCompact(ctx.company.arrUsd),
     },
+    squadOkrs: {
+      counts: {
+        total: ctx.squadOkrs.total,
+        onTrack: ctx.squadOkrs.onTrack,
+        atRisk: ctx.squadOkrs.atRisk,
+        behind: ctx.squadOkrs.behind,
+        notStarted: ctx.squadOkrs.notStarted,
+      },
+      recent: ctx.squadOkrs.recent.map((o) => ({
+        objective: o.objective,
+        kr: o.kr,
+        status: o.status,
+        actual: o.actual,
+        target: o.target,
+        postedDate: o.postedAtIso.slice(0, 10),
+      })),
+    },
     pillarOkrs: {
       counts: {
         total: ctx.pillarOkrs.total,
@@ -175,14 +196,14 @@ function formatContextJson(ctx: BriefingContext): string {
         postedDate: o.postedAtIso.slice(0, 10),
       })),
     },
-    squadOkrs: ctx.squadOkrs.map((o) => ({
-      objective: o.objective,
-      kr: o.kr,
-      status: o.status,
-      actual: o.actual,
-      target: o.target,
-      postedDate: o.postedAtIso.slice(0, 10),
-    })),
+    meetings: ctx.meetings
+      ? {
+          todayCount: ctx.meetings.todayCount,
+          firstTitle: ctx.meetings.firstTitle,
+          firstStartTime: ctx.meetings.firstStartTimeIso,
+        }
+      : null,
+    relevantDashboardSections: ctx.relevantDashboardSections,
   };
   return JSON.stringify(payload, null, 2);
 }

@@ -29,9 +29,11 @@ function todayUtcDate(): string {
 export async function getOrGenerateBriefing({
   email,
   role,
+  userId,
 }: {
   email: string;
   role: Role;
+  userId?: string | null;
 }): Promise<DailyBriefing | null> {
   const lowerEmail = email.toLowerCase();
   const briefingDate = todayUtcDate();
@@ -70,7 +72,7 @@ export async function getOrGenerateBriefing({
 
   let context;
   try {
-    context = await getBriefingContext({ email: lowerEmail, role });
+    context = await getBriefingContext({ email: lowerEmail, role, userId });
   } catch (error) {
     Sentry.captureException(error, {
       tags: { integration: "llm-briefing" },
