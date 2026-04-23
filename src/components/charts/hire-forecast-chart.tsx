@@ -24,6 +24,13 @@ export interface HireForecastBandPoint {
   high: number;
 }
 
+export interface HireForecastCallout {
+  /** ISO date aligned to an actual or forecast point (YYYY-MM-DD). */
+  date: string;
+  /** Short label shown above the point — falls back to the date. */
+  label?: string;
+}
+
 interface HireForecastChartProps {
   /** Historical actuals — solid line ending at `forecastStart - 1`. */
   actual: HireForecastActualPoint[];
@@ -36,6 +43,9 @@ interface HireForecastChartProps {
   className?: string;
   /** Brand colour used for the actual and mid-forecast lines. */
   color?: string;
+  /** Optional mid-horizon markers — e.g. end-of-year snapshots. Each
+   *  renders a vertical dotted line + label with the forecast P50 value. */
+  callouts?: HireForecastCallout[];
 }
 
 export function HireForecastChart({
@@ -47,6 +57,7 @@ export function HireForecastChart({
   modeUrl,
   className,
   color = "#2563eb",
+  callouts,
 }: HireForecastChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -314,6 +325,56 @@ export function HireForecastChart({
         .text("forecast →");
     }
 
+    // Mid-horizon callouts — vertical dotted line + label showing P50 value.
+    if (callouts && callouts.length > 0 && forecastPts.length > 0) {
+      for (const c of callouts) {
+        const targetTime = new Date(c.date).getTime();
+        if (!Number.isFinite(targetTime)) continue;
+        // Snap to nearest forecast point for the P50 lookup.
+        const target = forecastPts.reduce((best, p) =>
+          Math.abs(p.date.getTime() - targetTime) <
+          Math.abs(best.date.getTime() - targetTime)
+            ? p
+            : best,
+        );
+        const cx = x(target.date);
+        // Vertical dotted line from x-axis up to the P50 point.
+        g.append("line")
+          .attr("x1", cx)
+          .attr("x2", cx)
+          .attr("y1", y(target.mid))
+          .attr("y2", innerHeight)
+          .attr("stroke", color)
+          .attr("stroke-width", 1)
+          .attr("stroke-dasharray", "2,3")
+          .attr("opacity", 0.45);
+        // Dot on the P50 line.
+        g.append("circle")
+          .attr("cx", cx)
+          .attr("cy", y(target.mid))
+          .attr("r", 3)
+          .attr("fill", color);
+        // Label group above the dot — background rect + text for legibility
+        // against the fan fill.
+        const labelText = `${c.label ?? c.date} · ${target.mid.toFixed(0)}`;
+        const labelY = y(target.mid) - 12;
+        const labelGroup = g.append("g");
+        labelGroup
+          .append("text")
+          .attr("x", cx)
+          .attr("y", labelY)
+          .attr("text-anchor", "middle")
+          .attr("fill", color)
+          .attr("font-size", "11px")
+          .attr("font-weight", 600)
+          .attr("paint-order", "stroke")
+          .attr("stroke", "white")
+          .attr("stroke-width", 4)
+          .attr("stroke-linejoin", "round")
+          .text(labelText);
+      }
+    }
+
     // End-of-horizon labels on the right edge
     if (forecastPts.length > 0) {
       const last = forecastPts[forecastPts.length - 1];
@@ -479,7 +540,7 @@ export function HireForecastChart({
       forecastDot.style("opacity", 0);
       tooltip.style("opacity", 0);
     });
-  }, [actual, forecast, yLabel, color]);
+  }, [actual, forecast, yLabel, color, callouts]);
 
   useEffect(() => {
     draw();
