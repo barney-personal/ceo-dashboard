@@ -18,6 +18,7 @@ import {
   type TalentHireRow,
   type TalentTargetRow,
 } from "@/lib/data/talent-utils";
+import { TALENT_ROSTER_AS_OF } from "@/lib/config/talent-roster";
 
 interface TalentPageClientProps {
   hireRows: TalentHireRow[];
@@ -346,6 +347,10 @@ function RecruiterTable({
             projected next {PROJECTION_MONTHS} months, and current-quarter
             hires vs target. Click any column header to sort.
           </p>
+          <p className="mt-1 text-[11px] italic text-muted-foreground/70">
+            Employment status reflects Lucy's roster as of {TALENT_ROSTER_AS_OF}
+            , overriding HiBob where HR hasn&apos;t yet processed an exit.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
           <FilterButtonGroup
@@ -407,15 +412,29 @@ function RecruiterTable({
                         <span className={isDeparted ? "opacity-70" : ""}>
                           {s.recruiter}
                         </span>
-                        {isDeparted && (
-                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground">
-                            {formatTerminationLabel(s.employment.terminationDate)}
+                        {isDeparted &&
+                          s.employment.terminationDate && (
+                            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground">
+                              {formatTerminationLabel(s.employment.terminationDate)}
+                            </span>
+                          )}
+                        {isDeparted && !s.employment.terminationDate && (
+                          <span
+                            className="rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-warning"
+                            title={s.employment.overrideNote ?? undefined}
+                          >
+                            Exit (HR lag)
                           </span>
                         )}
                       </div>
                       {s.employment.jobTitle && (
                         <div className="mt-0.5 text-[11px] font-normal text-muted-foreground/80">
                           {s.employment.jobTitle}
+                        </div>
+                      )}
+                      {s.employment.overrideNote && (
+                        <div className="mt-0.5 text-[11px] font-normal italic text-muted-foreground/60">
+                          {s.employment.overrideNote}
                         </div>
                       )}
                     </td>

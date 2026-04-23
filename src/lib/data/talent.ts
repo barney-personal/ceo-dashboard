@@ -7,7 +7,12 @@ import {
   rowNum,
   validateModeColumns,
 } from "./mode";
-import { buildEmploymentIndex, classifyRole } from "./talent-utils";
+import {
+  applyRosterOverride,
+  buildEmploymentIndex,
+  classifyRole,
+} from "./talent-utils";
+import { TALENT_ROSTER } from "@/lib/config/talent-roster";
 import type {
   HrEmploymentRecord,
   TalentData,
@@ -26,6 +31,7 @@ export {
   type EmploymentRecord,
   type HrEmploymentRecord,
   type RecruiterRole,
+  type RosterOverrideEntry,
   aggregateHiresByRecruiterMonth,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
@@ -34,6 +40,7 @@ export {
   trailing3mAvg,
   onlyHires,
   classifyRole,
+  applyRosterOverride,
 } from "./talent-utils";
 
 const ALL_HIRES_COLUMNS = [
@@ -201,12 +208,19 @@ export async function getTalentData(): Promise<TalentData> {
     })
     .filter((r) => Boolean(r.displayName));
 
-  const employmentByRecruiter = buildEmploymentIndex(
+  const hrEmployment = buildEmploymentIndex(
     headcountRecords,
     recruiterNames,
     // Names on the target QTD roster are canonical recruiters — if HR has
     // no record for them (external contractors), still treat them as TPs.
     targets.map((t) => t.recruiter),
+  );
+
+  // Apply Lucy's roster override — her snapshot is more current than HR's
+  // lifecycle_status, especially for recent exits.
+  const employmentByRecruiter = applyRosterOverride(
+    hrEmployment,
+    TALENT_ROSTER,
   );
 
   const syncedAt =

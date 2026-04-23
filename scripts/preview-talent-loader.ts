@@ -63,35 +63,27 @@ async function main() {
     undefined,
     data.employmentByRecruiter,
   );
-  console.log("\nAll recruiters by hires L12m (with employment status):");
+  console.log("\nAll recruiters by hires L12m (with employment + role):");
   console.log(
     [
       "recruiter",
       "status",
+      "role",
+      "jobTitle",
       "term",
-      "tech",
       "L12m",
-      "t3m",
-      "qtd",
-      "target",
-      "attain",
-    ].join("\t"),
+    ].join("  |  "),
   );
   for (const s of summaries) {
     console.log(
       [
-        s.recruiter,
-        s.employment.status,
-        s.employment.terminationDate ?? "-",
-        s.tech ?? "-",
+        s.recruiter.padEnd(24),
+        s.employment.status.padEnd(8),
+        s.role.padEnd(15),
+        (s.employment.jobTitle ?? "-").padEnd(32),
+        (s.employment.terminationDate ?? "-").padEnd(12),
         s.hiresLast12m.toFixed(1),
-        s.trailing3mAvg.toFixed(2),
-        s.hiresQtd ?? "-",
-        s.targetQtd ?? "-",
-        s.attainmentQtd == null
-          ? "-"
-          : `${(s.attainmentQtd * 100).toFixed(0)}%`,
-      ].join("\t"),
+      ].join("  |  "),
     );
   }
 

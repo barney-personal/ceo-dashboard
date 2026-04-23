@@ -56,6 +56,9 @@ export interface EmploymentRecord {
   department: string | null;
   /** Raw job title from HR, kept for display. */
   jobTitle: string | null;
+  /** When a manual roster override applies, this carries Lucy's note
+   *  (e.g. "Exit per Lucy's Apr 23 roster — HR not yet updated"). */
+  overrideNote?: string;
 }
 
 export function classifyRole(jobTitle: string | null): RecruiterRole {
@@ -470,4 +473,68 @@ function nameVariants(raw: string): string[] {
     variants.add(`${first} ${last}`.toLowerCase());
   }
   return [...variants];
+}
+
+export type RosterOverrideEntry = {
+  status: "active" | "departed";
+  role: RecruiterRole;
+  aliases?: string[];
+  notes?: string;
+};
+
+/**
+ * Apply a manual override map (e.g. Lucy's spreadsheet roster) on top of the
+ * HR-derived employment index. The override's status and role win, and its
+ * `notes` is copied onto the record so the UI can surface it. Mutates and
+ * returns the same map for convenience.
+ */
+export function applyRosterOverride(
+  employmentByRecruiter: Record<string, EmploymentRecord>,
+  roster: Record<string, RosterOverrideEntry>,
+): Record<string, EmploymentRecord & { overrideNote?: string }> {
+  const byVariant = new Map<string, RosterOverrideEntry & { canonicalName: string }>();
+  for (const [name, entry] of Object.entries(roster)) {
+    const allNames = [name, ...(entry.aliases ?? [])];
+    for (const n of allNames) {
+      for (const v of nameVariants(n)) {
+        byVariant.set(v, { ...entry, canonicalName: name });
+      }
+    }
+  }
+
+  const result: Record<
+    string,
+    EmploymentRecord & { overrideNote?: string }
+  > = {};
+
+  // First, promote every roster entry whose name isn't already in the index
+  // — these are people Lucy knows about who never showed up in all_hires.
+  // They won't get rendered in the table (no hire rows to build a summary
+  // from) but the lookup is useful for targets and future extensions.
+  for (const recruiter of Object.keys(employmentByRecruiter)) {
+    const base = employmentByRecruiter[recruiter];
+    let override: (RosterOverrideEntry & { canonicalName: string }) | undefined;
+    for (const v of nameVariants(recruiter)) {
+      override = byVariant.get(v);
+      if (override) break;
+    }
+    if (override) {
+      result[recruiter] = {
+        ...base,
+        status: override.status,
+        role: override.role,
+        terminationDate:
+          override.status === "departed"
+            ? // Keep HR's termination date if we have it — it's more precise
+              // than the roster's "departed per Apr 23 snapshot".
+              base.terminationDate ?? null
+            : null,
+        overrideNote: override.notes,
+      };
+    } else {
+      result[recruiter] = base;
+    }
+  }
+
+  return result;
 }

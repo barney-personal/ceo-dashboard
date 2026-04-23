@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addMonths,
   aggregateHiresByRecruiterMonth,
+  applyRosterOverride,
   buildEmploymentIndex,
   buildRecruiterSummaries,
   buildTeamChartSeries,
@@ -13,6 +14,7 @@ import {
   predictHiresPerRecruiter,
   sumToTeamMonthly,
   trailing3mAvg,
+  type EmploymentRecord,
   type TalentHireRow,
   type TalentTargetRow,
 } from "../talent-utils";
@@ -326,6 +328,83 @@ describe("buildEmploymentIndex", () => {
       ["Angela Komornik"],
     );
     expect(idx["Angela Komornik"]?.status).toBe("active");
+  });
+});
+
+describe("applyRosterOverride", () => {
+  const baseHr: Record<string, EmploymentRecord> = {
+    "Marta Kowalczyk": {
+      status: "active",
+      role: "talent_partner",
+      terminationDate: null,
+      matchedName: "Marta Kowalczyk",
+      department: "People",
+      jobTitle: "Talent Partner II",
+    },
+    "Beth Baron": {
+      status: "unknown",
+      role: "talent_partner",
+      terminationDate: null,
+      matchedName: null,
+      department: null,
+      jobTitle: null,
+    },
+    "Someone Else": {
+      status: "active",
+      role: "talent_partner",
+      terminationDate: null,
+      matchedName: "Someone Else",
+      department: "People",
+      jobTitle: "Talent Partner",
+    },
+  };
+
+  it("flips HR 'active' to 'departed' when the roster says so", () => {
+    const out = applyRosterOverride(baseHr, {
+      "Marta Kowalczyk": {
+        status: "departed",
+        role: "talent_partner",
+        notes: "Exit per Lucy's Apr 23 roster — HR not yet updated",
+      },
+    });
+    expect(out["Marta Kowalczyk"].status).toBe("departed");
+    expect(out["Marta Kowalczyk"].overrideNote).toContain("Exit per Lucy");
+  });
+
+  it("passes through HR state when there is no override", () => {
+    const out = applyRosterOverride(baseHr, {});
+    expect(out["Someone Else"].status).toBe("active");
+    expect(out["Someone Else"].overrideNote).toBeUndefined();
+  });
+
+  it("matches aliases", () => {
+    const out = applyRosterOverride(baseHr, {
+      "Bethany Baron": {
+        status: "active",
+        role: "talent_partner",
+        aliases: ["Beth Baron"],
+      },
+    });
+    expect(out["Beth Baron"].status).toBe("active");
+  });
+
+  it("clears termination date when flipping departed→active", () => {
+    const rehired = {
+      ...baseHr["Marta Kowalczyk"],
+      status: "departed" as const,
+      terminationDate: "2025-12-01",
+    };
+    const out = applyRosterOverride(
+      { "Marta Kowalczyk": rehired },
+      {
+        "Marta Kowalczyk": {
+          status: "active",
+          role: "talent_partner",
+        },
+      },
+    );
+    expect(out["Marta Kowalczyk"].status).toBe("active");
+    expect(out["Marta Kowalczyk"].terminationDate).toBeNull();
   });
 });
 

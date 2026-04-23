@@ -162,7 +162,7 @@ describe("TalentPageClient", () => {
       { recruiter: "Beth", tech: "Data", hiresQtd: 8, targetQtd: 6, teamQtd: 20 },
     ];
     const employmentByRecruiter: Record<string, EmploymentRecord> = {
-      Lucy: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Lucy", department: "People", jobTitle: "Talent Partner" },
+      Lucy: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Lucy", department: "People", jobTitle: "Talent Partner" } as EmploymentRecord,
       Ellis: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Ellis", department: "People", jobTitle: "Talent Partner" },
       Beth: { status: "active", role: "talent_partner", terminationDate: null, matchedName: "Beth", department: "People", jobTitle: "Talent Partner" },
     };
