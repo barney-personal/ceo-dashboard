@@ -57,6 +57,45 @@ const OKR_WINDOW_DAYS = 14;
 const MAX_PILLAR_OKR_ENTRIES = 10;
 const MAX_SQUAD_OKR_ENTRIES = 6;
 
+/**
+ * Normalise a pillar name for matching. Headcount uses "Growth Pillar",
+ * OKRs use "Growth". Also OKRs sometimes combine pillars into one key like
+ * "Access, Trust & Money, Risk & Payments" — we split and normalise each.
+ */
+function normalisePillar(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\bpillar\b/g, "")
+    .replace(/\bdecisioning\b/g, "")
+    .replace(/\bproducts?\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function okrKeyMatchesPersonPillar(okrKey: string, personPillar: string): boolean {
+  const target = normalisePillar(personPillar);
+  if (!target) return false;
+  const okrNorm = normalisePillar(okrKey);
+  if (okrNorm === target) return true;
+  // OKR keys sometimes combine pillars (e.g. "Access, Trust & Money, Risk &
+  // Payments" → "access trust money risk payments"). Match if the target
+  // tokens appear contiguously anywhere as a whole-word run.
+  return new RegExp(`(^|\\s)${target}($|\\s)`).test(okrNorm);
+}
+
+function collectOkrsForPillar(
+  okrsByPillar: Map<string, OkrSummary[]>,
+  personPillar: string,
+): OkrSummary[] {
+  const matched: OkrSummary[] = [];
+  for (const [key, okrs] of okrsByPillar.entries()) {
+    if (okrKeyMatchesPersonPillar(key, personPillar)) {
+      matched.push(...okrs);
+    }
+  }
+  return matched;
+}
+
 function firstNameOf(fullName: string): string {
   const first = fullName.trim().split(/\s+/)[0];
   return first || fullName;
@@ -171,8 +210,9 @@ export async function getBriefingContext({
     : null;
 
   const okrsByPillar = okrsResult.data ?? new Map<string, OkrSummary[]>();
-  const pillarKey = person?.pillar ?? "";
-  const pillarOkrs = okrsByPillar.get(pillarKey) ?? [];
+  const pillarOkrs = person
+    ? collectOkrsForPillar(okrsByPillar, person.pillar)
+    : [];
 
   const company: BriefingCompanyMetrics = {
     ltvPaidCacRatio: ltvCacResult.data ?? null,
