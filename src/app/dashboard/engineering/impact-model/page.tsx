@@ -54,7 +54,11 @@ export default async function ImpactModelPage({
   let targetName: string | null = null;
   if (canPickAnyManager && params.manager) {
     const candidate = params.manager.toLowerCase();
-    const matched = allManagers.find((m) => m.email === candidate);
+    // getAllManagers already lowercases emails, but compare case-insensitively
+    // here too — belt-and-braces in case that normalisation ever regresses.
+    const matched = allManagers.find(
+      (m) => m.email.toLowerCase() === candidate,
+    );
     if (matched) {
       targetEmail = matched.email;
       targetName = matched.name;

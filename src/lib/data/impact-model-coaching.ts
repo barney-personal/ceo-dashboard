@@ -80,8 +80,9 @@ const FEATURE_COPY: Record<string, FeatureCopy> = {
   latest_rating: {
     actionable: false,
     strength: () => "Recent performance rating is strong.",
-    conversation: () =>
-      "Most recent rating is lower than expected — is there a recent change (manager, team, scope) worth understanding?",
+    // Deliberately no `conversation` — a manager doesn't "coach someone to
+    // have a better rating"; the rating is the outcome. Surface it only as
+    // a strength; let negative contributions stay silent in coaching cards.
   },
 
   ai_tokens_log: {

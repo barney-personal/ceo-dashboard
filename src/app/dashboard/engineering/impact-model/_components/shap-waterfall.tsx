@@ -47,7 +47,6 @@ const GROUP_COLOR: Record<string, string> = {
   "Performance review": "#6a8b4c",
   "PR cadence": "#2d6a5c",
   "PR habits": "#4a8b7c",
-  "Code style": "#2d6a5c",
   Pillar: "#8b5a9c",
   Discipline: "#9c5d2e",
   Level: "#4a6b7c",
