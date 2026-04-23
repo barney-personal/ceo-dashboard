@@ -359,6 +359,60 @@ describe("applyRosterOverride", () => {
     },
   };
 
+  it("defers to HR's role when HR has a non-TP job title (keeps SVP Tech out of the TP filter)", () => {
+    // Lucy tracks Sam Taylor's hires because he staffs his own engineering
+    // org; his HR title is SVP of Technology. The override should not
+    // promote him to talent_partner.
+    const out = applyRosterOverride(
+      {
+        "Sam Taylor": {
+          status: "active",
+          role: "other",
+          terminationDate: null,
+          matchedName: "Sam Taylor",
+          department: "Exec",
+          jobTitle: "SVP of Technology",
+        },
+      },
+      {
+        "Sam Taylor": {
+          status: "active",
+          role: "talent_partner",
+          notes: "Started January 2026",
+        },
+      },
+    );
+    expect(out["Sam Taylor"].status).toBe("active");
+    expect(out["Sam Taylor"].role).toBe("other");
+    expect(out["Sam Taylor"].overrideNote).toContain("Started January");
+  });
+
+  it("uses the override role when HR has no job title", () => {
+    // Mario Tavares isn't in HiBob at all (external contractor); the roster
+    // is the only source of truth.
+    const out = applyRosterOverride(
+      {
+        "Mario Tavares": {
+          status: "unknown",
+          role: "talent_partner",
+          terminationDate: null,
+          matchedName: null,
+          department: null,
+          jobTitle: null,
+        },
+      },
+      {
+        "Mario Tavares": {
+          status: "departed",
+          role: "talent_partner",
+          notes: "Exit per Lucy's Apr 23 roster — HR not yet updated",
+        },
+      },
+    );
+    expect(out["Mario Tavares"].role).toBe("talent_partner");
+    expect(out["Mario Tavares"].status).toBe("departed");
+  });
+
   it("flips HR 'active' to 'departed' when the roster says so", () => {
     const out = applyRosterOverride(baseHr, {
       "Marta Kowalczyk": {

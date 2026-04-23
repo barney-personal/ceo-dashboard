@@ -484,9 +484,14 @@ export type RosterOverrideEntry = {
 
 /**
  * Apply a manual override map (e.g. Lucy's spreadsheet roster) on top of the
- * HR-derived employment index. The override's status and role win, and its
- * `notes` is copied onto the record so the UI can surface it. Mutates and
- * returns the same map for convenience.
+ * HR-derived employment index. The override's **status** always wins — HR is
+ * the thing we can't trust for departures. Role is different: when HR has a
+ * concrete job title we defer to its classification, because Lucy's roster
+ * sometimes lists people (e.g. Sam Taylor, SVP of Technology) who run their
+ * own team's hires and aren't actually Talent Partners. Only when HR has no
+ * job title (external contractors, unknowns) does the override's role
+ * apply. The override's `notes` is copied onto the record so the UI can
+ * surface it.
  */
 export function applyRosterOverride(
   employmentByRecruiter: Record<string, EmploymentRecord>,
@@ -519,10 +524,15 @@ export function applyRosterOverride(
       if (override) break;
     }
     if (override) {
+      // Role: HR wins when it has a clear job title, since Lucy's roster
+      // occasionally lists senior leaders (e.g. SVP of Technology) who run
+      // their own hires on the side. Override role only fills in when HR
+      // has nothing to say.
+      const role = base.jobTitle ? base.role : override.role;
       result[recruiter] = {
         ...base,
         status: override.status,
-        role: override.role,
+        role,
         terminationDate:
           override.status === "departed"
             ? // Keep HR's termination date if we have it — it's more precise
