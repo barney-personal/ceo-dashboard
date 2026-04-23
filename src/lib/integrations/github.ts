@@ -485,7 +485,9 @@ function classifySurface(filename: string): CodeReviewSurface | null {
   return null;
 }
 
-function inferPrimarySurface(files: GitHubPullRequestFile[]): CodeReviewSurface {
+export function inferPrimarySurface(
+  files: GitHubPullRequestFile[],
+): CodeReviewSurface {
   const weights: Record<CodeReviewSurface, number> = {
     frontend: 0,
     backend: 0,
@@ -517,7 +519,7 @@ function inferPrimarySurface(files: GitHubPullRequestFile[]): CodeReviewSurface 
   return bestWeight / total >= 0.55 ? best : "mixed";
 }
 
-function computeReviewRounds(
+export function computeReviewRounds(
   reviewTimes: Date[],
   commitTimes: Date[],
 ): number {

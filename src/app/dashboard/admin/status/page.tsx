@@ -238,6 +238,16 @@ export default async function DataStatusPage() {
       label: "Code Review OpenAI Model",
       required: false,
     },
+    {
+      key: "CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION",
+      label: "Code Review OpenAI Toggle",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_REASONING_EFFORT",
+      label: "Code Review OpenAI Reasoning",
+      required: false,
+    },
     { key: "HIBOB_API_TOKEN", label: "HiBob API Token", required: false },
     { key: "CRON_SECRET", label: "Cron Secret", required: false },
   ];

@@ -36,7 +36,7 @@ vi.mock("@/lib/integrations/github", () => ({
   fetchPRAnalysisPayload: mockFetchPayload,
 }));
 
-import { runCodeReviewAnalysis } from "../code-review";
+import { detectRevertWithin14d, runCodeReviewAnalysis } from "../code-review";
 
 interface FakePr {
   repo: string;
@@ -263,6 +263,48 @@ describe("runCodeReviewAnalysis", () => {
 
     const result = await runCodeReviewAnalysis({ limit: 5 });
     expect(result.analysed).toBe(5);
+  });
+
+  it("detects a revert when the revert commit references the merge SHA", async () => {
+    stubSelectSequence([
+      [
+        {
+          message: 'Revert "Add thing" (abc123)',
+          committedAt: new Date("2026-04-22T10:00:00Z"),
+        },
+      ],
+    ]);
+
+    await expect(
+      detectRevertWithin14d(
+        "acme/api",
+        42,
+        new Date("2026-04-21T10:00:00Z"),
+        "abc123",
+        "Add thing",
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("does not mark unrelated revert commits as matches on a loose title substring", async () => {
+    stubSelectSequence([
+      [
+        {
+          message: "Revert fix login bug regression in payments",
+          committedAt: new Date("2026-04-22T10:00:00Z"),
+        },
+      ],
+    ]);
+
+    await expect(
+      detectRevertWithin14d(
+        "acme/api",
+        42,
+        new Date("2026-04-21T10:00:00Z"),
+        "abc123",
+        "Fix login bug",
+      ),
+    ).resolves.toBe(false);
   });
 });
 

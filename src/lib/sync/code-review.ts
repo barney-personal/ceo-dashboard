@@ -212,7 +212,7 @@ export async function runCodeReviewAnalysis(
   };
 }
 
-async function detectRevertWithin14d(
+export async function detectRevertWithin14d(
   repo: string,
   prNumber: number,
   mergedAt: Date,
@@ -240,7 +240,7 @@ async function detectRevertWithin14d(
     if (!message.startsWith("revert")) return false;
     if (mergeSha && message.includes(mergeSha.toLowerCase())) return true;
     if (message.includes(`#${prNumber}`)) return true;
-    if (normalizedTitle && message.includes(normalizedTitle)) return true;
+    if (normalizedTitle && message.includes(`"${normalizedTitle}"`)) return true;
     return false;
   });
 }

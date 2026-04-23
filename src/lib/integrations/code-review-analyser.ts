@@ -145,7 +145,7 @@ function isRetryableAnthropicError(error: unknown): boolean {
 
 function getAnthropicClient(): Anthropic {
   return new Anthropic({
-    dangerouslyAllowBrowser: typeof window !== "undefined",
+    maxRetries: 0,
   });
 }
 
@@ -247,7 +247,7 @@ async function adjudicateWithOpenAi(
 ): Promise<CodeReviewModelReview> {
   const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    maxRetries: 1,
+    maxRetries: 0,
   });
   const model = getOpenAiModel();
   const content = renderReviewPayload(payload, { primaryReview: primary });
