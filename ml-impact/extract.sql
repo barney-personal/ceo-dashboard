@@ -2,10 +2,15 @@
 --
 -- Produces one row per active engineer with:
 --   - label: 360d impact score
---   - demographic features: level, discipline, pillar, squad, tenure, gender, location
+--   - demographic features: level, discipline, pillar, squad, tenure
 --   - slack engagement: messages, reactions, active-day rate, desktop share, channel share
 --   - ai usage: total tokens, total cost, days used, models used (in latest month)
 --   - perf signal: latest & avg performance rating (if reviewed)
+--
+-- IMPORTANT: gender and work-location are INTENTIONALLY NOT selected here.
+-- They are protected attributes / demographic proxies and are excluded from
+-- the entire pipeline — including the intermediate features.csv — so no
+-- downstream script can accidentally pick them up.
 --
 -- Run:
 --   psql "$PROD_DB_URL" -A -F',' -P footer=off -f extract.sql > features.csv
@@ -23,8 +28,7 @@ WITH active_engineers AS (
     row->>'hb_squad' AS squad,
     row->>'rp_department_name' AS department,
     row->>'start_date' AS start_date,
-    row->>'work_location' AS location,
-    row->>'gender_identity' AS gender,
+    -- work_location and gender_identity intentionally NOT selected — see header
     row->>'seniority_name' AS seniority_name,
     (row->>'seniority_id')::int AS seniority_id
   FROM mode_report_data d
@@ -185,8 +189,6 @@ SELECT
   ae.squad,
   ae.department,
   ae.start_date,
-  ae.location,
-  ae.gender,
   ae.seniority_name,
   ae.seniority_id,
   EXTRACT(DAY FROM NOW() - ae.start_date::timestamp)::int AS tenure_days,

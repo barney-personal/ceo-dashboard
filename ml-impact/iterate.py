@@ -128,8 +128,8 @@ def load_and_derive():
     df["avg_rating"] = df["avg_rating"].fillna(df["avg_rating"].median())
     df["latest_rating"] = df["latest_rating"].fillna(df["latest_rating"].median())
 
-    df["gender"] = df["gender"].fillna("Unknown")
-    df["location"] = df["location"].fillna("Unknown")
+    # gender/location no longer extracted from SQL (see extract.sql header).
+    # Columns removed from the dataframe — no longer fillna'd here.
     return df
 
 
@@ -155,12 +155,13 @@ BASE_NUMERIC = [
     "pr_slope_per_week",
     "commits_per_pr",
 ]
-# NOTE: this is the historical 5-round shootout script. gender + location are
-# left in BASE_CATEGORICAL here to preserve the numbers reported in the PR
-# narrative, but the production train.py EXCLUDES them — see train.py's
-# categorical_features and the README. Re-running this script today would
-# produce numbers that differ slightly from the shipped model on purpose.
-BASE_CATEGORICAL = ["level_track", "discipline", "pillar", "gender", "location"]
+# Historical 5-round shootout script. gender + location are now excluded
+# from both this script and the production train.py — see extract.sql header.
+# The per-round numbers reported in the PR narrative were computed when those
+# attributes were still in the pipeline; re-running this script today would
+# produce slightly different numbers, but the comparative ordering of rounds
+# (0 < 1 ≈ 2 < 4 = winner) holds.
+BASE_CATEGORICAL = ["level_track", "discipline", "pillar"]
 
 MONOTONE_PRIORS = {
     "tenure_months": 1,

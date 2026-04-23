@@ -196,8 +196,8 @@ def main():
     df["latest_rating"] = df["latest_rating"].fillna(df["latest_rating"].median())
 
     # Numeric
-    df["gender"] = df["gender"].fillna("Unknown")
-    df["location"] = df["location"].fillna("Unknown")
+    # (gender + work-location are not extracted from SQL — see extract.sql
+    #  header. They used to be imputed here; the columns no longer exist.)
 
     # Feature set.
     # IMPORTANT: impact = prs × log2(1 + (add+del)/prs). PR count and PR size
