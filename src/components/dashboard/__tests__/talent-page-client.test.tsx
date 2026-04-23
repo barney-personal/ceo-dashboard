@@ -126,8 +126,8 @@ describe("TalentPageClient", () => {
 
     // Summary cards present
     expect(container.textContent).toContain("Hires · last 12 months");
-    expect(container.textContent).toContain("Trailing 3mo avg");
-    expect(container.textContent).toContain("Projected next 3mo");
+    expect(container.textContent).toContain("Next month · forecast");
+    expect(container.textContent).toContain("2027 · forecast");
     expect(container.textContent).toContain("QTD vs target");
 
     // Chart section header

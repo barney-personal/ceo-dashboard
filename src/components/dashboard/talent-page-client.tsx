@@ -8,9 +8,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import {
   aggregateHiresByRecruiterMonth,
   buildRecruiterSummaries,
-  buildTeamChartSeries,
   currentMonthKey,
-  predictHiresPerRecruiter,
   sumToTeamMonthly,
   type EmploymentRecord,
   type RecruiterRole,
@@ -18,6 +16,10 @@ import {
   type TalentHireRow,
   type TalentTargetRow,
 } from "@/lib/data/talent-utils";
+import {
+  forecastTeamHires,
+  totalForecastOverRange,
+} from "@/lib/data/talent-forecast";
 import { TALENT_ROSTER_AS_OF } from "@/lib/config/talent-roster";
 
 interface TalentPageClientProps {
@@ -32,6 +34,8 @@ type EmploymentFilter = "active" | "all" | "departed";
 type RoleFilter = RecruiterRole | "all";
 
 const PROJECTION_MONTHS = 3;
+const FORECAST_THROUGH = "2027-12";
+const FORECAST_TRAINING_MONTHS = 12;
 
 function formatNumber(n: number, fractionDigits = 1): string {
   if (n === 0) return "0";
@@ -488,29 +492,56 @@ export function TalentPageClient({
     useState<EmploymentFilter>("active");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("talent_partner");
 
-  const { histories, teamActual, teamProjection, summaries, latestMonth } =
-    useMemo(() => {
-      const now = currentMonthKey();
-      const histories = aggregateHiresByRecruiterMonth(hireRows);
-      const teamActual = sumToTeamMonthly(histories);
-      const teamProjection = sumToTeamMonthly(
-        predictHiresPerRecruiter(histories, PROJECTION_MONTHS, now),
-      );
-      const summaries = buildRecruiterSummaries(
-        histories,
-        targets,
-        now,
-        employmentByRecruiter,
-      );
-      const latestMonth = lastActualMonth(hireRows);
-      return {
-        histories,
-        teamActual,
-        teamProjection,
-        summaries,
-        latestMonth,
-      };
-    }, [hireRows, targets, employmentByRecruiter]);
+  const {
+    histories,
+    teamActual,
+    summaries,
+    latestMonth,
+    forecast,
+    fit,
+    forecast2026H2,
+    forecast2027,
+  } = useMemo(() => {
+    const now = currentMonthKey();
+    const histories = aggregateHiresByRecruiterMonth(hireRows);
+    const teamActual = sumToTeamMonthly(histories);
+    const summaries = buildRecruiterSummaries(
+      histories,
+      targets,
+      now,
+      employmentByRecruiter,
+    );
+    const latestMonth = lastActualMonth(hireRows);
+
+    const { forecast, fit } = forecastTeamHires(
+      teamActual,
+      FORECAST_THROUGH,
+      {
+        trainingMonths: FORECAST_TRAINING_MONTHS,
+        currentMonth: now,
+      },
+    );
+
+    const forecast2026H2 = totalForecastOverRange(forecast, {
+      from: "2026-05",
+      to: "2026-12",
+    });
+    const forecast2027 = totalForecastOverRange(forecast, {
+      from: "2027-01",
+      to: "2027-12",
+    });
+
+    return {
+      histories,
+      teamActual,
+      summaries,
+      latestMonth,
+      forecast,
+      fit,
+      forecast2026H2,
+      forecast2027,
+    };
+  }, [hireRows, targets, employmentByRecruiter]);
 
   // Counts are computed against the *other* dimension so each filter row
   // shows how many would match if you switched only it.
@@ -542,11 +573,9 @@ export function TalentPageClient({
     return <TalentEmpty reason={emptyReason} />;
   }
 
-  // Trailing team average uses only complete months — the projection already
-  // does this, so we read the first projected month (which is `avg * 1`) to
-  // get an in-progress-aware headline number that matches the forecast.
-  const trailing3mAvgTeam = teamProjection[0]?.hires ?? 0;
-  const projectedNext3Total = teamProjection.reduce((s, m) => s + m.hires, 0);
+  // Forecast-anchored headline: the first projected month's mid is the trend
+  // line's next value — aligns with the chart's dashed projection.
+  const trailing3mAvgTeam = forecast[0]?.mid ?? 0;
   const hiresLast12m = teamActual
     .slice(-12)
     .reduce((s, m) => s + m.hires, 0);
@@ -556,10 +585,63 @@ export function TalentPageClient({
   const qtdAttainment =
     targetQtdTeam > 0 ? hiresQtdTeam / targetQtdTeam : null;
 
-  const chartSeries = buildTeamChartSeries(
-    teamActual.slice(-24),
-    teamProjection,
-  );
+  // Actuals: last 24 months (solid), with an anchor point the dashed forecast
+  // attaches to so the line is continuous.
+  const actualTail = teamActual.slice(-24);
+  const actualData = actualTail.map((m) => ({
+    date: `${m.month}-01`,
+    value: m.hires,
+  }));
+  const anchor = actualTail[actualTail.length - 1];
+
+  // Three forecast series: mid (colored dashed), low / high (muted dashed).
+  const midData = forecast.map((m) => ({
+    date: `${m.month}-01`,
+    value: m.mid,
+  }));
+  const lowData = forecast.map((m) => ({
+    date: `${m.month}-01`,
+    value: m.low,
+  }));
+  const highData = forecast.map((m) => ({
+    date: `${m.month}-01`,
+    value: m.high,
+  }));
+  const withAnchor = (
+    data: { date: string; value: number }[],
+  ): { date: string; value: number }[] =>
+    anchor
+      ? [{ date: `${anchor.month}-01`, value: anchor.hires }, ...data]
+      : data;
+
+  const chartSeries =
+    actualData.length === 0
+      ? []
+      : [
+          {
+            label: "Actual",
+            color: "#2563eb",
+            data: actualData,
+          },
+          {
+            label: "Forecast (most likely)",
+            color: "#2563eb",
+            data: withAnchor(midData),
+            dashed: true,
+          },
+          {
+            label: "Low (P10)",
+            color: "#94a3b8",
+            data: withAnchor(lowData),
+            dashed: true,
+          },
+          {
+            label: "High (P90)",
+            color: "#94a3b8",
+            data: withAnchor(highData),
+            dashed: true,
+          },
+        ];
 
   return (
     <>
@@ -571,21 +653,29 @@ export function TalentPageClient({
           modeUrl={modeUrl}
         />
         <MetricCard
-          label="Trailing 3mo avg"
+          label="Next month · forecast"
           value={formatNumber(trailing3mAvgTeam)}
-          subtitle="hires / month"
+          subtitle={
+            forecast[0]
+              ? `range ${formatNumber(forecast[0].low, 0)}–${formatNumber(forecast[0].high, 0)}`
+              : "hires"
+          }
         />
         <MetricCard
-          label={`Projected next ${PROJECTION_MONTHS}mo`}
-          value={formatNumber(projectedNext3Total, 0)}
-          subtitle="hires (team)"
+          label="2027 · forecast (year)"
+          value={
+            forecast2027 ? formatNumber(forecast2027.mid, 0) : "—"
+          }
+          subtitle={
+            forecast2027
+              ? `range ${formatNumber(forecast2027.low, 0)}–${formatNumber(forecast2027.high, 0)}`
+              : undefined
+          }
         />
         <MetricCard
           label="QTD vs target"
           value={
-            qtdAttainment == null
-              ? "—"
-              : formatPercent(qtdAttainment)
+            qtdAttainment == null ? "—" : formatPercent(qtdAttainment)
           }
           subtitle={
             qtdAttainment == null
@@ -596,10 +686,10 @@ export function TalentPageClient({
       </div>
 
       <SectionDivider
-        title="Team trajectory"
-        subtitle={`Monthly hires summed across all recruiters. Data through ${formatMonthLabel(
+        title="Team trajectory & forecast"
+        subtitle={`Solid: monthly hires summed across all recruiters, through ${formatMonthLabel(
           latestMonth,
-        )}; the dashed tail projects ${PROJECTION_MONTHS} months forward at each recruiter's trailing-3-month average.`}
+        )}. Dashed: linear-regression forecast trained on the last ${fit?.trainingMonths ?? FORECAST_TRAINING_MONTHS} complete months, with 80% prediction interval (P10 / P50 / P90) extended through Dec 2027.`}
       />
 
       {chartSeries.length > 0 ? (
