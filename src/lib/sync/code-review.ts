@@ -1,7 +1,8 @@
 import * as Sentry from "@sentry/nextjs";
-import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+  githubCommits,
   githubEmployeeMap,
   githubPrs,
   prReviewAnalyses,
@@ -14,10 +15,10 @@ import {
 import { fetchPRAnalysisPayload } from "@/lib/integrations/github";
 
 /**
- * How far back the page looks. 30 days is the calibration window; widening
- * gives more signal but dilutes the "what did they do this month" framing.
+ * How far back the page looks. 90 days gives enough evidence for a shrunk,
+ * cohort-relative ranking while weekly buckets still surface recent changes.
  */
-export const CODE_REVIEW_WINDOW_DAYS = 30;
+export const CODE_REVIEW_WINDOW_DAYS = 90;
 
 /**
  * Repos we'll never run Claude against — sensitive, infra-only, or where LLM
@@ -56,7 +57,7 @@ export interface AnalyseRunResult {
 }
 
 export interface AnalyseRunOptions {
-  /** Override the 30d default window (for cron / backfills / tests). */
+  /** Override the 90d default window (for cron / backfills / tests). */
   windowDays?: number;
   /** Abort signal for cancellation. */
   signal?: AbortSignal;
@@ -182,8 +183,15 @@ export async function runCodeReviewAnalysis(
       const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
         signal: opts.signal,
       });
+      payload.review.revertWithin14d = await detectRevertWithin14d(
+        c.repo,
+        c.prNumber,
+        c.mergedAt,
+        payload.mergeSha,
+        payload.title,
+      );
       const analysis = await analysePR(payload, { signal: opts.signal });
-      await upsertAnalysis(c, payload.mergeSha, analysis);
+      await upsertAnalysis(c, payload, analysis);
       analysed++;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -204,6 +212,39 @@ export async function runCodeReviewAnalysis(
   };
 }
 
+async function detectRevertWithin14d(
+  repo: string,
+  prNumber: number,
+  mergedAt: Date,
+  mergeSha: string | null,
+  title: string,
+): Promise<boolean> {
+  const cutoff = new Date(mergedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const commits = await db
+    .select({
+      message: githubCommits.message,
+      committedAt: githubCommits.committedAt,
+    })
+    .from(githubCommits)
+    .where(
+      and(
+        eq(githubCommits.repo, repo),
+        gte(githubCommits.committedAt, mergedAt),
+        lte(githubCommits.committedAt, cutoff),
+      ),
+    );
+
+  const normalizedTitle = title.trim().toLowerCase();
+  return commits.some((commit) => {
+    const message = commit.message.toLowerCase();
+    if (!message.startsWith("revert")) return false;
+    if (mergeSha && message.includes(mergeSha.toLowerCase())) return true;
+    if (message.includes(`#${prNumber}`)) return true;
+    if (normalizedTitle && message.includes(normalizedTitle)) return true;
+    return false;
+  });
+}
+
 async function upsertAnalysis(
   pr: {
     repo: string;
@@ -211,7 +252,22 @@ async function upsertAnalysis(
     authorLogin: string;
     mergedAt: Date;
   },
-  mergeSha: string | null,
+  payload: {
+    mergeSha: string | null;
+    primarySurface: string;
+    review: {
+      approvalCount: number;
+      changeRequestCount: number;
+      reviewCommentCount: number;
+      conversationCommentCount: number;
+      reviewRounds: number;
+      timeToFirstReviewHours: number | null;
+      timeToMergeHours: number;
+      commitCount: number;
+      commitsAfterFirstReview: number;
+      revertWithin14d: boolean;
+    };
+  },
   analysis: CodeReviewAnalysis,
 ): Promise<void> {
   await db
@@ -219,15 +275,41 @@ async function upsertAnalysis(
     .values({
       repo: pr.repo,
       prNumber: pr.prNumber,
-      mergeSha: mergeSha ?? null,
+      mergeSha: payload.mergeSha ?? null,
       authorLogin: pr.authorLogin,
       mergedAt: pr.mergedAt,
       complexity: analysis.complexity,
       quality: analysis.quality,
+      technicalDifficulty: analysis.technicalDifficulty,
+      executionQuality: analysis.executionQuality,
+      testAdequacy: analysis.testAdequacy,
+      riskHandling: analysis.riskHandling,
+      reviewability: analysis.reviewability,
+      analysisConfidencePct: analysis.analysisConfidencePct,
+      primarySurface: analysis.primarySurface,
       category: analysis.category,
       summary: analysis.summary,
       caveats: analysis.caveats,
       standout: analysis.standout,
+      approvalCount: payload.review.approvalCount,
+      changeRequestCount: payload.review.changeRequestCount,
+      reviewCommentCount: payload.review.reviewCommentCount,
+      conversationCommentCount: payload.review.conversationCommentCount,
+      reviewRounds: payload.review.reviewRounds,
+      timeToFirstReviewMinutes:
+        payload.review.timeToFirstReviewHours === null
+          ? null
+          : Math.round(payload.review.timeToFirstReviewHours * 60),
+      timeToMergeMinutes: Math.round(payload.review.timeToMergeHours * 60),
+      commitCount: payload.review.commitCount,
+      commitsAfterFirstReview: payload.review.commitsAfterFirstReview,
+      revertWithin14d: payload.review.revertWithin14d,
+      outcomeScore: analysis.outcomeScore,
+      reviewProvider: analysis.provider,
+      reviewModel: analysis.model,
+      secondOpinionUsed: analysis.secondOpinionUsed,
+      agreementLevel: analysis.agreementLevel,
+      secondOpinionReasons: analysis.secondOpinionReasons,
       rubricVersion: RUBRIC_VERSION,
       rawJson: analysis as unknown as Record<string, unknown>,
     })
@@ -238,15 +320,41 @@ async function upsertAnalysis(
         prReviewAnalyses.rubricVersion,
       ],
       set: {
-        mergeSha: mergeSha ?? null,
+        mergeSha: payload.mergeSha ?? null,
         authorLogin: pr.authorLogin,
         mergedAt: pr.mergedAt,
         complexity: analysis.complexity,
         quality: analysis.quality,
+        technicalDifficulty: analysis.technicalDifficulty,
+        executionQuality: analysis.executionQuality,
+        testAdequacy: analysis.testAdequacy,
+        riskHandling: analysis.riskHandling,
+        reviewability: analysis.reviewability,
+        analysisConfidencePct: analysis.analysisConfidencePct,
+        primarySurface: analysis.primarySurface,
         category: analysis.category,
         summary: analysis.summary,
         caveats: analysis.caveats,
         standout: analysis.standout,
+        approvalCount: payload.review.approvalCount,
+        changeRequestCount: payload.review.changeRequestCount,
+        reviewCommentCount: payload.review.reviewCommentCount,
+        conversationCommentCount: payload.review.conversationCommentCount,
+        reviewRounds: payload.review.reviewRounds,
+        timeToFirstReviewMinutes:
+          payload.review.timeToFirstReviewHours === null
+            ? null
+            : Math.round(payload.review.timeToFirstReviewHours * 60),
+        timeToMergeMinutes: Math.round(payload.review.timeToMergeHours * 60),
+        commitCount: payload.review.commitCount,
+        commitsAfterFirstReview: payload.review.commitsAfterFirstReview,
+        revertWithin14d: payload.review.revertWithin14d,
+        outcomeScore: analysis.outcomeScore,
+        reviewProvider: analysis.provider,
+        reviewModel: analysis.model,
+        secondOpinionUsed: analysis.secondOpinionUsed,
+        agreementLevel: analysis.agreementLevel,
+        secondOpinionReasons: analysis.secondOpinionReasons,
         rawJson: analysis as unknown as Record<string, unknown>,
         analysedAt: sql`now()`,
       },

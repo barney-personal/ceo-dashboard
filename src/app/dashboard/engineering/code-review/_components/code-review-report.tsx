@@ -11,24 +11,26 @@ import type {
 import type {
   AnalysisCategory,
   AnalysisStandout,
+  ModelAgreementLevel,
+  SecondOpinionReason,
 } from "@/lib/integrations/code-review-analyser";
 
 const FLAG_LABEL: Record<DiagnosticFlag, string> = {
-  high_volume_low_quality: "High volume, low quality",
-  low_volume_high_complexity: "Few PRs, high complexity",
+  low_evidence: "Low evidence",
+  low_confidence: "Low confidence",
   quality_variance_high: "Quality varies a lot",
-  all_tiny_prs: "Only tiny PRs",
-  low_evidence: "Low evidence (<3 PRs)",
+  review_churn_high: "Review churn is high",
   has_concerning_pr: "Has a concerning PR",
+  reverted_pr: "Has a reverted PR",
 };
 
 const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
-  high_volume_low_quality: "warn",
-  low_volume_high_complexity: "info",
-  quality_variance_high: "warn",
-  all_tiny_prs: "warn",
   low_evidence: "neutral",
+  low_confidence: "info",
+  quality_variance_high: "warn",
+  review_churn_high: "warn",
   has_concerning_pr: "warn",
+  reverted_pr: "warn",
 };
 
 const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
@@ -55,48 +57,48 @@ const STANDOUT_TONE: Record<AnalysisStandout, "good" | "warn"> = {
   concerning: "warn",
 };
 
+const AGREEMENT_LABEL: Record<ModelAgreementLevel, string> = {
+  single_model: "Single-model review",
+  confirmed: "Second opinion confirmed",
+  minor_adjustment: "Second opinion adjusted slightly",
+  material_adjustment: "Second opinion adjusted materially",
+};
+
+const SECOND_OPINION_LABEL: Record<SecondOpinionReason, string> = {
+  truncated_diff: "Truncated diff",
+  large_pr: "Large PR",
+  low_confidence: "Low confidence",
+  concerning_flag: "Concerning signal",
+  review_churn: "Review churn",
+  revert_signal: "Revert signal",
+};
+
 export function CodeReviewReport({ view }: { view: CodeReviewView }) {
   const [activeFlag, setActiveFlag] = useState<DiagnosticFlag | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
   const visible = useMemo(() => {
     if (!activeFlag) return view.engineers;
-    return view.engineers.filter((e) => e.flags.includes(activeFlag));
+    return view.engineers.filter((engineer) => engineer.flags.includes(activeFlag));
   }, [view.engineers, activeFlag]);
 
   const selectedEngineer = useMemo(
-    () =>
-      view.engineers.find((e) => e.authorLogin === selected) ??
-      view.lowEvidenceEngineers.find((e) => e.authorLogin === selected) ??
-      null,
-    [view, selected],
+    () => view.engineers.find((engineer) => engineer.authorLogin === selected) ?? null,
+    [view.engineers, selected],
   );
 
   return (
     <div className="space-y-6">
       <Header view={view} />
       <CalibrationBanner />
-      <FlagPills
-        view={view}
-        active={activeFlag}
-        onChange={setActiveFlag}
-      />
+      <FlagPills view={view} active={activeFlag} onChange={setActiveFlag} />
       <EngineerTable
         rows={visible}
         windowDays={view.windowDays}
         onSelect={setSelected}
       />
-      {view.lowEvidenceEngineers.length > 0 && (
-        <LowEvidenceSection
-          rows={view.lowEvidenceEngineers}
-          onSelect={setSelected}
-        />
-      )}
       {selectedEngineer && (
-        <Drawer
-          engineer={selectedEngineer}
-          onClose={() => setSelected(null)}
-        />
+        <Drawer engineer={selectedEngineer} onClose={() => setSelected(null)} />
       )}
     </div>
   );
@@ -122,7 +124,7 @@ function Header({ view }: { view: CodeReviewView }) {
         body.candidatesConsidered - body.cached - body.analysed;
       const suffix =
         remaining > 0
-          ? ` · ${remaining} PR${remaining === 1 ? "" : "s"} still pending (click again or wait for the weekly cron).`
+          ? ` · ${remaining} PR${remaining === 1 ? "" : "s"} still pending.`
           : "";
       setStatus(
         `Analysed ${body.analysed}, cached ${body.cached}, failed ${body.failed.length}.${suffix}`,
@@ -149,12 +151,13 @@ function Header({ view }: { view: CodeReviewView }) {
           Engineering · Code review
         </p>
         <h1 className="mt-1 font-display text-3xl italic tracking-tight text-foreground">
-          What did engineers ship in the last {view.windowDays} days?
+          Code review quality over the last {view.windowDays} days
         </h1>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Every merged PR reviewed by Claude against a fixed rubric. Each
-          engineer is ranked by the sum of complexity × quality across their
-          merged PRs. Expand any row to see per-PR evidence.
+          Every merged PR is reviewed against a richer rubric, blended with
+          GitHub review-process signals, and rolled up into cohort-relative,
+          confidence-aware percentiles. The final score is shrunk toward the
+          cohort mean when evidence is thin.
         </p>
       </div>
       <div className="flex flex-col items-end gap-1 text-[11px] text-muted-foreground">
@@ -190,10 +193,9 @@ function CalibrationBanner() {
       <span className="font-medium text-foreground">
         Calibration input, not a verdict.
       </span>{" "}
-      These scores are an LLM&rsquo;s structured opinion of merged code, not a
-      performance judgement. Treat as one input into calibration or a starting
-      point for a diagnostic conversation — not as a ranking you&rsquo;d share
-      or act on without context.
+      This page is still an LLM-assisted view of merged code. It is stronger
+      than the old complexity × quality rollup, but it should still inform a
+      diagnostic conversation rather than substitute for manager judgement.
     </div>
   );
 }
@@ -208,17 +210,17 @@ function FlagPills({
   onChange: (flag: DiagnosticFlag | null) => void;
 }) {
   const counts = useMemo(() => {
-    const out = {} as Record<DiagnosticFlag, number>;
-    for (const e of view.engineers) {
-      for (const f of e.flags) {
-        out[f] = (out[f] ?? 0) + 1;
+    const output = {} as Record<DiagnosticFlag, number>;
+    for (const engineer of view.engineers) {
+      for (const flag of engineer.flags) {
+        output[flag] = (output[flag] ?? 0) + 1;
       }
     }
-    return out;
+    return output;
   }, [view.engineers]);
 
   const flags = (Object.keys(FLAG_LABEL) as DiagnosticFlag[]).filter(
-    (f) => f !== "low_evidence" && (counts[f] ?? 0) > 0,
+    (flag) => (counts[flag] ?? 0) > 0,
   );
 
   if (flags.length === 0) return null;
@@ -235,14 +237,14 @@ function FlagPills({
       >
         All ({view.engineers.length})
       </button>
-      {flags.map((f) => (
+      {flags.map((flag) => (
         <button
-          key={f}
+          key={flag}
           type="button"
-          onClick={() => onChange(active === f ? null : f)}
-          className={pillClass(active === f, FLAG_TONE[f])}
+          onClick={() => onChange(active === flag ? null : flag)}
+          className={pillClass(active === flag, FLAG_TONE[flag])}
         >
-          {FLAG_LABEL[f]} ({counts[f]})
+          {FLAG_LABEL[flag]} ({counts[flag]})
         </button>
       ))}
     </div>
@@ -286,8 +288,8 @@ function EngineerTable({
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/10 p-5 text-sm text-muted-foreground">
-        No engineers match the current filter. Click a different diagnostic
-        pill, or run the analysis if nothing&rsquo;s been scored yet.
+        No engineers match the current filter. Change the filter or re-run the
+        analysis if nothing has been scored yet.
       </div>
     );
   }
@@ -299,66 +301,81 @@ function EngineerTable({
           <tr>
             <th className="px-3 py-2 text-left">#</th>
             <th className="px-3 py-2 text-left">Engineer</th>
+            <th className="px-3 py-2 text-left">Cohort</th>
             <th className="px-3 py-2 text-right">PRs</th>
-            <th className="px-3 py-2 text-right">Repos</th>
-            <th className="px-3 py-2 text-right">Med complexity</th>
-            <th className="px-3 py-2 text-right">Med quality</th>
-            <th className="px-3 py-2 text-right">Composite</th>
+            <th className="px-3 py-2 text-right">Confidence</th>
+            <th className="px-3 py-2 text-right">Quality pct</th>
+            <th className="px-3 py-2 text-right">Difficulty pct</th>
+            <th className="px-3 py-2 text-right">Outcome pct</th>
+            <th className="px-3 py-2 text-right">Final</th>
             <th className="px-3 py-2 text-right">{`vs prev ${windowDays}d`}</th>
             <th className="px-3 py-2 text-left">Flags</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((e, i) => (
+          {rows.map((engineer, index) => (
             <tr
-              key={e.authorLogin}
-              onClick={() => onSelect(e.authorLogin)}
+              key={engineer.authorLogin}
+              onClick={() => onSelect(engineer.authorLogin)}
               className={`cursor-pointer border-t border-border/40 hover:bg-primary/5 ${
-                i % 2 === 0 ? "bg-transparent" : "bg-muted/10"
+                index % 2 === 0 ? "bg-transparent" : "bg-muted/10"
               }`}
             >
-              <td className="px-3 py-2 font-mono text-muted-foreground">{i + 1}</td>
+              <td className="px-3 py-2 font-mono text-muted-foreground">
+                {index + 1}
+              </td>
               <td className="px-3 py-2">
                 <div className="font-medium text-foreground">
-                  {e.employeeName ?? e.authorLogin}
+                  {engineer.employeeName ?? engineer.authorLogin}
                 </div>
-                {e.employeeName && (
+                {engineer.employeeName && (
                   <div className="font-mono text-[10px] text-muted-foreground">
-                    @{e.authorLogin}
+                    @{engineer.authorLogin}
                   </div>
                 )}
               </td>
-              <td className="px-3 py-2 text-right font-mono">{e.prCount}</td>
-              <td className="px-3 py-2 text-right font-mono text-muted-foreground">
-                {e.distinctRepos}
+              <td className="px-3 py-2">
+                <span className="rounded-full border border-border/60 bg-muted/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  {engineer.cohort}
+                </span>
               </td>
               <td className="px-3 py-2 text-right font-mono">
-                {e.medianComplexity.toFixed(1)}
+                {engineer.prCount}
+                <span className="ml-1 text-[10px] text-muted-foreground">
+                  ({engineer.effectivePrCount.toFixed(1)} eff.)
+                </span>
               </td>
               <td className="px-3 py-2 text-right font-mono">
-                {e.medianQuality.toFixed(1)}
+                {engineer.confidencePct}%
+              </td>
+              <td className="px-3 py-2 text-right font-mono">
+                {Math.round(engineer.qualityPercentile)}
+              </td>
+              <td className="px-3 py-2 text-right font-mono">
+                {Math.round(engineer.difficultyPercentile)}
+              </td>
+              <td className="px-3 py-2 text-right font-mono">
+                {Math.round(engineer.reliabilityPercentile)}
               </td>
               <td className="px-3 py-2 text-right font-mono font-semibold text-foreground">
-                {Math.round(e.compositeScore)}
+                {Math.round(engineer.finalScore)}
               </td>
               <td className="px-3 py-2 text-right font-mono">
                 <DeltaCell
-                  current={e.compositeScore}
-                  prev={e.prevCompositeScore}
+                  current={engineer.finalScore}
+                  prev={engineer.prevFinalScore}
                 />
               </td>
               <td className="px-3 py-2">
                 <div className="flex flex-wrap gap-1">
-                  {e.flags
-                    .filter((f) => f !== "low_evidence")
-                    .map((f) => (
-                      <span
-                        key={f}
-                        className={pillClass(false, FLAG_TONE[f])}
-                      >
-                        {FLAG_LABEL[f]}
-                      </span>
-                    ))}
+                  {engineer.flags.map((flag) => (
+                    <span
+                      key={flag}
+                      className={pillClass(false, FLAG_TONE[flag])}
+                    >
+                      {FLAG_LABEL[flag]}
+                    </span>
+                  ))}
                 </div>
               </td>
             </tr>
@@ -377,53 +394,27 @@ function DeltaCell({
   prev: number | null;
 }) {
   if (prev === null) return <span className="text-muted-foreground">—</span>;
-  if (prev === 0 && current === 0)
-    return <span className="text-muted-foreground">—</span>;
   const delta = current - prev;
+  if (delta === 0) return <span className="text-muted-foreground">—</span>;
   const pct = prev > 0 ? (delta / prev) * 100 : null;
   const color =
-    delta > 0 ? "text-emerald-600" : delta < 0 ? "text-rose-600" : "text-muted-foreground";
+    delta > 0
+      ? "text-emerald-600"
+      : delta < 0
+      ? "text-rose-600"
+      : "text-muted-foreground";
   const sign = delta > 0 ? "+" : "";
   return (
     <span className={color}>
       {sign}
       {Math.round(delta)}
-      {pct !== null && <span className="ml-1 text-[10px]">({sign}{Math.round(pct)}%)</span>}
+      {pct !== null && (
+        <span className="ml-1 text-[10px]">
+          ({sign}
+          {Math.round(pct)}%)
+        </span>
+      )}
     </span>
-  );
-}
-
-function LowEvidenceSection({
-  rows,
-  onSelect,
-}: {
-  rows: EngineerRollup[];
-  onSelect: (login: string) => void;
-}) {
-  return (
-    <details className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-4">
-      <summary className="cursor-pointer text-[12px] font-medium text-foreground">
-        {rows.length} engineer{rows.length === 1 ? "" : "s"} with under 3 PRs
-        (excluded from the main ranking)
-      </summary>
-      <ul className="mt-3 space-y-1 text-[12px]">
-        {rows.map((e) => (
-          <li key={e.authorLogin}>
-            <button
-              type="button"
-              onClick={() => onSelect(e.authorLogin)}
-              className="text-foreground underline-offset-2 hover:underline"
-            >
-              {e.employeeName ?? e.authorLogin}
-            </button>
-            <span className="ml-2 text-muted-foreground">
-              · {e.prCount} PR{e.prCount === 1 ? "" : "s"} · composite{" "}
-              {Math.round(e.compositeScore)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </details>
   );
 }
 
@@ -441,7 +432,7 @@ function Drawer({
     >
       <div
         className="flex h-full w-full max-w-2xl flex-col overflow-y-auto rounded-xl border border-border/60 bg-card p-5 shadow-warm"
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-3 border-b border-border/60 pb-3">
           <div>
@@ -452,9 +443,9 @@ function Drawer({
               @{engineer.authorLogin}
             </p>
             <div className="mt-2 flex flex-wrap gap-1">
-              {engineer.flags.map((f) => (
-                <span key={f} className={pillClass(false, FLAG_TONE[f])}>
-                  {FLAG_LABEL[f]}
+              {engineer.flags.map((flag) => (
+                <span key={flag} className={pillClass(false, FLAG_TONE[flag])}>
+                  {FLAG_LABEL[flag]}
                 </span>
               ))}
             </div>
@@ -470,24 +461,30 @@ function Drawer({
         </div>
 
         <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="PRs merged" value={String(engineer.prCount)} />
-          <Stat label="Distinct repos" value={String(engineer.distinctRepos)} />
-          <Stat
-            label="Med complexity"
-            value={engineer.medianComplexity.toFixed(1)}
-          />
-          <Stat
-            label="Med quality"
-            value={engineer.medianQuality.toFixed(1)}
-          />
+          <Stat label="Final score" value={String(Math.round(engineer.finalScore))} />
+          <Stat label="Confidence" value={`${engineer.confidencePct}%`} />
+          <Stat label="PRs" value={`${engineer.prCount} (${engineer.effectivePrCount.toFixed(1)} eff.)`} />
+          <Stat label="Cohort" value={engineer.cohort} />
+          <Stat label="Avg exec quality" value={engineer.avgExecutionQuality.toFixed(1)} />
+          <Stat label="Avg tests" value={engineer.avgTestAdequacy.toFixed(1)} />
+          <Stat label="Avg risk" value={engineer.avgRiskHandling.toFixed(1)} />
+          <Stat label="Avg outcome" value={engineer.avgOutcomeScore.toFixed(0)} />
         </dl>
 
-        {engineer.weeklyComposite.length > 1 && (
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <Stat label="Quality pct" value={Math.round(engineer.qualityPercentile).toString()} />
+          <Stat label="Difficulty pct" value={Math.round(engineer.difficultyPercentile).toString()} />
+          <Stat label="Outcome pct" value={Math.round(engineer.reliabilityPercentile).toString()} />
+          <Stat label="Review pct" value={Math.round(engineer.reviewHealthPercentile).toString()} />
+          <Stat label="Throughput pct" value={Math.round(engineer.throughputPercentile).toString()} />
+        </div>
+
+        {engineer.weeklyScore.length > 1 && (
           <div className="mb-4 rounded-lg border border-border/40 bg-muted/5 p-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-              Weekly composite (oldest → newest)
+              Weekly PR score trend (oldest → newest)
             </p>
-            <Sparkline values={engineer.weeklyComposite} />
+            <Sparkline values={engineer.weeklyScore} />
           </div>
         )}
 
@@ -506,25 +503,19 @@ function Drawer({
 
 function Sparkline({ values }: { values: number[] }) {
   const max = Math.max(...values, 1);
-  const barWidthPct = 100 / values.length;
   return (
     <div className="mt-2 flex h-10 items-end gap-1">
-      {values.map((v, i) => {
-        const heightPct = (v / max) * 100;
+      {values.map((value, index) => {
+        const heightPct = (value / max) * 100;
         return (
           <div
-            key={i}
+            key={index}
             className="flex min-w-0 flex-1 flex-col items-center gap-1"
-            style={{ maxWidth: `${barWidthPct}%` }}
           >
             <div
-              className="w-full rounded-t-sm bg-primary/60"
-              style={{ height: `${Math.max(heightPct, 4)}%` }}
-              title={`${Math.round(v)}`}
+              className="w-full rounded-sm bg-primary/70"
+              style={{ height: `${Math.max(8, heightPct)}%` }}
             />
-            <span className="font-mono text-[9px] text-muted-foreground/70">
-              {Math.round(v)}
-            </span>
           </div>
         );
       })}
@@ -532,63 +523,99 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-border/40 bg-muted/10 p-2.5">
-      <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-        {label}
-      </p>
-      <p className="mt-0.5 font-display text-lg italic tracking-tight text-foreground">
-        {value}
-      </p>
-    </div>
-  );
-}
-
 function PrCard({ pr }: { pr: PrReviewEntry }) {
-  const date = new Date(pr.mergedAt).toLocaleDateString("en-GB", {
+  const mergedAt = new Date(pr.mergedAt).toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
   });
   return (
-    <li className="rounded-lg border border-border/60 bg-muted/5 p-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <a
-          href={pr.githubUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="font-medium text-foreground underline-offset-2 hover:underline"
-        >
-          {pr.repo} #{pr.prNumber}
-        </a>
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {date}
-        </span>
+    <li className="rounded-lg border border-border/50 bg-muted/5 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <a
+            href={pr.githubUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            {pr.repo} #{pr.prNumber}
+          </a>
+          <p className="mt-1 text-sm text-foreground">{pr.summary}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {CATEGORY_LABEL[pr.category]} · merged {mergedAt} · surface {pr.primarySurface}
+          </p>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-lg font-semibold text-foreground">
+            {Math.round(pr.prScore)}
+          </div>
+          <div className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            PR score
+          </div>
+        </div>
       </div>
-      <p className="mt-1 text-[12px] text-muted-foreground">{pr.summary}</p>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]">
-        <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
-          {CATEGORY_LABEL[pr.category]}
-        </span>
-        <span className="font-mono text-muted-foreground">
-          complexity {pr.complexity}/5
-        </span>
-        <span className="font-mono text-muted-foreground">
-          quality {pr.quality}/5
-        </span>
+
+      <dl className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
+        <Stat label="Difficulty" value={String(pr.technicalDifficulty)} />
+        <Stat label="Execution" value={String(pr.executionQuality)} />
+        <Stat label="Tests" value={String(pr.testAdequacy)} />
+        <Stat label="Risk" value={String(pr.riskHandling)} />
+        <Stat label="Reviewability" value={String(pr.reviewability)} />
+        <Stat label="Confidence" value={`${pr.analysisConfidencePct}%`} />
+        <Stat label="Outcome" value={String(pr.outcomeScore)} />
+        <Stat label="Review rounds" value={String(pr.reviewRounds)} />
+        <Stat label="Commits post-review" value={String(pr.commitsAfterFirstReview)} />
+        <Stat label="Comments" value={String(pr.reviewCommentCount + pr.conversationCommentCount)} />
+      </dl>
+
+      <div className="mt-3 flex flex-wrap gap-1">
         {pr.standout && (
           <span className={pillClass(false, STANDOUT_TONE[pr.standout])}>
             {STANDOUT_LABEL[pr.standout]}
           </span>
         )}
+        {pr.revertWithin14d && (
+          <span className={pillClass(false, "warn")}>Reverted within 14d</span>
+        )}
+        {pr.secondOpinionUsed && (
+          <span className={pillClass(false, "info")}>
+            {AGREEMENT_LABEL[pr.agreementLevel]}
+          </span>
+        )}
       </div>
+
+      {pr.secondOpinionUsed && pr.secondOpinionReasons.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {pr.secondOpinionReasons.map((reason) => (
+            <span key={reason} className={pillClass(false, "neutral")}>
+              {SECOND_OPINION_LABEL[reason]}
+            </span>
+          ))}
+        </div>
+      )}
+
       {pr.caveats.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-[11px] italic text-muted-foreground">
-          {pr.caveats.map((c) => (
-            <li key={c}>· {c}</li>
+        <ul className="mt-3 space-y-1 text-[12px] text-muted-foreground">
+          {pr.caveats.map((caveat, index) => (
+            <li key={`${caveat}-${index}`}>- {caveat}</li>
           ))}
         </ul>
       )}
+
+      <p className="mt-3 text-[11px] text-muted-foreground">
+        {pr.reviewProvider} · {pr.reviewModel}
+      </p>
     </li>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border/40 bg-background/70 px-2 py-1.5">
+      <dt className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="mt-1 font-mono text-[12px] text-foreground">{value}</dd>
+    </div>
   );
 }
