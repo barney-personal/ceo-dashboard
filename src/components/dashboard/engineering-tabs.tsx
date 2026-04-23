@@ -31,21 +31,31 @@ const MODEL_TAB = {
   href: "/dashboard/engineering/impact-model",
 } as const;
 
+const CODE_REVIEW_TAB = {
+  label: "Code review",
+  href: "/dashboard/engineering/code-review",
+} as const;
+
 /** Tabs where the period picker has no effect (trend/sparkline-based views). */
 const PERIODLESS_TABS = new Set<string>([
   "/dashboard/engineering/delivery-health",
   "/dashboard/engineering/impact",
   "/dashboard/engineering/impact-model",
+  "/dashboard/engineering/code-review",
 ]);
 
 export function EngineeringTabs({
   showImpact = false,
   showImpactModel = false,
+  showCodeReview = false,
 }: {
   showImpact?: boolean;
   /** Separate gate from `showImpact` — the Impact model is open to
    * managers (team-scoped view) even when the Impact analysis page isn't. */
   showImpactModel?: boolean;
+  /** CEO-only. The code-review ranking uses LLM judgement of individual
+   * engineers' PRs — sensitive, not for broader distribution. */
+  showCodeReview?: boolean;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -53,6 +63,7 @@ export function EngineeringTabs({
     ...BASE_TABS,
     ...(showImpact ? [IMPACT_TAB] : []),
     ...(showImpactModel ? [MODEL_TAB] : []),
+    ...(showCodeReview ? [CODE_REVIEW_TAB] : []),
   ];
   // Preserve period (and any other query state) when switching tabs so the
   // user doesn't lose their 90-day selection by navigating.

@@ -206,12 +206,23 @@ interface GitHubUser {
 interface GitHubPullRequest {
   number: number;
   title: string;
+  body: string | null;
   user: { login: string; avatar_url: string } | null;
   merged_at: string | null;
+  merge_commit_sha: string | null;
   additions: number;
   deletions: number;
   changed_files: number;
   created_at: string;
+}
+
+interface GitHubPullRequestFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
 }
 
 interface GitHubPullRequestListItem {
@@ -316,6 +327,201 @@ export async function getPRDetails(
     `/repos/${repoFullName}/pulls/${prNumber}`,
     { signal: opts.signal }
   );
+}
+
+export async function getPRFiles(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GitHubPullRequestFile[]> {
+  // GitHub caps /files at 3000 files and 30 pages of 100. For code-review
+  // purposes we'll never need more than 100 — if a PR touches that many
+  // files, we already know it's huge without reading every diff.
+  return githubRequest<GitHubPullRequestFile[]>(
+    `/repos/${repoFullName}/pulls/${prNumber}/files?per_page=100`,
+    { signal: opts.signal },
+  );
+}
+
+export interface PRAnalysisPayload {
+  repo: string;
+  prNumber: number;
+  title: string;
+  body: string;
+  mergeSha: string | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  /** Filename + patch for each non-skipped file, already truncated to fit
+   * within the prompt budget. A file with `truncated: true` had its patch
+   * elided; a file with `skipped: true` is lockfile/generated/etc. */
+  files: Array<{
+    filename: string;
+    status: string;
+    additions: number;
+    deletions: number;
+    patch: string | null;
+    truncated: boolean;
+    skipped: boolean;
+    skipReason?: string;
+  }>;
+  /** Notes for the reviewer prompt — e.g. "Large diff, 40 files truncated" */
+  prNotes: string[];
+}
+
+/** Files we never feed to Claude — generated output, lockfiles, vendored
+ * code, etc. The scorer can't meaningfully judge these and they eat tokens. */
+const SKIP_FILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /^package-lock\.json$|^npm-shrinkwrap\.json$/, reason: "npm lockfile" },
+  { pattern: /^yarn\.lock$|^pnpm-lock\.yaml$|^bun\.lockb$/, reason: "lockfile" },
+  { pattern: /^Cargo\.lock$|^poetry\.lock$|^Pipfile\.lock$/, reason: "lockfile" },
+  { pattern: /\.min\.(js|css)$/, reason: "minified asset" },
+  { pattern: /^dist\/|\/dist\//, reason: "build output" },
+  { pattern: /^build\/|\/build\//, reason: "build output" },
+  { pattern: /\.generated\.(ts|js|tsx|jsx|go|py)$/, reason: "generated code" },
+  { pattern: /^vendor\/|\/vendor\//, reason: "vendored code" },
+  { pattern: /^node_modules\/|\/node_modules\//, reason: "vendored code" },
+  { pattern: /\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.webp$|\.ico$/, reason: "binary/image" },
+  { pattern: /^drizzle\/meta\//, reason: "drizzle metadata" },
+];
+
+function classifyFileSkip(filename: string): string | null {
+  for (const { pattern, reason } of SKIP_FILE_PATTERNS) {
+    if (pattern.test(filename)) return reason;
+  }
+  return null;
+}
+
+/** Total characters of patch content we'll send to Claude per PR. Sonnet
+ * can handle far more but truncating keeps per-PR cost + latency predictable
+ * and forces us to prioritise signal over volume. */
+const MAX_PATCH_CHARS = 30_000;
+
+/**
+ * Fetch + shape a PR for Claude analysis. Non-code files are marked skipped
+ * (not sent to the model, but counted). Remaining patches are concatenated
+ * in priority order (src/* before tests before config) and truncated to
+ * MAX_PATCH_CHARS.
+ */
+export async function fetchPRAnalysisPayload(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PRAnalysisPayload> {
+  const [details, files] = await Promise.all([
+    getPRDetails(repoFullName, prNumber, opts),
+    getPRFiles(repoFullName, prNumber, opts),
+  ]);
+
+  const notes: string[] = [];
+  // Sort: prefer source files over tests over config over the rest. Same
+  // ordering decides which patches survive truncation.
+  function priority(filename: string): number {
+    if (/\.(md|rst|txt)$/i.test(filename)) return 4;
+    if (/(^|\/)__tests__\/|\.test\.|\.spec\./.test(filename)) return 2;
+    if (/^package\.json$|^tsconfig|\.yaml$|\.yml$|\.toml$|\.ini$/.test(filename)) return 3;
+    return 1;
+  }
+
+  const sorted = [...files].sort((a, b) => priority(a.filename) - priority(b.filename));
+  let budget = MAX_PATCH_CHARS;
+  const processed: PRAnalysisPayload["files"] = [];
+  let truncatedCount = 0;
+
+  for (const f of sorted) {
+    const skipReason = classifyFileSkip(f.filename);
+    if (skipReason) {
+      processed.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: null,
+        truncated: false,
+        skipped: true,
+        skipReason,
+      });
+      continue;
+    }
+    if (!f.patch) {
+      processed.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: null,
+        truncated: false,
+        skipped: true,
+        skipReason: "no patch (likely binary or too large)",
+      });
+      continue;
+    }
+    if (budget <= 0) {
+      processed.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: null,
+        truncated: true,
+        skipped: false,
+      });
+      truncatedCount++;
+      continue;
+    }
+    if (f.patch.length > budget) {
+      processed.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: f.patch.slice(0, budget) + "\n// … (truncated)",
+        truncated: true,
+        skipped: false,
+      });
+      budget = 0;
+      truncatedCount++;
+      continue;
+    }
+    processed.push({
+      filename: f.filename,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      patch: f.patch,
+      truncated: false,
+      skipped: false,
+    });
+    budget -= f.patch.length;
+  }
+
+  if (truncatedCount > 0) {
+    notes.push(
+      `Diff was truncated (${truncatedCount} file(s) partially or fully elided) — judge within the visible scope.`,
+    );
+  }
+  const skippedCount = processed.filter((f) => f.skipped).length;
+  if (skippedCount > 0) {
+    notes.push(
+      `${skippedCount} non-code file(s) excluded (lockfiles, generated, binary).`,
+    );
+  }
+  if (files.length >= 100) {
+    notes.push("PR touches ≥100 files — GitHub API cap; not all files visible.");
+  }
+
+  return {
+    repo: repoFullName,
+    prNumber,
+    title: details.title,
+    body: (details.body ?? "").slice(0, 4000),
+    mergeSha: details.merge_commit_sha,
+    additions: details.additions,
+    deletions: details.deletions,
+    changedFiles: details.changed_files,
+    files: processed,
+    prNotes: notes,
+  };
 }
 
 export interface MergedPRRecord {
