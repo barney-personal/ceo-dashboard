@@ -290,6 +290,7 @@ vi.mock("drizzle-orm", () => ({
   inArray: (left: unknown, right: unknown[]) => ({ inArray: [left, right] }),
   isNotNull: (value: unknown) => ({ isNotNull: value }),
   notInArray: (left: unknown, right: unknown[]) => ({ notInArray: [left, right] }),
+  sql: vi.fn(() => ({})),
 }));
 
 import { runManagementAccountsSync } from "../management-accounts";

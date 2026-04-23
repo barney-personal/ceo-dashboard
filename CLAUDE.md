@@ -190,7 +190,7 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/managers` | manager | Team performance + alerts for the viewer's direct reports (leadership+ can inspect any manager via `?manager=`) |
 | `/dashboard/engineering` | everyone | GitHub PRs / commits / Mode engineering |
 | `/dashboard/engineering/impact-model` | manager | SHAP impact model + manager team coaching (team-scoped for plain managers; leadership+ gets a manager picker) |
-| `/dashboard/engineering/code-review` | ceo | Claude-reviewed merged PRs, stack-ranked by complexity × quality composite. CEO-only — LLM judgements of individual engineers' code. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). |
+| `/dashboard/engineering/code-review` | ceo | LLM-reviewed merged PRs with multi-axis rubric scoring, GitHub review-process signals, and a confidence-aware cohort-relative ranking. CEO-only — model judgements of individual engineers' code. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). |
 | `/dashboard/slack` | leadership | Workspace engagement, tenure-normalised |
 | `/dashboard/settings` | everyone | Per-user integrations |
 | `/dashboard/admin/users` | ceo | Clerk user admin |
@@ -328,7 +328,7 @@ web service via `fromService:` refs — also no Doppler entry needed.
 - `SLACK_BOT_TOKEN` / `SLACK_OKR_CHANNEL_IDS` / `SLACK_PRE_READS_CHANNEL_ID` — Slack API
 - `ANTHROPIC_API_KEY` — Claude API for OKR and Excel parsing
 - `IMPACT_MODEL_HASH_KEY` — HMAC-SHA256 key linking `src/data/impact-model.json` engineer hashes to real names at request time. **Rotation:** if this key changes, `ml-impact/train.py` must re-run (or the rehash migration) so committed hashes match the live key. Otherwise the Engineering → Impact Model page silently degrades to "Engineer NNN" pseudonyms.
-- `CODE_REVIEW_EXCLUDED_REPOS` — optional comma-separated list of `owner/repo` pairs the Engineering → Code review page skips when analysing merged PRs (e.g. infra-only or security-sensitive repos). Empty = analyse everything `githubPrs` knows about. Bumping `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts` forces a full re-analysis (cache key is `(repo, prNumber, rubricVersion)`).
+- `CODE_REVIEW_EXCLUDED_REPOS` / `OPENAI_API_KEY` / `CODE_REVIEW_OPENAI_MODEL` / `CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION` / `CODE_REVIEW_OPENAI_REASONING_EFFORT` — Code review analysis controls. `CODE_REVIEW_EXCLUDED_REPOS` is an optional comma-separated list of `owner/repo` pairs the Engineering → Code review page skips when analysing merged PRs (e.g. infra-only or security-sensitive repos). Empty = analyse everything `githubPrs` knows about. Bumping `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts` forces a full re-analysis (cache key is `(repo, prNumber, rubricVersion)`). `OPENAI_API_KEY` stays server-side only and enables the optional second-opinion path.
 - `GITHUB_API_TOKEN` / `GITHUB_ORG` / `GITHUB_REPOS` — GitHub engineering metrics
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` / `GOOGLE_CALENDAR_ID` — Google Calendar
 - `GRANOLA_API_TOKEN` — Granola meeting transcripts

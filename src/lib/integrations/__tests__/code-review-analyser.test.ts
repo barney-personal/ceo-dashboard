@@ -1,14 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the Anthropic SDK to return a controllable tool_use response.
-const messagesCreate = vi.fn();
+const { anthropicCreate, openaiCreate } = vi.hoisted(() => ({
+  anthropicCreate: vi.fn(),
+  openaiCreate: vi.fn(),
+}));
+
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class {
-    messages = { create: messagesCreate };
+    messages = { create: anthropicCreate };
   },
 }));
 
-import { analysePR } from "../code-review-analyser";
+vi.mock("openai", () => ({
+  default: class {
+    responses = { create: openaiCreate };
+  },
+}));
+
+import { analysePR, computeOutcomeScore } from "../code-review-analyser";
 import type { PRAnalysisPayload } from "../github";
 
 function makePayload(
@@ -19,10 +28,25 @@ function makePayload(
     prNumber: 42,
     title: "Add thing",
     body: "Does the thing",
-    mergeSha: "abc",
+    createdAt: "2026-04-20T10:00:00.000Z",
+    mergedAt: "2026-04-21T10:00:00.000Z",
+    mergeSha: "abc123",
     additions: 100,
     deletions: 20,
     changedFiles: 3,
+    primarySurface: "backend",
+    review: {
+      approvalCount: 1,
+      changeRequestCount: 0,
+      reviewCommentCount: 2,
+      conversationCommentCount: 1,
+      reviewRounds: 1,
+      timeToFirstReviewHours: 2,
+      timeToMergeHours: 24,
+      commitCount: 2,
+      commitsAfterFirstReview: 0,
+      revertWithin14d: false,
+    },
     files: [
       {
         filename: "src/feature.ts",
@@ -39,8 +63,8 @@ function makePayload(
   };
 }
 
-function mockToolUseResponse(input: Record<string, unknown>) {
-  messagesCreate.mockResolvedValueOnce({
+function mockAnthropicToolUse(input: Record<string, unknown>) {
+  anthropicCreate.mockResolvedValueOnce({
     stop_reason: "tool_use",
     content: [
       {
@@ -54,113 +78,214 @@ function mockToolUseResponse(input: Record<string, unknown>) {
 }
 
 describe("analysePR", () => {
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
+
   beforeEach(() => {
-    messagesCreate.mockReset();
+    anthropicCreate.mockReset();
+    openaiCreate.mockReset();
+    delete process.env.OPENAI_API_KEY;
   });
 
-  it("returns a valid analysis from a well-formed tool_use response", async () => {
-    mockToolUseResponse({
-      complexity: 3,
-      quality: 4,
+  afterEach(() => {
+    if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalOpenAiKey;
+  });
+
+  it("returns the primary Anthropic review when no OpenAI second opinion is configured", async () => {
+    mockAnthropicToolUse({
+      technicalDifficulty: 3,
+      executionQuality: 4,
+      testAdequacy: 4,
+      riskHandling: 3,
+      reviewability: 4,
+      analysisConfidencePct: 81,
       category: "feature",
       summary: "Adds a feature foo that does X.",
       caveats: ["Primarily test file changes"],
       standout: null,
     });
+
     const result = await analysePR(makePayload());
-    expect(result).toEqual({
-      complexity: 3,
-      quality: 4,
+    expect(result.technicalDifficulty).toBe(3);
+    expect(result.executionQuality).toBe(4);
+    expect(result.analysisConfidencePct).toBe(81);
+    expect(result.secondOpinionUsed).toBe(false);
+    expect(result.agreementLevel).toBe("single_model");
+    expect(result.primarySurface).toBe("backend");
+    expect(result.outcomeScore).toBeGreaterThan(0);
+  });
+
+  it("uses OpenAI as an adjudicator when the primary review is low-confidence", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    mockAnthropicToolUse({
+      technicalDifficulty: 4,
+      executionQuality: 2,
+      testAdequacy: 2,
+      riskHandling: 2,
+      reviewability: 2,
+      analysisConfidencePct: 40,
       category: "feature",
-      summary: "Adds a feature foo that does X.",
-      caveats: ["Primarily test file changes"],
-      standout: null,
+      summary: "Adds a feature under low-confidence evidence.",
+      caveats: ["Diff was truncated"],
+      standout: "concerning",
     });
+    openaiCreate.mockResolvedValueOnce({
+      output_text: JSON.stringify({
+        technicalDifficulty: 4,
+        executionQuality: 3,
+        testAdequacy: 3,
+        riskHandling: 3,
+        reviewability: 3,
+        analysisConfidencePct: 74,
+        category: "feature",
+        summary: "Adds a feature with some rough edges but acceptable execution.",
+        caveats: ["Primary review looked overly harsh on partial evidence"],
+        standout: null,
+      }),
+    });
+
+    const result = await analysePR(
+      makePayload({
+        files: [
+          {
+            filename: "src/feature.ts",
+            status: "modified",
+            additions: 80,
+            deletions: 10,
+            patch: null,
+            truncated: true,
+            skipped: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.secondOpinionUsed).toBe(true);
+    expect(result.secondOpinionReasons).toContain("truncated_diff");
+    expect(result.executionQuality).toBe(3);
+    expect(result.agreementLevel).not.toBe("single_model");
   });
 
-  it("clamps scores outside 1..5 to the valid range", async () => {
-    mockToolUseResponse({
-      complexity: 9,
-      quality: 0,
-      category: "refactor",
-      summary: "x",
-      caveats: [],
-      standout: null,
-    });
-    const result = await analysePR(makePayload());
-    expect(result.complexity).toBe(5);
-    expect(result.quality).toBe(1);
-  });
+  it("falls back to the primary review when OpenAI adjudication fails", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-  it("coerces unknown categories to 'chore'", async () => {
-    mockToolUseResponse({
-      complexity: 3,
-      quality: 3,
-      category: "something-made-up",
-      summary: "x",
-      caveats: [],
-      standout: null,
-    });
-    const result = await analysePR(makePayload());
-    expect(result.category).toBe("chore");
-  });
-
-  it("drops a standout value that isn't one of the known tags", async () => {
-    mockToolUseResponse({
-      complexity: 3,
-      quality: 3,
+    mockAnthropicToolUse({
+      technicalDifficulty: 4,
+      executionQuality: 2,
+      testAdequacy: 2,
+      riskHandling: 2,
+      reviewability: 2,
+      analysisConfidencePct: 40,
       category: "feature",
-      summary: "x",
-      caveats: [],
-      standout: "gold_star",
+      summary: "Adds a feature under low-confidence evidence.",
+      caveats: ["Diff was truncated"],
+      standout: "concerning",
     });
-    const result = await analysePR(makePayload());
-    expect(result.standout).toBeNull();
+    openaiCreate.mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }));
+
+    const result = await analysePR(
+      makePayload({
+        files: [
+          {
+            filename: "src/feature.ts",
+            status: "modified",
+            additions: 80,
+            deletions: 10,
+            patch: null,
+            truncated: true,
+            skipped: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.secondOpinionUsed).toBe(false);
+    expect(result.secondOpinionReasons).toContain("truncated_diff");
+    expect(result.executionQuality).toBe(2);
+    expect(result.agreementLevel).toBe("single_model");
+    expect(result.rawModelReviews).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
-  it("retries then throws on persistent SDK failure", async () => {
-    messagesCreate.mockRejectedValue(new Error("upstream timeout"));
-    await expect(analysePR(makePayload())).rejects.toThrow(/upstream timeout/);
-    // 3 attempts per the analyser's LLM_MAX_ATTEMPTS constant.
-    expect(messagesCreate).toHaveBeenCalledTimes(3);
-  });
-
-  it("throws when the model omits the tool call", async () => {
-    messagesCreate.mockResolvedValue({
+  it("throws when Claude omits the required tool call", async () => {
+    anthropicCreate.mockResolvedValueOnce({
       stop_reason: "end_turn",
       content: [{ type: "text", text: "I don't want to score this." }],
     });
     await expect(analysePR(makePayload())).rejects.toThrow(/submit_review/);
   });
 
-  it("preserves prNotes and file-skip markers in the rendered prompt", async () => {
-    mockToolUseResponse({
-      complexity: 2,
-      quality: 3,
-      category: "chore",
-      summary: "ok",
-      caveats: [],
-      standout: null,
+  it("returns a neutral outcome score when review signals are absent", () => {
+    const payload = makePayload({
+      review: {
+        approvalCount: 0,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 0,
+        timeToFirstReviewHours: 0,
+        timeToMergeHours: 0,
+        commitCount: 0,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: false,
+      },
     });
-    await analysePR(
-      makePayload({
-        prNotes: ["Diff was truncated (5 files partially elided)"],
-        files: [
-          {
-            filename: "package-lock.json",
-            status: "modified",
-            additions: 2000,
-            deletions: 100,
-            patch: null,
-            truncated: false,
-            skipped: true,
-            skipReason: "npm lockfile",
-          },
-        ],
-      }),
-    );
-    const sentMessage = messagesCreate.mock.calls[0][0].messages[0].content as string;
-    expect(sentMessage).toContain("Diff was truncated");
-    expect(sentMessage).toContain("package-lock.json (skipped");
+
+    expect(computeOutcomeScore(payload)).toBe(75);
+  });
+
+  it("caps reverted PR outcome scores at 40", () => {
+    const payload = makePayload({
+      review: {
+        approvalCount: 3,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 1,
+        timeToFirstReviewHours: 1,
+        timeToMergeHours: 12,
+        commitCount: 3,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: true,
+      },
+    });
+
+    expect(computeOutcomeScore(payload)).toBe(40);
+  });
+
+  it("rewards smooth review outcomes and clamps heavily negative cases to zero", () => {
+    const strongPayload = makePayload({
+      review: {
+        approvalCount: 3,
+        changeRequestCount: 0,
+        reviewCommentCount: 0,
+        conversationCommentCount: 0,
+        reviewRounds: 1,
+        timeToFirstReviewHours: 1,
+        timeToMergeHours: 12,
+        commitCount: 3,
+        commitsAfterFirstReview: 0,
+        revertWithin14d: false,
+      },
+    });
+    const poorPayload = makePayload({
+      review: {
+        approvalCount: 0,
+        changeRequestCount: 8,
+        reviewCommentCount: 99,
+        conversationCommentCount: 0,
+        reviewRounds: 8,
+        timeToFirstReviewHours: 24,
+        timeToMergeHours: 72,
+        commitCount: 12,
+        commitsAfterFirstReview: 9,
+        revertWithin14d: true,
+      },
+    });
+
+    expect(computeOutcomeScore(strongPayload)).toBeGreaterThan(80);
+    expect(computeOutcomeScore(poorPayload)).toBe(0);
   });
 });

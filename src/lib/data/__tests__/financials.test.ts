@@ -12,6 +12,7 @@ vi.mock("@/lib/db/schema", () => ({
 
 vi.mock("drizzle-orm", () => ({
   desc: vi.fn((v) => v),
+  sql: vi.fn(() => ({})),
 }));
 
 import {

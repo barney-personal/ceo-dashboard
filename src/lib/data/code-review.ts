@@ -5,6 +5,9 @@ import {
   RUBRIC_VERSION,
   type AnalysisCategory,
   type AnalysisStandout,
+  type CodeReviewSurface,
+  type ModelAgreementLevel,
+  type SecondOpinionReason,
 } from "@/lib/integrations/code-review-analyser";
 import { CODE_REVIEW_WINDOW_DAYS } from "@/lib/sync/code-review";
 
@@ -12,48 +15,76 @@ export interface PrReviewEntry {
   repo: string;
   prNumber: number;
   mergedAt: Date;
-  complexity: number;
-  quality: number;
+  technicalDifficulty: number;
+  executionQuality: number;
+  testAdequacy: number;
+  riskHandling: number;
+  reviewability: number;
+  analysisConfidencePct: number;
   category: AnalysisCategory;
   summary: string;
   caveats: string[];
   standout: AnalysisStandout | null;
+  primarySurface: CodeReviewSurface;
+  approvalCount: number;
+  changeRequestCount: number;
+  reviewCommentCount: number;
+  conversationCommentCount: number;
+  reviewRounds: number;
+  timeToFirstReviewMinutes: number | null;
+  timeToMergeMinutes: number;
+  commitCount: number;
+  commitsAfterFirstReview: number;
+  revertWithin14d: boolean;
+  outcomeScore: number;
+  reviewProvider: string;
+  reviewModel: string;
+  secondOpinionUsed: boolean;
+  agreementLevel: ModelAgreementLevel;
+  secondOpinionReasons: SecondOpinionReason[];
+  qualityScore: number;
+  reviewHealthScore: number;
+  prScore: number;
+  recencyWeight: number;
   githubUrl: string;
 }
 
 export type DiagnosticFlag =
-  | "high_volume_low_quality"
-  | "low_volume_high_complexity"
-  | "quality_variance_high"
-  | "all_tiny_prs"
   | "low_evidence"
-  | "has_concerning_pr";
+  | "low_confidence"
+  | "quality_variance_high"
+  | "review_churn_high"
+  | "has_concerning_pr"
+  | "reverted_pr";
 
 export interface EngineerRollup {
   authorLogin: string;
   employeeName: string | null;
   employeeEmail: string | null;
   isBot: boolean;
+  cohort: CodeReviewSurface;
   prCount: number;
+  effectivePrCount: number;
+  confidencePct: number;
   distinctRepos: number;
-  medianComplexity: number;
-  medianQuality: number;
-  maxComplexity: number;
-  /** Composite ranking input. Sum of complexity × quality across this
-   * engineer's PRs — rewards both volume and per-PR weight. A flood of
-   * trivial PRs can't outrank a few hard ones. */
-  compositeScore: number;
+  avgTechnicalDifficulty: number;
+  avgExecutionQuality: number;
+  avgTestAdequacy: number;
+  avgRiskHandling: number;
+  avgReviewability: number;
+  avgOutcomeScore: number;
+  qualityPercentile: number;
+  difficultyPercentile: number;
+  reliabilityPercentile: number;
+  reviewHealthPercentile: number;
+  throughputPercentile: number;
+  rawScore: number;
+  finalScore: number;
   categoryCounts: Record<AnalysisCategory, number>;
   flags: DiagnosticFlag[];
-  /** Present for the drawer. Sorted by merged_at desc. */
   prs: PrReviewEntry[];
-  /** Delta vs the previous `windowDays` window (Phase 2). `null` when no
-   * prior data — don't show a misleading "+100%" for first-ever analyses. */
-  prevPrCount: number | null;
-  prevCompositeScore: number | null;
-  /** Weekly composite buckets across the current window, oldest→newest.
-   * Used for the trend sparkline in the drawer. */
-  weeklyComposite: number[];
+  prevFinalScore: number | null;
+  weeklyScore: number[];
 }
 
 export interface CodeReviewView {
@@ -61,45 +92,164 @@ export interface CodeReviewView {
   rubricVersion: string;
   analysedAtLatest: Date | null;
   engineers: EngineerRollup[];
-  /** Engineers with <3 PRs in the window — separated from the main ranking
-   * to avoid ordinal rankings with almost no evidence behind them. */
-  lowEvidenceEngineers: EngineerRollup[];
   totalPrs: number;
 }
 
-function median(values: number[]): number {
+interface AnalysisRow {
+  repo: string;
+  prNumber: number;
+  authorLogin: string;
+  mergedAt: Date;
+  technicalDifficulty?: number | null;
+  executionQuality?: number | null;
+  testAdequacy?: number | null;
+  riskHandling?: number | null;
+  reviewability?: number | null;
+  analysisConfidencePct?: number | null;
+  category: string;
+  summary: string;
+  caveats: unknown;
+  standout: string | null;
+  primarySurface?: string | null;
+  approvalCount?: number | null;
+  changeRequestCount?: number | null;
+  reviewCommentCount?: number | null;
+  conversationCommentCount?: number | null;
+  reviewRounds?: number | null;
+  timeToFirstReviewMinutes?: number | null;
+  timeToMergeMinutes?: number | null;
+  commitCount?: number | null;
+  commitsAfterFirstReview?: number | null;
+  revertWithin14d?: boolean | null;
+  outcomeScore?: number | null;
+  reviewProvider?: string | null;
+  reviewModel?: string | null;
+  secondOpinionUsed?: boolean | null;
+  agreementLevel?: string | null;
+  secondOpinionReasons?: unknown;
+  analysedAt: Date;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function clamp100(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function average(values: number[]): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2
-    ? sorted[mid]
-    : (sorted[mid - 1] + sorted[mid]) / 2;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function weightedAverage(values: number[], weights: number[]): number {
+  if (values.length === 0 || values.length !== weights.length) return 0;
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  if (totalWeight <= 0) return 0;
+  let weighted = 0;
+  for (let i = 0; i < values.length; i++) {
+    weighted += values[i] * weights[i];
+  }
+  return weighted / totalWeight;
 }
 
 function stdev(values: number[]): number {
   if (values.length < 2) return 0;
-  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  const mean = average(values);
   const variance =
-    values.reduce((s, v) => s + (v - mean) ** 2, 0) / (values.length - 1);
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+    (values.length - 1);
   return Math.sqrt(variance);
 }
 
-/** Bucket PRs into weekly composite totals, oldest→newest, across the window.
- * `windowDays=30` yields 5 buckets (`ceil(30/7) = 5`) each covering ~6 days
- * so every day in the window maps to exactly one bucket. */
-function bucketWeekly(prs: PrReviewEntry[], windowDays: number): number[] {
-  const buckets = Math.max(1, Math.ceil(windowDays / 7));
-  const totals = new Array<number>(buckets).fill(0);
-  const windowStart = Date.now() - windowDays * 24 * 60 * 60 * 1000;
-  const bucketMs = (windowDays * 24 * 60 * 60 * 1000) / buckets;
-  for (const pr of prs) {
-    const offset = pr.mergedAt.getTime() - windowStart;
-    let idx = Math.floor(offset / bucketMs);
-    if (idx < 0) idx = 0;
-    if (idx >= buckets) idx = buckets - 1;
-    totals[idx] += pr.complexity * pr.quality;
+export function percentileRank(value: number, values: number[]): number {
+  if (values.length <= 1) return 50;
+  const sorted = [...values].sort((a, b) => a - b);
+  let lower = 0;
+  let equal = 0;
+  for (const candidate of sorted) {
+    if (candidate < value) lower++;
+    else if (candidate === value) equal++;
   }
-  return totals;
+  const denominator = Math.max(1, sorted.length - 1);
+  return ((lower + Math.max(0, equal - 1) / 2) / denominator) * 100;
+}
+
+function recencyWeight(mergedAt: Date, windowDays: number): number {
+  const ageDays = Math.max(
+    0,
+    (Date.now() - mergedAt.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  // Half-life ~= 30 days inside the 90-day window.
+  return Math.pow(0.5, ageDays / Math.min(30, windowDays));
+}
+
+function toConfidence(value: number): number {
+  return clamp01(value / 100);
+}
+
+function computeQualityScore(pr: {
+  executionQuality: number;
+  testAdequacy: number;
+  riskHandling: number;
+  reviewability: number;
+}): number {
+  return clamp100(
+    ((0.4 * pr.executionQuality +
+      0.25 * pr.testAdequacy +
+      0.2 * pr.riskHandling +
+      0.15 * pr.reviewability) /
+      5) *
+      100,
+  );
+}
+
+function computeReviewHealthScore(pr: {
+  reviewability: number;
+  changeRequestCount: number;
+  commitsAfterFirstReview: number;
+  reviewRounds: number;
+  reviewCommentCount: number;
+  outcomeScore: number;
+}): number {
+  let score = (pr.reviewability / 5) * 65 + pr.outcomeScore * 0.35;
+  score -= Math.min(10, pr.changeRequestCount * 4);
+  score -= Math.min(8, pr.commitsAfterFirstReview * 2);
+  score -= Math.min(8, Math.max(0, pr.reviewRounds - 1) * 4);
+  score -= Math.min(5, pr.reviewCommentCount * 0.25);
+  return clamp100(score);
+}
+
+function computePrScore(pr: {
+  technicalDifficulty: number;
+  executionQuality: number;
+  testAdequacy: number;
+  riskHandling: number;
+  reviewability: number;
+  analysisConfidencePct: number;
+  outcomeScore: number;
+  standout: AnalysisStandout | null;
+}): number {
+  const qualityBlock =
+    (0.4 * pr.executionQuality +
+      0.25 * pr.testAdequacy +
+      0.2 * pr.riskHandling +
+      0.15 * pr.reviewability) /
+    5;
+  const difficultyBonus = 0.85 + 0.05 * pr.technicalDifficulty;
+  const outcomeMultiplier = 0.7 + 0.4 * (pr.outcomeScore / 100);
+  let score =
+    100 *
+    qualityBlock *
+    difficultyBonus *
+    outcomeMultiplier *
+    toConfidence(pr.analysisConfidencePct);
+
+  if (pr.executionQuality <= 2) score = Math.min(score, 45);
+  if (pr.standout === "concerning") score = Math.min(score, 25);
+
+  return clamp100(score);
 }
 
 function emptyCategoryCounts(): Record<AnalysisCategory, number> {
@@ -114,42 +264,407 @@ function emptyCategoryCounts(): Record<AnalysisCategory, number> {
   };
 }
 
-function computeFlags(rows: PrReviewEntry[]): DiagnosticFlag[] {
+function computeFlags(prs: PrReviewEntry[], effectivePrCount: number): DiagnosticFlag[] {
   const flags: DiagnosticFlag[] = [];
-  if (rows.length === 0) return flags;
-  const qualities = rows.map((r) => r.quality);
-  const complexities = rows.map((r) => r.complexity);
-  const medQ = median(qualities);
-  const medC = median(complexities);
-
-  // Thresholds are intentionally conservative — we flag *signal*, not noise.
-  if (rows.length >= 8 && medQ <= 2) flags.push("high_volume_low_quality");
-  if (rows.length <= 4 && medC >= 4) flags.push("low_volume_high_complexity");
-  if (qualities.length >= 5 && stdev(qualities) >= 1.2) {
-    flags.push("quality_variance_high");
+  if (effectivePrCount < 2.5) flags.push("low_evidence");
+  if (weightedAverage(
+    prs.map((pr) => pr.analysisConfidencePct),
+    prs.map((pr) => Math.max(0.1, pr.recencyWeight)),
+  ) < 65) {
+    flags.push("low_confidence");
   }
-  if (rows.length >= 5 && rows.every((r) => r.complexity <= 2)) {
-    flags.push("all_tiny_prs");
-  }
-  if (rows.length < 3) flags.push("low_evidence");
-  if (rows.some((r) => r.standout === "concerning")) {
+  if (prs.some((pr) => pr.standout === "concerning")) {
     flags.push("has_concerning_pr");
+  }
+  if (prs.some((pr) => pr.revertWithin14d)) {
+    flags.push("reverted_pr");
+  }
+  if (
+    average(prs.map((pr) => pr.reviewRounds)) >= 2.5 ||
+    average(prs.map((pr) => pr.commitsAfterFirstReview)) >= 2
+  ) {
+    flags.push("review_churn_high");
+  }
+  if (prs.length >= 5 && stdev(prs.map((pr) => pr.executionQuality)) >= 1.1) {
+    flags.push("quality_variance_high");
   }
   return flags;
 }
 
+function bucketWeekly(prs: PrReviewEntry[], windowDays: number): number[] {
+  const buckets = Math.max(1, Math.ceil(windowDays / 7));
+  const totals = new Array<number>(buckets).fill(0);
+  const windowStart = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+  const bucketMs = (windowDays * 24 * 60 * 60 * 1000) / buckets;
+  for (const pr of prs) {
+    const offset = pr.mergedAt.getTime() - windowStart;
+    let idx = Math.floor(offset / bucketMs);
+    if (idx < 0) idx = 0;
+    if (idx >= buckets) idx = buckets - 1;
+    totals[idx] += pr.prScore;
+  }
+  return totals;
+}
+
+function toSurface(value: string | null | undefined): CodeReviewSurface {
+  switch (value) {
+    case "frontend":
+    case "backend":
+    case "data":
+    case "infra":
+    case "mobile":
+    case "mixed":
+      return value;
+    default:
+      return "mixed";
+  }
+}
+
+function toAgreement(value: string | null | undefined): ModelAgreementLevel {
+  switch (value) {
+    case "single_model":
+    case "confirmed":
+    case "minor_adjustment":
+    case "material_adjustment":
+      return value;
+    default:
+      return "single_model";
+  }
+}
+
+function normaliseRow(row: AnalysisRow): Omit<PrReviewEntry, "githubUrl"> {
+  const technicalDifficulty = Math.max(1, Math.min(5, row.technicalDifficulty ?? 3));
+  const executionQuality = Math.max(1, Math.min(5, row.executionQuality ?? 3));
+  const testAdequacy = Math.max(1, Math.min(5, row.testAdequacy ?? executionQuality));
+  const riskHandling = Math.max(1, Math.min(5, row.riskHandling ?? executionQuality));
+  const reviewability = Math.max(1, Math.min(5, row.reviewability ?? executionQuality));
+  const analysisConfidencePct = Math.max(
+    0,
+    Math.min(100, row.analysisConfidencePct ?? 60),
+  );
+  const standout = row.standout as AnalysisStandout | null;
+  const primarySurface = toSurface(row.primarySurface);
+  const outcomeScore = Math.max(0, Math.min(100, row.outcomeScore ?? 75));
+  const recency = recencyWeight(row.mergedAt, CODE_REVIEW_WINDOW_DAYS);
+  const base = {
+    repo: row.repo,
+    prNumber: row.prNumber,
+    mergedAt: row.mergedAt,
+    technicalDifficulty,
+    executionQuality,
+    testAdequacy,
+    riskHandling,
+    reviewability,
+    analysisConfidencePct,
+    category: row.category as AnalysisCategory,
+    summary: row.summary,
+    caveats: (row.caveats as string[] | null) ?? [],
+    standout,
+    primarySurface,
+    approvalCount: row.approvalCount ?? 0,
+    changeRequestCount: row.changeRequestCount ?? 0,
+    reviewCommentCount: row.reviewCommentCount ?? 0,
+    conversationCommentCount: row.conversationCommentCount ?? 0,
+    reviewRounds: row.reviewRounds ?? 0,
+    timeToFirstReviewMinutes: row.timeToFirstReviewMinutes ?? null,
+    timeToMergeMinutes: row.timeToMergeMinutes ?? 0,
+    commitCount: row.commitCount ?? 0,
+    commitsAfterFirstReview: row.commitsAfterFirstReview ?? 0,
+    revertWithin14d: row.revertWithin14d ?? false,
+    outcomeScore,
+    reviewProvider: row.reviewProvider ?? "anthropic",
+    reviewModel: row.reviewModel ?? "unknown",
+    secondOpinionUsed: row.secondOpinionUsed ?? false,
+    agreementLevel: toAgreement(row.agreementLevel),
+    secondOpinionReasons:
+      (row.secondOpinionReasons as SecondOpinionReason[] | null) ?? [],
+    qualityScore: 0,
+    reviewHealthScore: 0,
+    prScore: 0,
+    recencyWeight: recency,
+  };
+  const qualityScore = computeQualityScore(base);
+  const reviewHealthScore = computeReviewHealthScore({
+    reviewability: base.reviewability,
+    changeRequestCount: base.changeRequestCount,
+    commitsAfterFirstReview: base.commitsAfterFirstReview,
+    reviewRounds: base.reviewRounds,
+    reviewCommentCount: base.reviewCommentCount,
+    outcomeScore: base.outcomeScore,
+  });
+  const prScore = computePrScore(base);
+
+  return {
+    ...base,
+    qualityScore,
+    reviewHealthScore,
+    prScore,
+  };
+}
+
+function buildGithubUrl(repo: string, prNumber: number): string {
+  return repo.includes("/")
+    ? `https://github.com/${repo}/pull/${prNumber}`
+    : `https://github.com/${process.env.GITHUB_ORG ?? ""}/${repo}/pull/${prNumber}`;
+}
+
+function rowsLoginFor(rows: Array<{ authorLogin: string }>, key: string): string {
+  for (const row of rows) {
+    if (row.authorLogin.toLowerCase() === key) return row.authorLogin;
+  }
+  return key;
+}
+
+function buildRollupSet(
+  rows: AnalysisRow[],
+  employeeByLogin: Map<
+    string,
+    {
+      employeeName?: string | null;
+      employeeEmail?: string | null;
+      isBot?: boolean | null;
+    }
+  >,
+  windowDays: number,
+): EngineerRollup[] {
+  const rollupByAuthor = new Map<
+    string,
+    {
+      prs: PrReviewEntry[];
+      repos: Set<string>;
+      categoryCounts: Record<AnalysisCategory, number>;
+      surfaceWeight: Record<CodeReviewSurface, number>;
+    }
+  >();
+
+  for (const row of rows) {
+    const key = row.authorLogin.toLowerCase();
+    let bucket = rollupByAuthor.get(key);
+    if (!bucket) {
+      bucket = {
+        prs: [],
+        repos: new Set(),
+        categoryCounts: emptyCategoryCounts(),
+        surfaceWeight: {
+          frontend: 0,
+          backend: 0,
+          data: 0,
+          infra: 0,
+          mobile: 0,
+          mixed: 0,
+        },
+      };
+      rollupByAuthor.set(key, bucket);
+    }
+
+    const pr = {
+      ...normaliseRow(row),
+      githubUrl: buildGithubUrl(row.repo, row.prNumber),
+    };
+    bucket.prs.push(pr);
+    bucket.repos.add(row.repo);
+    bucket.categoryCounts[pr.category] = (bucket.categoryCounts[pr.category] ?? 0) + 1;
+    bucket.surfaceWeight[pr.primarySurface] += Math.max(
+      0.1,
+      pr.recencyWeight * toConfidence(pr.analysisConfidencePct),
+    );
+  }
+
+  const provisional: EngineerRollup[] = [];
+  const cohortRawByAuthor = new Map<
+    string,
+    {
+      quality: number;
+      difficulty: number;
+      reliability: number;
+      reviewHealth: number;
+      throughput: number;
+      cohort: CodeReviewSurface;
+    }
+  >();
+
+  for (const [key, bucket] of rollupByAuthor) {
+    const employee = employeeByLogin.get(key);
+    if (employee?.isBot) continue;
+
+    const prs = bucket.prs.sort((a, b) => b.mergedAt.getTime() - a.mergedAt.getTime());
+    const weights = prs.map((pr) =>
+      Math.max(0.1, pr.recencyWeight * toConfidence(pr.analysisConfidencePct)),
+    );
+    const effectivePrCount = weights.reduce((sum, weight) => sum + weight, 0);
+    const totalSurfaceWeight = Object.values(bucket.surfaceWeight).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const cohort =
+      totalSurfaceWeight <= 0
+        ? "mixed"
+        : ((Object.entries(bucket.surfaceWeight).sort(
+            (a, b) => b[1] - a[1],
+          )[0]?.[0] ?? "mixed") as CodeReviewSurface);
+
+    const qualityRaw = weightedAverage(
+      prs.map((pr) => pr.qualityScore),
+      weights,
+    );
+    const difficultyRaw = weightedAverage(
+      prs.map((pr) => (pr.technicalDifficulty / 5) * 100),
+      weights,
+    );
+    const reliabilityRaw = weightedAverage(
+      prs.map((pr) => pr.outcomeScore),
+      weights,
+    );
+    const reviewHealthRaw = weightedAverage(
+      prs.map((pr) => pr.reviewHealthScore),
+      weights,
+    );
+    const throughputRaw = prs.reduce(
+      (sum, pr) => sum + pr.prScore * pr.recencyWeight,
+      0,
+    );
+
+    cohortRawByAuthor.set(key, {
+      quality: qualityRaw,
+      difficulty: difficultyRaw,
+      reliability: reliabilityRaw,
+      reviewHealth: reviewHealthRaw,
+      throughput: throughputRaw,
+      cohort,
+    });
+
+    provisional.push({
+      authorLogin: rowsLoginFor(rows, key),
+      employeeName: employee?.employeeName ?? null,
+      employeeEmail: employee?.employeeEmail ?? null,
+      isBot: employee?.isBot ?? false,
+      cohort,
+      prCount: prs.length,
+      effectivePrCount,
+      confidencePct: Math.min(100, Math.round((effectivePrCount / 8) * 100)),
+      distinctRepos: bucket.repos.size,
+      avgTechnicalDifficulty: weightedAverage(
+        prs.map((pr) => pr.technicalDifficulty),
+        weights,
+      ),
+      avgExecutionQuality: weightedAverage(
+        prs.map((pr) => pr.executionQuality),
+        weights,
+      ),
+      avgTestAdequacy: weightedAverage(
+        prs.map((pr) => pr.testAdequacy),
+        weights,
+      ),
+      avgRiskHandling: weightedAverage(
+        prs.map((pr) => pr.riskHandling),
+        weights,
+      ),
+      avgReviewability: weightedAverage(
+        prs.map((pr) => pr.reviewability),
+        weights,
+      ),
+      avgOutcomeScore: reliabilityRaw,
+      qualityPercentile: 50,
+      difficultyPercentile: 50,
+      reliabilityPercentile: 50,
+      reviewHealthPercentile: 50,
+      throughputPercentile: 50,
+      rawScore: 50,
+      finalScore: 50,
+      categoryCounts: bucket.categoryCounts,
+      flags: computeFlags(prs, effectivePrCount),
+      prs,
+      prevFinalScore: null,
+      weeklyScore: bucketWeekly(prs, windowDays),
+    });
+  }
+
+  const allValues = {
+    quality: provisional.map((rollup) => cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!.quality),
+    difficulty: provisional.map((rollup) => cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!.difficulty),
+    reliability: provisional.map((rollup) => cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!.reliability),
+    reviewHealth: provisional.map((rollup) => cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!.reviewHealth),
+    throughput: provisional.map((rollup) => cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!.throughput),
+  };
+
+  const byCohort = new Map<CodeReviewSurface, EngineerRollup[]>();
+  for (const rollup of provisional) {
+    const arr = byCohort.get(rollup.cohort) ?? [];
+    arr.push(rollup);
+    byCohort.set(rollup.cohort, arr);
+  }
+
+  for (const rollup of provisional) {
+    const raw = cohortRawByAuthor.get(rollup.authorLogin.toLowerCase())!;
+    const cohortMembers = byCohort.get(rollup.cohort) ?? [];
+    const useCohort = cohortMembers.length >= 3 ? cohortMembers : provisional;
+    const cohortValues = {
+      quality: useCohort.map(
+        (member) => cohortRawByAuthor.get(member.authorLogin.toLowerCase())!.quality,
+      ),
+      difficulty: useCohort.map(
+        (member) => cohortRawByAuthor.get(member.authorLogin.toLowerCase())!.difficulty,
+      ),
+      reliability: useCohort.map(
+        (member) => cohortRawByAuthor.get(member.authorLogin.toLowerCase())!.reliability,
+      ),
+      reviewHealth: useCohort.map(
+        (member) => cohortRawByAuthor.get(member.authorLogin.toLowerCase())!.reviewHealth,
+      ),
+      throughput: useCohort.map(
+        (member) => cohortRawByAuthor.get(member.authorLogin.toLowerCase())!.throughput,
+      ),
+    };
+
+    rollup.qualityPercentile = percentileRank(
+      raw.quality,
+      cohortValues.quality.length === 0 ? allValues.quality : cohortValues.quality,
+    );
+    rollup.difficultyPercentile = percentileRank(
+      raw.difficulty,
+      cohortValues.difficulty.length === 0
+        ? allValues.difficulty
+        : cohortValues.difficulty,
+    );
+    rollup.reliabilityPercentile = percentileRank(
+      raw.reliability,
+      cohortValues.reliability.length === 0
+        ? allValues.reliability
+        : cohortValues.reliability,
+    );
+    rollup.reviewHealthPercentile = percentileRank(
+      raw.reviewHealth,
+      cohortValues.reviewHealth.length === 0
+        ? allValues.reviewHealth
+        : cohortValues.reviewHealth,
+    );
+    rollup.throughputPercentile = percentileRank(
+      raw.throughput,
+      cohortValues.throughput.length === 0
+        ? allValues.throughput
+        : cohortValues.throughput,
+    );
+    rollup.rawScore =
+      0.4 * rollup.qualityPercentile +
+      0.2 * rollup.difficultyPercentile +
+      0.15 * rollup.reliabilityPercentile +
+      0.15 * rollup.reviewHealthPercentile +
+      0.1 * rollup.throughputPercentile;
+    // Shrink sparse samples toward a neutral prior of 8 effective PRs at score 50.
+    rollup.finalScore =
+      (8 * 50 + rollup.effectivePrCount * rollup.rawScore) /
+      (8 + rollup.effectivePrCount);
+  }
+
+  provisional.sort((a, b) => b.finalScore - a.finalScore);
+  return provisional;
+}
+
 interface RollupOptions {
   windowDays?: number;
-  /** If true, also compute previous-window metrics for delta display. */
   includePrevious?: boolean;
 }
 
-/**
- * Roll up cached PR analyses into per-engineer rows. Hits the DB once (plus
- * one extra query for the previous window if delta is requested), then does
- * all aggregation in memory — the dataset is small (< few thousand rows)
- * so this is fine.
- */
 export async function getCodeReviewView(
   opts: RollupOptions = {},
 ): Promise<CodeReviewView> {
@@ -170,13 +685,7 @@ export async function getCodeReviewView(
     db.select().from(githubEmployeeMap),
   ]);
 
-  const employeeByLogin = new Map(
-    employeeMap.map((m) => [m.githubLogin.toLowerCase(), m]),
-  );
-
-  // Previous window (Phase 2 delta). Only the shape we need for comparison —
-  // skip loading full PR bodies, just the inputs for composite/count.
-  let prevRows: typeof rows = [];
+  let prevRows: AnalysisRow[] = [];
   if (opts.includePrevious) {
     const prevStart = new Date(
       Date.now() - 2 * windowDays * 24 * 60 * 60 * 1000,
@@ -194,110 +703,26 @@ export async function getCodeReviewView(
       );
   }
 
-  const rollupByAuthor = new Map<
-    string,
-    {
-      prs: PrReviewEntry[];
-      repos: Set<string>;
-      categoryCounts: Record<AnalysisCategory, number>;
-    }
-  >();
-
-  for (const row of rows) {
-    const key = row.authorLogin.toLowerCase();
-    let bucket = rollupByAuthor.get(key);
-    if (!bucket) {
-      bucket = {
-        prs: [],
-        repos: new Set(),
-        categoryCounts: emptyCategoryCounts(),
-      };
-      rollupByAuthor.set(key, bucket);
-    }
-    const entry: PrReviewEntry = {
-      repo: row.repo,
-      prNumber: row.prNumber,
-      mergedAt: row.mergedAt,
-      complexity: row.complexity,
-      quality: row.quality,
-      category: row.category as AnalysisCategory,
-      summary: row.summary,
-      caveats: (row.caveats as string[] | null) ?? [],
-      standout: (row.standout as AnalysisStandout | null) ?? null,
-      // Stored repo may be a bare name (matches githubPrs schema); prepend
-      // the org so the link actually resolves. GITHUB_ORG is a required
-      // Doppler secret — we'd rather a visibly broken link than a
-      // hardcoded fallback that silently points at the wrong GitHub org.
-      githubUrl: row.repo.includes("/")
-        ? `https://github.com/${row.repo}/pull/${row.prNumber}`
-        : `https://github.com/${process.env.GITHUB_ORG ?? ""}/${row.repo}/pull/${row.prNumber}`,
-    };
-    bucket.prs.push(entry);
-    bucket.repos.add(row.repo);
-    bucket.categoryCounts[entry.category] =
-      (bucket.categoryCounts[entry.category] ?? 0) + 1;
-  }
-
-  const prevByAuthor = new Map<string, number[]>();
-  const prevCountByAuthor = new Map<string, number>();
-  for (const row of prevRows) {
-    const key = row.authorLogin.toLowerCase();
-    const arr = prevByAuthor.get(key) ?? [];
-    arr.push(row.complexity * row.quality);
-    prevByAuthor.set(key, arr);
-    prevCountByAuthor.set(key, (prevCountByAuthor.get(key) ?? 0) + 1);
-  }
-
-  const all: EngineerRollup[] = [];
-  for (const [key, bucket] of rollupByAuthor) {
-    const emp = employeeByLogin.get(key);
-    if (emp?.isBot) continue;
-    const prs = bucket.prs;
-    const complexities = prs.map((p) => p.complexity);
-    const qualities = prs.map((p) => p.quality);
-    const composite = prs.reduce(
-      (s, p) => s + p.complexity * p.quality,
-      0,
-    );
-    const flags = computeFlags(prs);
-    const prevComposite = prevByAuthor.get(key)?.reduce((s, v) => s + v, 0);
-    const weeklyComposite = bucketWeekly(prs, windowDays);
-    all.push({
-      authorLogin: prs[0] ? rowsLoginFor(rows, key) : key,
-      employeeName: emp?.employeeName ?? null,
-      employeeEmail: emp?.employeeEmail ?? null,
-      isBot: emp?.isBot ?? false,
-      prCount: prs.length,
-      distinctRepos: bucket.repos.size,
-      medianComplexity: median(complexities),
-      medianQuality: median(qualities),
-      maxComplexity: Math.max(...complexities),
-      compositeScore: composite,
-      categoryCounts: bucket.categoryCounts,
-      flags,
-      prs,
-      prevPrCount: opts.includePrevious
-        ? prevCountByAuthor.get(key) ?? 0
-        : null,
-      prevCompositeScore: opts.includePrevious ? prevComposite ?? 0 : null,
-      weeklyComposite,
-    });
-  }
-
-  all.sort((a, b) => b.compositeScore - a.compositeScore);
-
-  const engineers = all.filter((e) => !e.flags.includes("low_evidence"));
-  const lowEvidenceEngineers = all.filter((e) =>
-    e.flags.includes("low_evidence"),
+  const employeeByLogin = new Map(
+    employeeMap.map((entry) => [entry.githubLogin.toLowerCase(), entry]),
   );
 
-  // rows is sorted by mergedAt desc — not the same thing as "most recently
-  // analysed". Walk the set to find the true max analysedAt so the page
-  // header accurately reflects when the last LLM call completed.
+  const engineers = buildRollupSet(rows as AnalysisRow[], employeeByLogin, windowDays);
+  const prevRollups = opts.includePrevious
+    ? buildRollupSet(prevRows as AnalysisRow[], employeeByLogin, windowDays)
+    : [];
+  const prevByAuthor = new Map(
+    prevRollups.map((rollup) => [rollup.authorLogin.toLowerCase(), rollup.finalScore]),
+  );
+  for (const engineer of engineers) {
+    engineer.prevFinalScore =
+      prevByAuthor.get(engineer.authorLogin.toLowerCase()) ?? null;
+  }
+
   let analysedAtLatest: Date | null = null;
-  for (const r of rows) {
-    if (!analysedAtLatest || r.analysedAt > analysedAtLatest) {
-      analysedAtLatest = r.analysedAt;
+  for (const row of rows as AnalysisRow[]) {
+    if (!analysedAtLatest || row.analysedAt > analysedAtLatest) {
+      analysedAtLatest = row.analysedAt;
     }
   }
 
@@ -306,20 +731,6 @@ export async function getCodeReviewView(
     rubricVersion: RUBRIC_VERSION,
     analysedAtLatest,
     engineers,
-    lowEvidenceEngineers,
     totalPrs: rows.length,
   };
-}
-
-// Find the canonical-case login for this lower-cased key. The aggregation map
-// is keyed case-insensitively (GitHub logins are case-insensitive for
-// comparison) but we want to show the original casing.
-function rowsLoginFor(
-  rows: Array<{ authorLogin: string }>,
-  key: string,
-): string {
-  for (const r of rows) {
-    if (r.authorLogin.toLowerCase() === key) return r.authorLogin;
-  }
-  return key;
 }

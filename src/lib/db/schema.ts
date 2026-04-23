@@ -367,11 +367,40 @@ export const prReviewAnalyses = pgTable(
     // "Known deliberate gaps" in CLAUDE.md for why no CHECK constraints).
     complexity: integer("complexity").notNull(),
     quality: integer("quality").notNull(),
+    technicalDifficulty: integer("technical_difficulty").notNull().default(3),
+    executionQuality: integer("execution_quality").notNull().default(3),
+    testAdequacy: integer("test_adequacy").notNull().default(3),
+    riskHandling: integer("risk_handling").notNull().default(3),
+    reviewability: integer("reviewability").notNull().default(3),
+    analysisConfidencePct: integer("analysis_confidence_pct").notNull().default(60),
+    primarySurface: text("primary_surface").notNull().default("mixed"),
     category: text("category").notNull(), // bug_fix | feature | refactor | infra | test | docs | chore
     summary: text("summary").notNull(),
     // caveats is always supplied by upsertAnalysis — no DB default needed.
     caveats: jsonb("caveats").notNull(), // string[]
     standout: text("standout"), // notably_complex | notably_high_quality | notably_low_quality | concerning | null
+    approvalCount: integer("approval_count").notNull().default(0),
+    changeRequestCount: integer("change_request_count").notNull().default(0),
+    reviewCommentCount: integer("review_comment_count").notNull().default(0),
+    conversationCommentCount: integer("conversation_comment_count")
+      .notNull()
+      .default(0),
+    reviewRounds: integer("review_rounds").notNull().default(0),
+    timeToFirstReviewMinutes: integer("time_to_first_review_minutes"),
+    timeToMergeMinutes: integer("time_to_merge_minutes").notNull().default(0),
+    commitCount: integer("commit_count").notNull().default(0),
+    commitsAfterFirstReview: integer("commits_after_first_review")
+      .notNull()
+      .default(0),
+    revertWithin14d: boolean("revert_within_14d").notNull().default(false),
+    outcomeScore: integer("outcome_score").notNull().default(75),
+    reviewProvider: text("review_provider").notNull().default("anthropic"),
+    reviewModel: text("review_model").notNull().default("claude-opus-4-7"),
+    secondOpinionUsed: boolean("second_opinion_used").notNull().default(false),
+    agreementLevel: text("agreement_level").notNull().default("single_model"),
+    secondOpinionReasons: jsonb("second_opinion_reasons")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     rubricVersion: text("rubric_version").notNull(),
     rawJson: jsonb("raw_json").notNull(),
     analysedAt: timestamp("analysed_at").defaultNow().notNull(),
@@ -516,6 +545,37 @@ export const enpsPrompts = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Headcount forecast snapshots — used for forecast accuracy tracking.
+// Snapshotted once per calendar month (idempotent) so we can compare past
+// forecasts against actual headcount as months elapse.
+// ---------------------------------------------------------------------------
+
+export const headcountForecastSnapshots = pgTable(
+  "headcount_forecast_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    /** YYYY-MM — the month when the forecast was captured. One row per
+     *  calendar month enforced by the unique index below. */
+    asOfMonth: text("as_of_month").notNull(),
+    /** Timestamp of capture — useful when diagnosing late-month
+     *  snapshots vs early-month ones. */
+    capturedAt: timestamp("captured_at").defaultNow().notNull(),
+    /** Active FTE count at time of snapshot. */
+    startingHeadcount: integer("starting_headcount").notNull(),
+    /** Hire scenarios (P10/P50/P90 hires-per-month) used in the forecast. */
+    hireScenarios: jsonb("hire_scenarios").notNull(), // { low, mid, high }
+    /** Attrition rates used in the forecast (annualised). */
+    attritionRates: jsonb("attrition_rates").notNull(), // { under1yrAnnual, over1yrAnnual }
+    /** The monthly projection: [{month, low, mid, high, hires, departures, netChange}]. */
+    projection: jsonb("projection").notNull(),
+  },
+  (table) => [
+    unique("headcount_forecast_snapshot_month_uniq").on(table.asOfMonth),
+    index("headcount_forecast_snapshot_captured_idx").on(table.capturedAt),
+  ]
+);
+
+// ---------------------------------------------------------------------------
 // Daily briefing cache — Claude-generated personalised briefing per user/day.
 // Cached once per (email, date) so we pay the LLM cost at most once per user
 // per UTC day. Bumping the model forces regeneration by failing the
@@ -542,4 +602,3 @@ export const userBriefings = pgTable(
     index("user_briefings_date_idx").on(table.briefingDate),
   ],
 );
-

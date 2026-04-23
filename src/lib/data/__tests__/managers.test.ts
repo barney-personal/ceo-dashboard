@@ -17,6 +17,7 @@ vi.mock("drizzle-orm", () => ({
   and: (...args: unknown[]) => args,
   eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
   desc: (v: unknown) => v,
+  sql: vi.fn(() => ({})),
 }));
 
 // React's `cache()` memoises on module identity. Each test wants a clean

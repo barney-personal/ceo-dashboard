@@ -7,7 +7,7 @@ import {
 import { runCodeReviewAnalysis } from "@/lib/sync/code-review";
 
 /**
- * Trigger a code-review analysis run over the last 30d of merged PRs.
+ * Trigger a code-review analysis run over the last 90d of merged PRs.
  *
  * Access:
  *   - CEO manual trigger (Clerk session)

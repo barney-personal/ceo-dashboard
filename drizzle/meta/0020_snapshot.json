@@ -1,6 +1,6 @@
 {
-  "id": "85b50578-de08-434e-b0a5-af0489b04508",
-  "prevId": "d25749cb-e56e-4a60-99d1-9d5d40e31fd4",
+  "id": "db155d6f-8d64-4a96-9258-5e648681805e",
+  "prevId": "b94cd6a9-4cb8-4319-babb-e3fd2af91a59",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1592,6 +1592,55 @@
           "primaryKey": false,
           "notNull": true
         },
+        "technical_difficulty": {
+          "name": "technical_difficulty",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 3
+        },
+        "execution_quality": {
+          "name": "execution_quality",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 3
+        },
+        "test_adequacy": {
+          "name": "test_adequacy",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 3
+        },
+        "risk_handling": {
+          "name": "risk_handling",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 3
+        },
+        "reviewability": {
+          "name": "reviewability",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 3
+        },
+        "analysis_confidence_pct": {
+          "name": "analysis_confidence_pct",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 60
+        },
+        "primary_surface": {
+          "name": "primary_surface",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'mixed'"
+        },
         "category": {
           "name": "category",
           "type": "text",
@@ -1615,6 +1664,117 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "approval_count": {
+          "name": "approval_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "change_request_count": {
+          "name": "change_request_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "review_comment_count": {
+          "name": "review_comment_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "conversation_comment_count": {
+          "name": "conversation_comment_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "review_rounds": {
+          "name": "review_rounds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "time_to_first_review_minutes": {
+          "name": "time_to_first_review_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "time_to_merge_minutes": {
+          "name": "time_to_merge_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "commit_count": {
+          "name": "commit_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "commits_after_first_review": {
+          "name": "commits_after_first_review",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "revert_within_14d": {
+          "name": "revert_within_14d",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "outcome_score": {
+          "name": "outcome_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 75
+        },
+        "review_provider": {
+          "name": "review_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'anthropic'"
+        },
+        "review_model": {
+          "name": "review_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'claude-opus-4-7'"
+        },
+        "second_opinion_used": {
+          "name": "second_opinion_used",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "agreement_level": {
+          "name": "agreement_level",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'single_model'"
+        },
+        "second_opinion_reasons": {
+          "name": "second_opinion_reasons",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         },
         "rubric_version": {
           "name": "rubric_version",
@@ -2579,6 +2739,111 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.user_briefings": {
+      "name": "user_briefings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_email": {
+          "name": "user_email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "briefing_date": {
+          "name": "briefing_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "briefing_text": {
+          "name": "briefing_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "context_json": {
+          "name": "context_json",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cache_read_tokens": {
+          "name": "cache_read_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cache_creation_tokens": {
+          "name": "cache_creation_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "generated_at": {
+          "name": "generated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_briefings_date_idx": {
+          "name": "user_briefings_date_idx",
+          "columns": [
+            {
+              "expression": "briefing_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_briefings_email_date_uniq": {
+          "name": "user_briefings_email_date_uniq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_email",
+            "briefing_date"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

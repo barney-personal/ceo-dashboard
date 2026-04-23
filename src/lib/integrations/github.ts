@@ -1,4 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
+import type { CodeReviewSurface } from "./code-review-rubric";
 
 export class GitHubApiError extends Error {
   status: number;
@@ -231,6 +232,35 @@ interface GitHubPullRequestListItem {
   merged_at: string | null;
 }
 
+interface GitHubPullRequestReview {
+  id: number;
+  user: { login: string } | null;
+  state: string;
+  submitted_at: string | null;
+}
+
+interface GitHubPullRequestComment {
+  id: number;
+  user: { login: string } | null;
+  created_at: string;
+}
+
+interface GitHubIssueComment {
+  id: number;
+  user: { login: string } | null;
+  created_at: string;
+}
+
+interface GitHubPullRequestCommit {
+  sha: string;
+  commit: {
+    author: {
+      date: string | null;
+    } | null;
+    message: string;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -343,15 +373,205 @@ export async function getPRFiles(
   );
 }
 
+async function getPaginatedGitHubResource<T>(
+  buildPath: (page: number) => string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<T[]> {
+  const all: T[] = [];
+  let page = 1;
+
+  while (true) {
+    const batch = await githubRequest<T[]>(buildPath(page), {
+      signal: opts.signal,
+    });
+    all.push(...batch);
+    if (batch.length < GITHUB_PER_PAGE) break;
+    page++;
+  }
+
+  return all;
+}
+
+async function getPRReviews(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GitHubPullRequestReview[]> {
+  return getPaginatedGitHubResource(
+    (page) =>
+      `/repos/${repoFullName}/pulls/${prNumber}/reviews?per_page=${GITHUB_PER_PAGE}&page=${page}`,
+    opts,
+  );
+}
+
+async function getPRReviewComments(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GitHubPullRequestComment[]> {
+  return getPaginatedGitHubResource(
+    (page) =>
+      `/repos/${repoFullName}/pulls/${prNumber}/comments?per_page=${GITHUB_PER_PAGE}&page=${page}`,
+    opts,
+  );
+}
+
+async function getPRIssueComments(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GitHubIssueComment[]> {
+  return getPaginatedGitHubResource(
+    (page) =>
+      `/repos/${repoFullName}/issues/${prNumber}/comments?per_page=${GITHUB_PER_PAGE}&page=${page}`,
+    opts,
+  );
+}
+
+async function getPRCommits(
+  repoFullName: string,
+  prNumber: number,
+  opts: { signal?: AbortSignal } = {},
+): Promise<GitHubPullRequestCommit[]> {
+  return getPaginatedGitHubResource(
+    (page) =>
+      `/repos/${repoFullName}/pulls/${prNumber}/commits?per_page=${GITHUB_PER_PAGE}&page=${page}`,
+    opts,
+  );
+}
+
+function hoursBetween(startIso: string | null, endIso: string | null): number | null {
+  if (!startIso || !endIso) return null;
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+    return null;
+  }
+  return (end - start) / (1000 * 60 * 60);
+}
+
+function classifySurface(filename: string): CodeReviewSurface | null {
+  if (/^(ios|android|mobile)\//i.test(filename)) return "mobile";
+  if (
+    /^(\.github|infra|terraform|ops|scripts)\//i.test(filename) ||
+    /^Dockerfile$|^render\.ya?ml$/i.test(filename)
+  ) {
+    return "infra";
+  }
+  if (
+    /(^|\/)(sql|dbt|warehouse|analytics|mode)\//i.test(filename) ||
+    /(\.sql|\.psql)$/i.test(filename)
+  ) {
+    return "data";
+  }
+  if (
+    /^src\/app\/api\//.test(filename) ||
+    /^src\/lib\/(db|sync|integrations|auth)\//.test(filename) ||
+    /^api\//.test(filename)
+  ) {
+    return "backend";
+  }
+  if (
+    /^src\/components\//.test(filename) ||
+    /^src\/app\/(?!api\/)/.test(filename) ||
+    /^styles\//.test(filename) ||
+    /\.(tsx|jsx|css|scss|sass|less)$/i.test(filename)
+  ) {
+    return "frontend";
+  }
+  if (/(^|\/)__tests__\/|\.test\.|\.spec\./.test(filename)) {
+    return /\.tsx|\.jsx/i.test(filename) ? "frontend" : "backend";
+  }
+  return null;
+}
+
+export function inferPrimarySurface(
+  files: GitHubPullRequestFile[],
+): CodeReviewSurface {
+  const weights: Record<CodeReviewSurface, number> = {
+    frontend: 0,
+    backend: 0,
+    data: 0,
+    infra: 0,
+    mobile: 0,
+    mixed: 0,
+  };
+
+  for (const file of files) {
+    const surface = classifySurface(file.filename);
+    if (!surface) continue;
+    weights[surface] += Math.max(1, file.additions + file.deletions);
+  }
+
+  let best: CodeReviewSurface = "mixed";
+  let bestWeight = 0;
+  let total = 0;
+  for (const surface of ["frontend", "backend", "data", "infra", "mobile"] as const) {
+    const weight = weights[surface];
+    total += weight;
+    if (weight > bestWeight) {
+      best = surface;
+      bestWeight = weight;
+    }
+  }
+
+  if (total === 0) return "mixed";
+  return bestWeight / total >= 0.55 ? best : "mixed";
+}
+
+export function computeReviewRounds(
+  reviewTimes: Date[],
+  commitTimes: Date[],
+): number {
+  if (reviewTimes.length === 0) return 0;
+  const sortedReviews = [...reviewTimes].sort((a, b) => a.getTime() - b.getTime());
+  const sortedCommits = [...commitTimes].sort((a, b) => a.getTime() - b.getTime());
+  let rounds = 1;
+  let nextReviewIdx = 1;
+  let lastRoundAt = sortedReviews[0];
+
+  for (const commitTime of sortedCommits) {
+    if (commitTime <= lastRoundAt) continue;
+    while (
+      nextReviewIdx < sortedReviews.length &&
+      sortedReviews[nextReviewIdx] <= commitTime
+    ) {
+      nextReviewIdx++;
+    }
+    if (nextReviewIdx < sortedReviews.length) {
+      rounds++;
+      lastRoundAt = sortedReviews[nextReviewIdx];
+      nextReviewIdx++;
+    }
+  }
+
+  return rounds;
+}
+
 export interface PRAnalysisPayload {
   repo: string;
   prNumber: number;
   title: string;
   body: string;
+  createdAt: string;
+  mergedAt: string;
   mergeSha: string | null;
   additions: number;
   deletions: number;
   changedFiles: number;
+  primarySurface: CodeReviewSurface;
+  review: {
+    approvalCount: number;
+    changeRequestCount: number;
+    reviewCommentCount: number;
+    conversationCommentCount: number;
+    reviewRounds: number;
+    timeToFirstReviewHours: number | null;
+    timeToMergeHours: number;
+    commitCount: number;
+    commitsAfterFirstReview: number;
+    revertWithin14d: boolean;
+  };
   /** Filename + patch for each non-skipped file, already truncated to fit
    * within the prompt budget. A file with `truncated: true` had its patch
    * elided; a file with `skipped: true` is lockfile/generated/etc. */
@@ -408,12 +628,17 @@ export async function fetchPRAnalysisPayload(
   prNumber: number,
   opts: { signal?: AbortSignal } = {},
 ): Promise<PRAnalysisPayload> {
-  const [details, files] = await Promise.all([
+  const [details, files, reviews, reviewComments, issueComments, commits] = await Promise.all([
     getPRDetails(repoFullName, prNumber, opts),
     getPRFiles(repoFullName, prNumber, opts),
+    getPRReviews(repoFullName, prNumber, opts),
+    getPRReviewComments(repoFullName, prNumber, opts),
+    getPRIssueComments(repoFullName, prNumber, opts),
+    getPRCommits(repoFullName, prNumber, opts),
   ]);
 
   const notes: string[] = [];
+  const authorLogin = details.user?.login?.toLowerCase() ?? null;
   // Sort: prefer source files over tests over config over the rest. Same
   // ordering decides which patches survive truncation.
   function priority(filename: string): number {
@@ -510,15 +735,71 @@ export async function fetchPRAnalysisPayload(
     notes.push("PR touches ≥100 files — GitHub API cap; not all files visible.");
   }
 
+  const filteredReviews = reviews.filter((review) => {
+    if (!review.submitted_at) return false;
+    if (!review.user?.login) return false;
+    if (authorLogin && review.user.login.toLowerCase() === authorLogin) return false;
+    return review.state !== "PENDING";
+  });
+  const approvalCount = filteredReviews.filter((r) => r.state === "APPROVED").length;
+  const changeRequestCount = filteredReviews.filter(
+    (r) => r.state === "CHANGES_REQUESTED",
+  ).length;
+  const filteredReviewComments = reviewComments.filter(
+    (comment) =>
+      !authorLogin ||
+      comment.user?.login?.toLowerCase() !== authorLogin,
+  );
+  const filteredIssueComments = issueComments.filter(
+    (comment) =>
+      !authorLogin ||
+      comment.user?.login?.toLowerCase() !== authorLogin,
+  );
+  const reviewTimes = filteredReviews
+    .map((review) => new Date(review.submitted_at!))
+    .filter((date) => Number.isFinite(date.getTime()));
+  const commitTimes = commits
+    .map((commit) => commit.commit.author?.date)
+    .filter((date): date is string => typeof date === "string")
+    .map((date) => new Date(date))
+    .filter((date) => Number.isFinite(date.getTime()));
+  const firstReviewIso =
+    filteredReviews
+      .map((review) => review.submitted_at)
+      .filter((date): date is string => typeof date === "string")
+      .sort()[0] ?? null;
+  const commitsAfterFirstReview =
+    firstReviewIso === null
+      ? 0
+      : commitTimes.filter((commitTime) => commitTime > new Date(firstReviewIso)).length;
+  const timeToMergeHours =
+    hoursBetween(details.created_at, details.merged_at) ?? 0;
+  const timeToFirstReviewHours = hoursBetween(details.created_at, firstReviewIso);
+
   return {
     repo: repoFullName,
     prNumber,
     title: details.title,
     body: (details.body ?? "").slice(0, 4000),
+    createdAt: details.created_at,
+    mergedAt: details.merged_at ?? new Date().toISOString(),
     mergeSha: details.merge_commit_sha,
     additions: details.additions,
     deletions: details.deletions,
     changedFiles: details.changed_files,
+    primarySurface: inferPrimarySurface(files),
+    review: {
+      approvalCount,
+      changeRequestCount,
+      reviewCommentCount: filteredReviewComments.length,
+      conversationCommentCount: filteredIssueComments.length,
+      reviewRounds: computeReviewRounds(reviewTimes, commitTimes),
+      timeToFirstReviewHours,
+      timeToMergeHours,
+      commitCount: commits.length,
+      commitsAfterFirstReview,
+      revertWithin14d: false,
+    },
     files: processed,
     prNotes: notes,
   };
