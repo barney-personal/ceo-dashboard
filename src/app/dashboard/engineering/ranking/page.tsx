@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
-import { getEngineeringRanking } from "@/lib/data/engineering-ranking";
+import { getEngineeringRankingSnapshot } from "@/lib/data/engineering-ranking.server";
 import { RankingScaffold } from "./_components/ranking-scaffold";
 
 export const metadata = {
@@ -14,7 +14,7 @@ export default async function EngineeringRankingPage() {
     redirect("/dashboard/engineering");
   }
 
-  const snapshot = await getEngineeringRanking();
+  const snapshot = await getEngineeringRankingSnapshot();
 
   return <RankingScaffold snapshot={snapshot} />;
 }
