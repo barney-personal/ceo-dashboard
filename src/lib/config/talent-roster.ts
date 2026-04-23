@@ -118,15 +118,11 @@ export const TALENT_ROSTER: Record<string, TalentRosterEntry> = {
   "Calum McMahon": {
     status: "active",
     role: "sourcer",
-    notes: "Manager in T1 — parental leave 26 Jan – 2 Mar 2026",
+    notes: "Manager in T1",
   },
   "Victoria Zolotar": { status: "active", role: "sourcer" },
   "Lucia Burgos": { status: "active", role: "sourcer" },
-  "Julissa Santacruz": {
-    status: "active",
-    role: "sourcer",
-    notes: "Sick leave 6 Mar – 14 Apr 2026",
-  },
+  "Julissa Santacruz": { status: "active", role: "sourcer" },
   "Oleksandra Votintseva": { status: "active", role: "sourcer" },
 
   // ── Recent Exits (18) — departed per Lucy's roster ─────────────────────
@@ -167,7 +163,7 @@ export const TALENT_ROSTER: Record<string, TalentRosterEntry> = {
   "Florian Rose": {
     status: "departed",
     role: "talent_partner",
-    notes: "Garden leave, termination 2026-06-17",
+    notes: "Exit per Lucy's Apr 23 roster",
   },
   "Luis Bravo": {
     status: "departed",
