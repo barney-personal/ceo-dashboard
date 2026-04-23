@@ -233,7 +233,13 @@ def main():
         "weekly_pr_cv",
         "ramp_slope_first90",
     ]
-    categorical_features = ["level_track", "discipline", "pillar", "gender", "location"]
+    # IMPORTANT: gender is a protected characteristic and location is a
+    # demographic proxy (remote UK / hybrid / etc). Both are deliberately
+    # EXCLUDED from the model so the output cannot directly reflect (or
+    # amplify) protected-attribute gaps. If headcount composition is creating
+    # an impact gap that is a finding to surface SEPARATELY — never embed
+    # into an individual-scoring model.
+    categorical_features = ["level_track", "discipline", "pillar"]
 
     # One-hot encode categoricals
     X_cat = pd.get_dummies(df[categorical_features], prefix=categorical_features)
