@@ -26,16 +26,22 @@ const IMPACT_TAB = {
   href: "/dashboard/engineering/impact",
 } as const;
 
+const MODEL_TAB = {
+  label: "Impact model",
+  href: "/dashboard/engineering/impact-model",
+} as const;
+
 /** Tabs where the period picker has no effect (trend/sparkline-based views). */
 const PERIODLESS_TABS = new Set<string>([
   "/dashboard/engineering/delivery-health",
   "/dashboard/engineering/impact",
+  "/dashboard/engineering/impact-model",
 ]);
 
 export function EngineeringTabs({ showImpact = false }: { showImpact?: boolean }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const TABS = showImpact ? [...BASE_TABS, IMPACT_TAB] : BASE_TABS;
+  const TABS = showImpact ? [...BASE_TABS, IMPACT_TAB, MODEL_TAB] : BASE_TABS;
   // Preserve period (and any other query state) when switching tabs so the
   // user doesn't lose their 90-day selection by navigating.
   const qs = searchParams.toString();
