@@ -7,6 +7,7 @@ import { GroupBars } from "./group-bars";
 import { OutlierTable } from "./outlier-table";
 import { ShapWaterfall } from "./shap-waterfall";
 import { GroupedImportanceChart } from "./grouped-importance-chart";
+import { FeatureDeepDive } from "./feature-deep-dive";
 
 function MetricTile({
   label,
@@ -317,10 +318,26 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
         </div>
       </section>
 
-      {/* Per-engineer SHAP waterfall */}
+      {/* Per-feature deep dive */}
       <section>
         <SectionHead
           letter="C"
+          title="What exactly did the model learn about each feature?"
+          lede="For every top feature, a curve showing how the prediction changes as that feature sweeps from low to high. This is where you see the actual learned relationship — is it linear, does it plateau, where's the sweet spot?"
+        />
+        <div className="mt-6">
+          <FeatureDeepDive
+            partialDependence={model.partial_dependence}
+            categoricalEffects={model.categorical_effects}
+            baseline={model.shap.expected_impact}
+          />
+        </div>
+      </section>
+
+      {/* Per-engineer SHAP waterfall */}
+      <section>
+        <SectionHead
+          letter="D"
           title="Why did the model predict this for a specific engineer?"
           lede="Pick an engineer below to see the exact path from the baseline prediction to their final score. Each step is one feature's contribution — green up, red down. This is how the model 'explains itself'."
         />
@@ -335,7 +352,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Actual vs Predicted */}
       <section>
         <SectionHead
-          letter="D"
+          letter="E"
           title="Does the model rank engineers well?"
           lede="Each dot is one engineer. Points on the dashed line are perfectly predicted. Above the line: the model over-predicted. Below: it under-predicted. Colour = discipline."
         />
@@ -347,7 +364,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Group stats */}
       <section>
         <SectionHead
-          letter="E"
+          letter="F"
           title="Where does impact concentrate?"
           lede="Group median and mean impact. Bar = median (robust to outliers), line = mean (sensitive to top-end)."
         />
@@ -361,7 +378,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Outliers */}
       <section>
         <SectionHead
-          letter="F"
+          letter="G"
           title="Who surprises the model?"
           lede="The ten engineers whose actual output most diverged from the prediction. These are where the model's features don't tell the whole story — worth investigating."
         />
@@ -373,7 +390,7 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       {/* Methodology */}
       <section>
         <SectionHead
-          letter="G"
+          letter="H"
           title="Methodology"
           lede="Training pipeline, so you can re-run or replace it."
         />

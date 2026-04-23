@@ -24,6 +24,7 @@ export interface ImpactEngineerPrediction {
   tenure_months: number;
   actual: number;
   predicted: number;
+  predicted_insample: number;
   residual: number;
   slack_msgs_per_day: number;
   ai_tokens: number;
@@ -34,6 +35,32 @@ export interface ImpactEngineerPrediction {
 export interface ImpactGroupedImportance {
   group: string;
   mean_abs_shap: number;
+}
+
+export interface ImpactPartialDependence {
+  feature: string;
+  label: string;
+  group: string;
+  grid: number[];
+  pdp_mean: number[];
+  ice_sample: number[][];
+  actual_min: number;
+  actual_max: number;
+  actual_median: number;
+}
+
+export interface ImpactCategoricalEntry {
+  category: string;
+  n: number;
+  mean_predicted: number;
+  mean_actual: number;
+  vs_baseline_pct: number;
+}
+
+export interface ImpactCategoricalEffect {
+  label: string;
+  baseline: number;
+  categories: ImpactCategoricalEntry[];
 }
 
 export interface ImpactGroupStat {
@@ -74,6 +101,8 @@ export interface ImpactModel {
     expected_impact: number;
   };
   grouped_importance: ImpactGroupedImportance[];
+  partial_dependence: ImpactPartialDependence[];
+  categorical_effects: Record<string, ImpactCategoricalEffect | null>;
   features: ImpactFeatureImportance[];
   engineers: ImpactEngineerPrediction[];
   by_discipline: ImpactGroupStat[];

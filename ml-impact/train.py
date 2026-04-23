@@ -30,6 +30,24 @@ OUT_PATH = HERE / "model.json"
 
 RANDOM_STATE = 42
 
+FEATURE_DISPLAY = {
+    "tenure_months": "Tenure (months)",
+    "slack_msgs_per_day": "Slack messages per day",
+    "slack_reactions_per_day": "Slack reactions per day",
+    "slack_active_day_rate": "Slack active-day rate",
+    "slack_desktop_share": "Slack desktop share",
+    "slack_channel_share": "Channel vs DM share",
+    "slack_days_since_active": "Days since last active",
+    "ai_tokens_log": "AI tokens (log)",
+    "ai_cost_log": "AI cost (log)",
+    "ai_n_days": "AI usage days",
+    "ai_max_models": "Distinct AI models",
+    "avg_rating": "Avg perf rating",
+    "latest_rating": "Latest perf rating",
+    "rating_count": "Perf review count",
+    "level_num": "Level number",
+}
+
 
 def impact_score(prs: float, additions: float, deletions: float) -> float:
     """Mirror src/lib/data/engineering-impact.ts impactScore()."""
@@ -286,17 +304,112 @@ def main():
         reverse=True,
     )
 
+    # In-sample predictions (from the full-data fit — what SHAP decomposes).
+    # These will differ from the 5-fold-CV predictions used for honest metrics
+    # but sum correctly with the SHAP values so the waterfall adds up.
+    y_pred_insample_log = chosen_model.predict(X)
+    y_pred_insample = np.expm1(y_pred_insample_log)
+
+    # Partial dependence for top continuous features: sweep the feature across
+    # a grid, predict the whole dataset with that feature replaced, average.
+    # Answers "as X goes from low to high, what does the model predict?"
+    def partial_dependence(fname: str, n_points: int = 30):
+        if fname not in X.columns:
+            return None
+        col = X[fname].values
+        is_onehot = fname.startswith(
+            ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+        )
+        if is_onehot:
+            return None
+        lo, hi = np.percentile(col, [5, 95])
+        if lo == hi:
+            return None
+        grid = np.linspace(lo, hi, n_points)
+        X_mod = X.copy()
+        sample_size = min(40, len(X))
+        sample_idx = np.random.default_rng(RANDOM_STATE).choice(
+            len(X), sample_size, replace=False
+        )
+        pdp_mean = []
+        ice_lines = [[] for _ in range(sample_size)]
+        for v in grid:
+            X_mod[fname] = v
+            preds_log = chosen_model.predict(X_mod)
+            preds = np.expm1(preds_log)
+            pdp_mean.append(float(preds.mean()))
+            for k, si in enumerate(sample_idx):
+                ice_lines[k].append(float(preds[si]))
+        return {
+            "feature": fname,
+            "label": FEATURE_DISPLAY.get(fname, fname),
+            "group": feature_group(fname),
+            "grid": [float(g) for g in grid],
+            "pdp_mean": pdp_mean,
+            "ice_sample": ice_lines,
+            "actual_min": float(col.min()),
+            "actual_max": float(col.max()),
+            "actual_median": float(np.median(col)),
+        }
+
+    ranked_numeric = [
+        f
+        for f in sorted(
+            feature_names,
+            key=lambda n: -np.abs(shap_values[:, feature_names.index(n)]).mean(),
+        )
+        if not any(
+            f.startswith(p)
+            for p in ("pillar_", "discipline_", "gender_", "location_", "level_track_")
+        )
+    ][:10]
+    print(f"\nComputing partial dependence for {len(ranked_numeric)} features...")
+    pdp_plots = []
+    for fname in ranked_numeric:
+        pdp = partial_dependence(fname)
+        if pdp is not None:
+            pdp_plots.append(pdp)
+
+    def categorical_effect(prefix: str, label: str):
+        cats = [f for f in feature_names if f.startswith(prefix)]
+        if not cats:
+            return None
+        results = []
+        base = float(y_pred_insample.mean())
+        for c in cats:
+            mask = X[c] == 1
+            if mask.sum() < 2:
+                continue
+            mean_pred = float(y_pred_insample[mask].mean())
+            mean_actual = float(y[mask].mean())
+            results.append({
+                "category": c.replace(prefix, ""),
+                "n": int(mask.sum()),
+                "mean_predicted": mean_pred,
+                "mean_actual": mean_actual,
+                "vs_baseline_pct": round(((mean_pred - base) / base) * 100, 1),
+            })
+        results.sort(key=lambda r: r["mean_predicted"], reverse=True)
+        return {"label": label, "baseline": base, "categories": results}
+
+    categorical_effects = {
+        "pillar": categorical_effect("pillar_", "Pillar"),
+        "discipline": categorical_effect("discipline_", "Discipline"),
+        "level": categorical_effect("level_track_", "Level track"),
+    }
+
     engineers = []
     df_reset = df.reset_index(drop=True)
     for i, (_, r) in enumerate(df_reset.iterrows()):
         # Per-engineer SHAP: feature, raw contribution (log units), % multiplier (exp(shap)-1)
+        # Filter noise / inapplicable one-hot zeros, but collect their SHAP sum into a
+        # synthetic "other_minor" entry so the waterfall still adds up to the prediction.
         eng_shap = shap_values[i]
         contributions = []
+        hidden_sum = 0.0
+        hidden_count = 0
         for j, fname in enumerate(feature_names):
             shap_val = float(eng_shap[j])
-            if abs(shap_val) < 1e-4:
-                continue
-            # Skip one-hot features with value 0 (they don't "apply" to this engineer)
             try:
                 feat_val = float(X.iloc[i, j])
             except (ValueError, TypeError):
@@ -304,7 +417,11 @@ def main():
             is_onehot = fname.startswith(
                 ("pillar_", "discipline_", "gender_", "location_", "level_track_")
             )
-            if is_onehot and feat_val == 0:
+            is_inapplicable_onehot = is_onehot and feat_val == 0
+            is_trivial = abs(shap_val) < 5e-3
+            if is_inapplicable_onehot or is_trivial:
+                hidden_sum += shap_val
+                hidden_count += 1
                 continue
             contributions.append({
                 "feature": fname,
@@ -312,6 +429,14 @@ def main():
                 "shap": round(shap_val, 4),
                 "pct_multiplier": round((float(np.exp(shap_val)) - 1) * 100, 1),
                 "value": round(feat_val, 3) if feat_val is not None else None,
+            })
+        if hidden_count > 0 and abs(hidden_sum) > 1e-3:
+            contributions.append({
+                "feature": f"{hidden_count}_minor_features",
+                "group": "Other",
+                "shap": round(hidden_sum, 4),
+                "pct_multiplier": round((float(np.exp(hidden_sum)) - 1) * 100, 1),
+                "value": None,
             })
         contributions.sort(key=lambda c: abs(c["shap"]), reverse=True)
 
@@ -325,11 +450,12 @@ def main():
                 "tenure_months": round(float(r["tenure_months"]), 1),
                 "actual": int(r["impact_360d"]),
                 "predicted": int(round(float(y_pred_final[i]))),
+                "predicted_insample": int(round(float(y_pred_insample[i]))),
                 "residual": int(round(float(r["impact_360d"] - y_pred_final[i]))),
                 "slack_msgs_per_day": round(float(r["slack_msgs_per_day"]), 2),
                 "ai_tokens": int(r["ai_tokens"]),
                 "latest_rating": float(r["latest_rating"]) if pd.notna(r["latest_rating"]) else None,
-                "shap_contributions": contributions[:12],
+                "shap_contributions": contributions,
             }
         )
 
@@ -373,6 +499,8 @@ def main():
             "expected_impact": expected_impact,
         },
         "grouped_importance": grouped_importance,
+        "partial_dependence": pdp_plots,
+        "categorical_effects": categorical_effects,
         "features": feats,
         "engineers": engineers,
         "by_discipline": grouped_stats("discipline"),
