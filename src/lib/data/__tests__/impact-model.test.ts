@@ -56,4 +56,19 @@ describe("getImpactModel (static snapshot loader)", () => {
       );
     }
   });
+
+  it("never uses protected attributes (gender, location) as features", () => {
+    for (const f of model.features) {
+      expect(f.name).not.toMatch(/gender|location/i);
+    }
+    for (const g of model.grouped_importance) {
+      expect(g.group).not.toMatch(/^Gender$|^Location$/);
+    }
+    for (const e of model.engineers) {
+      for (const c of e.shap_contributions) {
+        expect(c.feature).not.toMatch(/gender|location/i);
+        expect(c.group).not.toMatch(/^Gender$|^Location$/);
+      }
+    }
+  });
 });

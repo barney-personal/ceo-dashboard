@@ -38,6 +38,8 @@ function prettyName(raw: string): string {
   return raw;
 }
 
+// Protected attributes (Gender, Location) are deliberately excluded from the
+// model (see ml-impact/train.py) so they never reach these colour lookups.
 const GROUP_COLOR: Record<string, string> = {
   Tenure: "#7a5a3e",
   "Slack engagement": "#3f7ca0",
@@ -47,8 +49,6 @@ const GROUP_COLOR: Record<string, string> = {
   Pillar: "#8b5a9c",
   Discipline: "#9c5d2e",
   Level: "#4a6b7c",
-  Gender: "#8e8680",
-  Location: "#8e8680",
   Other: "#8e8680",
 };
 
