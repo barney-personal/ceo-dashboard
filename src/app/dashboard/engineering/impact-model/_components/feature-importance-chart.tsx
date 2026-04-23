@@ -27,11 +27,11 @@ const FEATURE_LABELS: Record<string, string> = {
 
 function prettyName(raw: string): string {
   if (FEATURE_LABELS[raw]) return FEATURE_LABELS[raw];
-  // e.g. pillar_Win On Data → "Pillar: Win On Data"
+  // e.g. pillar_Win_On_Data → "Pillar: Win On Data"
   const idx = raw.indexOf("_");
   if (idx > 0) {
     const prefix = raw.slice(0, idx);
-    const value = raw.slice(idx + 1);
+    const value = raw.slice(idx + 1).replace(/_/g, " ");
     return `${prefix[0].toUpperCase()}${prefix.slice(1)}: ${value}`;
   }
   return raw;
