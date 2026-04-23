@@ -1,3 +1,4 @@
+import { cache } from "react";
 import {
   DatabaseUnavailableError,
   isSchemaCompatibilityError,
@@ -183,7 +184,9 @@ export async function getUnitEconomicsMetrics() {
 
 // --- Headcount Metrics ---
 
-export async function getHeadcountMetrics() {
+// React.cache() dedupes within a single server render — `page.tsx` and
+// `briefing-context.ts` both call this during an Overview load.
+export const getHeadcountMetrics = cache(async () => {
   const fallback = { total: null as number | null, lastSync: null as Date | null };
 
   return withMetricsFallback(
@@ -216,7 +219,7 @@ export async function getHeadcountMetrics() {
       };
     },
   );
-}
+});
 
 // --- OKR Metrics ---
 

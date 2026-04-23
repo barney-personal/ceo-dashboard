@@ -179,7 +179,10 @@ export default async function DashboardOverview() {
         <DailyBriefing
           emails={briefingEmails}
           role={role}
-          userId={effectiveUserId}
+          // Real Clerk user ID — not effectiveUserId — so the briefing
+          // resolves the *real viewer's* Google token for meetings even
+          // during an impersonation session.
+          userId={realUserId}
         />
       </Suspense>
 

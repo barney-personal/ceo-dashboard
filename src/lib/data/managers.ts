@@ -93,6 +93,24 @@ export async function isManagerByAnyEmail(
 }
 
 /**
+ * Max direct-report count across the provided email addresses. Used when the
+ * caller needs the actual count (not just the manager/non-manager boolean) —
+ * e.g. briefing context. Returns 0 when no email matches.
+ */
+export async function getDirectReportCountByAnyEmail(
+  emails: Array<string | null | undefined>,
+): Promise<number> {
+  const counts = await loadReportCountsByManagerEmail();
+  let max = 0;
+  for (const e of emails) {
+    if (!e) continue;
+    const n = counts.get(e.toLowerCase()) ?? 0;
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+/**
  * Return the SSoT-matching email for a Clerk user given all their addresses.
  * Prefers the first email that appears as an employee in the SSoT so that
  * downstream "whose team are you viewing" queries work regardless of which

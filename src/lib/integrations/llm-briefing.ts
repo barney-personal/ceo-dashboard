@@ -12,7 +12,10 @@ export const BRIEFING_MODEL = "claude-opus-4-7";
 const LLM_CALL_TIMEOUT_MS = 45_000;
 const LLM_MAX_ATTEMPTS = 3;
 const LLM_INITIAL_BACKOFF_MS = 1_000;
-const BRIEFING_MAX_TOKENS = 1500;
+// Adaptive thinking shares the max_tokens budget with visible output, so
+// giving the model ~4K of headroom means a heavy thinking burst can't
+// truncate the 120–180 word briefing. Cost impact is trivial at Opus pricing.
+const BRIEFING_MAX_TOKENS = 4000;
 
 export interface BriefingUsage {
   inputTokens: number | null;

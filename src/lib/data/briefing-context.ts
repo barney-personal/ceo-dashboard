@@ -1,12 +1,48 @@
 import * as Sentry from "@sentry/nextjs";
-import { getActiveEmployees, type Person } from "@/lib/data/people";
+import { getActiveEmployees } from "@/lib/data/people";
 import { getHeadcountMetrics } from "@/lib/data/metrics";
 import { getLatestLtvCacRatio, getLatestMAU } from "@/lib/data/chart-data";
 import { getLatestARR } from "@/lib/data/management-accounts";
 import { getLatestOkrUpdates, type OkrSummary } from "@/lib/data/okrs";
 import { getMeetingsForRange } from "@/lib/data/meetings";
+import { getDirectReportCountByAnyEmail } from "@/lib/data/managers";
 import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import type { Role } from "@/lib/auth/roles";
+import {
+  collectOkrsForPillar,
+  firstNameOf,
+  relevantSectionsFor,
+  summarisePillarOkrs,
+  summariseSquadOkrs,
+  type BriefingOkrBlock,
+  type BriefingOkrEntry,
+  type BriefingPerson,
+} from "@/lib/data/briefing-helpers";
+
+export type { BriefingOkrBlock, BriefingOkrEntry, BriefingPerson };
+
+export interface BriefingCompanyMetrics {
+  ltvPaidCacRatio: number | null;
+  mau: number | null;
+  headcount: number | null;
+  arrUsd: number | null;
+}
+
+export interface BriefingMeetings {
+  todayCount: number;
+  firstTitle: string | null;
+  firstStartTimeIso: string | null;
+}
+
+export interface BriefingContext {
+  person: BriefingPerson | null;
+  company: BriefingCompanyMetrics;
+  pillarOkrs: BriefingOkrBlock;
+  squadOkrs: BriefingOkrBlock;
+  meetings: BriefingMeetings | null;
+  relevantDashboardSections: string[];
+  generatedAtIso: string;
+}
 
 /**
  * Like `safeLoad` but swallows any error, not just `DatabaseUnavailableError`.
@@ -29,231 +65,6 @@ async function tolerantLoad<T>(
     });
     return fallback;
   }
-}
-
-export interface BriefingPerson {
-  firstName: string;
-  fullName: string;
-  email: string;
-  jobTitle: string;
-  squad: string;
-  pillar: string;
-  function: string;
-  tenureMonths: number;
-  role: Role;
-  directReportCount: number;
-}
-
-export interface BriefingCompanyMetrics {
-  ltvPaidCacRatio: number | null;
-  mau: number | null;
-  headcount: number | null;
-  arrUsd: number | null;
-}
-
-export interface BriefingOkrEntry {
-  squad: string;
-  objective: string;
-  kr: string;
-  status: string;
-  actual: string | null;
-  target: string | null;
-  postedAtIso: string;
-  isSameSquad: boolean;
-}
-
-export interface BriefingOkrBlock {
-  total: number;
-  onTrack: number;
-  atRisk: number;
-  behind: number;
-  notStarted: number;
-  recent: BriefingOkrEntry[];
-}
-
-export interface BriefingMeetings {
-  todayCount: number;
-  firstTitle: string | null;
-  firstStartTimeIso: string | null;
-}
-
-export interface BriefingContext {
-  person: BriefingPerson | null;
-  company: BriefingCompanyMetrics;
-  pillarOkrs: BriefingOkrBlock;
-  squadOkrs: BriefingOkrBlock;
-  meetings: BriefingMeetings | null;
-  relevantDashboardSections: string[];
-  generatedAtIso: string;
-}
-
-const OKR_WINDOW_DAYS = 14;
-const MAX_PILLAR_OKR_ENTRIES = 8;
-const MAX_SQUAD_OKR_ENTRIES = 10;
-
-function firstNameOf(fullName: string): string {
-  const first = fullName.trim().split(/\s+/)[0];
-  return first || fullName;
-}
-
-function countDirectReports(employees: Person[], managerEmail: string): number {
-  const lower = managerEmail.toLowerCase();
-  return employees.filter((p) => p.manager.toLowerCase() === lower).length;
-}
-
-/**
- * Normalise a pillar name for matching. Headcount uses "Growth Pillar",
- * OKRs use "Growth". Also OKRs sometimes combine pillars into one key like
- * "Access, Trust & Money, Risk & Payments".
- */
-function normalisePillar(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/\bpillar\b/g, "")
-    .replace(/\bdecisioning\b/g, "")
-    .replace(/\bproducts?\b/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function okrKeyMatchesPersonPillar(okrKey: string, personPillar: string): boolean {
-  const target = normalisePillar(personPillar);
-  if (!target) return false;
-  const okrNorm = normalisePillar(okrKey);
-  if (okrNorm === target) return true;
-  return new RegExp(`(^|\\s)${target}($|\\s)`).test(okrNorm);
-}
-
-function collectOkrsForPillar(
-  okrsByPillar: Map<string, OkrSummary[]>,
-  personPillar: string,
-): OkrSummary[] {
-  const matched: OkrSummary[] = [];
-  for (const [key, okrs] of okrsByPillar.entries()) {
-    if (okrKeyMatchesPersonPillar(key, personPillar)) {
-      matched.push(...okrs);
-    }
-  }
-  return matched;
-}
-
-function okrToEntry(okr: OkrSummary, personSquad: string): BriefingOkrEntry {
-  return {
-    squad: okr.squadName,
-    objective: okr.objectiveName,
-    kr: okr.krName,
-    status: okr.status,
-    actual: okr.actual,
-    target: okr.target,
-    postedAtIso: okr.postedAt.toISOString(),
-    isSameSquad: okr.squadName.toLowerCase() === personSquad.toLowerCase(),
-  };
-}
-
-function severityRank(status: string): number {
-  return status === "behind" ? 0 : status === "at_risk" ? 1 : status === "not_started" ? 2 : 3;
-}
-
-function countsFor(okrs: OkrSummary[]): Omit<BriefingOkrBlock, "recent"> {
-  return {
-    total: okrs.length,
-    onTrack: okrs.filter((o) => o.status === "on_track").length,
-    atRisk: okrs.filter((o) => o.status === "at_risk").length,
-    behind: okrs.filter((o) => o.status === "behind").length,
-    notStarted: okrs.filter((o) => o.status === "not_started").length,
-  };
-}
-
-function summarisePillarOkrs(
-  okrs: OkrSummary[],
-  personSquad: string,
-): BriefingOkrBlock {
-  const cutoff = Date.now() - OKR_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-  // Pillar block excludes the reader's own squad — squadOkrs covers those
-  // separately so the LLM can speak about "your squad" vs "your pillar"
-  // without double-mentioning the same KRs.
-  const siblings = okrs.filter(
-    (o) => o.squadName.toLowerCase() !== personSquad.toLowerCase(),
-  );
-  const recent = siblings
-    .filter((o) => o.postedAt.getTime() >= cutoff)
-    .sort((a, b) => {
-      const sev = severityRank(a.status) - severityRank(b.status);
-      if (sev !== 0) return sev;
-      return b.postedAt.getTime() - a.postedAt.getTime();
-    })
-    .slice(0, MAX_PILLAR_OKR_ENTRIES)
-    .map((o) => okrToEntry(o, personSquad));
-  return { ...countsFor(siblings), recent };
-}
-
-function summariseSquadOkrs(
-  allPillarOkrs: OkrSummary[],
-  personSquad: string,
-): BriefingOkrBlock {
-  const lowered = personSquad.toLowerCase();
-  const squadOkrs = allPillarOkrs.filter(
-    (o) => o.squadName.toLowerCase() === lowered,
-  );
-  const recent = squadOkrs
-    .sort((a, b) => {
-      const sev = severityRank(a.status) - severityRank(b.status);
-      if (sev !== 0) return sev;
-      return b.postedAt.getTime() - a.postedAt.getTime();
-    })
-    .slice(0, MAX_SQUAD_OKR_ENTRIES)
-    .map((o) => okrToEntry(o, personSquad));
-  return { ...countsFor(squadOkrs), recent };
-}
-
-/**
- * Lightweight role/function → dashboard sections map. The LLM uses these
- * names when suggesting what to look at. Keep the labels as they appear in
- * the sidebar so anchors are meaningful to the reader.
- */
-function relevantSectionsFor(
-  role: Role,
-  person: BriefingPerson | null,
-): string[] {
-  const base = ["Overview"];
-  if (!person) return base;
-
-  const fn = person.function.toLowerCase();
-  const pillar = person.pillar.toLowerCase();
-
-  const sections = new Set<string>(base);
-
-  if (role === "ceo" || role === "leadership") {
-    sections.add("Financial");
-  }
-
-  // Growth / commercial-adjacent
-  if (pillar.includes("growth") || fn.includes("marketing") || fn.includes("commercial")) {
-    sections.add("Unit Economics");
-  }
-
-  if (
-    pillar.includes("chat") ||
-    pillar.includes("wealth") ||
-    pillar.includes("credit") ||
-    pillar.includes("new bets") ||
-    fn.includes("product")
-  ) {
-    sections.add("Product");
-    sections.add("OKRs");
-  }
-
-  if (fn.includes("engineering") || fn.includes("machine learning") || fn.includes("data")) {
-    sections.add("Engineering");
-  }
-
-  if (fn.includes("people") || fn.includes("talent") || pillar.includes("people")) {
-    sections.add("Org");
-    sections.add("Talent");
-  }
-
-  sections.add("OKRs");
-  return [...sections];
 }
 
 async function loadTodayMeetings({
@@ -287,7 +98,8 @@ async function loadTodayMeetings({
     const upcoming = day.meetings
       .filter((m) => new Date(m.startTime).getTime() >= now.getTime() - 5 * 60_000)
       .sort(
-        (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
+        (a, b) =>
+          new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
       );
     const first = upcoming[0] ?? null;
     return {
@@ -332,6 +144,7 @@ export async function getBriefingContext({
     arr,
     okrsByPillar,
     meetings,
+    directReportCount,
   ] = await Promise.all([
     tolerantLoad("getActiveEmployees", () => getActiveEmployees(), null),
     tolerantLoad("getHeadcountMetrics", () => getHeadcountMetrics(), null),
@@ -344,6 +157,11 @@ export async function getBriefingContext({
       new Map<string, OkrSummary[]>(),
     ),
     loadTodayMeetings({ userId: userId ?? null }),
+    tolerantLoad(
+      "getDirectReportCountByAnyEmail",
+      () => getDirectReportCountByAnyEmail(candidateEmails),
+      0,
+    ),
   ]);
 
   const allEmployees = employees?.employees ?? [];
@@ -363,7 +181,7 @@ export async function getBriefingContext({
         function: me.function,
         tenureMonths: me.tenureMonths,
         role,
-        directReportCount: countDirectReports(allEmployees, me.email),
+        directReportCount,
       }
     : null;
 
