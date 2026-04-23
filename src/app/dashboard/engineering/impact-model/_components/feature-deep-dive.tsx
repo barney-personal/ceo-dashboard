@@ -23,44 +23,185 @@ const GROUP_COLOR: Record<string, string> = {
   Other: "#8e8680",
 };
 
-interface PdpPlotProps {
-  pdp: ImpactPartialDependence;
-  baseline: number;
+const ABOVE_COLOR = "#2e7d52"; // green — impact above baseline
+const BELOW_COLOR = "#b8472a"; // amber-red — impact below baseline
+
+// Plain-English feature labels that drop technical suffixes like "(log)" or "(scaled)"
+// and describe what the feature actually measures in human terms.
+const PLAIN_LABEL: Record<string, string> = {
+  tenure_months: "How long they've been here",
+  slack_msgs_per_day: "How many Slack messages per day",
+  slack_reactions_per_day: "How many Slack reactions per day",
+  slack_active_day_rate: "Share of days active on Slack",
+  slack_desktop_share: "Share of Slack activity on desktop",
+  slack_channel_share: "Share of messages in channels vs DMs",
+  slack_days_since_active: "Days since last active on Slack",
+  ai_tokens_log: "How heavily they use AI tools",
+  ai_cost_log: "How much they spend on AI tools",
+  ai_n_days: "Days per month using AI",
+  ai_max_models: "How many different AI models they try",
+  avg_rating: "Average performance rating",
+  latest_rating: "Latest performance rating",
+  rating_count: "Performance reviews received",
+  level_num: "Level (seniority number)",
+  pr_size_median: "Typical PR size",
+  distinct_repos_180d: "How many different repos they touch",
+  weekend_pr_share: "Share of PRs merged on weekends",
+  offhours_pr_share: "Share of PRs merged outside 9–6 UTC",
+  pr_slope_per_week: "Whether their PR rate is speeding up",
+  commits_180d_log: "How many commits they ship",
+  commits_per_pr: "Commits per PR (rework proxy)",
+  pr_gap_days: "Share of PRs that are older than 3 months",
+  weekly_pr_cv: "How steady vs bursty their PR output is",
+  ramp_slope_first90: "Recent PR rate (per tenure-month)",
+};
+
+function plainLabel(feature: string, fallback: string): string {
+  return PLAIN_LABEL[feature] ?? fallback;
 }
 
-function describeShape(pdp: ImpactPartialDependence): string {
-  const { grid, pdp_mean, actual_median } = pdp;
+// Unit formatter for grid tick labels — converts "log" features back to a
+// human-readable approximation so axis labels don't say "7.5" for an AI
+// spend that's really $1,800.
+function formatValue(feature: string, v: number): string {
+  if (feature.endsWith("_log")) {
+    const raw = Math.expm1(v);
+    if (raw >= 1000) return `${Math.round(raw / 1000)}k`;
+    return Math.round(raw).toLocaleString();
+  }
+  if (feature === "slack_channel_share" || feature === "slack_desktop_share" ||
+      feature === "slack_active_day_rate" || feature === "weekend_pr_share" ||
+      feature === "offhours_pr_share") {
+    return `${Math.round(v * 100)}%`;
+  }
+  if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}k`;
+  if (Number.isInteger(v) || Math.abs(v) >= 10) return Math.round(v).toLocaleString();
+  return v.toFixed(1);
+}
+
+interface DirectionBadge {
+  label: string;
+  color: string;
+  bg: string;
+}
+
+interface FeatureInsight {
+  headline: string;
+  badge: DirectionBadge;
+  example: string;
+  spread: number;
+}
+
+// Analyse the PDP curve and produce:
+//   - a plain-English one-line headline ("More tenure → more impact")
+//   - a direction badge (More is better / Less is better / Sweet spot / Weak signal)
+//   - a concrete example comparing low-quartile vs high-quartile engineers
+function analyseFeature(
+  pdp: ImpactPartialDependence,
+  baseline: number,
+): FeatureInsight {
+  const { grid, pdp_mean, actual_median, feature } = pdp;
+  const plain = plainLabel(feature, pdp.label);
   const start = pdp_mean[0];
   const end = pdp_mean[pdp_mean.length - 1];
   const peak = Math.max(...pdp_mean);
   const trough = Math.min(...pdp_mean);
   const peakIdx = pdp_mean.indexOf(peak);
   const spread = peak - trough;
-  const mid = (peak + trough) / 2;
-  const direction = end > start ? "up" : end < start ? "down" : "flat";
-  const monotonic =
-    pdp_mean.every((v, i) => i === 0 || v >= pdp_mean[i - 1] - 1) ||
-    pdp_mean.every((v, i) => i === 0 || v <= pdp_mean[i - 1] + 1);
 
-  const lowLabel = Math.round(grid[0]);
-  const highLabel = Math.round(grid[grid.length - 1]);
-  const medLabel = Math.round(actual_median);
+  // Deltas of adjacent points — monotonic if one direction dominates
+  const deltas = pdp_mean.slice(1).map((v, i) => v - pdp_mean[i]);
+  const up = deltas.filter((d) => d > 0).length;
+  const down = deltas.filter((d) => d < 0).length;
+  const monotonicUp = up > deltas.length * 0.7 && end > start;
+  const monotonicDown = down > deltas.length * 0.7 && end < start;
 
-  if (direction === "up" && monotonic) {
-    return `Higher ${pdp.label.toLowerCase()} → higher predicted impact. As ${pdp.label.toLowerCase()} goes from ${lowLabel} to ${highLabel}, predicted impact rises from ~${Math.round(start).toLocaleString()} to ~${Math.round(end).toLocaleString()}. The median engineer sits at ${medLabel}.`;
+  // Flat: the whole curve barely moves relative to the baseline
+  const flatThreshold = Math.max(40, baseline * 0.08);
+  if (spread < flatThreshold) {
+    return {
+      headline: `${plain} barely changes the prediction`,
+      badge: {
+        label: "Weak signal",
+        color: "#6b6660",
+        bg: "rgb(107 102 96 / 0.15)",
+      },
+      example: `Across the realistic range, the model's prediction only moves by about ${Math.round(spread)} points. Other features matter more.`,
+      spread,
+    };
   }
-  if (direction === "down" && monotonic) {
-    return `Higher ${pdp.label.toLowerCase()} → lower predicted impact. As ${pdp.label.toLowerCase()} goes from ${lowLabel} to ${highLabel}, predicted impact falls from ~${Math.round(start).toLocaleString()} to ~${Math.round(end).toLocaleString()}.`;
+
+  const loLabel = formatValue(feature, grid[Math.floor(grid.length * 0.15)]);
+  const hiLabel = formatValue(feature, grid[Math.floor(grid.length * 0.85)]);
+  const loPred = Math.round(pdp_mean[Math.floor(pdp_mean.length * 0.15)]);
+  const hiPred = Math.round(pdp_mean[Math.floor(pdp_mean.length * 0.85)]);
+
+  if (monotonicUp) {
+    const ratio = hiPred > 0 && loPred > 0 ? hiPred / loPred : null;
+    const ratioText = ratio && ratio >= 1.2
+      ? ` — a ${ratio.toFixed(1)}× difference`
+      : "";
+    return {
+      headline: `More ${plain.toLowerCase().replace(/^how |^share of |^days |^whether /, "")} → more predicted impact`,
+      badge: {
+        label: "More is better",
+        color: ABOVE_COLOR,
+        bg: "rgb(46 125 82 / 0.12)",
+      },
+      example: `Lower-end (${loLabel}): predicted ~${loPred.toLocaleString()}. Higher-end (${hiLabel}): predicted ~${hiPred.toLocaleString()}${ratioText}.`,
+      spread,
+    };
   }
-  // Non-monotonic: describe the shape
-  const peakVal = Math.round(grid[peakIdx]);
-  if (peakIdx > 2 && peakIdx < pdp_mean.length - 3 && peak > mid) {
-    return `Non-monotonic — impact peaks around ${pdp.label.toLowerCase()} = ${peakVal} (predicted ~${Math.round(peak).toLocaleString()}), then tapers off. Neither very low nor very high values are optimal.`;
+
+  if (monotonicDown) {
+    const ratio = loPred > 0 && hiPred > 0 ? loPred / hiPred : null;
+    const ratioText = ratio && ratio >= 1.2
+      ? ` — a ${ratio.toFixed(1)}× difference`
+      : "";
+    return {
+      headline: `More ${plain.toLowerCase().replace(/^how |^share of |^days |^whether /, "")} → less predicted impact`,
+      badge: {
+        label: "Less is better",
+        color: BELOW_COLOR,
+        bg: "rgb(184 71 42 / 0.12)",
+      },
+      example: `Lower-end (${loLabel}): predicted ~${loPred.toLocaleString()}. Higher-end (${hiLabel}): predicted ~${hiPred.toLocaleString()}${ratioText}.`,
+      spread,
+    };
   }
-  if (spread < 50) {
-    return `Mostly flat — changing ${pdp.label.toLowerCase()} only moves the prediction by ~${Math.round(spread)} points. The model relies on other signals instead.`;
+
+  // Non-monotonic: find whether the peak is in the interior
+  const peakInterior = peakIdx > 2 && peakIdx < pdp_mean.length - 3;
+  if (peakInterior && peak - Math.min(start, end) > flatThreshold) {
+    const peakVal = formatValue(feature, grid[peakIdx]);
+    return {
+      headline: `Sweet spot around ${peakVal}`,
+      badge: {
+        label: "Sweet spot",
+        color: "#8b5a2a",
+        bg: "rgb(139 90 42 / 0.12)",
+      },
+      example: `Predicted impact peaks at ~${Math.round(peak).toLocaleString()} when this feature is around ${peakVal}. Both very low and very high values score lower.`,
+      spread,
+    };
   }
-  return `Shape is complex. Across the 5–95 percentile range (${lowLabel} to ${highLabel}), predicted impact varies between ~${Math.round(trough).toLocaleString()} and ~${Math.round(peak).toLocaleString()}, with the biggest change near ${peakVal}.`;
+
+  // Complex / mixed: describe as a range
+  return {
+    headline: `Mixed effect across the range`,
+    badge: {
+      label: "Mixed",
+      color: "#6b6660",
+      bg: "rgb(107 102 96 / 0.15)",
+    },
+    example: `Predicted impact ranges from ~${Math.round(trough).toLocaleString()} to ~${Math.round(peak).toLocaleString()} across realistic values — no simple \"more is better\" story.`,
+    spread,
+  };
+}
+
+interface PdpPlotProps {
+  pdp: ImpactPartialDependence;
+  baseline: number;
 }
 
 function PdpPlot({ pdp, baseline }: PdpPlotProps) {
@@ -71,8 +212,8 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
     if (!svgRef.current || !containerRef.current) return;
     const container = containerRef.current;
     const width = getContentBoxWidth(container);
-    const height = 220;
-    const margin = { top: 12, right: 16, bottom: 32, left: 52 };
+    const height = 240;
+    const margin = { top: 18, right: 20, bottom: 50, left: 58 };
     const innerW = width - margin.left - margin.right;
     const innerH = height - margin.top - margin.bottom;
 
@@ -84,21 +225,33 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
       .append("g")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const allVals = [
-      ...pdp.pdp_mean,
-      ...pdp.ice_sample.flat(),
-      baseline,
-    ];
+    const allVals = [...pdp.pdp_mean, ...pdp.ice_sample.flat(), baseline];
     const yMin = d3Min(allVals) ?? 0;
     const yMax = d3Max(allVals) ?? 1;
     const yDomain: [number, number] = [
       Math.max(0, yMin - (yMax - yMin) * 0.1),
-      yMax + (yMax - yMin) * 0.1,
+      yMax + (yMax - yMin) * 0.12,
     ];
     const x = scaleLinear()
       .domain([pdp.grid[0], pdp.grid[pdp.grid.length - 1]])
       .range([0, innerW]);
     const y = scaleLinear().domain(yDomain).range([innerH, 0]);
+
+    // Horizontal band shading: green above baseline, amber below
+    g.append("rect")
+      .attr("x", 0)
+      .attr("y", 0)
+      .attr("width", innerW)
+      .attr("height", y(baseline))
+      .attr("fill", ABOVE_COLOR)
+      .attr("fill-opacity", 0.045);
+    g.append("rect")
+      .attr("x", 0)
+      .attr("y", y(baseline))
+      .attr("width", innerW)
+      .attr("height", innerH - y(baseline))
+      .attr("fill", BELOW_COLOR)
+      .attr("fill-opacity", 0.045);
 
     // Gridlines
     y.ticks(4).forEach((t) => {
@@ -110,7 +263,7 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
         .attr("stroke", "currentColor")
         .attr("stroke-opacity", 0.07);
       g.append("text")
-        .attr("x", -6)
+        .attr("x", -8)
         .attr("y", y(t))
         .attr("text-anchor", "end")
         .attr("dominant-baseline", "middle")
@@ -121,26 +274,27 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
         .text(Math.round(t).toLocaleString());
     });
 
-    // Baseline (expected) line
+    // Baseline line
     g.append("line")
       .attr("x1", 0)
       .attr("x2", innerW)
       .attr("y1", y(baseline))
       .attr("y2", y(baseline))
-      .attr("stroke", "#c4976b")
-      .attr("stroke-opacity", 0.5)
-      .attr("stroke-dasharray", "3 3")
-      .attr("stroke-width", 1);
+      .attr("stroke", "#9c5d2e")
+      .attr("stroke-opacity", 0.7)
+      .attr("stroke-dasharray", "4 3")
+      .attr("stroke-width", 1.2);
     g.append("text")
       .attr("x", innerW - 2)
-      .attr("y", y(baseline) - 4)
+      .attr("y", y(baseline) - 5)
       .attr("text-anchor", "end")
       .attr("font-size", 9)
       .attr("fill", "#9c5d2e")
-      .attr("fill-opacity", 0.75)
-      .text(`baseline ${Math.round(baseline)}`);
+      .attr("fill-opacity", 0.9)
+      .attr("font-weight", 600)
+      .text(`avg engineer ≈ ${Math.round(baseline).toLocaleString()}`);
 
-    // ICE (per-engineer) lines — light, translucent
+    // ICE lines (translucent) — show spread across individuals
     const lineGen = d3Line<number>()
       .x((_, i) => x(pdp.grid[i]))
       .y((v) => y(v));
@@ -149,50 +303,85 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
         .datum(series)
         .attr("d", lineGen)
         .attr("fill", "none")
-        .attr("stroke", GROUP_COLOR[pdp.group] ?? "#9c5d2e")
-        .attr("stroke-opacity", 0.08)
+        .attr("stroke", "currentColor")
+        .attr("stroke-opacity", 0.07)
         .attr("stroke-width", 1);
     });
 
-    // PDP mean line — bold
-    g.append("path")
-      .datum(pdp.pdp_mean)
-      .attr("d", lineGen)
-      .attr("fill", "none")
-      .attr("stroke", GROUP_COLOR[pdp.group] ?? "#9c5d2e")
-      .attr("stroke-width", 2.5);
+    // PDP mean line — split into above / below baseline segments,
+    // coloured green / amber accordingly.
+    const segments: { color: string; pts: Array<[number, number]> }[] = [];
+    let currentColor = pdp.pdp_mean[0] >= baseline ? ABOVE_COLOR : BELOW_COLOR;
+    let currentPts: Array<[number, number]> = [[pdp.grid[0], pdp.pdp_mean[0]]];
+    for (let i = 1; i < pdp.pdp_mean.length; i++) {
+      const v = pdp.pdp_mean[i];
+      const prev = pdp.pdp_mean[i - 1];
+      const color = v >= baseline ? ABOVE_COLOR : BELOW_COLOR;
+      if (color !== currentColor) {
+        // Find the x-coordinate where the line crosses baseline (linear interpolation)
+        const t = (baseline - prev) / (v - prev);
+        const xCross =
+          pdp.grid[i - 1] + t * (pdp.grid[i] - pdp.grid[i - 1]);
+        currentPts.push([xCross, baseline]);
+        segments.push({ color: currentColor, pts: currentPts });
+        currentColor = color;
+        currentPts = [[xCross, baseline]];
+      }
+      currentPts.push([pdp.grid[i], v]);
+    }
+    segments.push({ color: currentColor, pts: currentPts });
 
-    // Median marker
+    for (const seg of segments) {
+      const segLine = d3Line<[number, number]>()
+        .x((p) => x(p[0]))
+        .y((p) => y(p[1]));
+      g.append("path")
+        .datum(seg.pts)
+        .attr("d", segLine)
+        .attr("fill", "none")
+        .attr("stroke", seg.color)
+        .attr("stroke-width", 2.8);
+    }
+
+    // Typical engineer marker (vertical at median of feature's actual distribution)
+    const medX = x(pdp.actual_median);
     g.append("line")
-      .attr("x1", x(pdp.actual_median))
-      .attr("x2", x(pdp.actual_median))
-      .attr("y1", innerH)
-      .attr("y2", innerH - 6)
+      .attr("x1", medX)
+      .attr("x2", medX)
+      .attr("y1", 0)
+      .attr("y2", innerH)
       .attr("stroke", "currentColor")
-      .attr("stroke-opacity", 0.4)
-      .attr("stroke-width", 2);
+      .attr("stroke-opacity", 0.18)
+      .attr("stroke-dasharray", "2 3");
     g.append("text")
-      .attr("x", x(pdp.actual_median))
-      .attr("y", innerH + 22)
+      .attr("x", medX)
+      .attr("y", -6)
       .attr("text-anchor", "middle")
       .attr("font-size", 9)
       .attr("font-family", "var(--font-mono, ui-monospace)")
       .attr("fill", "currentColor")
-      .attr("fill-opacity", 0.5)
-      .text(`median ${Math.round(pdp.actual_median)}`);
+      .attr("fill-opacity", 0.55)
+      .text(`typical: ${formatValue(pdp.feature, pdp.actual_median)}`);
 
-    // X axis
+    // X axis ticks
     const xTicks = x.ticks(5);
     xTicks.forEach((t) => {
+      g.append("line")
+        .attr("x1", x(t))
+        .attr("x2", x(t))
+        .attr("y1", innerH)
+        .attr("y2", innerH + 4)
+        .attr("stroke", "currentColor")
+        .attr("stroke-opacity", 0.3);
       g.append("text")
         .attr("x", x(t))
-        .attr("y", innerH + 14)
+        .attr("y", innerH + 16)
         .attr("text-anchor", "middle")
         .attr("font-size", 9)
         .attr("font-family", "var(--font-mono, ui-monospace)")
         .attr("fill", "currentColor")
-        .attr("fill-opacity", 0.55)
-        .text(Math.round(t).toLocaleString());
+        .attr("fill-opacity", 0.6)
+        .text(formatValue(pdp.feature, t));
     });
     g.append("line")
       .attr("x1", 0)
@@ -200,7 +389,26 @@ function PdpPlot({ pdp, baseline }: PdpPlotProps) {
       .attr("y1", innerH)
       .attr("y2", innerH)
       .attr("stroke", "currentColor")
-      .attr("stroke-opacity", 0.25);
+      .attr("stroke-opacity", 0.3);
+
+    // Axis labels
+    g.append("text")
+      .attr("x", -44)
+      .attr("y", innerH / 2)
+      .attr("text-anchor", "middle")
+      .attr("transform", `rotate(-90, -44, ${innerH / 2})`)
+      .attr("font-size", 10)
+      .attr("fill", "currentColor")
+      .attr("fill-opacity", 0.65)
+      .text("Predicted impact (360d)");
+    g.append("text")
+      .attr("x", innerW / 2)
+      .attr("y", innerH + 38)
+      .attr("text-anchor", "middle")
+      .attr("font-size", 10)
+      .attr("fill", "currentColor")
+      .attr("fill-opacity", 0.65)
+      .text(plainLabel(pdp.feature, pdp.label));
   }, [pdp, baseline]);
 
   useEffect(() => {
@@ -231,7 +439,7 @@ function CategoricalEffectBars({ effect }: CatProps) {
     const container = containerRef.current;
     const width = getContentBoxWidth(container);
     const barHeight = 28;
-    const margin = { top: 8, right: 70, bottom: 8, left: 140 };
+    const margin = { top: 8, right: 70, bottom: 20, left: 140 };
     const innerW = width - margin.left - margin.right;
     const height = cats.length * barHeight + margin.top + margin.bottom;
 
@@ -253,29 +461,29 @@ function CategoricalEffectBars({ effect }: CatProps) {
       .attr("x2", x(effect.baseline))
       .attr("y1", -2)
       .attr("y2", cats.length * barHeight)
-      .attr("stroke", "#c4976b")
-      .attr("stroke-opacity", 0.6)
+      .attr("stroke", "#9c5d2e")
+      .attr("stroke-opacity", 0.7)
       .attr("stroke-dasharray", "3 3");
     g.append("text")
       .attr("x", x(effect.baseline))
-      .attr("y", cats.length * barHeight + 2)
+      .attr("y", cats.length * barHeight + 14)
       .attr("text-anchor", "middle")
       .attr("font-size", 9)
       .attr("fill", "#9c5d2e")
-      .attr("fill-opacity", 0.8)
-      .text(`baseline ${Math.round(effect.baseline)}`);
+      .attr("fill-opacity", 0.9)
+      .text(`avg ${Math.round(effect.baseline)}`);
 
     cats.forEach((c, i) => {
       const y = i * barHeight;
       const color =
-        c.mean_predicted >= effect.baseline ? "#6a8b4c" : "#b8472a";
+        c.mean_predicted >= effect.baseline ? ABOVE_COLOR : BELOW_COLOR;
       g.append("rect")
         .attr("x", 0)
         .attr("y", y + 4)
         .attr("width", x(c.mean_predicted))
         .attr("height", 14)
         .attr("fill", color)
-        .attr("fill-opacity", 0.75)
+        .attr("fill-opacity", 0.8)
         .attr("rx", 2);
       g.append("text")
         .attr("x", -10)
@@ -327,7 +535,6 @@ export function FeatureDeepDive({
   categoricalEffects,
   baseline,
 }: DeepDiveProps) {
-  // Show top 6 PDP as a grid
   const topPdp = useMemo(
     () => partialDependence.slice(0, 6),
     [partialDependence],
@@ -336,42 +543,87 @@ export function FeatureDeepDive({
   return (
     <div className="space-y-6">
       <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-[12px] leading-relaxed text-muted-foreground">
-        <span className="font-medium text-foreground">How to read this.</span>{" "}
-        Each small chart shows what the model predicts as one feature sweeps
-        from low to high, holding everything else constant. The bold line is
-        the average; the faint lines underneath are individual engineers
-        (ICE), showing whether the effect is the same for everyone or varies.
-        The dashed horizontal line is the baseline (average prediction across
-        all engineers) — if the bold line stays near it, that feature barely
-        moves the needle.
+        <span className="font-medium text-foreground">How to read these charts.</span>{" "}
+        Each card shows how the model&rsquo;s prediction changes as one feature
+        goes from low to high. The <span className="font-medium" style={{ color: ABOVE_COLOR }}>green</span>{" "}
+        band means &ldquo;above the average engineer&rdquo;;{" "}
+        <span className="font-medium" style={{ color: BELOW_COLOR }}>amber</span>{" "}
+        means below. The badge in the top-right tells you the story at a glance:
+        <span
+          className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+          style={{ color: ABOVE_COLOR, backgroundColor: "rgb(46 125 82 / 0.12)" }}
+        >
+          More is better
+        </span>
+        ,{" "}
+        <span
+          className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+          style={{ color: BELOW_COLOR, backgroundColor: "rgb(184 71 42 / 0.12)" }}
+        >
+          Less is better
+        </span>
+        ,{" "}
+        <span
+          className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+          style={{ color: "#8b5a2a", backgroundColor: "rgb(139 90 42 / 0.12)" }}
+        >
+          Sweet spot
+        </span>
+        , or{" "}
+        <span
+          className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+          style={{ color: "#6b6660", backgroundColor: "rgb(107 102 96 / 0.15)" }}
+        >
+          Weak signal
+        </span>
+        . The vertical dotted line is the typical engineer&rsquo;s value.
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {topPdp.map((pdp) => (
-          <div
-            key={pdp.feature}
-            className="rounded-xl border border-border/60 bg-card p-5 shadow-warm"
-          >
-            <div className="mb-1 flex items-baseline justify-between gap-3">
-              <h4 className="font-display text-xl italic tracking-tight text-foreground">
-                {pdp.label}
-              </h4>
-              <span
-                className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
-                style={{
-                  backgroundColor: `${GROUP_COLOR[pdp.group] ?? "#9c5d2e"}20`,
-                  color: GROUP_COLOR[pdp.group] ?? "#9c5d2e",
-                }}
-              >
-                {pdp.group}
-              </span>
+        {topPdp.map((pdp) => {
+          const insight = analyseFeature(pdp, baseline);
+          return (
+            <div
+              key={pdp.feature}
+              className="rounded-xl border border-border/60 bg-card p-5 shadow-warm"
+            >
+              <div className="mb-1 flex items-start justify-between gap-3">
+                <div>
+                  <h4 className="font-display text-xl italic tracking-tight text-foreground">
+                    {plainLabel(pdp.feature, pdp.label)}
+                  </h4>
+                  <p className="mt-0.5 text-[11px] font-medium text-foreground/80">
+                    {insight.headline}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+                    style={{
+                      backgroundColor: insight.badge.bg,
+                      color: insight.badge.color,
+                    }}
+                  >
+                    {insight.badge.label}
+                  </span>
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em]"
+                    style={{
+                      backgroundColor: `${GROUP_COLOR[pdp.group] ?? "#9c5d2e"}20`,
+                      color: GROUP_COLOR[pdp.group] ?? "#9c5d2e",
+                    }}
+                  >
+                    {pdp.group}
+                  </span>
+                </div>
+              </div>
+              <p className="mb-3 mt-2 text-[12px] leading-relaxed text-muted-foreground">
+                {insight.example}
+              </p>
+              <PdpPlot pdp={pdp} baseline={baseline} />
             </div>
-            <p className="mb-3 text-[12px] leading-relaxed text-muted-foreground">
-              {describeShape(pdp)}
-            </p>
-            <PdpPlot pdp={pdp} baseline={baseline} />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div>
@@ -379,10 +631,14 @@ export function FeatureDeepDive({
           Categorical effects
         </h4>
         <p className="mb-4 max-w-3xl text-[12px] leading-relaxed text-muted-foreground">
-          For categorical features we can&rsquo;t draw a curve — instead, for
-          each category we show the mean predicted impact of engineers in it
-          vs the baseline. Bars above the dashed line predict higher impact on
-          average; below, lower. (Small-n categories are filtered out.)
+          For categorical features (pillar, discipline, level track) we
+          can&rsquo;t draw a curve — instead, for each category we show the
+          mean predicted impact of engineers in it.{" "}
+          <span className="font-medium" style={{ color: ABOVE_COLOR }}>Green</span>{" "}
+          bars are above the average engineer,{" "}
+          <span className="font-medium" style={{ color: BELOW_COLOR }}>amber</span>{" "}
+          bars below. The % next to each bar shows the deviation. Small-n
+          categories are filtered out.
         </p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Object.entries(categoricalEffects).map(([key, effect]) => {

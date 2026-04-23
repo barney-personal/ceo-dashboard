@@ -659,8 +659,14 @@ def main():
     rank_by_pos = {orig_i: rank + 1 for rank, orig_i in enumerate(sorted_indices)}
     for i, e in enumerate(public["engineers"]):
         rank = rank_by_pos[i]
+        # email_hash is a stable, irreversible identifier — the leadership-gated
+        # page re-hydrates real names at request time by computing the same hash
+        # across current headcount and joining. The committed JSON itself has
+        # no PII.
+        email_hash = hashlib.sha256(e["email"].encode()).hexdigest()[:16]
         e["name"] = f"Engineer {rank:03d}"
         e["email"] = f"anon-{rank:03d}"
+        e["email_hash"] = email_hash
     PUBLIC_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     PUBLIC_OUT_PATH.write_text(json.dumps(public, indent=2))
     print(f"Wrote {PUBLIC_OUT_PATH} (anonymised, committed)")

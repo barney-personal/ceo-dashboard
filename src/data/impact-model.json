@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-23T11:35:20.473909+00:00",
+  "generated_at": "2026-04-23T12:10:45.833824+00:00",
   "n_engineers": 141,
   "n_features": 41,
   "chosen_model": "gradient_boosting",
@@ -14175,7 +14175,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "2a2f0835502ed718"
     },
     {
       "name": "Engineer 140",
@@ -14346,7 +14347,8 @@
           "pct_multiplier": 0.6,
           "value": 2.0
         }
-      ]
+      ],
+      "email_hash": "fab29384802e32fd"
     },
     {
       "name": "Engineer 114",
@@ -14510,7 +14512,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "cf869356808a4f50"
     },
     {
       "name": "Engineer 087",
@@ -14674,7 +14677,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "8bfd870ee321949f"
     },
     {
       "name": "Engineer 051",
@@ -14838,7 +14842,8 @@
           "pct_multiplier": -0.8,
           "value": 3.0
         }
-      ]
+      ],
+      "email_hash": "4bbe869d7427b886"
     },
     {
       "name": "Engineer 131",
@@ -15002,7 +15007,8 @@
           "pct_multiplier": -0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "eca2368461b7bb0c"
     },
     {
       "name": "Engineer 121",
@@ -15159,7 +15165,8 @@
           "pct_multiplier": -0.6,
           "value": 18.159
         }
-      ]
+      ],
+      "email_hash": "d93c45cfc470c2ab"
     },
     {
       "name": "Engineer 128",
@@ -15330,7 +15337,8 @@
           "pct_multiplier": -0.5,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "e655fdf95c1c398f"
     },
     {
       "name": "Engineer 110",
@@ -15487,7 +15495,8 @@
           "pct_multiplier": 0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "c109551280f9ecaf"
     },
     {
       "name": "Engineer 118",
@@ -15644,7 +15653,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "d6644d5b4b05351c"
     },
     {
       "name": "Engineer 047",
@@ -15808,7 +15818,8 @@
           "pct_multiplier": -0.3,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "46f7884d70181e52"
     },
     {
       "name": "Engineer 134",
@@ -15965,7 +15976,8 @@
           "pct_multiplier": 0.8,
           "value": 8.0
         }
-      ]
+      ],
+      "email_hash": "f129745bd9ec5e9c"
     },
     {
       "name": "Engineer 027",
@@ -16129,7 +16141,8 @@
           "pct_multiplier": -0.8,
           "value": 0.97
         }
-      ]
+      ],
+      "email_hash": "2cdf72fcb53d80eb"
     },
     {
       "name": "Engineer 014",
@@ -16307,7 +16320,8 @@
           "pct_multiplier": -0.5,
           "value": 11.0
         }
-      ]
+      ],
+      "email_hash": "1e083a6959c42bc0"
     },
     {
       "name": "Engineer 073",
@@ -16464,7 +16478,8 @@
           "pct_multiplier": 1.0,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "74e4e0c8f9752fc1"
     },
     {
       "name": "Engineer 020",
@@ -16635,7 +16650,8 @@
           "pct_multiplier": -0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "2223e1570b9151a1"
     },
     {
       "name": "Engineer 058",
@@ -16778,7 +16794,8 @@
           "pct_multiplier": -0.5,
           "value": 0.275
         }
-      ]
+      ],
+      "email_hash": "58f40ab6d55abfb6"
     },
     {
       "name": "Engineer 066",
@@ -16942,7 +16959,8 @@
           "pct_multiplier": 0.5,
           "value": 2.0
         }
-      ]
+      ],
+      "email_hash": "69127416a2ea3adb"
     },
     {
       "name": "Engineer 043",
@@ -17120,7 +17138,8 @@
           "pct_multiplier": 0.6,
           "value": 2.34
         }
-      ]
+      ],
+      "email_hash": "40f806bc856a2e96"
     },
     {
       "name": "Engineer 126",
@@ -17298,7 +17317,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "e1768d28451b8e9a"
     },
     {
       "name": "Engineer 107",
@@ -17469,7 +17489,8 @@
           "pct_multiplier": 0.6,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "bc2b54b212e5e0d2"
     },
     {
       "name": "Engineer 008",
@@ -17626,7 +17647,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "17dc0f8890bdd18c"
     },
     {
       "name": "Engineer 124",
@@ -17797,7 +17819,8 @@
           "pct_multiplier": -0.5,
           "value": 4.25
         }
-      ]
+      ],
+      "email_hash": "dc81afb297ae7fcd"
     },
     {
       "name": "Engineer 010",
@@ -17975,7 +17998,8 @@
           "pct_multiplier": -0.4,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "1a96d622aef221a8"
     },
     {
       "name": "Engineer 074",
@@ -18132,7 +18156,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "775164f19ae1311d"
     },
     {
       "name": "Engineer 116",
@@ -18296,7 +18321,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "d38d2bd7880c2c32"
     },
     {
       "name": "Engineer 024",
@@ -18453,7 +18479,8 @@
           "pct_multiplier": -0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "241bf6dff514c9e0"
     },
     {
       "name": "Engineer 085",
@@ -18624,7 +18651,8 @@
           "pct_multiplier": 0.3,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "8682790a440af3f7"
     },
     {
       "name": "Engineer 041",
@@ -18809,7 +18837,8 @@
           "pct_multiplier": -0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "3c5eacba98b482d4"
     },
     {
       "name": "Engineer 038",
@@ -18966,7 +18995,8 @@
           "pct_multiplier": 0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "3a6afb970bcdb42a"
     },
     {
       "name": "Engineer 016",
@@ -19137,7 +19167,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "205abb31dd39c35e"
     },
     {
       "name": "Engineer 036",
@@ -19294,7 +19325,8 @@
           "pct_multiplier": -0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "38963081a2b429a0"
     },
     {
       "name": "Engineer 102",
@@ -19451,7 +19483,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "b0dbc173d114b572"
     },
     {
       "name": "Engineer 101",
@@ -19587,7 +19620,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "aef199fe56001cc0"
     },
     {
       "name": "Engineer 044",
@@ -19737,7 +19771,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "41f770dc7fce054b"
     },
     {
       "name": "Engineer 115",
@@ -19894,7 +19929,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "d35cb48950feac7c"
     },
     {
       "name": "Engineer 050",
@@ -20058,7 +20094,8 @@
           "pct_multiplier": -0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "4a4b8e5712462b60"
     },
     {
       "name": "Engineer 084",
@@ -20215,7 +20252,8 @@
           "pct_multiplier": 0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "85588250449feb8c"
     },
     {
       "name": "Engineer 135",
@@ -20386,7 +20424,8 @@
           "pct_multiplier": -0.4,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "f18f411fbad510c1"
     },
     {
       "name": "Engineer 028",
@@ -20543,7 +20582,8 @@
           "pct_multiplier": -0.5,
           "value": 3.0
         }
-      ]
+      ],
+      "email_hash": "2db772ff97a02dba"
     },
     {
       "name": "Engineer 042",
@@ -20707,7 +20747,8 @@
           "pct_multiplier": -0.7,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "3c8b242e7d3d01e5"
     },
     {
       "name": "Engineer 125",
@@ -20878,7 +20919,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "e0571b415f9e30d7"
     },
     {
       "name": "Engineer 081",
@@ -21035,7 +21077,8 @@
           "pct_multiplier": -0.5,
           "value": 4.25
         }
-      ]
+      ],
+      "email_hash": "81336a8aec165aeb"
     },
     {
       "name": "Engineer 113",
@@ -21206,7 +21249,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "cb68f562b4ad798b"
     },
     {
       "name": "Engineer 009",
@@ -21370,7 +21414,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "1827d7575d32c916"
     },
     {
       "name": "Engineer 122",
@@ -21541,7 +21586,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "da277eb196537d16"
     },
     {
       "name": "Engineer 059",
@@ -21712,7 +21758,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "58f4ddec6637d765"
     },
     {
       "name": "Engineer 079",
@@ -21876,7 +21923,8 @@
           "pct_multiplier": 0.6,
           "value": 2.0
         }
-      ]
+      ],
+      "email_hash": "80cc4058cf121554"
     },
     {
       "name": "Engineer 094",
@@ -22054,7 +22102,8 @@
           "pct_multiplier": 0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "a0ff94aec9b2006c"
     },
     {
       "name": "Engineer 112",
@@ -22211,7 +22260,8 @@
           "pct_multiplier": 0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "c1b30e607846c833"
     },
     {
       "name": "Engineer 103",
@@ -22382,7 +22432,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "b35f49aec0015292"
     },
     {
       "name": "Engineer 133",
@@ -22539,7 +22590,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "f08e044f4812640d"
     },
     {
       "name": "Engineer 092",
@@ -22703,7 +22755,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "9c108234ffc68367"
     },
     {
       "name": "Engineer 021",
@@ -22867,7 +22920,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "230f082e0a8d7305"
     },
     {
       "name": "Engineer 138",
@@ -23038,7 +23092,8 @@
           "pct_multiplier": 0.4,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "f8a450074e2b0d26"
     },
     {
       "name": "Engineer 082",
@@ -23195,7 +23250,8 @@
           "pct_multiplier": -1.6,
           "value": 1.904
         }
-      ]
+      ],
+      "email_hash": "8223bcd19c5db247"
     },
     {
       "name": "Engineer 053",
@@ -23352,7 +23408,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "51ddeff4dbd3ed31"
     },
     {
       "name": "Engineer 055",
@@ -23495,7 +23552,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "536ce599a73b67b8"
     },
     {
       "name": "Engineer 015",
@@ -23631,7 +23689,8 @@
           "pct_multiplier": -0.5,
           "value": 2.0
         }
-      ]
+      ],
+      "email_hash": "1fc616549faaa692"
     },
     {
       "name": "Engineer 119",
@@ -23802,7 +23861,8 @@
           "pct_multiplier": 0.6,
           "value": 3.75
         }
-      ]
+      ],
+      "email_hash": "d745e0772a688d62"
     },
     {
       "name": "Engineer 072",
@@ -23952,7 +24012,8 @@
           "pct_multiplier": 0.5,
           "value": 7.0
         }
-      ]
+      ],
+      "email_hash": "7451b5bd01b411a0"
     },
     {
       "name": "Engineer 002",
@@ -24130,7 +24191,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "05b9ac1b523ba0ef"
     },
     {
       "name": "Engineer 006",
@@ -24294,7 +24356,8 @@
           "pct_multiplier": 0.6,
           "value": 5.0
         }
-      ]
+      ],
+      "email_hash": "131d03d775597fa6"
     },
     {
       "name": "Engineer 098",
@@ -24451,7 +24514,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "a55df2919184d88c"
     },
     {
       "name": "Engineer 001",
@@ -24636,7 +24700,8 @@
           "pct_multiplier": -0.7,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "02bb980c7ef79f77"
     },
     {
       "name": "Engineer 064",
@@ -24807,7 +24872,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "654c713aee7a912b"
     },
     {
       "name": "Engineer 120",
@@ -24964,7 +25030,8 @@
           "pct_multiplier": -0.5,
           "value": 3.0
         }
-      ]
+      ],
+      "email_hash": "d8a33b132a853f04"
     },
     {
       "name": "Engineer 127",
@@ -25121,7 +25188,8 @@
           "pct_multiplier": 0.6,
           "value": 5.0
         }
-      ]
+      ],
+      "email_hash": "e466daedbcc29a3b"
     },
     {
       "name": "Engineer 083",
@@ -25292,7 +25360,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "84c1f117f0b6cebc"
     },
     {
       "name": "Engineer 056",
@@ -25442,7 +25511,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "56948efe26a10bf7"
     },
     {
       "name": "Engineer 005",
@@ -25599,7 +25669,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "1287190aeecdce55"
     },
     {
       "name": "Engineer 132",
@@ -25756,7 +25827,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "f064f20c07c9914b"
     },
     {
       "name": "Engineer 029",
@@ -25920,7 +25992,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "2eb68346bdfd2ff0"
     },
     {
       "name": "Engineer 075",
@@ -26098,7 +26171,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "7a94fe075d5271eb"
     },
     {
       "name": "Engineer 025",
@@ -26276,7 +26350,8 @@
           "pct_multiplier": -0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "24d50db88c0263dd"
     },
     {
       "name": "Engineer 045",
@@ -26447,7 +26522,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "4345705cb2d44ce5"
     },
     {
       "name": "Engineer 108",
@@ -26597,7 +26673,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "be56a452518d06e7"
     },
     {
       "name": "Engineer 097",
@@ -26754,7 +26831,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "a524836cd0a322f7"
     },
     {
       "name": "Engineer 017",
@@ -26925,7 +27003,8 @@
           "pct_multiplier": -0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "20d92b99ea45fe8b"
     },
     {
       "name": "Engineer 031",
@@ -27089,7 +27168,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "348983b8f5dba244"
     },
     {
       "name": "Engineer 093",
@@ -27239,7 +27319,8 @@
           "pct_multiplier": -0.7,
           "value": 15.0
         }
-      ]
+      ],
+      "email_hash": "9cfaea3cfaa0971a"
     },
     {
       "name": "Engineer 096",
@@ -27389,7 +27470,8 @@
           "pct_multiplier": -0.5,
           "value": 22.0
         }
-      ]
+      ],
+      "email_hash": "a4f7cc9582453fba"
     },
     {
       "name": "Engineer 117",
@@ -27553,7 +27635,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "d5cb8fe601a02dc4"
     },
     {
       "name": "Engineer 109",
@@ -27696,7 +27779,8 @@
           "pct_multiplier": -0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "c02cc2ba2146bd80"
     },
     {
       "name": "Engineer 080",
@@ -27860,7 +27944,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "8103def26f60ecbd"
     },
     {
       "name": "Engineer 004",
@@ -28010,7 +28095,8 @@
           "pct_multiplier": -0.6,
           "value": 3.0
         }
-      ]
+      ],
+      "email_hash": "1105c6e8bd3a4e1d"
     },
     {
       "name": "Engineer 035",
@@ -28167,7 +28253,8 @@
           "pct_multiplier": -0.5,
           "value": 3.0
         }
-      ]
+      ],
+      "email_hash": "3862d372d5040224"
     },
     {
       "name": "Engineer 022",
@@ -28352,7 +28439,8 @@
           "pct_multiplier": 1.1,
           "value": 3.75
         }
-      ]
+      ],
+      "email_hash": "237a3b663a07ddca"
     },
     {
       "name": "Engineer 069",
@@ -28523,7 +28611,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "6fc8fb011334c71a"
     },
     {
       "name": "Engineer 063",
@@ -28687,7 +28776,8 @@
           "pct_multiplier": 0.6,
           "value": 0.187
         }
-      ]
+      ],
+      "email_hash": "5bbd16b5f246e4de"
     },
     {
       "name": "Engineer 061",
@@ -28851,7 +28941,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "5a30b7001204499f"
     },
     {
       "name": "Engineer 054",
@@ -29015,7 +29106,8 @@
           "pct_multiplier": 0.5,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "522d152f9403a551"
     },
     {
       "name": "Engineer 060",
@@ -29193,7 +29285,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "599ab8de520ec1c4"
     },
     {
       "name": "Engineer 030",
@@ -29371,7 +29464,8 @@
           "pct_multiplier": -0.5,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "305e2108486fad82"
     },
     {
       "name": "Engineer 034",
@@ -29528,7 +29622,8 @@
           "pct_multiplier": 0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "383a8cb2216944a7"
     },
     {
       "name": "Engineer 067",
@@ -29692,7 +29787,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "6b241617f8ec1542"
     },
     {
       "name": "Engineer 076",
@@ -29835,7 +29931,8 @@
           "pct_multiplier": -0.6,
           "value": 0.722
         }
-      ]
+      ],
+      "email_hash": "7d3b95133e9483d6"
     },
     {
       "name": "Engineer 070",
@@ -29999,7 +30096,8 @@
           "pct_multiplier": 0.7,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "7108f57a5103eb66"
     },
     {
       "name": "Engineer 046",
@@ -30156,7 +30254,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "44f286a790a2d6cf"
     },
     {
       "name": "Engineer 039",
@@ -30334,7 +30433,8 @@
           "pct_multiplier": -0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "3b3eef517ae7949c"
     },
     {
       "name": "Engineer 104",
@@ -30498,7 +30598,8 @@
           "pct_multiplier": 0.1,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "b3a1713577a279ba"
     },
     {
       "name": "Engineer 141",
@@ -30662,7 +30763,8 @@
           "pct_multiplier": 0.8,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "fd4c89741645084b"
     },
     {
       "name": "Engineer 040",
@@ -30819,7 +30921,8 @@
           "pct_multiplier": 0.7,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "3b50f79d723192d3"
     },
     {
       "name": "Engineer 065",
@@ -30976,7 +31079,8 @@
           "pct_multiplier": -0.7,
           "value": 15.0
         }
-      ]
+      ],
+      "email_hash": "68305bff90b3e104"
     },
     {
       "name": "Engineer 052",
@@ -31133,7 +31237,8 @@
           "pct_multiplier": -0.7,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "4cdb7ea907223034"
     },
     {
       "name": "Engineer 090",
@@ -31311,7 +31416,8 @@
           "pct_multiplier": -0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "95451ac392ae8f6c"
     },
     {
       "name": "Engineer 111",
@@ -31468,7 +31574,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "c1aedf5d8bcd4f52"
     },
     {
       "name": "Engineer 049",
@@ -31632,7 +31739,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "4a09f1fa9533b582"
     },
     {
       "name": "Engineer 037",
@@ -31824,7 +31932,8 @@
           "pct_multiplier": 0.5,
           "value": 0.702
         }
-      ]
+      ],
+      "email_hash": "39f149d0ece43c9b"
     },
     {
       "name": "Engineer 091",
@@ -31988,7 +32097,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "9acb61773519e4c7"
     },
     {
       "name": "Engineer 033",
@@ -32159,7 +32269,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "35025a02c465d565"
     },
     {
       "name": "Engineer 086",
@@ -32323,7 +32434,8 @@
           "pct_multiplier": 0.3,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "873700b21ffc241c"
     },
     {
       "name": "Engineer 071",
@@ -32501,7 +32613,8 @@
           "pct_multiplier": 0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "744bc0b6260cb2ca"
     },
     {
       "name": "Engineer 129",
@@ -32672,7 +32785,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "e7da8f6e6bb4bc5d"
     },
     {
       "name": "Engineer 007",
@@ -32836,7 +32950,8 @@
           "pct_multiplier": 0.6,
           "value": 4.0
         }
-      ]
+      ],
+      "email_hash": "1494744ea77b5589"
     },
     {
       "name": "Engineer 130",
@@ -32993,7 +33108,8 @@
           "pct_multiplier": -0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "eab8312d22382388"
     },
     {
       "name": "Engineer 077",
@@ -33143,7 +33259,8 @@
           "pct_multiplier": 0.6,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "7def59237dc8d31d"
     },
     {
       "name": "Engineer 019",
@@ -33293,7 +33410,8 @@
           "pct_multiplier": -0.1,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "21bc6b2e7e0b81d3"
     },
     {
       "name": "Engineer 099",
@@ -33450,7 +33568,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "a86cb2e1e0fbcc36"
     },
     {
       "name": "Engineer 078",
@@ -33614,7 +33733,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "806f895ee3e18894"
     },
     {
       "name": "Engineer 095",
@@ -33778,7 +33898,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "a28123c86820e134"
     },
     {
       "name": "Engineer 013",
@@ -33935,7 +34056,8 @@
           "pct_multiplier": 1.3,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "1dfa0011034e66ce"
     },
     {
       "name": "Engineer 012",
@@ -34092,7 +34214,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "1d584c6dc0879efe"
     },
     {
       "name": "Engineer 139",
@@ -34263,7 +34386,8 @@
           "pct_multiplier": 0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "fa94905f6bd6abc9"
     },
     {
       "name": "Engineer 136",
@@ -34399,7 +34523,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "f617bd9bc4c175ee"
     },
     {
       "name": "Engineer 106",
@@ -34556,7 +34681,8 @@
           "pct_multiplier": -1.0,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "b77719b4bd39954d"
     },
     {
       "name": "Engineer 088",
@@ -34727,7 +34853,8 @@
           "pct_multiplier": 0.6,
           "value": 3.75
         }
-      ]
+      ],
+      "email_hash": "8db5473e5f9e8b89"
     },
     {
       "name": "Engineer 062",
@@ -34891,7 +35018,8 @@
           "pct_multiplier": 0.6,
           "value": 5.0
         }
-      ]
+      ],
+      "email_hash": "5ba2abb5e4982c82"
     },
     {
       "name": "Engineer 123",
@@ -35041,7 +35169,8 @@
           "pct_multiplier": 0.6,
           "value": 1.0
         }
-      ]
+      ],
+      "email_hash": "dbbecb6bb1e6ea7a"
     },
     {
       "name": "Engineer 100",
@@ -35205,7 +35334,8 @@
           "pct_multiplier": -0.1,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "ab2c141188326890"
     },
     {
       "name": "Engineer 018",
@@ -35376,7 +35506,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "219ddc1f962be8c0"
     },
     {
       "name": "Engineer 003",
@@ -35547,7 +35678,8 @@
           "pct_multiplier": 0.6,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "0fe3df16f6bd7fc6"
     },
     {
       "name": "Engineer 105",
@@ -35711,7 +35843,8 @@
           "pct_multiplier": 0.1,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "b52a7badd6893160"
     },
     {
       "name": "Engineer 048",
@@ -35882,7 +36015,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "497906a0d74dee16"
     },
     {
       "name": "Engineer 011",
@@ -36025,7 +36159,8 @@
           "pct_multiplier": -0.4,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "1b3a2bcd7dc78bd0"
     },
     {
       "name": "Engineer 057",
@@ -36182,7 +36317,8 @@
           "pct_multiplier": 0.9,
           "value": 0.946
         }
-      ]
+      ],
+      "email_hash": "57b0b718f5dcf6ed"
     },
     {
       "name": "Engineer 068",
@@ -36332,7 +36468,8 @@
           "pct_multiplier": -0.8,
           "value": 1.083
         }
-      ]
+      ],
+      "email_hash": "6d3210598aeffaf9"
     },
     {
       "name": "Engineer 023",
@@ -36489,7 +36626,8 @@
           "pct_multiplier": -0.2,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "23e2c63bf7efa265"
     },
     {
       "name": "Engineer 137",
@@ -36639,7 +36777,8 @@
           "pct_multiplier": 0.5,
           "value": null
         }
-      ]
+      ],
+      "email_hash": "f799eabfdcf58029"
     },
     {
       "name": "Engineer 089",
@@ -36810,7 +36949,8 @@
           "pct_multiplier": 0.7,
           "value": 3.25
         }
-      ]
+      ],
+      "email_hash": "91e6f4e6d2821f51"
     },
     {
       "name": "Engineer 032",
@@ -36967,7 +37107,8 @@
           "pct_multiplier": -0.5,
           "value": 0.0
         }
-      ]
+      ],
+      "email_hash": "34b856fee7a05090"
     }
   ],
   "by_discipline": [

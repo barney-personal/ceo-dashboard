@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
-import { getImpactModel } from "@/lib/data/impact-model";
+import { getImpactModelHydrated } from "@/lib/data/impact-model.server";
 import { ImpactModelReport } from "./_components/model-report";
 
 export const metadata = {
@@ -14,7 +14,9 @@ export default async function ImpactModelPage() {
     redirect("/dashboard/engineering");
   }
 
-  const model = getImpactModel();
+  // Hydrates anonymised snapshot with real employee names via DB join.
+  // Safe at this point: leadership+ is already verified above.
+  const model = await getImpactModelHydrated();
 
   return <ImpactModelReport model={model} />;
 }
