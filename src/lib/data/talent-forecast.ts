@@ -19,7 +19,7 @@
 // Present both the number AND the assumption to the user so they can calibrate.
 
 import { addMonths } from "./talent-utils";
-import type { MonthlyHires } from "./talent-utils";
+import type { MonthlyHires, RecruiterHistory } from "./talent-utils";
 
 function monthDelta(from: string, to: string): number {
   const [fy, fm] = from.split("-").map(Number);
@@ -179,6 +179,141 @@ export function forecastTeamHires(
 export interface MonthRange {
   from: string;
   to: string;
+}
+
+export interface CapacityForecastOptions {
+  /** Window for the per-person mean hire rate (trailing). Default: 3. */
+  productivityWindowMonths?: number;
+  /** Window for the per-person σ estimate. Default: 6. */
+  sigmaWindowMonths?: number;
+  /** Z-score for the interval. Default: 1.28 (80%). */
+  zScore?: number;
+  /**
+   * Current month (YYYY-MM) — the final month of each person's history is
+   * treated as partial and excluded from their productivity/σ windows.
+   */
+  currentMonth?: string;
+}
+
+export interface CapacityForecastResult {
+  forecast: MonthlyForecast[];
+  /** Per-recruiter monthly mean + σ. Same length & order as the input
+   *  `activeRecruiters` list; names that had no history produce zero. */
+  contributors: Array<{
+    recruiter: string;
+    monthsOfHistory: number;
+    meanMonthlyHires: number;
+    sigmaMonthly: number;
+  }>;
+  /** The summed team mean hires per month (mid of each forecast row). */
+  teamMeanMonthly: number;
+  /** Team-level σ per month, √(Σ σ_i²) assuming per-recruiter independence. */
+  teamSigmaMonthly: number;
+}
+
+/**
+ * Forecast team hires by summing each currently-active recruiter's trailing
+ * monthly hire rate, projected flat across the horizon.
+ *
+ * This is the "capacity-aware" alternative to team-level linear regression.
+ * It answers the question *"what will hires look like if the 17 TPs Lucy has
+ * today keep hiring at their recent individual velocities?"* — a
+ * conservative counter-factual that strips out the capacity that walked out
+ * the door.
+ *
+ * Trade-offs vs linear regression:
+ *  - Captures the current roster exactly — no ghost capacity from departed
+ *    TPs.
+ *  - Trailing-3 per person naturally reflects ramp for newcomers and steady
+ *    state for tenured TPs.
+ *  - Doesn't capture broader trend — assumes individual productivity stays
+ *    flat for the forecast horizon. For ramping new joiners whose last 3
+ *    months understate their eventual ceiling, this is conservative.
+ *  - σ assumes independence between recruiters, which inflates the band
+ *    slightly when the team is small; acceptable for an 80% CI.
+ */
+export function forecastFromActiveCapacity(
+  histories: RecruiterHistory[],
+  activeRecruiters: string[],
+  startMonth: string,
+  throughMonth: string,
+  options: CapacityForecastOptions = {},
+): CapacityForecastResult {
+  const productivityWindow = options.productivityWindowMonths ?? 3;
+  const sigmaWindow = options.sigmaWindowMonths ?? 6;
+  const z = options.zScore ?? 1.28;
+  const currentMonth = options.currentMonth;
+
+  const byRecruiter = new Map(histories.map((h) => [h.recruiter, h]));
+
+  const contributors = activeRecruiters.map((recruiter) => {
+    const history = byRecruiter.get(recruiter);
+    if (!history || history.monthly.length === 0) {
+      return {
+        recruiter,
+        monthsOfHistory: 0,
+        meanMonthlyHires: 0,
+        sigmaMonthly: 0,
+      };
+    }
+    const last = history.monthly[history.monthly.length - 1];
+    const completed =
+      currentMonth && last?.month === currentMonth
+        ? history.monthly.slice(0, -1)
+        : history.monthly;
+
+    const prodSlice = completed.slice(-productivityWindow);
+    const meanMonthlyHires =
+      prodSlice.length === 0
+        ? 0
+        : prodSlice.reduce((s, m) => s + m.hires, 0) / prodSlice.length;
+
+    const sigmaSlice = completed.slice(-sigmaWindow);
+    let sigmaMonthly = 0;
+    if (sigmaSlice.length >= 2) {
+      const mu =
+        sigmaSlice.reduce((s, m) => s + m.hires, 0) / sigmaSlice.length;
+      const variance =
+        sigmaSlice.reduce((s, m) => s + (m.hires - mu) ** 2, 0) /
+        (sigmaSlice.length - 1);
+      sigmaMonthly = Math.sqrt(variance);
+    }
+
+    return {
+      recruiter,
+      monthsOfHistory: completed.length,
+      meanMonthlyHires,
+      sigmaMonthly,
+    };
+  });
+
+  const teamMeanMonthly = contributors.reduce(
+    (s, c) => s + c.meanMonthlyHires,
+    0,
+  );
+  const teamSigmaMonthly = Math.sqrt(
+    contributors.reduce((s, c) => s + c.sigmaMonthly ** 2, 0),
+  );
+
+  const forecast: MonthlyForecast[] = [];
+  let cursor = startMonth;
+  while (cursor <= throughMonth) {
+    const halfWidth = z * teamSigmaMonthly;
+    forecast.push({
+      month: cursor,
+      low: Math.max(0, teamMeanMonthly - halfWidth),
+      mid: teamMeanMonthly,
+      high: teamMeanMonthly + halfWidth,
+    });
+    cursor = addMonths(cursor, 1);
+  }
+
+  return {
+    forecast,
+    contributors,
+    teamMeanMonthly,
+    teamSigmaMonthly,
+  };
 }
 
 /**

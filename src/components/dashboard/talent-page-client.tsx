@@ -6,6 +6,7 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import {
+  addMonths,
   aggregateHiresByRecruiterMonth,
   buildRecruiterSummaries,
   currentMonthKey,
@@ -17,7 +18,7 @@ import {
   type TalentTargetRow,
 } from "@/lib/data/talent-utils";
 import {
-  forecastTeamHires,
+  forecastFromActiveCapacity,
   totalForecastOverRange,
 } from "@/lib/data/talent-forecast";
 import { TALENT_ROSTER_AS_OF } from "@/lib/config/talent-roster";
@@ -35,7 +36,9 @@ type RoleFilter = RecruiterRole | "all";
 
 const PROJECTION_MONTHS = 3;
 const FORECAST_THROUGH = "2027-12";
-const FORECAST_TRAINING_MONTHS = 12;
+// Per-person productivity window — trailing-3 reflects ramp for new joiners
+// and a stable steady state for tenured TPs.
+const PRODUCTIVITY_WINDOW_MONTHS = 3;
 
 function formatNumber(n: number, fractionDigits = 1): string {
   if (n === 0) return "0";
@@ -498,7 +501,8 @@ export function TalentPageClient({
     summaries,
     latestMonth,
     forecast,
-    fit,
+    activeTpCount,
+    teamMeanMonthly,
     forecast2026H2,
     forecast2027,
   } = useMemo(() => {
@@ -513,11 +517,23 @@ export function TalentPageClient({
     );
     const latestMonth = lastActualMonth(hireRows);
 
-    const { forecast, fit } = forecastTeamHires(
-      teamActual,
+    // Capacity forecast = sum of each currently-active Talent Partner's
+    // trailing productivity. Excludes departed people, sourcers, and
+    // other roles so the number reflects Lucy's actual roster.
+    const activeTpNames = summaries
+      .filter(
+        (s) => s.employment.status !== "departed" && s.role === "talent_partner",
+      )
+      .map((s) => s.recruiter);
+
+    const forecastStart = addMonths(latestMonth ?? now, 1);
+    const { forecast, teamMeanMonthly } = forecastFromActiveCapacity(
+      histories,
+      activeTpNames,
+      forecastStart,
       FORECAST_THROUGH,
       {
-        trainingMonths: FORECAST_TRAINING_MONTHS,
+        productivityWindowMonths: PRODUCTIVITY_WINDOW_MONTHS,
         currentMonth: now,
       },
     );
@@ -537,7 +553,8 @@ export function TalentPageClient({
       summaries,
       latestMonth,
       forecast,
-      fit,
+      activeTpCount: activeTpNames.length,
+      teamMeanMonthly,
       forecast2026H2,
       forecast2027,
     };
@@ -573,9 +590,9 @@ export function TalentPageClient({
     return <TalentEmpty reason={emptyReason} />;
   }
 
-  // Forecast-anchored headline: the first projected month's mid is the trend
-  // line's next value — aligns with the chart's dashed projection.
-  const trailing3mAvgTeam = forecast[0]?.mid ?? 0;
+  // Forecast-anchored headline: monthly mean of the active-roster capacity
+  // model. Same value for every projected month (flat projection).
+  const trailing3mAvgTeam = teamMeanMonthly;
   const hiresLast12m = teamActual
     .slice(-12)
     .reduce((s, m) => s + m.hires, 0);
@@ -653,12 +670,12 @@ export function TalentPageClient({
           modeUrl={modeUrl}
         />
         <MetricCard
-          label="Next month · forecast"
+          label="Steady-state capacity"
           value={formatNumber(trailing3mAvgTeam)}
           subtitle={
             forecast[0]
-              ? `range ${formatNumber(forecast[0].low, 0)}–${formatNumber(forecast[0].high, 0)}`
-              : "hires"
+              ? `${formatNumber(forecast[0].low, 0)}–${formatNumber(forecast[0].high, 0)} / mo · ${activeTpCount} active TPs`
+              : "hires / month"
           }
         />
         <MetricCard
@@ -689,7 +706,7 @@ export function TalentPageClient({
         title="Team trajectory & forecast"
         subtitle={`Solid: monthly hires summed across all recruiters, through ${formatMonthLabel(
           latestMonth,
-        )}. Dashed: linear-regression forecast trained on the last ${fit?.trainingMonths ?? FORECAST_TRAINING_MONTHS} complete months, with 80% prediction interval (P10 / P50 / P90) extended through Dec 2027.`}
+        )}. Dashed: forecast built from ${activeTpCount} currently-active Talent Partners at their trailing ${PRODUCTIVITY_WINDOW_MONTHS}-month productivity (capacity-aware — ignores hires from recently-departed TPs). 80% interval (P10 / P50 / P90) held flat through Dec 2027.`}
       />
 
       {chartSeries.length > 0 ? (

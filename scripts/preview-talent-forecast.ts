@@ -3,12 +3,14 @@
 
 import { getTalentData } from "@/lib/data/talent";
 import {
+  addMonths,
   aggregateHiresByRecruiterMonth,
+  buildRecruiterSummaries,
   currentMonthKey,
   sumToTeamMonthly,
 } from "@/lib/data/talent-utils";
 import {
-  forecastTeamHires,
+  forecastFromActiveCapacity,
   totalForecastOverRange,
 } from "@/lib/data/talent-forecast";
 
@@ -18,20 +20,52 @@ async function main() {
   const teamActual = sumToTeamMonthly(histories);
   const now = currentMonthKey();
 
-  const { forecast, fit } = forecastTeamHires(teamActual, "2027-12", {
-    trainingMonths: 12,
-    currentMonth: now,
-  });
+  const summaries = buildRecruiterSummaries(
+    histories,
+    data.targets,
+    now,
+    data.employmentByRecruiter,
+  );
+  const activeTps = summaries.filter(
+    (s) => s.employment.status !== "departed" && s.role === "talent_partner",
+  );
+  console.log(`\nActive Talent Partners: ${activeTps.length}`);
 
-  console.log("Fit:", fit);
+  const latestMonth = teamActual[teamActual.length - 1]?.month ?? now;
+  const forecastStart = addMonths(latestMonth, 1);
 
-  console.log("\nLast 6 months of actuals:");
+  const { forecast, contributors, teamMeanMonthly, teamSigmaMonthly } =
+    forecastFromActiveCapacity(
+      histories,
+      activeTps.map((s) => s.recruiter),
+      forecastStart,
+      "2027-12",
+      {
+        productivityWindowMonths: 3,
+        currentMonth: now,
+      },
+    );
+
+  console.log(
+    `\nTeam mean: ${teamMeanMonthly.toFixed(1)} hires/month · σ = ${teamSigmaMonthly.toFixed(2)}`,
+  );
+  console.log("\nPer-active-TP contribution:");
+  for (const c of contributors.sort(
+    (a, b) => b.meanMonthlyHires - a.meanMonthlyHires,
+  )) {
+    console.log(
+      `  ${c.recruiter.padEnd(25)} mean=${c.meanMonthlyHires.toFixed(2).padStart(5)}  σ=${c.sigmaMonthly.toFixed(2).padStart(5)}  months=${c.monthsOfHistory}`,
+    );
+  }
+
+  console.log("\nLast 6 months of actuals (context):");
   for (const m of teamActual.slice(-6)) {
     console.log(`  ${m.month}  → ${m.hires.toFixed(1)}`);
   }
 
-  console.log("\nForecast (low / mid / high) through Dec 2027:");
-  for (const m of forecast) {
+  console.log("\nForecast (low / mid / high) — first 6 and last 3 months:");
+  const sliced = [...forecast.slice(0, 6), ...forecast.slice(-3)];
+  for (const m of sliced) {
     console.log(
       `  ${m.month}  →  [${m.low.toFixed(1).padStart(6)}, ${m.mid.toFixed(1).padStart(6)}, ${m.high.toFixed(1).padStart(6)}]`,
     );

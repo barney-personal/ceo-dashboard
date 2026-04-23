@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  forecastFromActiveCapacity,
   forecastTeamHires,
   totalForecastOverRange,
 } from "../talent-forecast";
-import type { MonthlyHires } from "../talent-utils";
+import type { MonthlyHires, RecruiterHistory } from "../talent-utils";
 
 function mh(month: string, hires: number): MonthlyHires {
   return { month, hires };
@@ -110,6 +111,116 @@ describe("forecastTeamHires", () => {
     expect(forecast.length).toBe(24);
     expect(forecast[0].month).toBe("2026-01");
     expect(forecast[forecast.length - 1].month).toBe("2027-12");
+  });
+});
+
+describe("forecastFromActiveCapacity", () => {
+  function history(
+    recruiter: string,
+    series: Array<[string, number]>,
+  ): RecruiterHistory {
+    return {
+      recruiter,
+      monthly: series.map(([month, hires]) => ({ month, hires })),
+    };
+  }
+
+  it("sums per-recruiter trailing-3 means across the active roster", () => {
+    const histories = [
+      history("Alice", [
+        ["2025-11", 1],
+        ["2025-12", 2],
+        ["2026-01", 3],
+        ["2026-02", 2],
+        ["2026-03", 3],
+      ]),
+      history("Bob", [
+        ["2026-01", 1],
+        ["2026-02", 1],
+        ["2026-03", 1],
+      ]),
+      // Charlie departed — must be excluded.
+      history("Charlie", [
+        ["2025-06", 5],
+        ["2025-07", 5],
+        ["2025-08", 5],
+      ]),
+    ];
+    const { forecast, teamMeanMonthly } = forecastFromActiveCapacity(
+      histories,
+      ["Alice", "Bob"],
+      "2026-04",
+      "2026-06",
+    );
+    // Alice's trailing 3 months: (3+2+3)/3 = 2.67
+    // Bob's trailing 3 months: (1+1+1)/3 = 1.0
+    // Team: 3.67
+    expect(teamMeanMonthly).toBeCloseTo(3.667, 2);
+    expect(forecast).toHaveLength(3);
+    // Flat projection — no trend term.
+    expect(forecast[0].mid).toBeCloseTo(3.667, 2);
+    expect(forecast[2].mid).toBeCloseTo(3.667, 2);
+  });
+
+  it("excludes the in-progress current month from each recruiter's window", () => {
+    const histories = [
+      history("Alice", [
+        ["2026-01", 3],
+        ["2026-02", 3],
+        ["2026-03", 3],
+        ["2026-04", 0], // partial
+      ]),
+    ];
+    const { teamMeanMonthly } = forecastFromActiveCapacity(
+      histories,
+      ["Alice"],
+      "2026-05",
+      "2026-07",
+      { currentMonth: "2026-04" },
+    );
+    // Partial April is excluded, so trailing 3 = Jan/Feb/Mar = 3.
+    expect(teamMeanMonthly).toBeCloseTo(3, 5);
+  });
+
+  it("gives contributors with zero history a zero contribution (no crash)", () => {
+    const { forecast, contributors, teamMeanMonthly } =
+      forecastFromActiveCapacity([], ["NewJoiner"], "2026-05", "2026-06");
+    expect(teamMeanMonthly).toBe(0);
+    expect(contributors[0].monthsOfHistory).toBe(0);
+    expect(forecast.every((m) => m.mid === 0 && m.low === 0)).toBe(true);
+  });
+
+  it("sums σ in quadrature across independent recruiters", () => {
+    // Alice: hires = [2, 4, 2, 4, 2, 4] → μ = 3, σ² = 1.2 (sample variance)
+    // Bob:   hires = [1, 1, 1, 1, 1, 1] → σ = 0
+    const histories = [
+      history("Alice", [
+        ["2025-11", 2],
+        ["2025-12", 4],
+        ["2026-01", 2],
+        ["2026-02", 4],
+        ["2026-03", 2],
+        ["2026-04", 4],
+      ]),
+      history("Bob", [
+        ["2025-11", 1],
+        ["2025-12", 1],
+        ["2026-01", 1],
+        ["2026-02", 1],
+        ["2026-03", 1],
+        ["2026-04", 1],
+      ]),
+    ];
+    const { teamSigmaMonthly, contributors } = forecastFromActiveCapacity(
+      histories,
+      ["Alice", "Bob"],
+      "2026-05",
+      "2026-06",
+    );
+    expect(contributors[0].sigmaMonthly).toBeGreaterThan(0);
+    expect(contributors[1].sigmaMonthly).toBe(0);
+    // Quadrature with one zero → should equal Alice's σ exactly.
+    expect(teamSigmaMonthly).toBeCloseTo(contributors[0].sigmaMonthly, 5);
   });
 });
 
