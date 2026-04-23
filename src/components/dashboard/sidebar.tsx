@@ -27,6 +27,7 @@ import {
   X,
   Sparkles,
   Compass,
+  UserPlus,
 } from "lucide-react";
 
 interface NavItem {
@@ -154,6 +155,12 @@ const NAV_GROUPS: NavGroup[] = [
         href: "/dashboard/people/attrition",
         requiredRole: "leadership",
         icon: TrendingUp,
+      },
+      {
+        label: "Talent",
+        href: "/dashboard/people/talent",
+        requiredRole: "leadership",
+        icon: UserPlus,
       },
       {
         label: "AI Usage",

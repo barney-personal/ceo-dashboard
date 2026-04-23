@@ -183,6 +183,7 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/people/performance` | leadership | Mode + Clerk metadata |
 | `/dashboard/people/engagement` | leadership | Culture Amp (planned) |
 | `/dashboard/people/attrition` | leadership | Mode attrition signal |
+| `/dashboard/people/talent` | leadership | Mode Talent report (recruiter hires + QTD targets) |
 | `/dashboard/people/data-cleanup` | everyone | Mode HR rows with gaps |
 | `/dashboard/people/[slug]` | manager | Unified person profile — rating panel additionally gated to CEO / self / direct-manager |
 | `/dashboard/managers` | manager | Team performance + alerts for the viewer's direct reports (leadership+ can inspect any manager via `?manager=`) |
@@ -209,7 +210,7 @@ Grouped by domain with role-based visibility (declared in `src/components/dashbo
 1. **Overview** — Dashboard (everyone)
 2. **Performance** — Unit Economics (everyone), Financial (leadership+), Product (everyone)
 3. **Goals** — OKRs (everyone), Meetings (everyone)
-4. **Team** — Org (everyone), Performance (leadership+), Engineering (everyone), Engagement (leadership+), Attrition (leadership+), Data cleanup (everyone)
+4. **Team** — Org (everyone), Performance (leadership+), Engineering (everyone), Engagement (leadership+), Attrition (leadership+), Talent (leadership+), Data cleanup (everyone)
 5. **Settings** — Integrations (everyone)
 6. **Admin** — Users, Squads, Data Status, Mode Explorer, Analytics, Probes (all ceo)
 
@@ -253,6 +254,7 @@ Configured in `src/lib/integrations/mode-config.ts`. Key reports:
 | App Retention | product | Cohort retention triangle |
 | Company OKR Dashboard | okrs | ARPU + Margin, User Acquisition |
 | Headcount SSoT | people | Employee headcount by department |
+| Talent | people | Per-recruiter hires (`talent_summary_gh`) + current-quarter targets (`target qtd team`) |
 | Seasonality Overview | financial | Revenue seasonality |
 
 ## Environment Variables
