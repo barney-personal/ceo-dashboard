@@ -141,18 +141,91 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
             hint={`Root mean squared error. Penalises large misses. Baseline RMSE: ${Math.round(metrics.baseline_rmse).toLocaleString()}.`}
           />
         </div>
-        <div className="mt-4 rounded-lg border border-dashed border-border/60 bg-muted/20 p-4 text-xs leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">Target:</span>{" "}
-          <code className="rounded bg-muted/50 px-1 py-0.5 font-mono text-[11px]">
-            {target.formula}
-          </code>{" "}
-          computed over the last 360 days of merged PRs. Mean ={" "}
-          <span className="font-mono">{Math.round(target.mean).toLocaleString()}</span>,
-          median ={" "}
-          <span className="font-mono">{Math.round(target.median).toLocaleString()}</span>,
-          p95 =
-          <span className="font-mono"> {Math.round(target.p95).toLocaleString()}</span>.
-          Long-tailed, so we train on log(1 + impact) and exponentiate back.
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-5">
+          <div className="rounded-xl border border-border/60 bg-card p-5 shadow-warm lg:col-span-3">
+            <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              What this means in plain English
+            </div>
+            <p className="mb-3 text-[13px] leading-relaxed text-foreground">
+              Think of 142 runners in a marathon. Using only things like age,
+              training hours, and gym visits — not running gait, injury
+              history, or sleep — the model tries to guess each runner&rsquo;s
+              finish time.
+            </p>
+            <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-emerald-200/50 bg-emerald-50/40 p-3">
+                <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-900/70">
+                  Good at&hellip;
+                </div>
+                <p className="mt-1 text-[12px] leading-relaxed text-emerald-950/80">
+                  <span className="font-semibold">Ranking.</span> Line up the
+                  engineers from lowest to highest predicted impact and the
+                  model gets the order ~{Math.round(metrics.spearman * 100)}%
+                  right (Spearman ρ ={" "}
+                  <span className="font-mono">
+                    {metrics.spearman.toFixed(2)}
+                  </span>
+                  ). Top-quartile vs bottom-quartile comes through clearly.
+                </p>
+              </div>
+              <div className="rounded-lg border border-amber-200/50 bg-amber-50/40 p-3">
+                <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-amber-950/70">
+                  Not good at&hellip;
+                </div>
+                <p className="mt-1 text-[12px] leading-relaxed text-amber-950/80">
+                  <span className="font-semibold">Exact scores.</span> A typical
+                  prediction is off by{" "}
+                  <span className="font-mono">
+                    {Math.round(metrics.mae).toLocaleString()}
+                  </span>{" "}
+                  impact points — big, given the median is{" "}
+                  <span className="font-mono">
+                    {Math.round(target.median).toLocaleString()}
+                  </span>
+                  . Don&rsquo;t read individual predictions as &ldquo;this
+                  engineer should ship X.&rdquo;
+                </p>
+              </div>
+            </div>
+            <p className="text-[12px] leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Bottom line:</span>{" "}
+              useful for &ldquo;roughly where is Alice in the distribution?&rdquo;
+              Not useful for &ldquo;what&rsquo;s Alice&rsquo;s exact number?&rdquo;
+              Treat the important features as <em>correlates</em> of impact, not
+              as levers you can pull.
+            </p>
+          </div>
+          <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 p-5 lg:col-span-2">
+            <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Why the gap between ρ and R²?
+            </div>
+            <p className="text-[12px] leading-relaxed text-muted-foreground">
+              Impact has a long tail — a few engineers ship 3&ndash;5× the
+              median (p95 ={" "}
+              <span className="font-mono">
+                {Math.round(target.p95).toLocaleString()}
+              </span>
+              , max ={" "}
+              <span className="font-mono">
+                {Math.round(target.max).toLocaleString()}
+              </span>
+              ). Features like tenure and Slack activity put these engineers in
+              the right <em>neighbourhood</em>, but nothing in the current
+              feature set explains the magnitude of their spike. Ranking
+              survives; absolute prediction doesn&rsquo;t.
+            </p>
+            <div className="mt-4 border-t border-border/40 pt-3 text-[11px] leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Target:</span>{" "}
+              <code className="rounded bg-muted/50 px-1 font-mono text-[10px]">
+                {target.formula}
+              </code>{" "}
+              over 360 days. Mean{" "}
+              <span className="font-mono">
+                {Math.round(target.mean).toLocaleString()}
+              </span>
+              , trained on log(1 + impact).
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
