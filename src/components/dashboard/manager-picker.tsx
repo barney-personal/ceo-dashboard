@@ -12,16 +12,18 @@ interface ManagerOption {
 export function ManagerPicker({
   current,
   managers,
+  basePath = "/dashboard/managers",
 }: {
   current: string;
   managers: ManagerOption[];
+  basePath?: string;
 }) {
   const router = useRouter();
   return (
     <select
       value={current}
       onChange={(e) =>
-        router.push(`/dashboard/managers?manager=${encodeURIComponent(e.target.value)}`)
+        router.push(`${basePath}?manager=${encodeURIComponent(e.target.value)}`)
       }
       className="h-8 min-w-[280px] max-w-[420px] rounded-md border border-border/60 bg-background px-2.5 text-xs text-foreground focus:border-primary/60 focus:outline-none"
     >

@@ -1,6 +1,13 @@
 "use client";
 
+import { useMemo } from "react";
 import type { ImpactModel } from "@/lib/data/impact-model";
+import type { TeamView as TeamViewData } from "@/lib/data/impact-model.server";
+import {
+  groupForFeature,
+  plainLabelFor,
+} from "@/lib/data/impact-model-coaching";
+import { ManagerPicker } from "@/components/dashboard/manager-picker";
 import { FeatureImportanceChart } from "./feature-importance-chart";
 import { ActualVsPredicted } from "./actual-vs-predicted";
 import { GroupBars } from "./group-bars";
@@ -8,6 +15,14 @@ import { OutlierTable } from "./outlier-table";
 import { ShapWaterfall } from "./shap-waterfall";
 import { GroupedImportanceChart } from "./grouped-importance-chart";
 import { FeatureDeepDive } from "./feature-deep-dive";
+import { TeamView } from "./team-view";
+
+interface ManagerOption {
+  email: string;
+  name: string;
+  directReports: number;
+  jobTitle: string | null;
+}
 
 function MetricTile({
   label,
@@ -74,8 +89,43 @@ function SectionHead({
   );
 }
 
-export function ImpactModelReport({ model }: { model: ImpactModel }) {
+export function ImpactModelReport({
+  model,
+  teamView,
+  allManagers,
+  isViewerOwnTeam,
+  restrictedToTeam,
+}: {
+  model: ImpactModel;
+  teamView?: TeamViewData | null;
+  allManagers?: ManagerOption[];
+  isViewerOwnTeam?: boolean;
+  /** True when the viewer is a plain manager (no leadership access) —
+   * `model.engineers` is already scoped to their team upstream, but we
+   * use this flag for copy/UI hints that only make sense in full view. */
+  restrictedToTeam?: boolean;
+}) {
   const { metrics, model_comparison, target, features, engineers } = model;
+
+  // Map every feature in the model to its group, sorted within each group by
+  // permutation importance desc. Used by the Section B chart to show what's
+  // inside each bucket on hover. Categorical one-hots collapse into a single
+  // "Pillars…" / "Disciplines…" line to avoid listing 8+ indicators.
+  const featuresByGroup = useMemo(() => {
+    const byGroup = new Map<string, { name: string; label: string; weight: number }[]>();
+    for (const f of features) {
+      const g = groupForFeature(f.name);
+      const arr = byGroup.get(g) ?? [];
+      arr.push({ name: f.name, label: plainLabelFor(f.name), weight: f.permutation_mean });
+      byGroup.set(g, arr);
+    }
+    const out: Record<string, { name: string; label: string }[]> = {};
+    for (const [g, arr] of byGroup) {
+      arr.sort((a, b) => b.weight - a.weight);
+      out[g] = arr.map(({ name, label }) => ({ name, label }));
+    }
+    return out;
+  }, [features]);
 
   const generatedAt = new Date(model.generated_at).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -108,6 +158,34 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
           <span className="text-primary">› </span>5-fold CV
         </span>
       </div>
+
+      {restrictedToTeam && (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">You&rsquo;re seeing your team&rsquo;s view.</span>{" "}
+          Your team scorecard, the SHAP waterfall, the scatter, and the outlier
+          table are all scoped to your direct reports. Feature importance and
+          PDPs (the &ldquo;what the model learned&rdquo; sections) reflect the
+          full company training set so you can see how the model reasons in
+          general.
+        </div>
+      )}
+
+      {/* Manager-scoped team view — placed first because it's the most
+          actionable content on the page. The model-wide sections below are
+          reference material for understanding how the model works. */}
+      {teamView ? (
+        <TeamView
+          team={teamView}
+          canPickAnyManager={!restrictedToTeam && (allManagers?.length ?? 0) > 0}
+          allManagers={allManagers ?? []}
+          isViewerOwnTeam={!!isViewerOwnTeam}
+        />
+      ) : (
+        !restrictedToTeam &&
+        (allManagers?.length ?? 0) > 0 && (
+          <TeamPickerEmptyState managers={allManagers ?? []} />
+        )
+      )}
 
       {/* Hero */}
       <section>
@@ -294,15 +372,22 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
                 Feature groups — share of model reasoning
               </div>
               <p className="mt-2 max-w-xl text-[12px] leading-relaxed text-muted-foreground">
-                Every feature bucketed by source. Percentages show what share
-                of the model&rsquo;s reasoning comes from each category. If
-                Tenure dominates, the model is mostly an experience-predictor;
-                if Slack engagement is big, it&rsquo;s picking up work-style
+                Every feature bucketed by what it measures. Percentages show
+                what share of the model&rsquo;s reasoning comes from each
+                category. <span className="font-medium">PR cadence</span> =
+                rate, gaps, ramp, burstiness.{" "}
+                <span className="font-medium">PR habits</span> = weekend/off-hours
+                share, commits-per-PR, breadth of repos. A dominant PR-cadence
+                share means the model is mostly reading off shipping patterns;
+                a dominant Slack / AI share means it&rsquo;s picking up work-style
                 signals.
               </p>
             </div>
           </div>
-          <GroupedImportanceChart data={model.grouped_importance} />
+          <GroupedImportanceChart
+            data={model.grouped_importance}
+            featuresByGroup={featuresByGroup}
+          />
         </div>
 
         {/* Individual feature importance */}
@@ -334,8 +419,8 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
       <section>
         <SectionHead
           letter="C"
-          title="What exactly did the model learn about each feature?"
-          lede="For every top feature, a curve showing how the prediction changes as that feature sweeps from low to high. This is where you see the actual learned relationship — is it linear, does it plateau, where's the sweet spot?"
+          title="Which things in an engineer's work move the model's prediction?"
+          lede="One card per feature. Each answers: as this thing goes up, does the model expect more impact, less, or does it peak somewhere in the middle? Features with no clear story on their own are listed at the bottom rather than charted."
         />
         <div className="mt-6">
           <FeatureDeepDive
@@ -490,5 +575,34 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
         </div>
       </section>
     </div>
+  );
+}
+
+/** Shown to leadership+ viewers who don't themselves manage a team and
+ * haven't picked one via ?manager=. Gives them a one-click entry to any
+ * team coaching view without forcing an arbitrary default. */
+function TeamPickerEmptyState({ managers }: { managers: ManagerOption[] }) {
+  return (
+    <section className="rounded-2xl border border-border/60 bg-card p-6 shadow-warm">
+      <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+        Manager view
+      </p>
+      <h2 className="mt-1 font-display text-3xl italic tracking-tight text-foreground">
+        Inspect a manager&rsquo;s team
+      </h2>
+      <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+        You don&rsquo;t run a team in the Headcount SSoT, so there&rsquo;s no default
+        team coaching view to show you. Pick any manager below to see their direct
+        reports with coaching signals. Everything else on this page is already
+        full-company.
+      </p>
+      <div className="mt-4">
+        <ManagerPicker
+          current=""
+          managers={managers}
+          basePath="/dashboard/engineering/impact-model"
+        />
+      </div>
+    </section>
   );
 }

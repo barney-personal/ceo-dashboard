@@ -38,10 +38,22 @@ const PERIODLESS_TABS = new Set<string>([
   "/dashboard/engineering/impact-model",
 ]);
 
-export function EngineeringTabs({ showImpact = false }: { showImpact?: boolean }) {
+export function EngineeringTabs({
+  showImpact = false,
+  showImpactModel = false,
+}: {
+  showImpact?: boolean;
+  /** Separate gate from `showImpact` — the Impact model is open to
+   * managers (team-scoped view) even when the Impact analysis page isn't. */
+  showImpactModel?: boolean;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const TABS = showImpact ? [...BASE_TABS, IMPACT_TAB, MODEL_TAB] : BASE_TABS;
+  const TABS = [
+    ...BASE_TABS,
+    ...(showImpact ? [IMPACT_TAB] : []),
+    ...(showImpactModel ? [MODEL_TAB] : []),
+  ];
   // Preserve period (and any other query state) when switching tabs so the
   // user doesn't lose their 90-day selection by navigating.
   const qs = searchParams.toString();

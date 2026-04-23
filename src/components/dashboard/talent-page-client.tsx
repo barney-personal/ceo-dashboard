@@ -476,7 +476,7 @@ function RecruiterTable({
             hires vs target. Click any column header to sort.
           </p>
           <p className="mt-1 text-[11px] italic text-muted-foreground/70">
-            Employment status reflects Lucy's roster as of {TALENT_ROSTER_AS_OF}
+            Employment status reflects Lucy&apos;s roster as of {TALENT_ROSTER_AS_OF}
             , overriding HiBob where HR hasn&apos;t yet processed an exit.
           </p>
         </div>

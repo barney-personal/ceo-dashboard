@@ -21,9 +21,13 @@ describe("getImpactModel (static snapshot loader)", () => {
     expect(model.engineers.length).toBeGreaterThan(0);
     for (const e of model.engineers) {
       // Catch accidental re-commit of real PII in the snapshot.
+      // (Real names get re-hydrated server-side at request time — see
+      //  src/lib/data/impact-model.server.ts.)
       expect(e.name).toMatch(/^Engineer \d{3}$/);
       expect(e.email).toMatch(/^anon-\d{3}$/);
       expect(e.email).not.toContain("@");
+      // email_hash must exist so server-side hydration can join to headcount.
+      expect(e.email_hash).toMatch(/^[0-9a-f]{16}$/);
     }
   });
 

@@ -39,7 +39,10 @@ export default async function EngineeringLayout({
           Next.js requires to sit under Suspense to avoid bailout warnings
           and to survive any future static rendering of children. */}
       <Suspense fallback={<div className="h-9" />}>
-        <EngineeringTabs showImpact={hasAccess(role, "leadership")} />
+        <EngineeringTabs
+          showImpact={hasAccess(role, "leadership")}
+          showImpactModel={hasAccess(role, "manager")}
+        />
       </Suspense>
 
       <div className="pt-2">{children}</div>

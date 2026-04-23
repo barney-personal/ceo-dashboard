@@ -11,8 +11,11 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -399,15 +402,37 @@ def main():
     expected_log = float(ev)
     expected_impact = float(np.expm1(expected_log))
 
-    # Feature-group buckets for aggregated importance.
+    # Feature-group buckets for aggregated importance. Splits the old
+    # catch-all "Code style" into "PR cadence" (time-shape of PR activity —
+    # rate, gaps, burstiness, ramp) vs "PR habits" (how/when/where — weekend,
+    # off-hours, rework, breadth). Non-prefix PR features (weekly_*, ramp_*)
+    # are routed explicitly so they don't fall through into "Other".
+    PR_CADENCE_FEATURES = {
+        "pr_slope_per_week",
+        "pr_gap_days",
+        "weekly_pr_cv",
+        "ramp_slope_first90",
+    }
+    PR_HABIT_FEATURES = {
+        "weekend_pr_share",
+        "offhours_pr_share",
+        "commits_per_pr",
+        "distinct_repos_180d",
+        "commits_180d_log",
+        "pr_size_median",
+        "pr_size_p90_log",
+    }
+
     def feature_group(name: str) -> str:
         lower = name.lower()
         if lower.startswith("slack_"):
             return "Slack engagement"
         if lower.startswith("ai_"):
             return "AI usage"
-        if lower.startswith(("pr_", "commits_", "distinct_repos", "weekend_", "offhours_")):
-            return "Code style"
+        if lower in PR_CADENCE_FEATURES:
+            return "PR cadence"
+        if lower in PR_HABIT_FEATURES:
+            return "PR habits"
         if lower.startswith("latest_rating") or lower.startswith("avg_rating") or lower == "rating_count":
             return "Performance review"
         if lower == "tenure_months":
@@ -650,17 +675,34 @@ def main():
     # Anonymised version for commit: strip names + emails, replace with stable
     # pseudonyms derived from a sort-by-email-hash index. The UI stays fully
     # functional — the waterfall picker + outlier table just show "Engineer NNN".
-    import copy, hashlib
+    import copy
+    # email_hash is an HMAC-SHA256 with a secret key — not a plain SHA256 —
+    # so someone with only the committed JSON can't recover emails by hashing
+    # candidate strings from a company directory. The server re-hydrates real
+    # names at request time by recomputing the HMAC against current headcount.
+    hash_key = os.environ.get("IMPACT_MODEL_HASH_KEY")
+    if not hash_key:
+        raise SystemExit(
+            "IMPACT_MODEL_HASH_KEY must be set (Doppler: ceo-dashboard/dev or prd). "
+            "Without a shared secret, the hash is dictionary-reversible against known emails."
+        )
+    key_bytes = hash_key.encode()
+
+    def _hash(email: str) -> str:
+        return hmac.new(key_bytes, email.lower().encode(), hashlib.sha256).hexdigest()[:16]
+
     public = copy.deepcopy(output)
     sorted_indices = sorted(
         range(len(public["engineers"])),
-        key=lambda i: hashlib.sha256(public["engineers"][i]["email"].encode()).hexdigest(),
+        key=lambda i: _hash(public["engineers"][i]["email"]),
     )
     rank_by_pos = {orig_i: rank + 1 for rank, orig_i in enumerate(sorted_indices)}
     for i, e in enumerate(public["engineers"]):
         rank = rank_by_pos[i]
+        email_hash = _hash(e["email"])
         e["name"] = f"Engineer {rank:03d}"
         e["email"] = f"anon-{rank:03d}"
+        e["email_hash"] = email_hash
     PUBLIC_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     PUBLIC_OUT_PATH.write_text(json.dumps(public, indent=2))
     print(f"Wrote {PUBLIC_OUT_PATH} (anonymised, committed)")
