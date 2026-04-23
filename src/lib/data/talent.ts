@@ -160,7 +160,7 @@ export async function getTalentData(): Promise<TalentData> {
 
   const targets: TalentTargetRow[] = (targetQuery?.rows ?? []).map((row) => ({
     recruiter: rowStr(row, "recruiter"),
-    tech: rowStr(row, "tech"),
+    tech: rowStr(row, "tech") || null,
     hiresQtd: rowNum(row, "hires_qtd"),
     targetQtd: rowNum(row, "target_qtd"),
     teamQtd: rowNum(row, "team_qtd"),

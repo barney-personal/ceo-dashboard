@@ -16,7 +16,7 @@ export interface TalentHireRow {
 
 export interface TalentTargetRow {
   recruiter: string;
-  tech: string;
+  tech: string | null;
   hiresQtd: number;
   targetQtd: number;
   teamQtd: number;
@@ -134,10 +134,10 @@ export function monthsBetween(from: string, to: string): string[] {
 }
 
 export function onlyHires(rows: TalentHireRow[]): TalentHireRow[] {
-  // `talent_summary_gh` includes `cnt = 0` placeholder rows for the current
-  // quarter so every recruiter appears in the roster even before they've
-  // logged their first hire. Those rows must not set the month axis or they
-  // pad the trailing-3-month window with zeros and flatten the projection.
+  // Defensive guard: a zero-count row must not set the month axis or it
+  // pads the trailing-3-month window with zeros and flattens the projection.
+  // The current loader (`all_hires`) doesn't emit such rows, but earlier
+  // shapes (`talent_summary_gh`) did, and the guard remains cheap.
   return rows.filter((r) => r.actionType === HIRES_ACTION && r.cnt > 0);
 }
 

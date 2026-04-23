@@ -254,7 +254,7 @@ Configured in `src/lib/integrations/mode-config.ts`. Key reports:
 | App Retention | product | Cohort retention triangle |
 | Company OKR Dashboard | okrs | ARPU + Margin, User Acquisition |
 | Headcount SSoT | people | Employee headcount by department |
-| Talent | people | Per-recruiter hires (`talent_summary_gh`) + current-quarter targets (`target qtd team`) |
+| Talent | people | Per-recruiter hires (`all_hires`) + current-quarter targets (`target qtd team`) |
 | Seasonality Overview | financial | Revenue seasonality |
 
 ## Environment Variables

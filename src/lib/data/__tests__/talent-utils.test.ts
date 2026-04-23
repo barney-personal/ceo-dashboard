@@ -70,11 +70,11 @@ describe("onlyHires", () => {
     expect(onlyHires(rows)).toHaveLength(2);
   });
 
-  it("drops cnt=0 placeholder rows that pad the current quarter", () => {
-    // talent_summary_gh emits a cnt=0 row per recruiter for the current
-    // quarter so every recruiter is in the roster even before they've logged
-    // a hire — those rows must not extend the month axis or they flatten
-    // trailing-3mo projections to zero.
+  it("drops cnt=0 rows so they don't extend the month axis", () => {
+    // A zero-count row must not extend the month axis or it flattens
+    // trailing-3mo projections to zero. The current loader (`all_hires`)
+    // doesn't emit such rows, but earlier shapes did and this guard is
+    // defensive.
     const rows = [
       hire("Lucy", "2025-08-10", 1),
       hire("Lucy", "2026-04-01", 0),

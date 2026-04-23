@@ -1,10 +1,18 @@
-// Parse the xlsx Lucy sent and dump rows so we can see the truth about who's
-// on the Talent team right now.
+// Parse a Talent team xlsx export and dump rows so we can see the truth about
+// who's on the Talent team right now.
+//
+// Usage: doppler run -- npx tsx scripts/parse-talent-xlsx.ts <path-to-xlsx>
 
 import * as XLSX from "xlsx";
 
-const path =
-  "/Users/barneyhussey-yeo/conductor/workspaces/ceo-dashboard-v3/irvine/.context/attachments/Talent Team Dec-April .xlsx";
+const path = process.argv[2];
+if (!path) {
+  console.error(
+    "Usage: npx tsx scripts/parse-talent-xlsx.ts <path-to-xlsx>\n" +
+      "(point it at the latest Talent roster export — e.g. Lucy's monthly file)",
+  );
+  process.exit(1);
+}
 
 const wb = XLSX.readFile(path);
 console.log("Sheet names:", wb.SheetNames);

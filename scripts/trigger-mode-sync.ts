@@ -9,16 +9,10 @@ import {
   createWorkerId,
   startBackgroundSyncDrain,
 } from "@/lib/sync/runtime";
+import { isActiveSyncStatus } from "@/lib/sync/config";
 import { db } from "@/lib/db";
 import { syncLog } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-
-const TERMINAL_STATUSES = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "timeout",
-]);
 
 async function main() {
   const result = await enqueueSyncRun("mode", { trigger: "manual", force: true });
@@ -48,7 +42,7 @@ async function main() {
       console.log("run disappeared?");
       break;
     }
-    if (TERMINAL_STATUSES.has(row.status)) {
+    if (!isActiveSyncStatus(row.status)) {
       console.log(
         `[done] status=${row.status} records=${row.recordsSynced} error=${row.errorMessage ?? "-"}`,
       );
