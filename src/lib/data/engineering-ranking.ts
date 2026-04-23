@@ -86,20 +86,45 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     engineers: [],
     knownLimitations: [
       "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
+      "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
       "Ranking math, tenure/role normalisation, and confidence bands are implemented in later milestones. Until then no engineer is ranked.",
-      "Squad-level DORA and AI usage signals remain contextual — they must not directly drive individual ranking without explicit evidence.",
+      "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
+      "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
     ],
     plannedSignals: [
-      { name: "GitHub PRs + commits", state: "available" },
+      { name: "GitHub PRs + commits (author, merged_at, lines)", state: "available" },
       { name: "SHAP impact model", state: "available" },
-      { name: "PR review graph", state: "available" },
       { name: "Mode headcount / tenure / discipline", state: "available" },
-      { name: "Swarmia DORA (squad context)", state: "available" },
-      { name: "AI usage (contextual, audit only)", state: "available" },
+      { name: "Squads registry (pillar, manager chain)", state: "available" },
+      {
+        name: "Swarmia DORA — squad/pillar context, not individual signal",
+        state: "available",
+        note: "Team-level cycle time, deploy frequency, CFR, MTTR. Context only; capped/contextual contribution to individual rank.",
+      },
+      {
+        name: "AI usage (contextual, audit only)",
+        state: "available",
+        note: "Claude + Cursor spend/tokens per engineer. Contextual, not a direct ranking reward — easily gameable.",
+      },
       {
         name: "Per-PR LLM rubric (prReviewAnalyses)",
         state: "unavailable",
-        note: "Not present in schema today. Listed in plan risks.",
+        note: "Not present in schema today. Listed in plan risks as highest-priority future signal.",
+      },
+      {
+        name: "Individual PR reviewer graph (who reviews whom)",
+        state: "unavailable",
+        note: "`githubPrs` persists author/stats only. Reviewer identities and review edges are not stored.",
+      },
+      {
+        name: "Individual review turnaround (time-to-first-review, time-to-approve)",
+        state: "unavailable",
+        note: "No reviewer timestamps in `githubPrs` or `githubPrMetrics`. Cannot be derived from current persisted fields.",
+      },
+      {
+        name: "Individual PR cycle time (open → merged at engineer level)",
+        state: "unavailable",
+        note: "`githubPrs` stores `merged_at` only. Opened-at / ready-for-review timestamps are not persisted, so per-engineer cycle time cannot be computed.",
       },
     ],
   };
