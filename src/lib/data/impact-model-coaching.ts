@@ -218,6 +218,50 @@ export function plainLabelFor(feature: string): string {
   return feature.replace(/_/g, " ");
 }
 
+// Mirrors feature_group() in ml-impact/train.py — the two must stay in sync.
+// Used for building the features-per-group tooltip on the Section B chart
+// (and anywhere else we need to derive the group label from a raw feature
+// name on the client).
+const PR_CADENCE_FEATURES = new Set([
+  "pr_slope_per_week",
+  "pr_gap_days",
+  "weekly_pr_cv",
+  "ramp_slope_first90",
+]);
+const PR_HABIT_FEATURES = new Set([
+  "weekend_pr_share",
+  "offhours_pr_share",
+  "commits_per_pr",
+  "distinct_repos_180d",
+  "commits_180d_log",
+  "pr_size_median",
+  "pr_size_p90_log",
+]);
+
+export function groupForFeature(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.startsWith("slack_")) return "Slack engagement";
+  if (lower.startsWith("ai_")) return "AI usage";
+  if (PR_CADENCE_FEATURES.has(lower)) return "PR cadence";
+  if (PR_HABIT_FEATURES.has(lower)) return "PR habits";
+  if (
+    lower.startsWith("latest_rating") ||
+    lower.startsWith("avg_rating") ||
+    lower === "rating_count"
+  )
+    return "Performance review";
+  if (lower === "tenure_months") return "Tenure";
+  if (
+    lower === "level_num" ||
+    lower.startsWith("level_track_") ||
+    lower.startsWith("level_label_")
+  )
+    return "Level";
+  if (lower.startsWith("discipline_")) return "Discipline";
+  if (lower.startsWith("pillar_")) return "Pillar";
+  return "Other";
+}
+
 function isActionable(feature: string): boolean {
   const entry = FEATURE_COPY[feature];
   if (!entry) return false;

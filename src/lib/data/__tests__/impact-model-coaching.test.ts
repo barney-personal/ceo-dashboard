@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildCoachingCard, plainLabelFor } from "../impact-model-coaching";
+import {
+  buildCoachingCard,
+  groupForFeature,
+  plainLabelFor,
+} from "../impact-model-coaching";
 import type { ImpactEngineerPrediction } from "../impact-model";
 
 function makeEngineer(
@@ -24,6 +28,41 @@ function makeEngineer(
     ...overrides,
   };
 }
+
+describe("groupForFeature", () => {
+  // These assertions mirror feature_group() in ml-impact/train.py — if
+  // train.py's routing changes, this test (and the client mirror) needs
+  // updating. Covers every feature in the production numeric_features +
+  // categorical one-hot set.
+  const cases: Array<[string, string]> = [
+    ["slack_msgs_per_day", "Slack engagement"],
+    ["slack_days_since_active", "Slack engagement"],
+    ["ai_cost_log", "AI usage"],
+    ["ai_n_days", "AI usage"],
+    ["pr_slope_per_week", "PR cadence"],
+    ["pr_gap_days", "PR cadence"],
+    ["weekly_pr_cv", "PR cadence"],
+    ["ramp_slope_first90", "PR cadence"],
+    ["weekend_pr_share", "PR habits"],
+    ["offhours_pr_share", "PR habits"],
+    ["commits_per_pr", "PR habits"],
+    ["distinct_repos_180d", "PR habits"],
+    ["tenure_months", "Tenure"],
+    ["level_num", "Level"],
+    ["level_track_IC", "Level"],
+    ["discipline_BE", "Discipline"],
+    ["pillar_growth", "Pillar"],
+    ["avg_rating", "Performance review"],
+    ["latest_rating", "Performance review"],
+    ["rating_count", "Performance review"],
+    ["something_unknown", "Other"],
+  ];
+  for (const [feature, expected] of cases) {
+    it(`routes ${feature} to ${expected}`, () => {
+      expect(groupForFeature(feature)).toBe(expected);
+    });
+  }
+});
 
 describe("plainLabelFor", () => {
   it("maps known features to plain English", () => {

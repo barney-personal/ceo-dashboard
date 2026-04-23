@@ -1,7 +1,12 @@
 "use client";
 
+import { useMemo } from "react";
 import type { ImpactModel } from "@/lib/data/impact-model";
 import type { TeamView as TeamViewData } from "@/lib/data/impact-model.server";
+import {
+  groupForFeature,
+  plainLabelFor,
+} from "@/lib/data/impact-model-coaching";
 import { FeatureImportanceChart } from "./feature-importance-chart";
 import { ActualVsPredicted } from "./actual-vs-predicted";
 import { GroupBars } from "./group-bars";
@@ -95,6 +100,26 @@ export function ImpactModelReport({
   isViewerOwnTeam?: boolean;
 }) {
   const { metrics, model_comparison, target, features, engineers } = model;
+
+  // Map every feature in the model to its group, sorted within each group by
+  // permutation importance desc. Used by the Section B chart to show what's
+  // inside each bucket on hover. Categorical one-hots collapse into a single
+  // "Pillars…" / "Disciplines…" line to avoid listing 8+ indicators.
+  const featuresByGroup = useMemo(() => {
+    const byGroup = new Map<string, { name: string; label: string; weight: number }[]>();
+    for (const f of features) {
+      const g = groupForFeature(f.name);
+      const arr = byGroup.get(g) ?? [];
+      arr.push({ name: f.name, label: plainLabelFor(f.name), weight: f.permutation_mean });
+      byGroup.set(g, arr);
+    }
+    const out: Record<string, { name: string; label: string }[]> = {};
+    for (const [g, arr] of byGroup) {
+      arr.sort((a, b) => b.weight - a.weight);
+      out[g] = arr.map(({ name, label }) => ({ name, label }));
+    }
+    return out;
+  }, [features]);
 
   const generatedAt = new Date(model.generated_at).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -337,7 +362,10 @@ export function ImpactModelReport({
               </p>
             </div>
           </div>
-          <GroupedImportanceChart data={model.grouped_importance} />
+          <GroupedImportanceChart
+            data={model.grouped_importance}
+            featuresByGroup={featuresByGroup}
+          />
         </div>
 
         {/* Individual feature importance */}

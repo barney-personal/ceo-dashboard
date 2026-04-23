@@ -1,11 +1,7 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
-import { select } from "d3-selection";
-import { scaleLinear } from "d3-scale";
-import { max } from "d3-array";
+import { useState } from "react";
 import type { ImpactGroupedImportance } from "@/lib/data/impact-model";
-import { getContentBoxWidth } from "@/components/charts/chart-utils";
 
 const GROUP_COLOR: Record<string, string> = {
   Tenure: "#7a5a3e",
@@ -14,7 +10,7 @@ const GROUP_COLOR: Record<string, string> = {
   "Performance review": "#6a8b4c",
   "PR cadence": "#2d6a5c",
   "PR habits": "#4a8b7c",
-  "Code style": "#2d6a5c", // retained for back-compat with pre-migration JSONs
+  "Code style": "#2d6a5c",
   Pillar: "#8b5a9c",
   Discipline: "#9c5d2e",
   Level: "#4a6b7c",
@@ -23,82 +19,104 @@ const GROUP_COLOR: Record<string, string> = {
   Other: "#8e8680",
 };
 
+interface FeatureEntry {
+  name: string;
+  label: string;
+}
+
 export function GroupedImportanceChart({
   data,
+  featuresByGroup,
 }: {
   data: ImpactGroupedImportance[];
+  featuresByGroup?: Record<string, FeatureEntry[]>;
 }) {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const draw = useCallback(() => {
-    if (!svgRef.current || !containerRef.current) return;
-
-    const sorted = [...data].sort((a, b) => b.mean_abs_shap - a.mean_abs_shap);
-    const total = sorted.reduce((s, d) => s + d.mean_abs_shap, 0);
-
-    const container = containerRef.current;
-    const width = getContentBoxWidth(container);
-    const barHeight = 40;
-    const margin = { top: 8, right: 80, bottom: 8, left: 150 };
-    const innerW = width - margin.left - margin.right;
-    const height = sorted.length * barHeight + margin.top + margin.bottom;
-
-    const svg = select(svgRef.current);
-    svg.selectAll("*").remove();
-    svg.attr("width", width).attr("height", height);
-
-    const g = svg
-      .append("g")
-      .attr("transform", `translate(${margin.left},${margin.top})`);
-
-    const m = max(sorted, (d) => d.mean_abs_shap) ?? 1;
-    const x = scaleLinear().domain([0, m]).range([0, innerW]);
-
-    sorted.forEach((d, i) => {
-      const y = i * barHeight;
-      g.append("rect")
-        .attr("x", 0)
-        .attr("y", y + 8)
-        .attr("width", Math.max(1, x(d.mean_abs_shap)))
-        .attr("height", 22)
-        .attr("fill", GROUP_COLOR[d.group] ?? "#8e8680")
-        .attr("rx", 3);
-
-      g.append("text")
-        .attr("x", -10)
-        .attr("y", y + 19)
-        .attr("text-anchor", "end")
-        .attr("dominant-baseline", "middle")
-        .attr("font-size", 12)
-        .attr("fill", "currentColor")
-        .attr("fill-opacity", 0.9)
-        .attr("font-weight", "500")
-        .text(d.group);
-
-      const pct = total > 0 ? (d.mean_abs_shap / total) * 100 : 0;
-      g.append("text")
-        .attr("x", x(d.mean_abs_shap) + 8)
-        .attr("y", y + 19)
-        .attr("dominant-baseline", "middle")
-        .attr("font-size", 11)
-        .attr("font-family", "var(--font-mono, ui-monospace)")
-        .attr("fill", "currentColor")
-        .attr("fill-opacity", 0.8)
-        .text(`${pct.toFixed(0)}%`);
-    });
-  }, [data]);
-
-  useEffect(() => {
-    draw();
-    const handler = () => draw();
-    window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
-  }, [draw]);
+  const sorted = [...data].sort((a, b) => b.mean_abs_shap - a.mean_abs_shap);
+  const total = sorted.reduce((s, d) => s + d.mean_abs_shap, 0);
+  const maxVal = Math.max(...sorted.map((d) => d.mean_abs_shap));
 
   return (
-    <div ref={containerRef} className="w-full">
-      <svg ref={svgRef} />
+    <div className="space-y-1.5">
+      {sorted.map((d) => {
+        const pct = total > 0 ? (d.mean_abs_shap / total) * 100 : 0;
+        const barPct = maxVal > 0 ? (d.mean_abs_shap / maxVal) * 100 : 0;
+        const features = featuresByGroup?.[d.group] ?? [];
+        return (
+          <GroupRow
+            key={d.group}
+            group={d.group}
+            pct={pct}
+            barPct={barPct}
+            color={GROUP_COLOR[d.group] ?? "#8e8680"}
+            features={features}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function GroupRow({
+  group,
+  pct,
+  barPct,
+  color,
+  features,
+}: {
+  group: string;
+  pct: number;
+  barPct: number;
+  color: string;
+  features: FeatureEntry[];
+}) {
+  const [hover, setHover] = useState(false);
+  const hasFeatures = features.length > 0;
+  return (
+    <div
+      className="relative grid grid-cols-[150px_1fr_60px] items-center gap-3 py-1"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      tabIndex={hasFeatures ? 0 : -1}
+      aria-label={hasFeatures ? `${group}: ${features.length} features` : group}
+    >
+      <span className="text-right text-[13px] font-medium text-foreground">
+        {group}
+      </span>
+      <div className="relative h-6 w-full overflow-hidden rounded-md bg-muted/15">
+        <div
+          className="h-full rounded-md transition-[width] duration-200"
+          style={{ width: `${barPct}%`, backgroundColor: color }}
+        />
+      </div>
+      <span className="font-mono text-[12px] text-muted-foreground">
+        {pct.toFixed(0)}%
+      </span>
+
+      {hover && hasFeatures && (
+        <div
+          role="tooltip"
+          className="absolute left-[160px] top-full z-20 mt-1 w-[22rem] max-w-[calc(100vw-32px)] rounded-lg border border-border/60 bg-popover p-3 text-[12px] shadow-lg"
+        >
+          <p className="mb-2 font-medium text-foreground">
+            {group} — {features.length} feature{features.length === 1 ? "" : "s"}
+          </p>
+          <ul className="space-y-1 text-muted-foreground">
+            {features.map((f) => (
+              <li
+                key={f.name}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <span>{f.label}</span>
+                <span className="font-mono text-[10px] text-muted-foreground/60">
+                  {f.name}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
