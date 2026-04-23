@@ -413,8 +413,13 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
             </div>
             <ul className="space-y-2 text-[13px] leading-relaxed text-muted-foreground">
               <li>
-                • <span className="text-foreground">Mode headcount SSoT</span> — active FTE engineers:
-                tenure, level, specialisation, squad, pillar, gender, location.
+                • <span className="text-foreground">Mode headcount SSoT</span> — active FTE
+                engineers: tenure, level, specialisation, squad, pillar. Gender and location
+                are extracted for diagnostic purposes but{" "}
+                <span className="font-medium text-foreground">
+                  deliberately excluded from the feature set
+                </span>{" "}
+                (see caveat below).
               </li>
               <li>
                 • <span className="text-foreground">GitHub PR history</span> — 360-day PR count &
