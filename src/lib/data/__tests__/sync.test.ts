@@ -19,6 +19,7 @@ const { mockDesc, mockLimit, mockOrderBy, mockFrom, mockSelect } = vi.hoisted(
 
 vi.mock("drizzle-orm", () => ({
   desc: mockDesc,
+  sql: vi.fn(() => ({})),
 }));
 
 vi.mock("@/lib/db", () => ({

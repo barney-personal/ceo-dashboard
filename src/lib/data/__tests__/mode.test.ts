@@ -43,6 +43,7 @@ vi.mock("drizzle-orm", () => ({
   and: mockAnd,
   desc: mockDesc,
   eq: mockEq,
+  sql: vi.fn(() => ({})),
 }));
 
 vi.mock("@/lib/db", () => ({
