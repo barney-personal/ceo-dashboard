@@ -4,6 +4,7 @@ import {
   aggregateHiresByRecruiterMonth,
   buildRecruiterSummaries,
   buildTeamChartSeries,
+  currentMonthKey,
   monthKey,
   monthsBetween,
   onlyHires,
@@ -170,10 +171,40 @@ describe("predictHiresPerRecruiter", () => {
     ]);
   });
 
+  it("ignores the partial current month when computing the trailing average", () => {
+    // April 2026 is in progress (only 1 hire so far); trailing 3mo should
+    // use Jan/Feb/Mar and the projection should start at May.
+    const histories = [
+      {
+        recruiter: "Lucy",
+        monthly: [
+          { month: "2026-01", hires: 3 },
+          { month: "2026-02", hires: 3 },
+          { month: "2026-03", hires: 3 },
+          { month: "2026-04", hires: 1 },
+        ],
+      },
+    ];
+    const projected = predictHiresPerRecruiter(histories, 3, "2026-04");
+    expect(projected[0].monthly).toEqual([
+      { month: "2026-05", hires: 3 },
+      { month: "2026-06", hires: 3 },
+      { month: "2026-07", hires: 3 },
+    ]);
+  });
+
   it("gives an empty projection when history is empty", () => {
     expect(predictHiresPerRecruiter([{ recruiter: "X", monthly: [] }], 3)).toEqual([
       { recruiter: "X", monthly: [] },
     ]);
+  });
+});
+
+describe("currentMonthKey", () => {
+  it("formats the given date as YYYY-MM using UTC", () => {
+    expect(currentMonthKey(new Date("2026-04-23T08:30:00Z"))).toBe("2026-04");
+    expect(currentMonthKey(new Date("2026-01-01T00:00:00Z"))).toBe("2026-01");
+    expect(currentMonthKey(new Date("2025-12-31T23:59:59Z"))).toBe("2025-12");
   });
 });
 

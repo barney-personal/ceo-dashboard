@@ -29,15 +29,16 @@ export {
   onlyHires,
 } from "./talent-utils";
 
-const SUMMARY_COLUMNS = [
-  "recruiter",
-  "action_type",
-  "action_date",
-  "cnt",
-  "role",
+const ALL_HIRES_COLUMNS = [
+  "hired_by",
+  "date_hired",
+  "is_hired",
+  "hire_attribution",
+  "person_hired",
+  "job_title",
   "department",
-  "candidate",
   "level",
+  "tech",
 ] as const;
 
 const TARGET_COLUMNS = [
@@ -68,24 +69,29 @@ function validatedQuery<TColumn extends string>(
 
 export async function getTalentData(): Promise<TalentData> {
   const data = await getReportData("people", "talent", [
-    "talent_summary_gh",
+    "all_hires",
     "target qtd team",
   ]);
 
-  const summary = validatedQuery(data, "talent_summary_gh", SUMMARY_COLUMNS);
+  const allHires = validatedQuery(data, "all_hires", ALL_HIRES_COLUMNS);
   const targetQuery = validatedQuery(data, "target qtd team", TARGET_COLUMNS);
 
-  const hireRows: TalentHireRow[] = (summary?.rows ?? []).map((row) => ({
-    recruiter: rowStr(row, "recruiter"),
-    actionType: rowStr(row, "action_type"),
-    actionDate: rowStr(row, "action_date"),
-    cnt: rowNum(row, "cnt"),
-    role: rowStr(row, "role"),
-    department: rowStr(row, "department"),
-    candidate: rowStr(row, "candidate"),
-    level: rowStr(row, "level") || null,
-    tech: null,
-  }));
+  // `all_hires` is one row per hire with `hire_attribution` as a fractional
+  // weight when credit is shared across multiple people. We normalise into
+  // `TalentHireRow` so the talent-utils aggregators treat it uniformly.
+  const hireRows: TalentHireRow[] = (allHires?.rows ?? [])
+    .filter((row) => rowStr(row, "is_hired") === "Yes")
+    .map((row) => ({
+      recruiter: rowStr(row, "hired_by"),
+      actionType: "hires",
+      actionDate: rowStr(row, "date_hired"),
+      cnt: rowNum(row, "hire_attribution"),
+      role: rowStr(row, "job_title"),
+      department: rowStr(row, "department"),
+      candidate: rowStr(row, "person_hired"),
+      level: rowStr(row, "level") || null,
+      tech: rowStr(row, "tech") || null,
+    }));
 
   const targets: TalentTargetRow[] = (targetQuery?.rows ?? []).map((row) => ({
     recruiter: rowStr(row, "recruiter"),
@@ -96,14 +102,15 @@ export async function getTalentData(): Promise<TalentData> {
   }));
 
   // Backfill tech focus on hire rows from the target roster so the table can
-  // show a recruiter's pillar without a join on every row downstream.
+  // show a recruiter's pillar without a join on every row downstream. Only
+  // overwrites rows whose all_hires.tech was empty.
   const techByRecruiter = new Map(targets.map((t) => [t.recruiter, t.tech]));
   for (const row of hireRows) {
-    row.tech = techByRecruiter.get(row.recruiter) ?? null;
+    if (!row.tech) row.tech = techByRecruiter.get(row.recruiter) ?? null;
   }
 
   const syncedAt =
-    summary?.syncedAt ?? targetQuery?.syncedAt ?? null;
+    allHires?.syncedAt ?? targetQuery?.syncedAt ?? null;
 
   return { hireRows, targets, syncedAt };
 }

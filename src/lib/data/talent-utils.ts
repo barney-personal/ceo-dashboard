@@ -56,6 +56,17 @@ export function monthKey(isoDate: string): string {
   return isoDate.slice(0, 7);
 }
 
+/**
+ * YYYY-MM for "now" — used to decide which month of the history is still
+ * in progress so the trailing-3mo forecast doesn't get dragged down by a
+ * half-finished current month.
+ */
+export function currentMonthKey(now: Date = new Date()): string {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth() + 1;
+  return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}`;
+}
+
 export function addMonths(monthKey: string, delta: number): string {
   const [y, m] = monthKey.split("-").map(Number);
   if (!Number.isFinite(y) || !Number.isFinite(m)) return monthKey;
@@ -142,17 +153,31 @@ export function trailing3mAvg(monthly: MonthlyHires[]): number {
 
 /**
  * Per-recruiter projection — horizonMonths of the trailing-3mo average,
- * starting the month after the last actual month. If history is empty,
- * returns an empty projection.
+ * starting the month after the last actual month.
+ *
+ * When `currentMonth` matches the most-recent history entry, that entry is
+ * treated as a partial in-progress month: the trailing window uses the 3
+ * complete months before it, and the projection begins at `currentMonth`.
+ * This avoids a half-finished current month dragging the forecast down.
  */
 export function predictHiresPerRecruiter(
   histories: RecruiterHistory[],
   horizonMonths: number,
+  currentMonth?: string,
 ): RecruiterHistory[] {
   return histories.map((h) => {
-    const avg = trailing3mAvg(h.monthly);
     const last = h.monthly[h.monthly.length - 1]?.month;
     if (!last) return { recruiter: h.recruiter, monthly: [] };
+
+    const isPartialCurrent = Boolean(
+      currentMonth && h.monthly[h.monthly.length - 1]?.month === currentMonth,
+    );
+    const completedMonthly = isPartialCurrent ? h.monthly.slice(0, -1) : h.monthly;
+    const avg = trailing3mAvg(completedMonthly);
+
+    // The projection always starts at `last + 1`, so when the current month
+    // is in progress the chart keeps showing its actual value and the
+    // dashed forecast picks up from the month after.
     const monthly: MonthlyHires[] = [];
     for (let i = 1; i <= horizonMonths; i++) {
       monthly.push({ month: addMonths(last, i), hires: avg });
@@ -233,25 +258,40 @@ export function buildTeamChartSeries(
 /**
  * Per-recruiter summary row for the talent table — trailing average, last
  * 12-month volume, QTD attainment vs target, projected next 3 months.
+ *
+ * When `currentMonth` matches the final history entry, that entry is treated
+ * as a partial in-progress month: the trailing 3-month average and last-3m
+ * total both look at the 3 complete months before it. `hiresLast12m` still
+ * includes the partial current month so the "last 12 months" total reflects
+ * the data shown in the chart.
  */
 export function buildRecruiterSummaries(
   histories: RecruiterHistory[],
   targets: TalentTargetRow[],
+  currentMonth?: string,
 ): RecruiterSummary[] {
   const targetByRecruiter = new Map(targets.map((t) => [t.recruiter, t]));
 
   return histories
     .map((h) => {
+      const isPartialCurrent = Boolean(
+        currentMonth &&
+          h.monthly[h.monthly.length - 1]?.month === currentMonth,
+      );
+      const completed = isPartialCurrent
+        ? h.monthly.slice(0, -1)
+        : h.monthly;
+
       const last12 = h.monthly.slice(-12);
-      const last3 = h.monthly.slice(-3);
-      const avg = trailing3mAvg(h.monthly);
+      const last3Completed = completed.slice(-3);
+      const avg = trailing3mAvg(completed);
       const target = targetByRecruiter.get(h.recruiter);
 
       return {
         recruiter: h.recruiter,
         tech: target?.tech ?? null,
         hiresLast12m: last12.reduce((s, m) => s + m.hires, 0),
-        hiresLast3m: last3.reduce((s, m) => s + m.hires, 0),
+        hiresLast3m: last3Completed.reduce((s, m) => s + m.hires, 0),
         trailing3mAvg: avg,
         projectedNext3m: avg * 3,
         hiresQtd: target ? target.hiresQtd : null,

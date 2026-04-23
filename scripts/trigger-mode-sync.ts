@@ -21,7 +21,7 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 async function main() {
-  const result = await enqueueSyncRun("mode", { trigger: "manual" });
+  const result = await enqueueSyncRun("mode", { trigger: "manual", force: true });
   console.log("enqueue result:", JSON.stringify(result, null, 2));
 
   if (result.runId == null) {

@@ -9,6 +9,7 @@ import {
   aggregateHiresByRecruiterMonth,
   buildRecruiterSummaries,
   buildTeamChartSeries,
+  currentMonthKey,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
   type RecruiterSummary,
@@ -162,12 +163,13 @@ export function TalentPageClient({
 }: TalentPageClientProps) {
   const { histories, teamActual, teamProjection, summaries, latestMonth } =
     useMemo(() => {
+      const now = currentMonthKey();
       const histories = aggregateHiresByRecruiterMonth(hireRows);
       const teamActual = sumToTeamMonthly(histories);
       const teamProjection = sumToTeamMonthly(
-        predictHiresPerRecruiter(histories, PROJECTION_MONTHS),
+        predictHiresPerRecruiter(histories, PROJECTION_MONTHS, now),
       );
-      const summaries = buildRecruiterSummaries(histories, targets);
+      const summaries = buildRecruiterSummaries(histories, targets, now);
       const latestMonth = lastActualMonth(hireRows);
       return {
         histories,
@@ -182,10 +184,10 @@ export function TalentPageClient({
     return <TalentEmpty reason={emptyReason} />;
   }
 
-  const trailing3mTeam = teamActual
-    .slice(-3)
-    .reduce((s, m) => s + m.hires, 0);
-  const trailing3mAvgTeam = trailing3mTeam / Math.max(1, Math.min(3, teamActual.length));
+  // Trailing team average uses only complete months — the projection already
+  // does this, so we read the first projected month (which is `avg * 1`) to
+  // get an in-progress-aware headline number that matches the forecast.
+  const trailing3mAvgTeam = teamProjection[0]?.hires ?? 0;
   const projectedNext3Total = teamProjection.reduce((s, m) => s + m.hires, 0);
   const hiresLast12m = teamActual
     .slice(-12)

@@ -390,13 +390,14 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     syncEnabled: true,
     queries: [
       {
-        // Per-recruiter activity rows (`action_type` in {hires, screen_calls,
-        // current_open_roles, leavers}). Only `hires` rows feed the talent
-        // page's chart, but we keep the whole shape for future extensions.
-        name: "talent_summary_gh",
+        // Per-hire rows attributed (possibly fractionally) to a recruiter.
+        // Preferred over `talent_summary_gh`, whose `hires` rows stop in
+        // 2025-09 even though the report itself is fresh — `all_hires` runs
+        // through the current month.
+        name: "all_hires",
         storageWindow: {
           kind: "last-months",
-          field: "action_date",
+          field: "date_hired",
           months: 36,
         },
       },
