@@ -544,7 +544,6 @@ export const enpsPrompts = pgTable(
   ]
 );
 
-
 // ---------------------------------------------------------------------------
 // Headcount forecast snapshots — used for forecast accuracy tracking.
 // Snapshotted once per calendar month (idempotent) so we can compare past
@@ -574,4 +573,32 @@ export const headcountForecastSnapshots = pgTable(
     unique("headcount_forecast_snapshot_month_uniq").on(table.asOfMonth),
     index("headcount_forecast_snapshot_captured_idx").on(table.capturedAt),
   ]
+);
+
+// ---------------------------------------------------------------------------
+// Daily briefing cache — Claude-generated personalised briefing per user/day.
+// Cached once per (email, date) so we pay the LLM cost at most once per user
+// per UTC day. Bumping the model forces regeneration by failing the
+// "model matches current" check in the loader.
+// ---------------------------------------------------------------------------
+
+export const userBriefings = pgTable(
+  "user_briefings",
+  {
+    id: serial("id").primaryKey(),
+    userEmail: text("user_email").notNull(), // lowercased
+    briefingDate: text("briefing_date").notNull(), // YYYY-MM-DD (UTC)
+    briefingText: text("briefing_text").notNull(),
+    contextJson: jsonb("context_json").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheCreationTokens: integer("cache_creation_tokens"),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("user_briefings_email_date_uniq").on(table.userEmail, table.briefingDate),
+    index("user_briefings_date_idx").on(table.briefingDate),
+  ],
 );
