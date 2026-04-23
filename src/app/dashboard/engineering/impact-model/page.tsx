@@ -65,10 +65,10 @@ export default async function ImpactModelPage({
     targetName =
       allManagers.find((m) => m.email === viewerEmail)?.name ?? null;
   }
-  if (!targetEmail && canPickAnyManager && allManagers[0]) {
-    targetEmail = allManagers[0].email;
-    targetName = allManagers[0].name;
-  }
+  // Intentionally NO fallback auto-pick for leadership+ viewers who don't
+  // manage a team. A CEO / non-manager VP opening this page should see the
+  // full-company model, not "first alphabetical manager's team" by default.
+  // The picker is still rendered so they can drill into any team on demand.
 
   let teamView: TeamView | null = null;
   if (targetEmail) {

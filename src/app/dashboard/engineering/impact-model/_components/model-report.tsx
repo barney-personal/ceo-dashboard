@@ -7,6 +7,7 @@ import {
   groupForFeature,
   plainLabelFor,
 } from "@/lib/data/impact-model-coaching";
+import { ManagerPicker } from "@/components/dashboard/manager-picker";
 import { FeatureImportanceChart } from "./feature-importance-chart";
 import { ActualVsPredicted } from "./actual-vs-predicted";
 import { GroupBars } from "./group-bars";
@@ -172,13 +173,18 @@ export function ImpactModelReport({
       {/* Manager-scoped team view — placed first because it's the most
           actionable content on the page. The model-wide sections below are
           reference material for understanding how the model works. */}
-      {teamView && (
+      {teamView ? (
         <TeamView
           team={teamView}
           canPickAnyManager={!restrictedToTeam && (allManagers?.length ?? 0) > 0}
           allManagers={allManagers ?? []}
           isViewerOwnTeam={!!isViewerOwnTeam}
         />
+      ) : (
+        !restrictedToTeam &&
+        (allManagers?.length ?? 0) > 0 && (
+          <TeamPickerEmptyState managers={allManagers ?? []} />
+        )
       )}
 
       {/* Hero */}
@@ -569,5 +575,34 @@ export function ImpactModelReport({
         </div>
       </section>
     </div>
+  );
+}
+
+/** Shown to leadership+ viewers who don't themselves manage a team and
+ * haven't picked one via ?manager=. Gives them a one-click entry to any
+ * team coaching view without forcing an arbitrary default. */
+function TeamPickerEmptyState({ managers }: { managers: ManagerOption[] }) {
+  return (
+    <section className="rounded-2xl border border-border/60 bg-card p-6 shadow-warm">
+      <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+        Manager view
+      </p>
+      <h2 className="mt-1 font-display text-3xl italic tracking-tight text-foreground">
+        Inspect a manager&rsquo;s team
+      </h2>
+      <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+        You don&rsquo;t run a team in the Headcount SSoT, so there&rsquo;s no default
+        team coaching view to show you. Pick any manager below to see their direct
+        reports with coaching signals. Everything else on this page is already
+        full-company.
+      </p>
+      <div className="mt-4">
+        <ManagerPicker
+          current=""
+          managers={managers}
+          basePath="/dashboard/engineering/impact-model"
+        />
+      </div>
+    </section>
   );
 }
