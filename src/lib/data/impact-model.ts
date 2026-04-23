@@ -84,10 +84,7 @@ export interface ImpactModel {
     baseline_mae: number;
     baseline_rmse: number;
   };
-  model_comparison: {
-    gradient_boosting: { r2: number; spearman: number };
-    random_forest: { r2: number; spearman: number };
-  };
+  model_comparison: Record<string, { r2: number; spearman: number }>;
   target: {
     name: string;
     formula: string;

@@ -55,6 +55,9 @@ FEATURE_DISPLAY = {
     "pr_slope_per_week": "PR rate slope (weekly)",
     "commits_180d_log": "Commits (log, 180d)",
     "commits_per_pr": "Commits per PR",
+    "pr_gap_days": "PR gap (days without PR)",
+    "weekly_pr_cv": "PR rate burstiness",
+    "ramp_slope_first90": "PR-rate ramp (per tenure-month)",
 }
 
 
@@ -161,6 +164,28 @@ def main():
     df["commits_180d_log"] = np.log1p(df["commits_180d"].fillna(0))
     df["commits_per_pr"] = df["commits_per_pr"].fillna(0).clip(upper=50)
 
+    # Round-4 time-shape features (ratios of PR counts — describe the SHAPE of
+    # activity without leaking volume). Validated non-leaky in iterate2.py:
+    # ramp_slope_first90 alone correlates only +0.12 with target, but combined
+    # with pr_gap_days + weekly_pr_cv captures strong orthogonal signal.
+    df["pr_gap_days"] = np.where(
+        df["prs_360d"] > 0,
+        365 * (1 - df["prs_90d"] / df["prs_360d"]),
+        365,
+    ).clip(0, 365)
+    def _rate_cv(r30, r90, r360):
+        rates = np.array([r30 / 30, r90 / 90, r360 / 360])
+        mu = rates.mean()
+        return 0 if mu == 0 else float(rates.std() / mu)
+    df["weekly_pr_cv"] = df.apply(
+        lambda r: _rate_cv(r["prs_30d"], r["prs_90d"], r["prs_360d"]), axis=1
+    )
+    df["ramp_slope_first90"] = np.where(
+        df["tenure_months"] > 3,
+        df["prs_90d"] / df["tenure_months"].clip(lower=1),
+        0,
+    )
+
     # Perf
     df["has_perf_rating"] = df["rating_count"].fillna(0) > 0
     df["avg_rating"] = df["avg_rating"].fillna(df["avg_rating"].median())
@@ -199,6 +224,10 @@ def main():
         "offhours_pr_share",
         "pr_slope_per_week",
         "commits_per_pr",
+        # Round-4 time-shape (ratios — describe activity shape, not volume)
+        "pr_gap_days",
+        "weekly_pr_cv",
+        "ramp_slope_first90",
     ]
     categorical_features = ["level_track", "discipline", "pillar", "gender", "location"]
 
@@ -224,8 +253,11 @@ def main():
 
     # Cross-validated predictions for honest performance estimate
     kf = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    # subsample=0.7 adds row-bagging which is the single biggest overfit reducer
+    # for gradient boosting on this n. Tuned via ml-impact/tune2.py.
     model_cv = GradientBoostingRegressor(
-        n_estimators=300, max_depth=3, learning_rate=0.05, random_state=RANDOM_STATE
+        n_estimators=300, max_depth=3, learning_rate=0.05,
+        subsample=0.7, random_state=RANDOM_STATE,
     )
     y_pred_log_cv = cross_val_predict(model_cv, X, y_log, cv=kf)
     y_pred_cv = np.expm1(y_pred_log_cv)
@@ -275,6 +307,9 @@ def main():
         "distinct_repos_180d": 1,     # touching more repos ⇒ higher impact
         "commits_180d_log": 1,        # more commits ⇒ higher impact
         "pr_slope_per_week": 1,       # accelerating ⇒ higher impact
+        "pr_gap_days": -1,            # bigger gaps ⇒ lower impact
+        "ramp_slope_first90": 1,      # faster ramp-up ⇒ higher impact
+        # NOT constrained: weekly_pr_cv (shape, direction unclear)
         # NOT constrained: pr_size_median (bigger isn't always better),
         # weekend_pr_share / offhours_pr_share (ambiguous), commits_per_pr
     }
