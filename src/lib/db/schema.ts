@@ -347,6 +347,42 @@ export const githubCommits = pgTable(
   ]
 );
 
+/**
+ * Per-PR Claude analysis cache. Keyed by (repo, pr_number, rubric_version) so
+ * a rubric change forces a re-analysis but the same PR isn't re-scored
+ * repeatedly within a rubric version. Predictions and SHAP values live
+ * elsewhere — this table only holds the LLM's structured judgement so the
+ * `/dashboard/engineering/code-review` page can aggregate cheaply on load.
+ */
+export const prReviewAnalyses = pgTable(
+  "pr_review_analyses",
+  {
+    id: serial("id").primaryKey(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    mergeSha: text("merge_sha"),
+    authorLogin: text("author_login").notNull(),
+    mergedAt: timestamp("merged_at").notNull(),
+    // Scores: 1-5 integers. Enforced in application code only (see
+    // "Known deliberate gaps" in CLAUDE.md for why no CHECK constraints).
+    complexity: integer("complexity").notNull(),
+    quality: integer("quality").notNull(),
+    category: text("category").notNull(), // bug_fix | feature | refactor | infra | test | docs | chore
+    summary: text("summary").notNull(),
+    // caveats is always supplied by upsertAnalysis — no DB default needed.
+    caveats: jsonb("caveats").notNull(), // string[]
+    standout: text("standout"), // notably_complex | notably_high_quality | notably_low_quality | concerning | null
+    rubricVersion: text("rubric_version").notNull(),
+    rawJson: jsonb("raw_json").notNull(),
+    analysedAt: timestamp("analysed_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.repo, table.prNumber, table.rubricVersion),
+    index("pr_review_merged_at_idx").on(table.mergedAt),
+    index("pr_review_author_idx").on(table.authorLogin),
+  ],
+);
+
 export const githubEmployeeMap = pgTable("github_employee_map", {
   id: serial("id").primaryKey(),
   githubLogin: text("github_login").notNull().unique(),

@@ -16,6 +16,8 @@ import {
   getSourceHealth,
 } from "@/lib/sync/health";
 import { cleanupDebugLogs } from "@/lib/debug-logger";
+import { maybeRunCodeReviewFromCron } from "@/lib/sync/code-review";
+import * as Sentry from "@sentry/nextjs";
 
 export async function GET(request: NextRequest) {
   try {
@@ -49,6 +51,18 @@ export async function GET(request: NextRequest) {
       enqueueSyncRun("github", { trigger: "cron" }),
     ]);
 
+    // Code-review analysis is expensive (per-PR LLM calls) — gate to weekly
+    // via a DB-driven cooldown rather than a separate cron schedule so we
+    // still get an opportunistic run if the cron misses a window. Errors
+    // here must never block the rest of the fan-out.
+    let codeReview: Awaited<ReturnType<typeof maybeRunCodeReviewFromCron>> | null = null;
+    try {
+      codeReview = await maybeRunCodeReviewFromCron();
+    } catch (error) {
+      Sentry.captureException(error, { tags: { feature: "code-review" } });
+      codeReview = { skippedBy: "cooldown" }; // serialise as "nothing to show"
+    }
+
     const allResults = [mode, slack, managementAccounts, meetings, github];
     const serializedResults = {
       mode: serializeEnqueueSyncResult(mode),
@@ -56,6 +70,7 @@ export async function GET(request: NextRequest) {
       managementAccounts: serializeEnqueueSyncResult(managementAccounts),
       meetings: serializeEnqueueSyncResult(meetings),
       github: serializeEnqueueSyncResult(github),
+      codeReview,
     };
 
     if (allResults.some((result) => result.outcome !== "skipped")) {

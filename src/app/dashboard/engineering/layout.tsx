@@ -42,6 +42,7 @@ export default async function EngineeringLayout({
         <EngineeringTabs
           showImpact={hasAccess(role, "leadership")}
           showImpactModel={hasAccess(role, "manager")}
+          showCodeReview={hasAccess(role, "ceo")}
         />
       </Suspense>
 
