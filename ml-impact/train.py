@@ -11,8 +11,11 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -650,20 +653,31 @@ def main():
     # Anonymised version for commit: strip names + emails, replace with stable
     # pseudonyms derived from a sort-by-email-hash index. The UI stays fully
     # functional — the waterfall picker + outlier table just show "Engineer NNN".
-    import copy, hashlib
+    import copy
+    # email_hash is an HMAC-SHA256 with a secret key — not a plain SHA256 —
+    # so someone with only the committed JSON can't recover emails by hashing
+    # candidate strings from a company directory. The server re-hydrates real
+    # names at request time by recomputing the HMAC against current headcount.
+    hash_key = os.environ.get("IMPACT_MODEL_HASH_KEY")
+    if not hash_key:
+        raise SystemExit(
+            "IMPACT_MODEL_HASH_KEY must be set (Doppler: ceo-dashboard/dev or prd). "
+            "Without a shared secret, the hash is dictionary-reversible against known emails."
+        )
+    key_bytes = hash_key.encode()
+
+    def _hash(email: str) -> str:
+        return hmac.new(key_bytes, email.lower().encode(), hashlib.sha256).hexdigest()[:16]
+
     public = copy.deepcopy(output)
     sorted_indices = sorted(
         range(len(public["engineers"])),
-        key=lambda i: hashlib.sha256(public["engineers"][i]["email"].encode()).hexdigest(),
+        key=lambda i: _hash(public["engineers"][i]["email"]),
     )
     rank_by_pos = {orig_i: rank + 1 for rank, orig_i in enumerate(sorted_indices)}
     for i, e in enumerate(public["engineers"]):
         rank = rank_by_pos[i]
-        # email_hash is a stable, irreversible identifier — the leadership-gated
-        # page re-hydrates real names at request time by computing the same hash
-        # across current headcount and joining. The committed JSON itself has
-        # no PII.
-        email_hash = hashlib.sha256(e["email"].encode()).hexdigest()[:16]
+        email_hash = _hash(e["email"])
         e["name"] = f"Engineer {rank:03d}"
         e["email"] = f"anon-{rank:03d}"
         e["email_hash"] = email_hash

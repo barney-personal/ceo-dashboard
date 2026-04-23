@@ -569,14 +569,21 @@ export function FeatureDeepDive({
         >
           Sweet spot
         </span>
-        , or{" "}
+        ,{" "}
         <span
           className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
           style={{ color: "#6b6660", backgroundColor: "rgb(107 102 96 / 0.15)" }}
         >
           Weak signal
         </span>
-        . The vertical dotted line is the typical engineer&rsquo;s value.
+        , or{" "}
+        <span
+          className="mx-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+          style={{ color: "#6b6660", backgroundColor: "rgb(107 102 96 / 0.15)" }}
+        >
+          Mixed
+        </span>
+        {" "}(non-monotonic, no single sweet spot). The vertical dotted line is the typical engineer&rsquo;s value.
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

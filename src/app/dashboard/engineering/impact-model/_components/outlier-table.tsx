@@ -69,7 +69,7 @@ export function OutlierTable({ engineers }: Props) {
           <tbody>
             {top.map((e, i) => (
               <tr
-                key={e.email}
+                key={e.email_hash}
                 className={i % 2 === 0 ? "bg-transparent" : "bg-muted/10"}
               >
                 <td className="px-3 py-2 font-medium text-foreground">{e.name}</td>

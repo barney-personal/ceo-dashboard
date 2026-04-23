@@ -320,17 +320,17 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
     () => [...engineers].sort((a, b) => a.name.localeCompare(b.name)),
     [engineers],
   );
-  const defaultEmail = useMemo(
+  const defaultId = useMemo(
     () =>
-      [...engineers].sort((a, b) => b.residual - a.residual)[0]?.email ??
-      sorted[0]?.email ??
+      [...engineers].sort((a, b) => b.residual - a.residual)[0]?.email_hash ??
+      sorted[0]?.email_hash ??
       "",
     [engineers, sorted],
   );
-  const [email, setEmail] = useState(defaultEmail);
+  const [selectedId, setSelectedId] = useState(defaultId);
   const [query, setQuery] = useState("");
 
-  const engineer = sorted.find((e) => e.email === email) ?? sorted[0];
+  const engineer = sorted.find((e) => e.email_hash === selectedId) ?? sorted[0];
   if (!engineer) return null;
 
   const filtered = query
@@ -377,12 +377,12 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
             className="w-full rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 sm:w-60"
           />
           <select
-            value={engineer.email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={engineer.email_hash}
+            onChange={(e) => setSelectedId(e.target.value)}
             className="w-full rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 sm:w-60"
           >
             {filtered.map((e) => (
-              <option key={e.email} value={e.email}>
+              <option key={e.email_hash} value={e.email_hash}>
                 {e.name} — {e.discipline}, {e.level_label}
               </option>
             ))}

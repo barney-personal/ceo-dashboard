@@ -1,9 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { getReportData, rowStr } from "./mode";
 import { getImpactModel, type ImpactModel } from "./impact-model";
 
-function hashEmail(email: string): string {
-  return createHash("sha256").update(email.toLowerCase()).digest("hex").slice(0, 16);
+// HMAC-SHA256 with a shared secret. Using a plain SHA256 would let anyone with
+// the committed JSON recover emails by hashing candidates from a company
+// directory (the keyspace is small — a few hundred plausible emails). The
+// key lives in Doppler (IMPACT_MODEL_HASH_KEY) and must match the key used
+// by ml-impact/train.py when the model was built.
+function hashEmail(email: string, key: string): string {
+  return createHmac("sha256", key).update(email.toLowerCase()).digest("hex").slice(0, 16);
 }
 
 /**
@@ -22,13 +27,19 @@ function hashEmail(email: string): string {
  */
 export async function getImpactModelHydrated(): Promise<ImpactModel> {
   const model = getImpactModel();
+  const key = process.env.IMPACT_MODEL_HASH_KEY;
+  if (!key) {
+    // Without the key, we can't compute matching hashes — serve anonymised.
+    // This is not an error in local dev without the secret; just a degraded mode.
+    console.warn("[impact-model] IMPACT_MODEL_HASH_KEY not set, serving anonymised");
+    return model;
+  }
 
   try {
     const headcount = await getReportData("people", "headcount", ["headcount"]);
     const rows = headcount.find((r) => r.queryName === "headcount")?.rows ?? [];
 
     const hashToName = new Map<string, string>();
-    const hashToEmail = new Map<string, string>();
     for (const r of rows) {
       const email = rowStr(r, "email").toLowerCase();
       if (!email) continue;
@@ -36,19 +47,15 @@ export async function getImpactModelHydrated(): Promise<ImpactModel> {
         rowStr(r, "preferred_name") ||
         rowStr(r, "rp_full_name") ||
         email;
-      const hash = hashEmail(email);
-      hashToName.set(hash, name);
-      hashToEmail.set(hash, email);
+      hashToName.set(hashEmail(email, key), name);
     }
 
     const hydratedEngineers = model.engineers.map((e) => {
       const real = hashToName.get(e.email_hash);
-      const realEmail = hashToEmail.get(e.email_hash);
-      return {
-        ...e,
-        name: real ?? e.name,
-        email: realEmail ?? e.email,
-      };
+      // Deliberately do NOT hydrate `email` — the client component only needs
+      // a stable unique id, and `email_hash` already serves that role. Keeps
+      // real email addresses out of the page payload entirely.
+      return { ...e, name: real ?? e.name };
     });
 
     return { ...model, engineers: hydratedEngineers };
