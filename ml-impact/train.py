@@ -59,7 +59,7 @@ FEATURE_DISPLAY = {
     "pr_slope_per_week": "PR rate slope (weekly)",
     "commits_180d_log": "Commits (log, 180d)",
     "commits_per_pr": "Commits per PR",
-    "pr_gap_days": "PR gap (days without PR)",
+    "pr_gap_days": "Recent-activity deficit (scaled)",
     "weekly_pr_cv": "PR rate burstiness",
     "ramp_slope_first90": "PR-rate ramp (per tenure-month)",
 }

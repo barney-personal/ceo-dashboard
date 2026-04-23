@@ -17,6 +17,7 @@
 
 \pset format csv
 \pset tuples_only off
+\pset footer off   -- suppress the "(N rows)" trailing line so pd.read_csv is happy
 
 WITH active_engineers AS (
   SELECT

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-23T11:29:53.189995+00:00",
+  "generated_at": "2026-04-23T11:35:20.473909+00:00",
   "n_engineers": 141,
   "n_features": 41,
   "chosen_model": "gradient_boosting",
@@ -2787,7 +2787,7 @@
     },
     {
       "feature": "pr_gap_days",
-      "label": "PR gap (days without PR)",
+      "label": "Recent-activity deficit (scaled)",
       "group": "Code style",
       "grid": [
         0.0,
