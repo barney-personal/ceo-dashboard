@@ -1,6 +1,15 @@
 import { createHmac } from "node:crypto";
 import { getReportData, rowStr } from "./mode";
-import { getImpactModel, type ImpactModel } from "./impact-model";
+import {
+  getImpactModel,
+  type ImpactEngineerPrediction,
+  type ImpactModel,
+} from "./impact-model";
+import { getDirectReports, type ManagerReport } from "./managers";
+import {
+  buildCoachingCard,
+  type CoachingCard,
+} from "./impact-model-coaching";
 
 // HMAC-SHA256 with a shared secret. Using a plain SHA256 would let anyone with
 // the committed JSON recover emails by hashing candidates from a company
@@ -64,4 +73,83 @@ export async function getImpactModelHydrated(): Promise<ImpactModel> {
     console.warn("[impact-model] hydration failed, serving anonymised:", err);
     return model;
   }
+}
+
+export interface TeamCoachingEntry {
+  report: ManagerReport;
+  engineer: ImpactEngineerPrediction;
+  coaching: CoachingCard;
+}
+
+export interface TeamView {
+  managerEmail: string;
+  managerName: string | null;
+  entries: TeamCoachingEntry[];
+  reportsNotInModel: ManagerReport[];
+  expectedImpact: number;
+  teamMedianPredicted: number;
+}
+
+/**
+ * Build a manager-scoped team view from the hydrated model + the manager's
+ * current direct reports (looked up in the Headcount SSoT). Each entry bundles
+ * the model's prediction for that report with a coaching card derived from
+ * their SHAP contributions. Reports who aren't in the model (e.g. haven't
+ * shipped ≥1 PR in the 360d window) are returned separately so the UI can
+ * flag them rather than silently drop them.
+ */
+export async function buildTeamView(
+  model: ImpactModel,
+  managerEmail: string,
+  managerName: string | null = null,
+): Promise<TeamView | null> {
+  const key = process.env.IMPACT_MODEL_HASH_KEY;
+  if (!key) return null;
+
+  const reports = await getDirectReports(managerEmail);
+  if (reports.length === 0) return null;
+
+  const hashToEngineer = new Map<string, ImpactEngineerPrediction>();
+  for (const e of model.engineers) hashToEngineer.set(e.email_hash, e);
+
+  const entries: TeamCoachingEntry[] = [];
+  const reportsNotInModel: ManagerReport[] = [];
+  for (const report of reports) {
+    const hash = hashEmail(report.email, key);
+    const engineer = hashToEngineer.get(hash);
+    if (!engineer) {
+      reportsNotInModel.push(report);
+      continue;
+    }
+    entries.push({
+      report,
+      engineer,
+      coaching: buildCoachingCard(engineer),
+    });
+  }
+
+  // Sort by predicted impact desc — "who's likely most productive" first.
+  entries.sort((a, b) => b.engineer.predicted - a.engineer.predicted);
+
+  const teamMedianPredicted = entries.length
+    ? median(entries.map((e) => e.engineer.predicted))
+    : 0;
+
+  return {
+    managerEmail,
+    managerName,
+    entries,
+    reportsNotInModel,
+    expectedImpact: model.shap.expected_impact,
+    teamMedianPredicted,
+  };
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
 }

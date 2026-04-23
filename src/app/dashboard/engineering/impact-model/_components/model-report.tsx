@@ -1,6 +1,7 @@
 "use client";
 
 import type { ImpactModel } from "@/lib/data/impact-model";
+import type { TeamView as TeamViewData } from "@/lib/data/impact-model.server";
 import { FeatureImportanceChart } from "./feature-importance-chart";
 import { ActualVsPredicted } from "./actual-vs-predicted";
 import { GroupBars } from "./group-bars";
@@ -8,6 +9,14 @@ import { OutlierTable } from "./outlier-table";
 import { ShapWaterfall } from "./shap-waterfall";
 import { GroupedImportanceChart } from "./grouped-importance-chart";
 import { FeatureDeepDive } from "./feature-deep-dive";
+import { TeamView } from "./team-view";
+
+interface ManagerOption {
+  email: string;
+  name: string;
+  directReports: number;
+  jobTitle: string | null;
+}
 
 function MetricTile({
   label,
@@ -74,7 +83,17 @@ function SectionHead({
   );
 }
 
-export function ImpactModelReport({ model }: { model: ImpactModel }) {
+export function ImpactModelReport({
+  model,
+  teamView,
+  allManagers,
+  isViewerOwnTeam,
+}: {
+  model: ImpactModel;
+  teamView?: TeamViewData | null;
+  allManagers?: ManagerOption[];
+  isViewerOwnTeam?: boolean;
+}) {
   const { metrics, model_comparison, target, features, engineers } = model;
 
   const generatedAt = new Date(model.generated_at).toLocaleDateString("en-GB", {
@@ -108,6 +127,18 @@ export function ImpactModelReport({ model }: { model: ImpactModel }) {
           <span className="text-primary">› </span>5-fold CV
         </span>
       </div>
+
+      {/* Manager-scoped team view — placed first because it's the most
+          actionable content on the page. The model-wide sections below are
+          reference material for understanding how the model works. */}
+      {teamView && (
+        <TeamView
+          team={teamView}
+          canPickAnyManager={true}
+          allManagers={allManagers ?? []}
+          isViewerOwnTeam={!!isViewerOwnTeam}
+        />
+      )}
 
       {/* Hero */}
       <section>
