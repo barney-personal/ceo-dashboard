@@ -67,13 +67,19 @@ function WaterfallChart({
 
   const steps = useMemo(() => {
     // Keep top-|shap| contributions; collapse the rest into "other features"
-    const top = engineer.shap_contributions.slice(0, maxSteps);
+    // The contributions array already has a trailing "{n}_minor_features" bucket
+    // from Python, so everything sums to the in-sample prediction.
+    const visible = engineer.shap_contributions.slice(0, maxSteps);
     const rest = engineer.shap_contributions.slice(maxSteps);
     const restSum = rest.reduce((s, c) => s + c.shap, 0);
-    const augmented: ImpactShapContribution[] = [...top];
+    const restCount = rest.reduce((n, c) => {
+      const m = c.feature.match(/^(\d+)_minor_features$/);
+      return n + (m ? parseInt(m[1], 10) : 1);
+    }, 0);
+    const augmented: ImpactShapContribution[] = [...visible];
     if (Math.abs(restSum) > 1e-3 && rest.length > 0) {
       augmented.push({
-        feature: `+${rest.length} other features`,
+        feature: `+${restCount} other features`,
         group: "Other",
         shap: restSum,
         pct_multiplier: Math.round((Math.exp(restSum) - 1) * 1000) / 10,
@@ -89,7 +95,9 @@ function WaterfallChart({
     const container = containerRef.current;
     const width = getContentBoxWidth(container);
     const barHeight = 28;
-    const margin = { top: 28, right: 24, bottom: 36, left: 200 };
+    // Right margin leaves space for two separate label columns
+    // (pct-change + running-total) so they never overlap with the bar.
+    const margin = { top: 28, right: 140, bottom: 36, left: 200 };
     const nRows = steps.length + 2; // base + steps + final
     const height = nRows * barHeight + margin.top + margin.bottom;
     const innerW = width - margin.left - margin.right;
@@ -187,14 +195,16 @@ function WaterfallChart({
           .attr("height", 14)
           .attr("fill", r.feature === "final" ? "#3f5b4c" : "#8e8680")
           .attr("rx", 2);
+        // Total in the running-total column (same x as step rows)
         g.append("text")
-          .attr("x", x(r.endImpact) + 8)
+          .attr("x", innerW + 70)
           .attr("y", y + 15)
+          .attr("text-anchor", "start")
           .attr("dominant-baseline", "middle")
           .attr("font-size", 11)
           .attr("font-family", "var(--font-mono, ui-monospace)")
           .attr("fill", "currentColor")
-          .attr("fill-opacity", 0.85)
+          .attr("fill-opacity", 0.9)
           .attr("font-weight", "600")
           .text(Math.round(r.endImpact).toLocaleString());
       } else {
@@ -213,11 +223,12 @@ function WaterfallChart({
           .attr("fill", color)
           .attr("rx", 2);
 
-        // Value text next to bar
+        // % label in a fixed column right after the bar area (never overlaps bar)
         const text = `${up ? "+" : ""}${r.pct.toFixed(1)}%`;
         g.append("text")
-          .attr("x", up ? x(r.endImpact) + 6 : x(r.startImpact) + 6)
+          .attr("x", innerW + 8)
           .attr("y", y + 13)
+          .attr("text-anchor", "start")
           .attr("dominant-baseline", "middle")
           .attr("font-size", 10)
           .attr("font-family", "var(--font-mono, ui-monospace)")
@@ -225,16 +236,16 @@ function WaterfallChart({
           .attr("font-weight", 600)
           .text(text);
 
-        // Running total at right end
+        // Running total in its own column further right
         g.append("text")
-          .attr("x", innerW)
+          .attr("x", innerW + 70)
           .attr("y", y + 13)
-          .attr("text-anchor", "end")
+          .attr("text-anchor", "start")
           .attr("dominant-baseline", "middle")
           .attr("font-size", 10)
           .attr("font-family", "var(--font-mono, ui-monospace)")
           .attr("fill", "currentColor")
-          .attr("fill-opacity", 0.45)
+          .attr("fill-opacity", 0.55)
           .text(`→ ${Math.round(r.endImpact).toLocaleString()}`);
       }
 
@@ -335,11 +346,15 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
       )
     : sorted;
 
+  // Use the in-sample prediction here because that's what the SHAP
+  // decomposition explains. The cross-validated `predicted` is the
+  // honest held-out estimate used for aggregate R²/MAE metrics.
+  const explainedPrediction = engineer.predicted_insample;
   const direction =
-    engineer.predicted > expectedImpact ? "above" : "below";
+    explainedPrediction > expectedImpact ? "above" : "below";
   const pctVsBaseline =
     Math.round(
-      ((engineer.predicted - expectedImpact) / expectedImpact) * 100,
+      ((explainedPrediction - expectedImpact) / expectedImpact) * 100,
     );
 
   return (
@@ -385,7 +400,13 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
             Model prediction
           </div>
           <div className="mt-1 font-display text-2xl italic text-foreground">
-            {engineer.predicted.toLocaleString()}
+            {explainedPrediction.toLocaleString()}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            held-out CV:{" "}
+            <span className="font-mono">
+              {engineer.predicted.toLocaleString()}
+            </span>
           </div>
         </div>
         <div className="rounded-lg border border-border/40 bg-muted/10 p-3">
@@ -400,20 +421,29 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
           className="rounded-lg border p-3"
           style={{
             borderColor:
-              engineer.residual >= 0 ? "rgb(46 125 82 / 0.3)" : "rgb(184 71 42 / 0.3)",
+              engineer.actual - explainedPrediction >= 0
+                ? "rgb(46 125 82 / 0.3)"
+                : "rgb(184 71 42 / 0.3)",
             backgroundColor:
-              engineer.residual >= 0 ? "rgb(46 125 82 / 0.05)" : "rgb(184 71 42 / 0.05)",
+              engineer.actual - explainedPrediction >= 0
+                ? "rgb(46 125 82 / 0.05)"
+                : "rgb(184 71 42 / 0.05)",
           }}
         >
           <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            Residual
+            Actual − predicted
           </div>
           <div
             className="mt-1 font-display text-2xl italic"
-            style={{ color: engineer.residual >= 0 ? "#2e7d52" : "#b8472a" }}
+            style={{
+              color:
+                engineer.actual - explainedPrediction >= 0
+                  ? "#2e7d52"
+                  : "#b8472a",
+            }}
           >
-            {engineer.residual > 0 ? "+" : ""}
-            {engineer.residual.toLocaleString()}
+            {engineer.actual - explainedPrediction > 0 ? "+" : ""}
+            {(engineer.actual - explainedPrediction).toLocaleString()}
           </div>
         </div>
       </div>
@@ -426,7 +456,7 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
         information. Each feature then moves the prediction up or down, based on
         this engineer's actual values. The final bar is the model's prediction
         for {engineer.name.split(" ")[0]}:{" "}
-        <span className="font-mono">{engineer.predicted.toLocaleString()}</span> —{" "}
+        <span className="font-mono">{explainedPrediction.toLocaleString()}</span> —{" "}
         {Math.abs(pctVsBaseline)}% {direction} baseline.
       </div>
 
