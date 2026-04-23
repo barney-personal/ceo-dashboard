@@ -39,6 +39,7 @@ export default async function TalentPage() {
       <TalentPageClient
         hireRows={data.hireRows}
         targets={data.targets}
+        employmentByRecruiter={data.employmentByRecruiter}
         modeUrl={modeUrl}
         emptyReason={isEmpty ? emptyReason : null}
       />

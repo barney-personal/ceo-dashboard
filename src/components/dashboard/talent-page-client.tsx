@@ -12,6 +12,7 @@ import {
   currentMonthKey,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
+  type EmploymentRecord,
   type RecruiterSummary,
   type TalentHireRow,
   type TalentTargetRow,
@@ -20,9 +21,12 @@ import {
 interface TalentPageClientProps {
   hireRows: TalentHireRow[];
   targets: TalentTargetRow[];
+  employmentByRecruiter: Record<string, EmploymentRecord>;
   modeUrl: string;
   emptyReason: string | null;
 }
+
+type EmploymentFilter = "active" | "all" | "departed";
 
 const PROJECTION_MONTHS = 3;
 
@@ -180,7 +184,59 @@ function SortableHeader({ label, sortKey, active, onSort, align = "left" }: Sort
   );
 }
 
-function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
+const EMPLOYMENT_FILTERS: {
+  value: EmploymentFilter;
+  label: string;
+}[] = [
+  { value: "active", label: "Active" },
+  { value: "all", label: "All" },
+  { value: "departed", label: "Departed" },
+];
+
+function filterByEmployment(
+  summaries: RecruiterSummary[],
+  filter: EmploymentFilter,
+): RecruiterSummary[] {
+  if (filter === "all") return summaries;
+  if (filter === "active") {
+    // Treat "unknown" as active — external contractors, hiring managers with
+    // hires attributed to them, etc. are generally still engaged. Explicit
+    // "departed" is the only thing we hide.
+    return summaries.filter((s) => s.employment.status !== "departed");
+  }
+  return summaries.filter((s) => s.employment.status === "departed");
+}
+
+function formatTerminationLabel(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return iso;
+  const today = new Date();
+  const label = date.toLocaleDateString("en-GB", {
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  return date.getTime() > today.getTime()
+    ? `leaving ${label}`
+    : `left ${label}`;
+}
+
+interface RecruiterTableProps {
+  summaries: RecruiterSummary[];
+  activeCount: number;
+  departedCount: number;
+  filter: EmploymentFilter;
+  onFilterChange: (filter: EmploymentFilter) => void;
+}
+
+function RecruiterTable({
+  summaries,
+  activeCount,
+  departedCount,
+  filter,
+  onFilterChange,
+}: RecruiterTableProps) {
   const [sort, setSort] = useState<SortState>({
     key: "hiresLast12m",
     direction: "desc",
@@ -196,79 +252,136 @@ function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
     );
   }
 
-  if (summaries.length === 0) return null;
+  const countByFilter: Record<EmploymentFilter, number> = {
+    active: activeCount,
+    departed: departedCount,
+    all: activeCount + departedCount,
+  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-warm">
-      <div className="border-b border-border/50 px-5 py-3">
-        <span className="text-sm font-semibold text-foreground">
-          Recruiter performance
-        </span>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Last 12 months of activity, per-recruiter trailing-3-month average,
-          projected next {PROJECTION_MONTHS} months, and current-quarter hires vs
-          target. Click any column header to sort.
-        </p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-            <tr>
-              <SortableHeader label="Recruiter" sortKey="recruiter" active={sort} onSort={handleSort} />
-              <SortableHeader label="Pillar" sortKey="tech" active={sort} onSort={handleSort} />
-              <SortableHeader label="Hires L12m" sortKey="hiresLast12m" active={sort} onSort={handleSort} align="right" />
-              <SortableHeader label="Trailing 3mo" sortKey="trailing3mAvg" active={sort} onSort={handleSort} align="right" />
-              <SortableHeader
-                label={`Proj. next ${PROJECTION_MONTHS}mo`}
-                sortKey="projectedNext3m"
-                active={sort}
-                onSort={handleSort}
-                align="right"
-              />
-              <SortableHeader label="QTD" sortKey="hiresQtd" active={sort} onSort={handleSort} align="right" />
-              <SortableHeader label="Target" sortKey="targetQtd" active={sort} onSort={handleSort} align="right" />
-              <SortableHeader label="Attainment" sortKey="attainmentQtd" active={sort} onSort={handleSort} align="right" />
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((s) => (
-              <tr
-                key={s.recruiter}
-                className="border-t border-border/40 hover:bg-muted/30"
+      <div className="flex flex-col gap-3 border-b border-border/50 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <span className="text-sm font-semibold text-foreground">
+            Recruiter performance
+          </span>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Last 12 months of activity, per-recruiter trailing-3-month average,
+            projected next {PROJECTION_MONTHS} months, and current-quarter
+            hires vs target. Click any column header to sort.
+          </p>
+        </div>
+        <div
+          role="group"
+          aria-label="Employment status filter"
+          className="inline-flex shrink-0 self-start rounded-md border border-border/60 bg-background text-xs"
+        >
+          {EMPLOYMENT_FILTERS.map((opt, i) => {
+            const active = opt.value === filter;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => onFilterChange(opt.value)}
+                className={`px-3 py-1.5 font-medium transition-colors ${
+                  active
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                } ${i !== 0 ? "border-l border-border/60" : ""}`}
+                aria-pressed={active}
               >
-                <td className="px-4 py-2.5 font-medium text-foreground">
-                  {s.recruiter}
-                </td>
-                <td className="px-4 py-2.5 text-muted-foreground">
-                  {s.tech ?? "—"}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {formatNumber(s.hiresLast12m, 0)}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {formatNumber(s.trailing3mAvg)}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {formatNumber(s.projectedNext3m)}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums">
-                  {s.hiresQtd == null ? "—" : formatNumber(s.hiresQtd)}
-                </td>
-                <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                  {s.targetQtd == null ? "—" : formatNumber(s.targetQtd)}
-                </td>
-                <td
-                  className={`px-4 py-2.5 text-right font-medium tabular-nums ${attainmentClass(s.attainmentQtd)}`}
+                {opt.label}{" "}
+                <span
+                  className={
+                    active ? "opacity-70" : "opacity-60"
+                  }
                 >
-                  {s.attainmentQtd == null
-                    ? "—"
-                    : formatPercent(s.attainmentQtd)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  ({countByFilter[opt.value]})
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
+      {summaries.length === 0 ? (
+        <div className="px-5 py-10 text-center text-sm text-muted-foreground">
+          No recruiters match this filter.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+              <tr>
+                <SortableHeader label="Recruiter" sortKey="recruiter" active={sort} onSort={handleSort} />
+                <SortableHeader label="Pillar" sortKey="tech" active={sort} onSort={handleSort} />
+                <SortableHeader label="Hires L12m" sortKey="hiresLast12m" active={sort} onSort={handleSort} align="right" />
+                <SortableHeader label="Trailing 3mo" sortKey="trailing3mAvg" active={sort} onSort={handleSort} align="right" />
+                <SortableHeader
+                  label={`Proj. next ${PROJECTION_MONTHS}mo`}
+                  sortKey="projectedNext3m"
+                  active={sort}
+                  onSort={handleSort}
+                  align="right"
+                />
+                <SortableHeader label="QTD" sortKey="hiresQtd" active={sort} onSort={handleSort} align="right" />
+                <SortableHeader label="Target" sortKey="targetQtd" active={sort} onSort={handleSort} align="right" />
+                <SortableHeader label="Attainment" sortKey="attainmentQtd" active={sort} onSort={handleSort} align="right" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((s) => {
+                const isDeparted = s.employment.status === "departed";
+                return (
+                  <tr
+                    key={s.recruiter}
+                    className={`border-t border-border/40 hover:bg-muted/30 ${
+                      isDeparted ? "text-muted-foreground/80" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-2.5 font-medium text-foreground">
+                      <div className="flex items-center gap-2">
+                        <span className={isDeparted ? "opacity-70" : ""}>
+                          {s.recruiter}
+                        </span>
+                        {isDeparted && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wider text-muted-foreground">
+                            {formatTerminationLabel(s.employment.terminationDate)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">
+                      {s.tech ?? "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {formatNumber(s.hiresLast12m, 0)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {formatNumber(s.trailing3mAvg)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {formatNumber(s.projectedNext3m)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums">
+                      {s.hiresQtd == null ? "—" : formatNumber(s.hiresQtd)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                      {s.targetQtd == null ? "—" : formatNumber(s.targetQtd)}
+                    </td>
+                    <td
+                      className={`px-4 py-2.5 text-right font-medium tabular-nums ${attainmentClass(s.attainmentQtd)}`}
+                    >
+                      {s.attainmentQtd == null
+                        ? "—"
+                        : formatPercent(s.attainmentQtd)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -276,10 +389,22 @@ function RecruiterTable({ summaries }: { summaries: RecruiterSummary[] }) {
 export function TalentPageClient({
   hireRows,
   targets,
+  employmentByRecruiter,
   modeUrl,
   emptyReason,
 }: TalentPageClientProps) {
-  const { histories, teamActual, teamProjection, summaries, latestMonth } =
+  const [employmentFilter, setEmploymentFilter] =
+    useState<EmploymentFilter>("active");
+
+  const {
+    histories,
+    teamActual,
+    teamProjection,
+    summaries,
+    latestMonth,
+    activeSummaryCount,
+    departedSummaryCount,
+  } =
     useMemo(() => {
       const now = currentMonthKey();
       const histories = aggregateHiresByRecruiterMonth(hireRows);
@@ -287,16 +412,32 @@ export function TalentPageClient({
       const teamProjection = sumToTeamMonthly(
         predictHiresPerRecruiter(histories, PROJECTION_MONTHS, now),
       );
-      const summaries = buildRecruiterSummaries(histories, targets, now);
+      const summaries = buildRecruiterSummaries(
+        histories,
+        targets,
+        now,
+        employmentByRecruiter,
+      );
       const latestMonth = lastActualMonth(hireRows);
+      const activeSummaryCount = summaries.filter(
+        (s) => s.employment.status !== "departed",
+      ).length;
+      const departedSummaryCount = summaries.length - activeSummaryCount;
       return {
         histories,
         teamActual,
         teamProjection,
         summaries,
         latestMonth,
+        activeSummaryCount,
+        departedSummaryCount,
       };
-    }, [hireRows, targets]);
+    }, [hireRows, targets, employmentByRecruiter]);
+
+  const filteredSummaries = useMemo(
+    () => filterByEmployment(summaries, employmentFilter),
+    [summaries, employmentFilter],
+  );
 
   if (emptyReason) {
     return <TalentEmpty reason={emptyReason} />;
@@ -379,7 +520,13 @@ export function TalentPageClient({
         subtitle="Current-quarter attainment and projected 3-month output for each recruiter on the target roster."
       />
 
-      <RecruiterTable summaries={summaries} />
+      <RecruiterTable
+        summaries={filteredSummaries}
+        activeCount={activeSummaryCount}
+        departedCount={departedSummaryCount}
+        filter={employmentFilter}
+        onFilterChange={setEmploymentFilter}
+      />
 
       {histories.length === 0 && (
         <TalentEmpty reason="No per-recruiter hire history available." />

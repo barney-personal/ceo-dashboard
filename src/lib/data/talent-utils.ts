@@ -32,6 +32,23 @@ export interface RecruiterHistory {
   monthly: MonthlyHires[];
 }
 
+export type EmploymentStatus = "active" | "departed" | "unknown";
+
+export interface EmploymentRecord {
+  /** "active" = currently at Cleo (or on notice with future termination date).
+   *  "departed" = has a termination date in the past.
+   *  "unknown" = no match in the HR employees query — likely external or
+   *  spelled differently than HR has them. */
+  status: EmploymentStatus;
+  /** Present for status = "departed". ISO `YYYY-MM-DD`. */
+  terminationDate: string | null;
+  /** Display name as HR has it (may differ slightly from the recruiter name). */
+  matchedName: string | null;
+  /** Department from HR — useful for distinguishing People-team recruiters
+   *  from hiring managers who happen to have been attributed hires. */
+  department: string | null;
+}
+
 export interface RecruiterSummary {
   recruiter: string;
   tech: string | null;
@@ -42,11 +59,13 @@ export interface RecruiterSummary {
   hiresQtd: number | null;
   targetQtd: number | null;
   attainmentQtd: number | null;
+  employment: EmploymentRecord;
 }
 
 export interface TalentData {
   hireRows: TalentHireRow[];
   targets: TalentTargetRow[];
+  employmentByRecruiter: Record<string, EmploymentRecord>;
   syncedAt: Date | null;
 }
 
@@ -255,6 +274,13 @@ export function buildTeamChartSeries(
   return series;
 }
 
+const UNKNOWN_EMPLOYMENT: EmploymentRecord = {
+  status: "unknown",
+  terminationDate: null,
+  matchedName: null,
+  department: null,
+};
+
 /**
  * Per-recruiter summary row for the talent table — trailing average, last
  * 12-month volume, QTD attainment vs target, projected next 3 months.
@@ -269,6 +295,7 @@ export function buildRecruiterSummaries(
   histories: RecruiterHistory[],
   targets: TalentTargetRow[],
   currentMonth?: string,
+  employmentByRecruiter: Record<string, EmploymentRecord> = {},
 ): RecruiterSummary[] {
   const targetByRecruiter = new Map(targets.map((t) => [t.recruiter, t]));
 
@@ -300,7 +327,98 @@ export function buildRecruiterSummaries(
           target && target.targetQtd > 0
             ? target.hiresQtd / target.targetQtd
             : null,
+        employment:
+          employmentByRecruiter[h.recruiter] ?? UNKNOWN_EMPLOYMENT,
       };
     })
     .sort((a, b) => b.hiresLast12m - a.hiresLast12m);
+}
+
+/**
+ * Build a `recruiter → EmploymentRecord` map from the raw HR employees
+ * query. Matches on full display name plus a `first last` fallback so small
+ * variations (middle names, "Senior" suffixes) still resolve.
+ */
+export function buildEmploymentIndex(
+  employees: Array<{
+    displayName: string;
+    startDate: string | null;
+    terminationDate: string | null;
+    department: string | null;
+  }>,
+  recruiterNames: Iterable<string>,
+  now: Date = new Date(),
+): Record<string, EmploymentRecord> {
+  const todayIso = now.toISOString().slice(0, 10);
+  const byVariant = new Map<
+    string,
+    {
+      displayName: string;
+      terminationDate: string | null;
+      department: string | null;
+    }
+  >();
+  for (const e of employees) {
+    const display = (e.displayName ?? "").trim();
+    if (!display) continue;
+    for (const variant of nameVariants(display)) {
+      // Prefer records with no termination date (active) over older terminated
+      // records for the same name.
+      const existing = byVariant.get(variant);
+      if (!existing || (existing.terminationDate && !e.terminationDate)) {
+        byVariant.set(variant, {
+          displayName: display,
+          terminationDate: e.terminationDate,
+          department: e.department,
+        });
+      }
+    }
+  }
+
+  const result: Record<string, EmploymentRecord> = {};
+  for (const recruiter of recruiterNames) {
+    const trimmed = recruiter.trim();
+    if (!trimmed) continue;
+
+    let match: ReturnType<typeof byVariant.get> | undefined;
+    for (const variant of nameVariants(trimmed)) {
+      match = byVariant.get(variant);
+      if (match) break;
+    }
+
+    if (!match) {
+      result[recruiter] = UNKNOWN_EMPLOYMENT;
+      continue;
+    }
+
+    // Notice periods (future termination date) still count as active today.
+    const isDeparted =
+      !!match.terminationDate && match.terminationDate.slice(0, 10) <= todayIso;
+
+    result[recruiter] = {
+      status: isDeparted ? "departed" : "active",
+      terminationDate: match.terminationDate
+        ? match.terminationDate.slice(0, 10)
+        : null,
+      matchedName: match.displayName,
+      department: match.department,
+    };
+  }
+  return result;
+}
+
+function nameVariants(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  const variants = new Set<string>();
+  variants.add(trimmed);
+  variants.add(trimmed.toLowerCase());
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    const first = parts[0];
+    const last = parts[parts.length - 1];
+    variants.add(`${first} ${last}`);
+    variants.add(`${first} ${last}`.toLowerCase());
+  }
+  return [...variants];
 }

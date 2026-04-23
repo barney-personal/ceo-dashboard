@@ -7,6 +7,7 @@ import {
   rowNum,
   validateModeColumns,
 } from "./mode";
+import { buildEmploymentIndex } from "./talent-utils";
 import type {
   TalentData,
   TalentHireRow,
@@ -20,6 +21,8 @@ export {
   type MonthlyHires,
   type RecruiterHistory,
   type RecruiterSummary,
+  type EmploymentStatus,
+  type EmploymentRecord,
   aggregateHiresByRecruiterMonth,
   predictHiresPerRecruiter,
   sumToTeamMonthly,
@@ -49,6 +52,13 @@ const TARGET_COLUMNS = [
   "team_qtd",
 ] as const;
 
+const EMPLOYEES_COLUMNS = [
+  "display_name",
+  "start_date",
+  "termination_date",
+  "department",
+] as const;
+
 type ModeQueryData = Awaited<ReturnType<typeof getReportData>>[number];
 
 function validatedQuery<TColumn extends string>(
@@ -68,13 +78,25 @@ function validatedQuery<TColumn extends string>(
 }
 
 export async function getTalentData(): Promise<TalentData> {
-  const data = await getReportData("people", "talent", [
-    "all_hires",
-    "target qtd team",
+  // Attrition 'employees' is HR's canonical FTE list with termination dates —
+  // we join it against all_hires.hired_by to flag recruiters who've left so
+  // the UI can filter them out.
+  const [talentData, attritionData] = await Promise.all([
+    getReportData("people", "talent", ["all_hires", "target qtd team"]),
+    getReportData("people", "attrition", ["employees"]),
   ]);
 
-  const allHires = validatedQuery(data, "all_hires", ALL_HIRES_COLUMNS);
-  const targetQuery = validatedQuery(data, "target qtd team", TARGET_COLUMNS);
+  const allHires = validatedQuery(talentData, "all_hires", ALL_HIRES_COLUMNS);
+  const targetQuery = validatedQuery(
+    talentData,
+    "target qtd team",
+    TARGET_COLUMNS,
+  );
+  const employeesQuery = validatedQuery(
+    attritionData,
+    "employees",
+    EMPLOYEES_COLUMNS,
+  );
 
   // `all_hires` is one row per hire with `hire_attribution` as a fractional
   // weight when credit is shared across multiple people. We normalise into
@@ -109,8 +131,30 @@ export async function getTalentData(): Promise<TalentData> {
     if (!row.tech) row.tech = techByRecruiter.get(row.recruiter) ?? null;
   }
 
+  // Build employment index for every recruiter that actually appears in
+  // hireRows (or the target roster) so the client can filter to active.
+  const recruiterNames = new Set<string>();
+  for (const row of hireRows) {
+    if (row.recruiter) recruiterNames.add(row.recruiter);
+  }
+  for (const t of targets) {
+    if (t.recruiter) recruiterNames.add(t.recruiter);
+  }
+
+  const employees = (employeesQuery?.rows ?? []).map((row) => ({
+    displayName: rowStr(row, "display_name"),
+    startDate: rowStr(row, "start_date") || null,
+    terminationDate: rowStr(row, "termination_date") || null,
+    department: rowStr(row, "department") || null,
+  }));
+
+  const employmentByRecruiter = buildEmploymentIndex(
+    employees,
+    recruiterNames,
+  );
+
   const syncedAt =
     allHires?.syncedAt ?? targetQuery?.syncedAt ?? null;
 
-  return { hireRows, targets, syncedAt };
+  return { hireRows, targets, employmentByRecruiter, syncedAt };
 }

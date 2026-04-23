@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addMonths,
   aggregateHiresByRecruiterMonth,
+  buildEmploymentIndex,
   buildRecruiterSummaries,
   buildTeamChartSeries,
   currentMonthKey,
@@ -205,6 +206,90 @@ describe("currentMonthKey", () => {
     expect(currentMonthKey(new Date("2026-04-23T08:30:00Z"))).toBe("2026-04");
     expect(currentMonthKey(new Date("2026-01-01T00:00:00Z"))).toBe("2026-01");
     expect(currentMonthKey(new Date("2025-12-31T23:59:59Z"))).toBe("2025-12");
+  });
+});
+
+describe("buildEmploymentIndex", () => {
+  const today = new Date("2026-04-23T00:00:00Z");
+
+  const employees = [
+    {
+      displayName: "Lucy Lynn",
+      startDate: "2021-01-15",
+      terminationDate: null,
+      department: "People",
+    },
+    {
+      displayName: "Chris Rea",
+      startDate: "2023-05-01",
+      terminationDate: "2025-09-22",
+      department: "Talent",
+    },
+    {
+      displayName: "Florian Rose",
+      startDate: "2023-05-01",
+      // Future termination date — still active today.
+      terminationDate: "2026-06-17",
+      department: "People",
+    },
+  ];
+
+  it("flags past termination dates as departed and future ones as active", () => {
+    const idx = buildEmploymentIndex(
+      employees,
+      ["Lucy Lynn", "Chris Rea", "Florian Rose"],
+      today,
+    );
+    expect(idx["Lucy Lynn"]?.status).toBe("active");
+    expect(idx["Chris Rea"]?.status).toBe("departed");
+    expect(idx["Chris Rea"]?.terminationDate).toBe("2025-09-22");
+    expect(idx["Florian Rose"]?.status).toBe("active");
+    expect(idx["Florian Rose"]?.terminationDate).toBe("2026-06-17");
+  });
+
+  it("returns unknown for recruiters with no match", () => {
+    const idx = buildEmploymentIndex(employees, ["Someone External"], today);
+    expect(idx["Someone External"]?.status).toBe("unknown");
+  });
+
+  it("matches on first/last name variants when middle names differ", () => {
+    const idx = buildEmploymentIndex(
+      [
+        {
+          displayName: "Jamie A. Davies",
+          startDate: "2022-01-01",
+          terminationDate: "2025-07-11",
+          department: "Talent",
+        },
+      ],
+      ["Jamie Davies"],
+      today,
+    );
+    expect(idx["Jamie Davies"]?.status).toBe("departed");
+    expect(idx["Jamie Davies"]?.terminationDate).toBe("2025-07-11");
+  });
+
+  it("prefers a record without termination over one with when the same name exists twice", () => {
+    // E.g. someone who left and was later rehired — the active record should win.
+    const idx = buildEmploymentIndex(
+      [
+        {
+          displayName: "Angela Komornik",
+          startDate: "2022-01-01",
+          terminationDate: "2024-05-01",
+          department: "Talent",
+        },
+        {
+          displayName: "Angela Komornik",
+          startDate: "2025-01-01",
+          terminationDate: null,
+          department: "Talent",
+        },
+      ],
+      ["Angela Komornik"],
+      today,
+    );
+    expect(idx["Angela Komornik"]?.status).toBe("active");
   });
 });
 

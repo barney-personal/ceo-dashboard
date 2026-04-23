@@ -1,7 +1,11 @@
 import { render, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { TalentPageClient } from "../talent-page-client";
-import type { TalentHireRow, TalentTargetRow } from "@/lib/data/talent-utils";
+import type {
+  EmploymentRecord,
+  TalentHireRow,
+  TalentTargetRow,
+} from "@/lib/data/talent-utils";
 
 // The LineChart uses d3 and reads element sizes from the DOM — jsdom doesn't
 // lay anything out, so we stub clientWidth and getBoundingClientRect just
@@ -71,6 +75,13 @@ function hire(
   };
 }
 
+const UNKNOWN_EMPLOYMENT: EmploymentRecord = {
+  status: "unknown",
+  terminationDate: null,
+  matchedName: null,
+  department: null,
+};
+
 describe("TalentPageClient", () => {
   it("renders summary cards, chart section, and per-recruiter table with real-shaped data", () => {
     const hireRows: TalentHireRow[] = [
@@ -96,11 +107,16 @@ describe("TalentPageClient", () => {
         teamQtd: 20,
       },
     ];
+    const employmentByRecruiter: Record<string, EmploymentRecord> = {
+      Lucy: UNKNOWN_EMPLOYMENT,
+      Ellis: UNKNOWN_EMPLOYMENT,
+    };
 
     const { container } = render(
       <TalentPageClient
         hireRows={hireRows}
         targets={targets}
+        employmentByRecruiter={employmentByRecruiter}
         modeUrl="https://app.mode.com/cleoai/reports/e9766a6cd260"
         emptyReason={null}
       />,
@@ -143,11 +159,17 @@ describe("TalentPageClient", () => {
       { recruiter: "Ellis", tech: "Data", hiresQtd: 3, targetQtd: 4, teamQtd: 20 },
       { recruiter: "Beth", tech: "Data", hiresQtd: 8, targetQtd: 6, teamQtd: 20 },
     ];
+    const employmentByRecruiter: Record<string, EmploymentRecord> = {
+      Lucy: { status: "active", terminationDate: null, matchedName: "Lucy", department: "People" },
+      Ellis: { status: "active", terminationDate: null, matchedName: "Ellis", department: "People" },
+      Beth: { status: "active", terminationDate: null, matchedName: "Beth", department: "People" },
+    };
 
     const { container, getByRole } = render(
       <TalentPageClient
         hireRows={hireRows}
         targets={targets}
+        employmentByRecruiter={employmentByRecruiter}
         modeUrl="https://app.mode.com/cleoai/reports/e9766a6cd260"
         emptyReason={null}
       />,
@@ -174,11 +196,68 @@ describe("TalentPageClient", () => {
     expect(rowNames()).toEqual(["Beth", "Lucy", "Ellis"]);
   });
 
+  it("hides departed recruiters by default and reveals them via the filter", () => {
+    const hireRows: TalentHireRow[] = [
+      hire("Lucy", "2026-01", 2),
+      hire("Lucy", "2026-02", 2),
+      hire("Lucy", "2026-03", 2),
+      hire("Chris", "2025-08", 3),
+      hire("Chris", "2025-09", 2),
+    ];
+    const targets: TalentTargetRow[] = [
+      { recruiter: "Lucy", tech: "Tech", hiresQtd: 4, targetQtd: 5, teamQtd: 20 },
+    ];
+    const employmentByRecruiter: Record<string, EmploymentRecord> = {
+      Lucy: { status: "active", terminationDate: null, matchedName: "Lucy", department: "People" },
+      Chris: {
+        status: "departed",
+        terminationDate: "2025-09-22",
+        matchedName: "Chris Rea",
+        department: "Talent",
+      },
+    };
+
+    const { container, getByRole } = render(
+      <TalentPageClient
+        hireRows={hireRows}
+        targets={targets}
+        employmentByRecruiter={employmentByRecruiter}
+        modeUrl="https://app.mode.com/cleoai/reports/e9766a6cd260"
+        emptyReason={null}
+      />,
+    );
+
+    const rowNames = () =>
+      Array.from(container.querySelectorAll("tbody tr td:first-child"))
+        .map((el) => el.textContent?.trim())
+        .filter(Boolean);
+
+    // Default filter is "Active" — Chris should be hidden.
+    expect(rowNames()).toEqual(["Lucy"]);
+    // The filter control should report accurate counts.
+    expect(container.textContent).toContain("Active (1)");
+    expect(container.textContent).toContain("Departed (1)");
+
+    // Switch to Departed — now only Chris, with a "left" badge.
+    fireEvent.click(getByRole("button", { name: /Departed/ }));
+    expect(rowNames()?.[0]).toContain("Chris");
+    // Badge text uses the abbreviated month/year.
+    expect(container.textContent).toMatch(/left .*2025/i);
+
+    // Switch to All — both visible (Chris's cell also has the "left" badge).
+    fireEvent.click(getByRole("button", { name: /^All/ }));
+    const all = rowNames();
+    expect(all).toHaveLength(2);
+    expect(all.some((n) => n?.startsWith("Lucy"))).toBe(true);
+    expect(all.some((n) => n?.startsWith("Chris"))).toBe(true);
+  });
+
   it("renders an empty state when emptyReason is provided", () => {
     const { container } = render(
       <TalentPageClient
         hireRows={[]}
         targets={[]}
+        employmentByRecruiter={{}}
         modeUrl="https://app.mode.com/cleoai/reports/e9766a6cd260"
         emptyReason="No data synced yet"
       />,
