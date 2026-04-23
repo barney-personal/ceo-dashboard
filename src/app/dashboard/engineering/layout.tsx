@@ -43,6 +43,7 @@ export default async function EngineeringLayout({
           showImpact={hasAccess(role, "leadership")}
           showImpactModel={hasAccess(role, "manager")}
           showCodeReview={hasAccess(role, "ceo")}
+          showRanking={hasAccess(role, "ceo")}
         />
       </Suspense>
 
