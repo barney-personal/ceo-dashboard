@@ -14,9 +14,11 @@ export const metadata = {
 // aren't exposed on the everyone-accessible Engineers table scrubbed.
 // `startDate` is excluded from the engineer-ranking payload deliberately
 // (see src/lib/data/engineering.ts) to avoid leaking hire dates to the
-// whole company; `location` isn't on that page at all. Keeping parity here
-// means opening Impact doesn't widen data exposure beyond what already
-// ships to `everyone`.
+// whole company; `location` isn't on that page at all. `bucketStart` on
+// tenureMonth=0 rows is effectively the hire date, so it has to go too —
+// charts only need the bucket index. Keeping parity here means opening
+// Impact doesn't widen data exposure beyond what already ships to
+// `everyone`.
 function scrubForNonLeadership(analysis: ImpactAnalysis): ImpactAnalysis {
   return {
     ...analysis,
@@ -24,6 +26,10 @@ function scrubForNonLeadership(analysis: ImpactAnalysis): ImpactAnalysis {
       ...e,
       startDate: "",
       location: null,
+    })),
+    tenureBuckets: analysis.tenureBuckets.map((b) => ({
+      ...b,
+      bucketStart: "",
     })),
   };
 }
