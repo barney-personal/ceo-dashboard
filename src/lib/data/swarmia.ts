@@ -36,7 +36,7 @@ async function safeLoad<T>(
   } catch (err) {
     // Swarmia upstream returns transient 5xx during report regeneration.
     // After one client-level retry (see integrations/swarmia.ts), those are
-    // handled with a UI fallback — group them under a single info-level
+    // handled with a UI fallback — group them under a single warning-level
     // Sentry issue rather than paging on every user view. Non-5xx (auth
     // failures, parse errors, network errors) keep full exception capture.
     const is5xx =

@@ -203,12 +203,27 @@ export async function runCodeReviewAnalysis(
   }
   let nextIndex = 0;
   const workerCount = Math.min(concurrency, toRun.length);
+  // Track attempts and 404s per repo so we can distinguish a one-off
+  // deleted PR (quiet info) from a token that has lost access to a whole
+  // repo (loud exception). GitHub returns 404 — not 403 — for private
+  // resources the token can't see, so a single 404 is ambiguous; a
+  // repo-wide 404 pattern is the unambiguous access-regression signal.
+  const perRepoStats = new Map<string, { total: number; notFound: number }>();
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (!opts.signal?.aborted) {
         const index = nextIndex++;
         const c = toRun[index];
         if (!c) return;
+
+        const stats =
+          perRepoStats.get(c.repo) ??
+          (() => {
+            const fresh = { total: 0, notFound: 0 };
+            perRepoStats.set(c.repo, fresh);
+            return fresh;
+          })();
+        stats.total += 1;
 
         try {
           const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
@@ -227,11 +242,12 @@ export async function runCodeReviewAnalysis(
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
-          // 404s mean the PR (or containing repo) has been deleted / renamed
-          // upstream — data cleanup, not a bug. Track as a handled miss so
-          // Sentry stops paging on every cron run.
           const is404 = err instanceof GitHubApiError && err.status === 404;
           if (is404) {
+            stats.notFound += 1;
+            // Individual 404 = PR was deleted / renamed upstream (data
+            // cleanup, not a bug). Repo-wide escalation happens after
+            // the worker pool drains.
             Sentry.captureMessage("Code review PR fetch returned 404", {
               level: "info",
               fingerprint: ["code-review", "pr-fetch-404"],
@@ -247,6 +263,31 @@ export async function runCodeReviewAnalysis(
       }
     }),
   );
+
+  // Access-regression detector: if every attempt against a repo 404'd and
+  // there were at least 3 attempts, the token probably lost access to that
+  // repo (token rotation, private-repo permission removed, repo renamed
+  // without updating `githubPrs.repo`, etc). Emit a distinct exception so
+  // Sentry actually pages on it, separate from the per-PR info stream.
+  for (const [repo, stats] of perRepoStats) {
+    if (stats.total >= 3 && stats.notFound === stats.total) {
+      Sentry.captureException(
+        new Error(
+          `Code review: ${stats.notFound}/${stats.total} PRs returned 404 for ${repo} — possible token access regression`,
+        ),
+        {
+          level: "error",
+          fingerprint: ["code-review", "repo-access-regression", repo],
+          tags: {
+            feature: "code-review",
+            repo,
+            access_regression_suspected: "true",
+          },
+          extra: { repo, total: stats.total, notFound: stats.notFound },
+        },
+      );
+    }
+  }
 
   return {
     candidatesConsidered: candidates.length,

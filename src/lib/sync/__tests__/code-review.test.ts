@@ -250,7 +250,7 @@ describe("runCodeReviewAnalysis", () => {
     expect(result.failed[0].reason).toContain("LLM down");
   });
 
-  it("treats GitHub 404 on a PR fetch as a soft miss (info, not exception)", async () => {
+  it("treats an isolated GitHub 404 as a soft miss (info, not exception)", async () => {
     const { GitHubApiError } = await import("@/lib/integrations/github");
     mockCaptureException.mockReset();
     mockCaptureMessage.mockReset();
@@ -269,6 +269,86 @@ describe("runCodeReviewAnalysis", () => {
       "Code review PR fetch returned 404",
       expect.objectContaining({ level: "info" }),
     );
+  });
+
+  it("escalates to captureException when a whole repo 404s (access regression)", async () => {
+    const { GitHubApiError } = await import("@/lib/integrations/github");
+    mockCaptureException.mockReset();
+    mockCaptureMessage.mockReset();
+
+    stubPrsQuery([
+      { repo: "acme/api", prNumber: 1, authorLogin: "alice", mergedAt: new Date() },
+      { repo: "acme/api", prNumber: 2, authorLogin: "bob", mergedAt: new Date() },
+      { repo: "acme/api", prNumber: 3, authorLogin: "carol", mergedAt: new Date() },
+    ]);
+    mockFetchPayload.mockRejectedValue(
+      new GitHubApiError(404, "/repos/acme/api/pulls/*", "Not Found"),
+    );
+
+    const result = await runCodeReviewAnalysis();
+    expect(result.failed).toHaveLength(3);
+    // Each individual 404 still logs as info
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(3);
+    // And the pool emits exactly one access-regression exception for the repo
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    const [err, ctx] = mockCaptureException.mock.calls[0];
+    expect((err as Error).message).toMatch(/acme\/api/);
+    expect((err as Error).message).toMatch(/access regression/);
+    expect(ctx).toEqual(
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          access_regression_suspected: "true",
+          repo: "acme/api",
+        }),
+      }),
+    );
+  });
+
+  it("does not escalate when fewer than 3 PRs 404 on the same repo", async () => {
+    const { GitHubApiError } = await import("@/lib/integrations/github");
+    mockCaptureException.mockReset();
+    mockCaptureMessage.mockReset();
+
+    stubPrsQuery([
+      { repo: "acme/api", prNumber: 1, authorLogin: "alice", mergedAt: new Date() },
+      { repo: "acme/api", prNumber: 2, authorLogin: "bob", mergedAt: new Date() },
+    ]);
+    mockFetchPayload.mockRejectedValue(
+      new GitHubApiError(404, "/repos/acme/api/pulls/*", "Not Found"),
+    );
+
+    const result = await runCodeReviewAnalysis();
+    expect(result.failed).toHaveLength(2);
+    expect(mockCaptureMessage).toHaveBeenCalledTimes(2);
+    // Below the ≥3-attempt threshold — no access-regression escalation
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  it("does not escalate when the repo has some successes mixed with 404s", async () => {
+    const { GitHubApiError } = await import("@/lib/integrations/github");
+    mockCaptureException.mockReset();
+    mockCaptureMessage.mockReset();
+
+    stubPrsQuery([
+      { repo: "acme/api", prNumber: 1, authorLogin: "alice", mergedAt: new Date() },
+      { repo: "acme/api", prNumber: 2, authorLogin: "bob", mergedAt: new Date() },
+      { repo: "acme/api", prNumber: 3, authorLogin: "carol", mergedAt: new Date() },
+    ]);
+    mockFetchPayload
+      .mockResolvedValueOnce(mockPayload())
+      .mockRejectedValueOnce(
+        new GitHubApiError(404, "/repos/acme/api/pulls/2", "Not Found"),
+      )
+      .mockRejectedValueOnce(
+        new GitHubApiError(404, "/repos/acme/api/pulls/3", "Not Found"),
+      );
+    mockAnalysePR.mockResolvedValue(mockAnalysis());
+
+    const result = await runCodeReviewAnalysis();
+    expect(result.analysed).toBe(1);
+    expect(result.failed).toHaveLength(2);
+    // The repo had a success, so it still has access — no escalation.
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
   it("re-analyses cached PRs when force=true", async () => {
