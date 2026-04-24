@@ -8,6 +8,8 @@ import type {
   EngineerRollup,
   PrReviewEntry,
   SecondLookReason,
+  SquadCodeReviewView,
+  SquadRollup,
 } from "@/lib/data/code-review";
 import type {
   AnalysisCategory,
@@ -15,6 +17,8 @@ import type {
   ModelAgreementLevel,
   SecondOpinionReason,
 } from "@/lib/integrations/code-review-analyser";
+
+type ReviewMode = "engineers" | "squads";
 
 const FLAG_LABEL: Record<DiagnosticFlag, string> = {
   low_evidence: "Light sample",
@@ -98,9 +102,17 @@ const SECOND_OPINION_LABEL: Record<SecondOpinionReason, string> = {
   revert_signal: "Revert nearby",
 };
 
-export function CodeReviewReport({ view }: { view: CodeReviewView }) {
+export function CodeReviewReport({
+  view,
+  squadView,
+}: {
+  view: CodeReviewView;
+  squadView: SquadCodeReviewView;
+}) {
+  const [mode, setMode] = useState<ReviewMode>("engineers");
   const [activeFlag, setActiveFlag] = useState<DiagnosticFlag | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedSquad, setSelectedSquad] = useState<string | null>(null);
 
   const visible = useMemo(() => {
     if (!activeFlag) return view.engineers;
@@ -112,20 +124,82 @@ export function CodeReviewReport({ view }: { view: CodeReviewView }) {
     [view.engineers, selected],
   );
 
+  const selectedSquadRollup = useMemo(
+    () =>
+      squadView.squads.find((squad) => squad.squadName === selectedSquad) ??
+      null,
+    [squadView.squads, selectedSquad],
+  );
+
   return (
     <div className="space-y-6">
       <Header view={view} />
       <ReassuranceBanner />
-      <FlagPills view={view} active={activeFlag} onChange={setActiveFlag} />
-      <EngineerTable
-        rows={visible}
-        windowDays={view.windowDays}
-        onSelect={setSelected}
-      />
+      <ViewToggle mode={mode} onChange={setMode} />
+      {mode === "engineers" ? (
+        <>
+          <FlagPills view={view} active={activeFlag} onChange={setActiveFlag} />
+          <EngineerTable
+            rows={visible}
+            windowDays={view.windowDays}
+            onSelect={setSelected}
+          />
+        </>
+      ) : (
+        <SquadTable
+          squadView={squadView}
+          onSelect={setSelectedSquad}
+        />
+      )}
       <FooterNote />
       {selectedEngineer && (
         <Drawer engineer={selectedEngineer} onClose={() => setSelected(null)} />
       )}
+      {selectedSquadRollup && (
+        <SquadDrawer
+          squad={selectedSquadRollup}
+          onClose={() => setSelectedSquad(null)}
+          onSelectEngineer={(login) => {
+            setSelectedSquad(null);
+            setMode("engineers");
+            setSelected(login);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: ReviewMode;
+  onChange: (next: ReviewMode) => void;
+}) {
+  const options: Array<{ key: ReviewMode; label: string }> = [
+    { key: "engineers", label: "Engineers" },
+    { key: "squads", label: "Squads" },
+  ];
+  return (
+    <div className="flex items-center gap-1 rounded-lg border border-border/60 bg-muted/10 p-1 text-[12px] w-fit">
+      {options.map((option) => {
+        const active = option.key === mode;
+        return (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => onChange(option.key)}
+            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+              active
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {option.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -957,6 +1031,423 @@ function Stat({ label, value }: { label: string; value: string }) {
         {label}
       </dt>
       <dd className="mt-1 font-mono text-[12px] text-foreground">{value}</dd>
+    </div>
+  );
+}
+
+type SquadSortKey =
+  | "squad"
+  | "pillar"
+  | "engineers"
+  | "prCount"
+  | "evidence"
+  | "craft"
+  | "challenge"
+  | "landing"
+  | "snapshot";
+
+interface SquadColumnSpec {
+  key: SquadSortKey;
+  label: string;
+  tooltip: string;
+  align: "left" | "right";
+  defaultDirection: SortDirection;
+  numeric: boolean;
+  getValue: (squad: SquadRollup) => number | string | null;
+}
+
+const SQUAD_COLUMNS: SquadColumnSpec[] = [
+  {
+    key: "squad",
+    label: "Squad",
+    tooltip:
+      "Canonical squad name from the `squads` registry. Engineers are attached via Headcount SSoT → GitHub login map. Click any row to drill into the squad.",
+    align: "left",
+    defaultDirection: "asc",
+    numeric: false,
+    getValue: (squad) => squad.squadName.toLowerCase(),
+  },
+  {
+    key: "pillar",
+    label: "Pillar",
+    tooltip:
+      "Pillar the squad rolls up to, pulled from the `squads` registry. Blank if the squad isn't in the registry.",
+    align: "left",
+    defaultDirection: "asc",
+    numeric: false,
+    getValue: (squad) => (squad.pillar ?? "").toLowerCase(),
+  },
+  {
+    key: "engineers",
+    label: "Engineers",
+    tooltip:
+      "Engineers with at least one merged PR read in this window, resolved to this squad.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.engineerCount,
+  },
+  {
+    key: "prCount",
+    label: "PRs read",
+    tooltip:
+      "Merged PRs read across all engineers in this squad. The 'eff.' number is the recency- and confidence-weighted count.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.prCount,
+  },
+  {
+    key: "evidence",
+    label: "Evidence",
+    tooltip:
+      "How much the squad view has to go on (0–100%). 100% ≈ 20+ effective PRs. Thin evidence pulls the snapshot toward 50 on purpose.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.confidencePct,
+  },
+  {
+    key: "craft",
+    label: "Craft",
+    tooltip:
+      "Squad percentile (0–100) against other squads on the blended craft metric — execution, tests, risk handling, reviewability.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.qualityPercentile,
+  },
+  {
+    key: "challenge",
+    label: "Challenge",
+    tooltip:
+      "Squad percentile (0–100) for the technical difficulty of the work that landed. Higher means harder work than peer squads this window.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.difficultyPercentile,
+  },
+  {
+    key: "landing",
+    label: "Landing",
+    tooltip:
+      "Squad percentile (0–100) for smooth landings — no reverts, few post-review commits, clean merges.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.reliabilityPercentile,
+  },
+  {
+    key: "snapshot",
+    label: "Snapshot",
+    tooltip:
+      "Blended squad score (0–100). Same weighting as the engineer table (40/20/15/15/10 across craft/challenge/landing/review flow/throughput) with squad-level shrinkage toward 50 when evidence is thin.",
+    align: "right",
+    defaultDirection: "desc",
+    numeric: true,
+    getValue: (squad) => squad.finalScore,
+  },
+];
+
+function SquadTable({
+  squadView,
+  onSelect,
+}: {
+  squadView: SquadCodeReviewView;
+  onSelect: (squadName: string) => void;
+}) {
+  const [sortKey, setSortKey] = useState<SquadSortKey>("snapshot");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  const sortedRows = useMemo(() => {
+    const column =
+      SQUAD_COLUMNS.find((col) => col.key === sortKey) ?? SQUAD_COLUMNS[0];
+    const direction = sortDirection === "asc" ? 1 : -1;
+    const copy = [...squadView.squads];
+    copy.sort((a, b) => {
+      const aValue = column.getValue(a);
+      const bValue = column.getValue(b);
+      if (aValue === null && bValue === null) return 0;
+      if (aValue === null) return 1;
+      if (bValue === null) return -1;
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        if (aValue === bValue) return 0;
+        return aValue < bValue ? -1 * direction : 1 * direction;
+      }
+      return (
+        String(aValue).localeCompare(String(bValue), undefined, {
+          sensitivity: "base",
+        }) * direction
+      );
+    });
+    return copy;
+  }, [squadView.squads, sortKey, sortDirection]);
+
+  function handleSort(column: SquadColumnSpec) {
+    if (column.key === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(column.key);
+      setSortDirection(column.defaultDirection);
+    }
+  }
+
+  if (squadView.squads.length === 0) {
+    return (
+      <div className="rounded-lg border border-border/60 bg-muted/10 p-5 text-sm text-muted-foreground">
+        No squads resolved from the PRs in this window. This usually means the
+        Headcount SSoT, GitHub employee map, or `squads` registry isn&apos;t
+        lined up — check the admin status page.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto rounded-lg border border-border/60 bg-card shadow-warm">
+        <table className="min-w-full text-[12px]">
+          <thead className="bg-muted/20 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            <tr>
+              {SQUAD_COLUMNS.map((column) => {
+                const isActive = column.key === sortKey;
+                const indicator = isActive
+                  ? sortDirection === "asc"
+                    ? "▲"
+                    : "▼"
+                  : "↕";
+                return (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    aria-sort={
+                      isActive
+                        ? sortDirection === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                    className={`px-3 py-2 ${
+                      column.align === "right" ? "text-right" : "text-left"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleSort(column)}
+                      title={column.tooltip}
+                      className={`inline-flex cursor-help items-center gap-1 whitespace-nowrap uppercase tracking-[0.12em] transition-colors hover:text-foreground ${
+                        column.align === "right" ? "flex-row-reverse" : ""
+                      } ${isActive ? "text-foreground" : ""}`}
+                    >
+                      <span className="underline decoration-dotted decoration-muted-foreground/50 underline-offset-[3px]">
+                        {column.label}
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className={`text-[9px] ${
+                          isActive ? "opacity-100" : "opacity-40"
+                        }`}
+                      >
+                        {indicator}
+                      </span>
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map((squad, index) => (
+              <tr
+                key={squad.squadName}
+                onClick={() => onSelect(squad.squadName)}
+                className={`cursor-pointer border-t border-border/40 hover:bg-primary/5 ${
+                  index % 2 === 0 ? "bg-transparent" : "bg-muted/10"
+                }`}
+              >
+                <td className="px-3 py-2">
+                  <div className="font-medium text-foreground">
+                    {squad.squadName}
+                  </div>
+                </td>
+                <td className="px-3 py-2">
+                  {squad.pillar ? (
+                    <span className="rounded-full border border-border/60 bg-muted/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                      {squad.pillar}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {squad.engineerCount}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {squad.prCount}
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    ({squad.effectivePrCount.toFixed(1)} eff.)
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {squad.confidencePct}%
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {Math.round(squad.qualityPercentile)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {Math.round(squad.difficultyPercentile)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  {Math.round(squad.reliabilityPercentile)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono font-semibold text-foreground">
+                  {Math.round(squad.finalScore)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {squadView.unassignedEngineerCount > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          {squadView.unassignedEngineerCount} engineer
+          {squadView.unassignedEngineerCount === 1 ? "" : "s"} with{" "}
+          {squadView.unassignedPrCount} PR
+          {squadView.unassignedPrCount === 1 ? "" : "s"} in this window
+          couldn&apos;t be resolved to a squad — usually a missing Headcount
+          row or an unmapped GitHub login. They show up on the engineer view
+          but are excluded here.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SquadDrawer({
+  squad,
+  onClose,
+  onSelectEngineer,
+}: {
+  squad: SquadRollup;
+  onClose: () => void;
+  onSelectEngineer: (login: string) => void;
+}) {
+  const categories = (Object.entries(squad.categoryCounts) as Array<
+    [AnalysisCategory, number]
+  >)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-end bg-black/30 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-full w-full max-w-3xl flex-col overflow-y-auto rounded-xl border border-border/60 bg-card p-5 shadow-warm"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3 border-b border-border/60 pb-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
+              Squad · {squad.pillar ?? "no pillar"}
+            </p>
+            <h2 className="mt-1 font-display text-2xl italic tracking-tight text-foreground">
+              {squad.squadName}
+            </h2>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {squad.engineerCount} engineer
+              {squad.engineerCount === 1 ? "" : "s"} · {squad.prCount} merged
+              PR{squad.prCount === 1 ? "" : "s"} read ·{" "}
+              {squad.distinctRepos} repo{squad.distinctRepos === 1 ? "" : "s"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-md border border-border/60 px-2 py-1 text-[12px] text-muted-foreground hover:bg-muted/20"
+          >
+            Close
+          </button>
+        </div>
+
+        <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Stat label="Snapshot" value={String(Math.round(squad.finalScore))} />
+          <Stat label="Evidence" value={`${squad.confidencePct}%`} />
+          <Stat
+            label="PRs read"
+            value={`${squad.prCount} (${squad.effectivePrCount.toFixed(1)} eff.)`}
+          />
+          <Stat label="Engineers" value={String(squad.engineerCount)} />
+          <Stat label="Avg execution" value={squad.avgExecutionQuality.toFixed(1)} />
+          <Stat label="Avg tests" value={squad.avgTestAdequacy.toFixed(1)} />
+          <Stat label="Avg risk handling" value={squad.avgRiskHandling.toFixed(1)} />
+          <Stat label="Avg landing" value={squad.avgOutcomeScore.toFixed(0)} />
+        </dl>
+
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <Stat label="Craft (peer)" value={Math.round(squad.qualityPercentile).toString()} />
+          <Stat label="Challenge (peer)" value={Math.round(squad.difficultyPercentile).toString()} />
+          <Stat label="Landing (peer)" value={Math.round(squad.reliabilityPercentile).toString()} />
+          <Stat label="Review flow (peer)" value={Math.round(squad.reviewHealthPercentile).toString()} />
+          <Stat label="Throughput (peer)" value={Math.round(squad.throughputPercentile).toString()} />
+        </div>
+
+        {categories.length > 0 && (
+          <div className="mb-4 rounded-md border border-border/40 bg-muted/5 px-3 py-2">
+            <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/80">
+              Work mix
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {categories.map(([category, count]) => (
+                <span
+                  key={category}
+                  className="rounded-full border border-border/60 bg-muted/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground"
+                >
+                  {CATEGORY_LABEL[category]} · {count}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          Engineers in this squad ({squad.engineers.length})
+        </h3>
+        <ul className="mb-4 divide-y divide-border/40 rounded-lg border border-border/40">
+          {squad.engineers.map((engineer) => (
+            <li key={engineer.authorLogin}>
+              <button
+                type="button"
+                onClick={() => onSelectEngineer(engineer.authorLogin)}
+                className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-primary/5"
+              >
+                <div>
+                  <div className="text-[13px] font-medium text-foreground">
+                    {engineer.employeeName ?? engineer.authorLogin}
+                  </div>
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    @{engineer.authorLogin} · {engineer.prCount} PR
+                    {engineer.prCount === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <div className="font-mono text-[14px] font-semibold text-foreground">
+                  {Math.round(engineer.finalScore)}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <h3 className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          PRs shipped ({squad.prs.length})
+        </h3>
+        <ul className="space-y-3">
+          {squad.prs.map((pr) => (
+            <PrCard key={`${pr.repo}#${pr.prNumber}`} pr={pr} />
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

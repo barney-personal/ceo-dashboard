@@ -10,7 +10,11 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { getCodeReviewView } from "../code-review";
+import {
+  getCodeReviewView,
+  rollupSquadsFromEngineers,
+  type SquadLookup,
+} from "../code-review";
 import { RUBRIC_VERSION } from "@/lib/integrations/code-review-analyser";
 
 interface FakeAnalysisRow {
@@ -358,5 +362,117 @@ describe("getCodeReviewView", () => {
     expect(view.engineers).toHaveLength(2);
     expect(view.engineers[0].qualityPercentile).toBe(100);
     expect(view.engineers[1].qualityPercentile).toBe(0);
+  });
+});
+
+describe("rollupSquadsFromEngineers", () => {
+  function squadMap(
+    entries: Array<[string, SquadLookup]>,
+  ): Map<string, SquadLookup> {
+    return new Map(entries.map(([login, lookup]) => [login.toLowerCase(), lookup]));
+  }
+
+  it("groups engineers by squad and ranks a stronger squad above a weaker one", async () => {
+    mockChain(
+      [
+        row({ authorLogin: "alice", prNumber: 1, executionQuality: 5, testAdequacy: 5, outcomeScore: 95 }),
+        row({ authorLogin: "alice", prNumber: 2, executionQuality: 5, testAdequacy: 4, outcomeScore: 92 }),
+        row({ authorLogin: "bob", prNumber: 3, executionQuality: 5, testAdequacy: 5, outcomeScore: 94 }),
+        row({ authorLogin: "bob", prNumber: 4, executionQuality: 4, testAdequacy: 5, outcomeScore: 90 }),
+        row({ authorLogin: "carol", prNumber: 5, executionQuality: 2, testAdequacy: 2, outcomeScore: 55 }),
+        row({ authorLogin: "carol", prNumber: 6, executionQuality: 2, testAdequacy: 2, outcomeScore: 58 }),
+        row({ authorLogin: "dave", prNumber: 7, executionQuality: 2, testAdequacy: 3, outcomeScore: 60 }),
+        row({ authorLogin: "dave", prNumber: 8, executionQuality: 3, testAdequacy: 2, outcomeScore: 62 }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    const map = squadMap([
+      ["alice", { squadName: "Payments", pillar: "Core" }],
+      ["bob", { squadName: "Payments", pillar: "Core" }],
+      ["carol", { squadName: "Growth", pillar: "GTM" }],
+      ["dave", { squadName: "Growth", pillar: "GTM" }],
+    ]);
+
+    const { squads, unassignedEngineerCount } = rollupSquadsFromEngineers(
+      view.engineers,
+      map,
+    );
+    expect(unassignedEngineerCount).toBe(0);
+    expect(squads).toHaveLength(2);
+    expect(squads[0].squadName).toBe("Payments");
+    expect(squads[0].engineerCount).toBe(2);
+    expect(squads[0].prCount).toBe(4);
+    expect(squads[0].pillar).toBe("Core");
+    expect(squads[0].finalScore).toBeGreaterThan(squads[1].finalScore);
+    expect(squads[0].qualityPercentile).toBe(100);
+    expect(squads[1].qualityPercentile).toBe(0);
+  });
+
+  it("counts engineers with no squad mapping as unassigned", async () => {
+    mockChain(
+      [
+        row({ authorLogin: "alice", prNumber: 10 }),
+        row({ authorLogin: "alice", prNumber: 11 }),
+        row({ authorLogin: "nobody", prNumber: 12 }),
+        row({ authorLogin: "nobody", prNumber: 13 }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    const map = squadMap([
+      ["alice", { squadName: "Payments", pillar: "Core" }],
+    ]);
+
+    const { squads, unassignedEngineerCount, unassignedPrCount } =
+      rollupSquadsFromEngineers(view.engineers, map);
+    expect(squads).toHaveLength(1);
+    expect(squads[0].squadName).toBe("Payments");
+    expect(unassignedEngineerCount).toBe(1);
+    expect(unassignedPrCount).toBe(2);
+  });
+
+  it("shrinks thin-evidence squads toward neutral 50", async () => {
+    // Payments: one engineer with one very strong PR — thin evidence.
+    // Growth: three engineers each with four mid PRs — much more evidence.
+    mockChain(
+      [
+        row({ authorLogin: "alice", prNumber: 20, executionQuality: 5, testAdequacy: 5, outcomeScore: 98 }),
+        ...["g1", "g2", "g3"].flatMap((login, i) =>
+          [0, 1, 2, 3].map((n) =>
+            row({
+              authorLogin: login,
+              prNumber: 30 + i * 10 + n,
+              executionQuality: 3,
+              testAdequacy: 3,
+              outcomeScore: 78,
+            }),
+          ),
+        ),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    const map = squadMap([
+      ["alice", { squadName: "Payments", pillar: "Core" }],
+      ["g1", { squadName: "Growth", pillar: "GTM" }],
+      ["g2", { squadName: "Growth", pillar: "GTM" }],
+      ["g3", { squadName: "Growth", pillar: "GTM" }],
+    ]);
+
+    const { squads } = rollupSquadsFromEngineers(view.engineers, map);
+    const payments = squads.find((s) => s.squadName === "Payments")!;
+    const growth = squads.find((s) => s.squadName === "Growth")!;
+    // Payments has the higher rawScore (stronger single PR) but the shrinkage
+    // toward 50 at 20 effective PRs should pull it closer to neutral than
+    // Growth's well-evidenced raw score.
+    expect(payments.rawScore).toBeGreaterThan(growth.rawScore);
+    expect(Math.abs(payments.finalScore - 50)).toBeLessThan(
+      Math.abs(payments.rawScore - 50),
+    );
+    expect(growth.effectivePrCount).toBeGreaterThan(payments.effectivePrCount);
   });
 });

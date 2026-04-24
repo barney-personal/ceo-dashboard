@@ -6,7 +6,12 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { CodeReviewReport } from "../code-review-report";
-import type { CodeReviewView, EngineerRollup } from "@/lib/data/code-review";
+import type {
+  CodeReviewView,
+  EngineerRollup,
+  SquadCodeReviewView,
+  SquadRollup,
+} from "@/lib/data/code-review";
 
 function makeRollup(overrides: Partial<EngineerRollup> = {}): EngineerRollup {
   return {
@@ -99,6 +104,61 @@ function makeView(engineers: EngineerRollup[]): CodeReviewView {
   };
 }
 
+function makeSquadView(squads: SquadRollup[] = []): SquadCodeReviewView {
+  return {
+    windowDays: 90,
+    rubricVersion: "v2.0-dual-review",
+    analysedAtLatest: new Date("2026-04-23T12:00:00Z"),
+    squads,
+    totalPrs: squads.reduce((sum, squad) => sum + squad.prCount, 0),
+    unassignedEngineerCount: 0,
+    unassignedPrCount: 0,
+  };
+}
+
+function makeSquad(
+  engineers: EngineerRollup[],
+  overrides: Partial<SquadRollup> = {},
+): SquadRollup {
+  return {
+    squadName: "Payments",
+    pillar: "Core",
+    engineerCount: engineers.length,
+    prCount: engineers.reduce((sum, engineer) => sum + engineer.prCount, 0),
+    effectivePrCount: engineers.reduce(
+      (sum, engineer) => sum + engineer.effectivePrCount,
+      0,
+    ),
+    confidencePct: 70,
+    distinctRepos: 1,
+    avgTechnicalDifficulty: 3.5,
+    avgExecutionQuality: 4.1,
+    avgTestAdequacy: 3.8,
+    avgRiskHandling: 3.9,
+    avgReviewability: 4.0,
+    avgOutcomeScore: 82,
+    qualityPercentile: 88,
+    difficultyPercentile: 72,
+    reliabilityPercentile: 79,
+    reviewHealthPercentile: 80,
+    throughputPercentile: 67,
+    rawScore: 81,
+    finalScore: 74,
+    categoryCounts: {
+      bug_fix: 1,
+      feature: 2,
+      refactor: 1,
+      infra: 0,
+      test: 1,
+      docs: 0,
+      chore: 0,
+    },
+    engineers,
+    prs: engineers.flatMap((engineer) => engineer.prs),
+    ...overrides,
+  };
+}
+
 describe("<CodeReviewReport />", () => {
   it("renders an engineer row with final score, confidence, and flags", () => {
     render(
@@ -106,6 +166,7 @@ describe("<CodeReviewReport />", () => {
         view={makeView([
           makeRollup({ flags: ["has_concerning_pr", "review_churn_high"] }),
         ])}
+        squadView={makeSquadView()}
       />,
     );
     expect(screen.getByText("Alice A")).toBeInTheDocument();
@@ -116,7 +177,12 @@ describe("<CodeReviewReport />", () => {
   });
 
   it("opens the drawer with PR detail on row click", () => {
-    render(<CodeReviewReport view={makeView([makeRollup()])} />);
+    render(
+      <CodeReviewReport
+        view={makeView([makeRollup()])}
+        squadView={makeSquadView()}
+      />,
+    );
     expect(screen.queryByText(/Add the feature foo/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Alice A"));
     expect(screen.getAllByText(/Add the feature foo/).length).toBeGreaterThan(0);
@@ -126,7 +192,12 @@ describe("<CodeReviewReport />", () => {
   });
 
   it("renders the reassurance banner above the table", () => {
-    render(<CodeReviewReport view={makeView([makeRollup()])} />);
+    render(
+      <CodeReviewReport
+        view={makeView([makeRollup()])}
+        squadView={makeSquadView()}
+      />,
+    );
     expect(screen.getByText(/How to read this fairly/)).toBeInTheDocument();
   });
 
@@ -145,6 +216,7 @@ describe("<CodeReviewReport />", () => {
             flags: [],
           }),
         ])}
+        squadView={makeSquadView()}
       />,
     );
 
@@ -154,5 +226,29 @@ describe("<CodeReviewReport />", () => {
     );
     expect(screen.queryByText("Bob B")).not.toBeInTheDocument();
     expect(screen.getByText("Alice A")).toBeInTheDocument();
+  });
+
+  it("switches to the squad view and opens a squad drawer on click", () => {
+    const alice = makeRollup({
+      authorLogin: "alice",
+      employeeName: "Alice A",
+    });
+    render(
+      <CodeReviewReport
+        view={makeView([alice])}
+        squadView={makeSquadView([
+          makeSquad([alice], { squadName: "Payments", pillar: "Core" }),
+        ])}
+      />,
+    );
+    expect(screen.queryByText("Payments")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Squads" }));
+    expect(screen.getByText("Payments")).toBeInTheDocument();
+    expect(screen.getByText("Core")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Payments"));
+    expect(screen.getByText(/Engineers in this squad/)).toBeInTheDocument();
+    expect(screen.getByText(/PRs shipped/)).toBeInTheDocument();
   });
 });
