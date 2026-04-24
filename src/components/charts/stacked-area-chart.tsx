@@ -4,7 +4,12 @@ import { useRef, useEffect, useCallback } from "react";
 import { select, pointer } from "d3-selection";
 import { scaleTime, scaleLinear } from "d3-scale";
 import { axisLeft, axisBottom } from "d3-axis";
-import { area as d3Area, stack as d3Stack, curveMonotoneX } from "d3-shape";
+import {
+  area as d3Area,
+  stack as d3Stack,
+  curveMonotoneX,
+  type SeriesPoint,
+} from "d3-shape";
 import { extent, max, bisector } from "d3-array";
 import { timeFormat } from "d3-time-format";
 import { timeMonth } from "d3-time";
@@ -201,7 +206,7 @@ export function StackedAreaChart({
       .call((sel) => sel.selectAll(".tick line").remove());
 
     // Areas
-    const areaGenerator = d3Area<{ 0: number; 1: number; data: (typeof parsed)[number] }>()
+    const areaGenerator = d3Area<SeriesPoint<ParsedRow>>()
       .x((d) => x(d.data._date))
       .y0((d) => y(d[0]))
       .y1((d) => y(d[1]))
@@ -210,8 +215,7 @@ export function StackedAreaChart({
     stacked.forEach((layer, i) => {
       const s = series[i];
       g.append("path")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .datum(layer as any)
+        .datum(layer)
         .attr("fill", s.color)
         .attr("fill-opacity", 0.85)
         .attr("stroke", s.color)
