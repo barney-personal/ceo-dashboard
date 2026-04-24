@@ -369,7 +369,7 @@ function ContrastTable({ engineer }: { engineer: HrEngineerEvidence }) {
         <span className="font-medium">lower = better</span> invert the
         reading — the colour coding and percentile are already inverted for
         those so <span className="text-destructive font-medium">red</span>{" "}
-        always means "this engineer is worse than the cohort on this signal."
+        always means &ldquo;this engineer is worse than the cohort on this signal.&rdquo;
         Red ≲ 50% gap vs median, <span className="text-warning">amber</span>{" "}
         ≲ 50–80%. Discipline cohort is used for the percentile where n ≥ 5,
         else the whole cohort.
