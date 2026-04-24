@@ -122,12 +122,26 @@ function RankCell({
   groupCounts: Map<number, number>;
 }) {
   const tieSize = groupCounts.get(entry.tieGroupId) ?? 1;
+  const tied = tieSize > 1;
+  // Render competition-rank: every member of a tie group shows the same
+  // displayRank (e.g. `#1, #1, #3`). Sequential `entry.rank` is intentionally
+  // hidden from the UI because the confidence band says the order inside the
+  // tie group is not real.
   return (
-    <div className="flex items-baseline gap-2">
+    <div
+      className="flex items-baseline gap-2"
+      aria-label={
+        tied
+          ? `Tied at rank ${entry.displayRank} with ${tieSize - 1} other engineer${
+              tieSize - 1 === 1 ? "" : "s"
+            }`
+          : `Rank ${entry.displayRank}`
+      }
+    >
       <span className="font-display text-base italic tabular-nums text-foreground">
-        #{entry.rank}
+        #{entry.displayRank}
       </span>
-      {tieSize > 1 && (
+      {tied && (
         <span className="rounded-sm border border-warning/40 bg-warning/10 px-1 text-[10px] uppercase tracking-[0.12em] text-warning">
           tied · {tieSize}
         </span>

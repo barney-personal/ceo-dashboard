@@ -1250,7 +1250,21 @@ export function findEngineerInComposite(
 // -----------------------------------------------------------------------------
 
 export interface RankedCompositeEntry extends CompositeEntry {
+  /**
+   * Stable positional index in the sorted output (1-based). Used internally
+   * for layout, sort assertions, and tests that need a deterministic order.
+   * NOT for user-visible rank labels — multiple entries in the same tie group
+   * still receive distinct `rank` values so rendering remains deterministic.
+   */
   rank: number;
+  /**
+   * Competition-style rank shown in the UI. Every member of a tie group
+   * receives the rank of the group's first positional index (1-based), so a
+   * two-way tie at the top renders as `#1, #1, #3` rather than `#1, #2, #3`.
+   * The visible label must use this value — not `rank` — to avoid implying an
+   * ordering inside the tie group that the confidence band says is not real.
+   */
+  displayRank: number;
   tieGroupId: number;
   quartile: 1 | 2 | 3 | 4;
   quartileFlag: QuartileFlag;
@@ -1445,6 +1459,18 @@ export function rankWithConfidence(
     }
   }
 
+  // --- Display rank per group (competition-rank) ---
+  // Every member of a tie group shares the rank of the group's first member.
+  // Subsequent groups jump to their own positional index, so a two-way tie at
+  // the top yields ranks [1, 1, 3, ...] not [1, 2, 3, ...].
+  const groupDisplayRank = new Map<number, number>();
+  for (let i = 0; i < sorted.length; i++) {
+    const gid = tieGroupIds[i];
+    if (!groupDisplayRank.has(gid)) {
+      groupDisplayRank.set(gid, i + 1);
+    }
+  }
+
   // --- Assemble output ---
   return sorted.map((entry, i) => {
     const gid = tieGroupIds[i];
@@ -1455,6 +1481,7 @@ export function rankWithConfidence(
     return {
       ...entry,
       rank: i + 1,
+      displayRank: groupDisplayRank.get(gid) ?? i + 1,
       tieGroupId: gid,
       quartile: assignQuartile(entry.score),
       quartileFlag: flag,

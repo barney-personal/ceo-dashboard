@@ -84,7 +84,7 @@ describe("StackRankTable", () => {
         within(row).getByText(new RegExp(`^${entry.displayName}$`)),
       ).toBeInTheDocument();
       expect(
-        within(row).getByText(new RegExp(`#${entry.rank}\\b`)),
+        within(row).getByText(new RegExp(`#${entry.displayRank}\\b`)),
       ).toBeInTheDocument();
       expect(row.getAttribute("data-quartile")).toBe(String(entry.quartile));
       expect(row.getAttribute("data-flag")).toBe(entry.quartileFlag ?? "none");
@@ -154,6 +154,144 @@ describe("StackRankTable", () => {
     const firstTieGroup = ranked[0].tieGroupId;
     for (const entry of ranked) {
       expect(entry.tieGroupId).toBe(firstTieGroup);
+    }
+  });
+
+  it("renders the same competition-style rank label for every member of a tie group", () => {
+    // Five engineers with overlapping confidence bands collapse into one tie
+    // group. The visible rank must be the same for all five, not `#1, #2, #3,
+    // #4, #5` with a tie badge — the badge alone still implies an ordering.
+    const identicalInputs: EngineerCompositeInput[] = [];
+    for (let i = 0; i < 5; i++) {
+      const email = `same${i}@meetcleo.com`;
+      identicalInputs.push(
+        engineer({
+          email,
+          displayName: `SAME ${i}`,
+          githubLogin: `same${i}`,
+          prCount: 12,
+          analysedPrCount: 10,
+          executionQualityMean: 3.5,
+          testAdequacyMean: 3.5,
+          riskHandlingMean: 3.5,
+          reviewabilityMean: 3.5,
+        }),
+      );
+    }
+    const bundle = buildComposite({ now: NOW, engineers: identicalInputs });
+    const ranked = rankWithConfidence(scopeComposite(bundle, {}));
+    expect(ranked.length).toBe(5);
+
+    render(<StackRankTable ranked={ranked} />);
+
+    const sharedDisplayRank = ranked[0].displayRank;
+    // All members of the only tie group share displayRank === 1.
+    expect(sharedDisplayRank).toBe(1);
+    for (const entry of ranked) {
+      expect(entry.displayRank).toBe(sharedDisplayRank);
+      const row = screen.getByTestId(`stack-rank-row-${entry.emailHash}`);
+      expect(within(row).getByText(/#1\b/)).toBeInTheDocument();
+      expect(within(row).queryByText(/#2\b/)).not.toBeInTheDocument();
+      expect(within(row).queryByText(/#3\b/)).not.toBeInTheDocument();
+    }
+    // Visible "#1" labels should appear once per tied row, no other rank
+    // numbers should leak out of the table.
+    const rankOneLabels = screen.getAllByText(/^#1$/);
+    expect(rankOneLabels.length).toBe(5);
+    expect(screen.queryByText(/^#2$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^#5$/)).not.toBeInTheDocument();
+  });
+
+  it("competition-rank jumps past the tie group size for the next non-tied row", () => {
+    // Two engineers tied at the top, then three with strictly higher-quality
+    // and well-separated confidence bands so they are NOT in the tie group.
+    // Expected displayRanks: [1, 1, 3, 4, 5] — the third row jumps to #3.
+    const inputs: EngineerCompositeInput[] = [];
+    // Two identical strong engineers (top tie).
+    for (let i = 0; i < 2; i++) {
+      inputs.push(
+        engineer({
+          email: `top${i}@meetcleo.com`,
+          displayName: `TOP ${i}`,
+          githubLogin: `top${i}`,
+          prCount: 60,
+          analysedPrCount: 50,
+          executionQualityMean: 4.8,
+          testAdequacyMean: 4.8,
+          riskHandlingMean: 4.8,
+          reviewabilityMean: 4.8,
+          revertRate: 0,
+          reviewParticipationRate: 1,
+          medianTimeToMergeMinutes: 4 * 60,
+        }),
+      );
+    }
+    // Three well-separated lower-quality engineers.
+    const tail: Array<Partial<EngineerCompositeInput>> = [
+      {
+        prCount: 18,
+        analysedPrCount: 15,
+        executionQualityMean: 3,
+        testAdequacyMean: 3,
+        riskHandlingMean: 3,
+        reviewabilityMean: 3,
+        revertRate: 0.1,
+      },
+      {
+        prCount: 10,
+        analysedPrCount: 8,
+        executionQualityMean: 2.5,
+        testAdequacyMean: 2.5,
+        riskHandlingMean: 2.5,
+        reviewabilityMean: 2.5,
+        revertRate: 0.2,
+      },
+      {
+        prCount: 6,
+        analysedPrCount: 5,
+        executionQualityMean: 2,
+        testAdequacyMean: 2,
+        riskHandlingMean: 2,
+        reviewabilityMean: 2,
+        revertRate: 0.3,
+      },
+    ];
+    tail.forEach((spec, i) => {
+      inputs.push(
+        engineer({
+          email: `tail${i}@meetcleo.com`,
+          displayName: `TAIL ${i}`,
+          githubLogin: `tail${i}`,
+          ...spec,
+        }),
+      );
+    });
+
+    const bundle = buildComposite({ now: NOW, engineers: inputs });
+    const ranked = rankWithConfidence(scopeComposite(bundle, {}));
+
+    // Sanity: top two share a tie group; the third row is in a different one.
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    expect(ranked[2].tieGroupId).not.toBe(ranked[0].tieGroupId);
+
+    expect(ranked[0].displayRank).toBe(1);
+    expect(ranked[1].displayRank).toBe(1);
+    expect(ranked[2].displayRank).toBe(3);
+
+    render(<StackRankTable ranked={ranked} />);
+
+    // No "#2" should be rendered — competition rank skips it after the tie.
+    expect(screen.queryByText(/^#2$/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^#1$/).length).toBe(2);
+    expect(screen.getByText(/^#3$/)).toBeInTheDocument();
+
+    // Promote/PM flag eligibility must not regress: the top tie spans indices
+    // 0,1 — the positional top quartile of a 5-row cohort is index [0,1] (no,
+    // ceil(5/4)=2 → top 2 indices 0,1) — so the promote flag stays eligible.
+    for (const entry of ranked.slice(0, 2)) {
+      if (entry.quartile === 4 && entry.flagEligible) {
+        expect(entry.quartileFlag).toBe("promote_candidate");
+      }
     }
   });
 

@@ -1513,6 +1513,103 @@ describe("rankWithConfidence", () => {
     }
   });
 
+  // --- Competition-style displayRank for tie groups (M11) ---
+
+  it("non-tied entries get sequential displayRank matching positional rank", () => {
+    const entries = buildBundleFromSpread([95, 80, 65, 50, 35, 20], [2, 2, 2, 2, 2, 2]);
+    const ranked = rankWithConfidence(entries);
+    expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(ranked.map((r) => r.displayRank)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("members of a multi-row tie group share a displayRank equal to the group's first index + 1", () => {
+    // 8 identical scores collapse to a single tie group via overlapping bands.
+    const entries = buildBundleFromSpread(
+      [50, 50, 50, 50, 50, 50, 50, 50],
+      [5, 5, 5, 5, 5, 5, 5, 5],
+    );
+    const ranked = rankWithConfidence(entries);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    expect(tieGroupIds.size).toBe(1);
+    for (const entry of ranked) {
+      expect(entry.displayRank).toBe(1);
+    }
+    // rank stays positional and sequential for stable ordering.
+    expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("displayRank skips past the size of the preceding tie group", () => {
+    // Two-way tie at top, then well-separated singletons. Expected
+    // displayRanks: [1, 1, 3, 4, 5, 6, 7, 8].
+    const entries = buildBundleFromSpread(
+      [85, 84, 60, 50, 40, 30, 20, 10],
+      [3, 3, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    expect(ranked[2].tieGroupId).not.toBe(ranked[0].tieGroupId);
+    expect(ranked[0].displayRank).toBe(1);
+    expect(ranked[1].displayRank).toBe(1);
+    expect(ranked[2].displayRank).toBe(3);
+    expect(ranked[3].displayRank).toBe(4);
+    expect(ranked[ranked.length - 1].displayRank).toBe(ranked.length);
+  });
+
+  it("multiple disjoint tie groups each share a displayRank equal to their group's start index + 1", () => {
+    // Top pair tied (indices 0,1), middle pair tied (indices 3,4), bottom
+    // pair tied (indices 6,7). Bands wide enough to fuse the pairs but not
+    // bridge the gaps.
+    const entries = buildBundleFromSpread(
+      [80, 78, 60, 41, 39, 25, 12, 10],
+      [3, 3, 2, 3, 3, 2, 3, 3],
+    );
+    const ranked = rankWithConfidence(entries);
+    // Sanity-check group structure rather than trust exact band arithmetic.
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    expect(ranked[3].tieGroupId).toBe(ranked[4].tieGroupId);
+    expect(ranked[6].tieGroupId).toBe(ranked[7].tieGroupId);
+    expect(ranked[2].tieGroupId).not.toBe(ranked[0].tieGroupId);
+    expect(ranked[2].tieGroupId).not.toBe(ranked[3].tieGroupId);
+    expect(ranked[5].tieGroupId).not.toBe(ranked[3].tieGroupId);
+    expect(ranked[5].tieGroupId).not.toBe(ranked[6].tieGroupId);
+    // displayRank reflects the group's first positional index + 1.
+    expect(ranked[0].displayRank).toBe(1);
+    expect(ranked[1].displayRank).toBe(1);
+    expect(ranked[2].displayRank).toBe(3);
+    expect(ranked[3].displayRank).toBe(4);
+    expect(ranked[4].displayRank).toBe(4);
+    expect(ranked[5].displayRank).toBe(6);
+    expect(ranked[6].displayRank).toBe(7);
+    expect(ranked[7].displayRank).toBe(7);
+  });
+
+  it("displayRank does not regress promote/PM flag eligibility for tied top/bottom groups", () => {
+    // 8 well-separated entries: top 2 in their own group (overlapping bands),
+    // bottom 2 in their own group (overlapping bands). Both groups span only
+    // the positional top/bottom quartile, so flags must remain eligible.
+    const entries = buildBundleFromSpread(
+      [95, 94, 75, 65, 55, 45, 26, 25],
+      [3, 3, 2, 2, 2, 2, 3, 3],
+    );
+    const ranked = rankWithConfidence(entries);
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    expect(ranked[6].tieGroupId).toBe(ranked[7].tieGroupId);
+    expect(ranked[0].displayRank).toBe(1);
+    expect(ranked[1].displayRank).toBe(1);
+    expect(ranked[6].displayRank).toBe(7);
+    expect(ranked[7].displayRank).toBe(7);
+    for (const entry of ranked.slice(0, 2)) {
+      expect(entry.quartile).toBe(4);
+      expect(entry.quartileFlag).toBe("promote_candidate");
+      expect(entry.flagEligible).toBe(true);
+    }
+    for (const entry of ranked.slice(-2)) {
+      expect(entry.quartile).toBe(1);
+      expect(entry.quartileFlag).toBe("performance_manage");
+      expect(entry.flagEligible).toBe(true);
+    }
+  });
+
   it("groups wholly inside positional top/bottom quartile still get flags", () => {
     // Well-separated 8 entries: top 2 in their own groups, bottom 2 in their own groups
     const entries = buildBundleFromSpread(
