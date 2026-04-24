@@ -460,27 +460,21 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
-    // Locked: the page includes a manual analysis trigger — engineering managers
-    // and above can see the report and re-run the analysis.
     id: "engineering.codeReview",
     label: "Code Review",
     description: "LLM-reviewed PR analysis for engineering quality.",
     href: "/dashboard/engineering/code-review",
     groupLabel: "Team",
     defaultRole: "engineering_manager",
-    editable: false,
     redirectTo: "/dashboard/engineering",
   },
   {
-    // Locked: the page persists per-engineer scoring snapshots and is the
-    // CEO-only methodology artefact.
     id: "engineering.ranking",
     label: "Engineer Ranking",
     description: "Methodology-first cohort-relative engineer ranking.",
     href: "/dashboard/engineering/ranking",
     groupLabel: "Team",
-    defaultRole: "ceo",
-    editable: false,
+    defaultRole: "engineering_manager",
     redirectTo: "/dashboard/engineering",
   },
   {

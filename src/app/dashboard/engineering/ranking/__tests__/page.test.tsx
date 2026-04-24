@@ -2,33 +2,25 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  mockGetCurrentUserRole,
+  mockRequireDashboardPermission,
   mockGetEngineeringRankingSnapshot,
   mockRankingScaffold,
-  mockRedirect,
 } = vi.hoisted(() => ({
-  mockGetCurrentUserRole: vi.fn(),
+  mockRequireDashboardPermission: vi.fn(),
   mockGetEngineeringRankingSnapshot: vi.fn(),
   mockRankingScaffold: vi.fn(
     ({ snapshot }: { snapshot: { methodologyVersion: string } }) => (
       <div data-testid="ranking-scaffold">{snapshot.methodologyVersion}</div>
     ),
   ),
-  mockRedirect: vi.fn(() => {
-    throw new Error("NEXT_REDIRECT");
-  }),
 }));
 
-vi.mock("@/lib/auth/roles.server", () => ({
-  getCurrentUserRole: mockGetCurrentUserRole,
+vi.mock("@/lib/auth/dashboard-permissions.server", () => ({
+  requireDashboardPermission: mockRequireDashboardPermission,
 }));
 
 vi.mock("@/lib/data/engineering-ranking.server", () => ({
   getEngineeringRankingSnapshot: mockGetEngineeringRankingSnapshot,
-}));
-
-vi.mock("next/navigation", () => ({
-  redirect: mockRedirect,
 }));
 
 vi.mock("../_components/ranking-scaffold", () => ({
@@ -41,18 +33,22 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("EngineeringRankingPage CEO gate", () => {
-  it("redirects non-CEO users back to engineering", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("leadership");
+describe("EngineeringRankingPage permission gate", () => {
+  it("defers access control to requireDashboardPermission", async () => {
+    mockRequireDashboardPermission.mockImplementation(async () => {
+      throw new Error("NEXT_REDIRECT");
+    });
 
     await expect(EngineeringRankingPage()).rejects.toThrow("NEXT_REDIRECT");
 
-    expect(mockRedirect).toHaveBeenCalledWith("/dashboard/engineering");
+    expect(mockRequireDashboardPermission).toHaveBeenCalledWith(
+      "engineering.ranking",
+    );
     expect(mockGetEngineeringRankingSnapshot).not.toHaveBeenCalled();
   });
 
-  it("renders the ranking scaffold for CEO users", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("ceo");
+  it("renders the ranking scaffold when the permission check passes", async () => {
+    mockRequireDashboardPermission.mockResolvedValue("engineering_manager");
     mockGetEngineeringRankingSnapshot.mockResolvedValue({
       methodologyVersion: "1.0.0-methodology",
     });
@@ -60,7 +56,9 @@ describe("EngineeringRankingPage CEO gate", () => {
     const page = await EngineeringRankingPage();
     render(page);
 
-    expect(mockRedirect).not.toHaveBeenCalled();
+    expect(mockRequireDashboardPermission).toHaveBeenCalledWith(
+      "engineering.ranking",
+    );
     expect(mockGetEngineeringRankingSnapshot).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("ranking-scaffold")).toHaveTextContent(
       "1.0.0-methodology",

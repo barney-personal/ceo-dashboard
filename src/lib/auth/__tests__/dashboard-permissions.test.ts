@@ -38,7 +38,6 @@ describe("buildDashboardPermissionSummaries", () => {
     const summaries = buildDashboardPermissionSummaries({
       "admin.users": "everyone",
       "admin.status": "everyone",
-      "engineering.codeReview": "everyone",
     });
 
     expect(
@@ -55,12 +54,29 @@ describe("buildDashboardPermissionSummaries", () => {
       editable: false,
       isOverride: false,
     });
+  });
+
+  it("allows overrides on engineering.codeReview and engineering.ranking", () => {
+    const summaries = buildDashboardPermissionSummaries({
+      "engineering.codeReview": "leadership",
+      "engineering.ranking": "leadership",
+    });
+
     expect(
       summaries.find((summary) => summary.id === "engineering.codeReview"),
     ).toMatchObject({
-      requiredRole: "engineering_manager",
-      editable: false,
-      isOverride: false,
+      defaultRole: "engineering_manager",
+      requiredRole: "leadership",
+      editable: true,
+      isOverride: true,
+    });
+    expect(
+      summaries.find((summary) => summary.id === "engineering.ranking"),
+    ).toMatchObject({
+      defaultRole: "engineering_manager",
+      requiredRole: "leadership",
+      editable: true,
+      isOverride: true,
     });
   });
 });
