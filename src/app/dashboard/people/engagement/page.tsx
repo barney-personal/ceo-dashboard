@@ -1,7 +1,10 @@
 import { PageHeader } from "@/components/dashboard/page-header";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 
-export default function PeopleEngagementPage() {
+export default async function PeopleEngagementPage() {
+  await requireDashboardPermission("dashboard.people.engagement");
+
   return (
     <div className="space-y-8">
       <PageHeader

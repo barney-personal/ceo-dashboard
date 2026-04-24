@@ -16,7 +16,7 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    const access = await authorizeSyncRequest(request);
+    const access = await authorizeSyncRequest(request, "admin.status");
     const accessError = syncRequestAccessErrorResponse(access);
     if (accessError) {
       return accessError;

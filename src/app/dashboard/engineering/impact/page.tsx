@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getImpactAnalysis } from "@/lib/data/engineering-impact";
 import { ImpactReport } from "./_components/impact-report";
 
@@ -9,10 +7,7 @@ export const metadata = {
 };
 
 export default async function ImpactPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard/engineering");
-  }
+  await requireDashboardPermission("engineering.impact");
 
   const analysis = await getImpactAnalysis();
 

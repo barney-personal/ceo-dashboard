@@ -1,12 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireRole, authErrorResponse } from "@/lib/sync/request-auth";
+import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { db } from "@/lib/db";
 import { modeReportData } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireRole("ceo");
-  const authError = authErrorResponse(auth);
+  const authError = await dashboardPermissionErrorResponse("admin.modeExplorer");
   if (authError) return authError;
 
   const queryIdParam = request.nextUrl.searchParams.get("queryId");

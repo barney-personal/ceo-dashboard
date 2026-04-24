@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
@@ -29,10 +28,7 @@ export default async function ManagersPage({
 }: {
   searchParams: Promise<{ manager?: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "manager")) {
-    redirect("/dashboard");
-  }
+  const role = await requireDashboardPermission("dashboard.managers");
   const params = await searchParams;
 
   const userResult = await getCurrentUserWithTimeout();
@@ -231,4 +227,3 @@ function StatTile({
     </div>
   );
 }
-

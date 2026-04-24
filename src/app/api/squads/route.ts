@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
+import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { db } from "@/lib/db";
 import { squads } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
 export async function GET() {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.squads");
+    if (authError) return authError;
 
     const all = await db.select().from(squads).orderBy(squads.pillar, squads.name);
     return NextResponse.json(all);
@@ -23,11 +20,8 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.squads");
+    if (authError) return authError;
 
     const body = await request.json();
     const { name, pillar, pmName, channelId } = body;
@@ -50,11 +44,8 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.squads");
+    if (authError) return authError;
 
     const body = await request.json();
     const { id, name, pillar, pmName, channelId, isActive } = body;

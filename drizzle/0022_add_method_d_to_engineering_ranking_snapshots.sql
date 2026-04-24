@@ -1,1 +1,0 @@
-ALTER TABLE "engineering_ranking_snapshots" ADD COLUMN "method_d" numeric(7, 4);

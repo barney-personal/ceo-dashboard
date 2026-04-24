@@ -1,9 +1,78 @@
 {
-  "id": "50323231-d6ba-4ede-8cc6-d3333efdeb82",
-  "prevId": "4e0ed010-5955-4610-906d-56b34b76d099",
+  "id": "a1e8a940-9e78-41e2-94f2-91dc365baeb4",
+  "prevId": "3bafabcb-399a-4d8b-827f-20075d53fa17",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.dashboard_permission_overrides": {
+      "name": "dashboard_permission_overrides",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "permission_id": {
+          "name": "permission_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required_role": {
+          "name": "required_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "dashboard_permission_overrides_role_idx": {
+          "name": "dashboard_permission_overrides_role_idx",
+          "columns": [
+            {
+              "expression": "required_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "dashboard_permission_overrides_permission_id_unique": {
+          "name": "dashboard_permission_overrides_permission_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "permission_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.debug_logs": {
       "name": "debug_logs",
       "schema": "",

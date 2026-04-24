@@ -813,7 +813,7 @@ export function MeetingsView({ initialDays, initialWeekStart, calendarConnected 
                   Connect your Google Calendar
                 </p>
                 <p className="text-xs text-amber-700/80">
-                  Sign out and back in to grant calendar access, then your personal meetings will appear here.
+                  Reconnect Google Calendar from your profile menu to restore calendar access, then your personal meetings will appear here.
                 </p>
               </div>
             </div>

@@ -1,9 +1,78 @@
 {
-  "id": "4e0ed010-5955-4610-906d-56b34b76d099",
+  "id": "3bafabcb-399a-4d8b-827f-20075d53fa17",
   "prevId": "db155d6f-8d64-4a96-9258-5e648681805e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.dashboard_permission_overrides": {
+      "name": "dashboard_permission_overrides",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "permission_id": {
+          "name": "permission_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required_role": {
+          "name": "required_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "dashboard_permission_overrides_role_idx": {
+          "name": "dashboard_permission_overrides_role_idx",
+          "columns": [
+            {
+              "expression": "required_role",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "dashboard_permission_overrides_permission_id_unique": {
+          "name": "dashboard_permission_overrides_permission_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "permission_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.debug_logs": {
       "name": "debug_logs",
       "schema": "",
@@ -57,181 +126,6 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.engineering_ranking_snapshots": {
-      "name": "engineering_ranking_snapshots",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "snapshot_date": {
-          "name": "snapshot_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "methodology_version": {
-          "name": "methodology_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "signal_window_start": {
-          "name": "signal_window_start",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "signal_window_end": {
-          "name": "signal_window_end",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "email_hash": {
-          "name": "email_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "eligibility_status": {
-          "name": "eligibility_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rank": {
-          "name": "rank",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "composite_score": {
-          "name": "composite_score",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "adjusted_percentile": {
-          "name": "adjusted_percentile",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "raw_percentile": {
-          "name": "raw_percentile",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "method_a": {
-          "name": "method_a",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "method_b": {
-          "name": "method_b",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "method_c": {
-          "name": "method_c",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confidence_low": {
-          "name": "confidence_low",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "confidence_high": {
-          "name": "confidence_high",
-          "type": "numeric(7, 4)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "input_hash": {
-          "name": "input_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "generated_at": {
-          "name": "generated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "engineering_ranking_snapshots_date_version_idx": {
-          "name": "engineering_ranking_snapshots_date_version_idx",
-          "columns": [
-            {
-              "expression": "snapshot_date",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "methodology_version",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "engineering_ranking_snapshots_email_hash_idx": {
-          "name": "engineering_ranking_snapshots_email_hash_idx",
-          "columns": [
-            {
-              "expression": "email_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "engineering_ranking_snapshots_natural_key": {
-          "name": "engineering_ranking_snapshots_natural_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "snapshot_date",
-            "methodology_version",
-            "email_hash"
-          ]
-        }
-      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

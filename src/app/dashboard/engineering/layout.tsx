@@ -1,8 +1,8 @@
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
 import { ExternalLink } from "lucide-react";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { getDashboardPermissionRoleMap } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { EngineeringTabs } from "@/components/dashboard/engineering-tabs";
 
@@ -11,11 +11,10 @@ export default async function EngineeringLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // All engineering sub-pages are open to everyone.
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "everyone")) {
-    redirect("/dashboard");
-  }
+  const [role, permissionRoles] = await Promise.all([
+    getCurrentUserRole(),
+    getDashboardPermissionRoleMap(),
+  ]);
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
@@ -40,10 +39,19 @@ export default async function EngineeringLayout({
           and to survive any future static rendering of children. */}
       <Suspense fallback={<div className="h-9" />}>
         <EngineeringTabs
-          showImpact={hasAccess(role, "leadership")}
-          showImpactModel={hasAccess(role, "manager")}
-          showCodeReview={hasAccess(role, "ceo")}
-          showRanking={hasAccess(role, "ceo")}
+          showImpact={hasAccess(role, permissionRoles["engineering.impact"])}
+          showImpactModel={hasAccess(
+            role,
+            permissionRoles["engineering.impactModel"],
+          )}
+          showCodeReview={hasAccess(
+            role,
+            permissionRoles["engineering.codeReview"],
+          )}
+          showRanking={hasAccess(
+            role,
+            permissionRoles["engineering.ranking"],
+          )}
         />
       </Suspense>
 

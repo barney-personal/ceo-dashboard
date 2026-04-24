@@ -13,6 +13,7 @@ CREATE TABLE "engineering_ranking_snapshots" (
 	"method_a" numeric(7, 4),
 	"method_b" numeric(7, 4),
 	"method_c" numeric(7, 4),
+	"method_d" numeric(7, 4),
 	"confidence_low" numeric(7, 4),
 	"confidence_high" numeric(7, 4),
 	"input_hash" text,

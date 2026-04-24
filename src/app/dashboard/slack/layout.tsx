@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SlackTabs } from "@/components/dashboard/slack-tabs";
 import { getLatestSlackMembersSnapshot } from "@/lib/data/slack-members";
@@ -18,10 +16,7 @@ export default async function SlackLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.slack");
 
   // Layout-level header — fetch just the window metadata to keep the
   // description accurate. The full snapshot is re-fetched in each page;

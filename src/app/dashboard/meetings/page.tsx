@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { getCurrentUserRole, getImpersonation } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { getImpersonation } from "@/lib/auth/roles.server";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MeetingsView } from "@/components/dashboard/meetings-view";
@@ -19,10 +18,7 @@ export default async function MeetingsPage({
 }: {
   searchParams: Promise<{ week?: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "everyone")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.meetings");
 
   const params = await searchParams;
   const baseDate = params.week ? new Date(params.week + "T12:00:00") : new Date();
