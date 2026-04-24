@@ -286,6 +286,71 @@ describe("AiUsageDashboard", () => {
     // Ensure at least one pillar-filter option from the fixture data.
     expect(container.textContent).toContain("Engineering");
   });
+
+  it("renders the monthly model mix chart when data is provided", () => {
+    const { container } = render(
+      <AiUsageDashboard
+        weeklyByCategory={WEEKLY_CATEGORY}
+        monthlyByModel={MONTHLY_MODEL}
+        monthlyByUser={MONTHLY_USER}
+        userTrends={USER_TRENDS}
+        modelTrends={MODEL_TRENDS}
+        monthlyModelMix={{
+          months: ["2026-03-01", "2026-04-01"],
+          models: [
+            {
+              key: "claude::Claude Sonnet 4.6",
+              modelName: "Claude Sonnet 4.6",
+              category: "claude",
+              totalCost: 8300,
+            },
+            {
+              key: "cursor::default",
+              modelName: "default",
+              category: "cursor",
+              totalCost: 4600,
+            },
+          ],
+          rows: [
+            {
+              monthStart: "2026-03-01",
+              "claude::Claude Sonnet 4.6": 3800,
+              "cursor::default": 1800,
+            },
+            {
+              monthStart: "2026-04-01",
+              "claude::Claude Sonnet 4.6": 4500,
+              "cursor::default": 2800,
+            },
+          ],
+        }}
+        people={PEOPLE}
+      />,
+    );
+    expect(container.textContent).toContain("Monthly model mix");
+    expect(container.textContent).toContain("How spend is split by model");
+    // Both legend entries appear.
+    expect(container.textContent).toContain("Claude Sonnet 4.6");
+    expect(container.textContent).toContain("default");
+  });
+
+  it("renders the weekly metric toggle (cost vs tokens)", () => {
+    const { container } = render(
+      <AiUsageDashboard
+        weeklyByCategory={WEEKLY_CATEGORY}
+        monthlyByModel={MONTHLY_MODEL}
+        monthlyByUser={MONTHLY_USER}
+        userTrends={USER_TRENDS}
+        modelTrends={MODEL_TRENDS}
+        people={PEOPLE}
+      />,
+    );
+    // Default label is cost.
+    expect(container.textContent).toContain("Weekly AI spend");
+    // Toggle buttons exist.
+    const costTab = container.querySelector("button[aria-selected='true']");
+    expect(costTab?.textContent).toContain("$ cost");
+  });
 });
 
 describe("AiUsageMetricCard", () => {
@@ -343,6 +408,27 @@ describe("AiUsageMetricCard", () => {
       <AiUsageMetricCard label="X" value="1" deltaPct={-25} higherIsBetter />,
     );
     expect(down.innerHTML).toContain("text-amber-700");
+    expect(down.innerHTML).not.toContain("text-positive");
+  });
+
+  it("renders deltas in muted foreground when neutralDelta is set", () => {
+    const { container: up } = render(
+      <AiUsageMetricCard label="Spend" value="$1" deltaPct={25} neutralDelta />,
+    );
+    // Neutral means neither good-green nor bad-amber.
+    expect(up.innerHTML).not.toContain("text-amber-700");
+    expect(up.innerHTML).not.toContain("text-positive");
+    expect(up.innerHTML).toContain("text-muted-foreground");
+
+    const { container: down } = render(
+      <AiUsageMetricCard
+        label="Spend"
+        value="$1"
+        deltaPct={-25}
+        neutralDelta
+      />,
+    );
+    expect(down.innerHTML).not.toContain("text-amber-700");
     expect(down.innerHTML).not.toContain("text-positive");
   });
 });

@@ -37,12 +37,18 @@ export interface StackedAreaDatum {
   [key: string]: string | number;
 }
 
-type YFormatType = "currency" | "number" | "percent";
+type YFormatType = "currency" | "number" | "percent" | "tokens";
 
 const Y_FORMATTERS: Record<YFormatType, (v: number) => string> = {
   currency: (v) => (v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${v.toFixed(0)}`),
   number: (v) => v.toLocaleString(),
   percent: (v) => `${v.toFixed(0)}%`,
+  tokens: (v) => {
+    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+    if (v >= 1000) return `${Math.round(v / 1000)}K`;
+    return v.toLocaleString();
+  },
 };
 
 interface StackedAreaChartProps {
