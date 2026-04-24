@@ -62,15 +62,16 @@ export default async function PeopleOrgPage({
   const firstUnavailable =
     employeesResult.error ?? deptDataResult.error ?? latestSyncRunResult.error;
 
-  const rawData = employeesResult.data;
-  // Strip Customer Success function so the current-view headcount is on
-  // the same basis as the planned view (which excludes the CS department).
-  // Mode already excludes part-time CS Champions and contractors.
+  const { employees, partTimeChampions, unassigned, contractors, allRows } =
+    employeesResult.data;
+  // For the planned-view reconciliation only, strip Customer Success so its
+  // baseline matches the sheet's CS-stripped numbers. Current view stays on
+  // the unfiltered Mode data so the existing Headcount card / Department
+  // chart / Tenure distribution don't silently drop CS people.
   const isCs = (fn: string) =>
     fn === "Customer Success" || fn.startsWith("Customer Success,");
-  const employees = rawData.employees.filter((p) => !isCs(p.function));
-  const unassigned = rawData.unassigned.filter((p) => !isCs(p.function));
-  const { partTimeChampions, contractors, allRows } = rawData;
+  const employeesNoCs = employees.filter((p) => !isCs(p.function));
+  const unassignedNoCs = unassigned.filter((p) => !isCs(p.function));
   const deptData = deptDataResult.data;
   const latestSyncRun = latestSyncRunResult.data;
 
@@ -140,14 +141,19 @@ export default async function PeopleOrgPage({
   // Reconcile sheet deltas against live Mode pillar counts so "Today" matches
   // the current view's headcount and planned = today + hires (not sheet's
   // own baseline, which differs from Mode by ~50 people from snapshot drift).
-  // Include unassigned as their own pseudo-pillar so totals match the current
-  // view's headcount (which counts employees + unassigned).
-  const modePillarsForReconcile = byPillar.map((p) => ({
+  // Use the CS-stripped Mode data so the baseline matches the sheet's
+  // CS-stripped numbers; include unassigned as their own pseudo-pillar so
+  // totals match the directory count of (employees + unassigned).
+  const byPillarNoCs = groupByPillarAndSquad(employeesNoCs);
+  const modePillarsForReconcile = byPillarNoCs.map((p) => ({
     name: p.name,
     count: p.count,
   }));
-  if (unassigned.length > 0) {
-    modePillarsForReconcile.push({ name: "Unassigned", count: unassigned.length });
+  if (unassignedNoCs.length > 0) {
+    modePillarsForReconcile.push({
+      name: "Unassigned",
+      count: unassignedNoCs.length,
+    });
   }
   // Engineering (Temp) is a sheet-only holding squad for new engineers
   // awaiting permanent assignment. Mode counts those people under their
@@ -160,6 +166,10 @@ export default async function PeopleOrgPage({
   const unmatchedDepartments = reconciled.unmatchedSheetDepartments;
   const futureHires =
     hcPlanTotals.hiredOfferOut + hcPlanTotals.inPipeline + hcPlanTotals.t2Hire;
+  const engTempPillar = reconciledPillars.find(
+    (p) => p.pillar === "Engineering (Temp)"
+  );
+  const engTempPlanned = engTempPillar?.totalHc ?? 0;
 
   return (
     <div className="space-y-8">
@@ -330,7 +340,8 @@ export default async function PeopleOrgPage({
               counts the engineers currently in the pool under their
               destination pillar, so to avoid double-counting this view shows
               Engineering (Temp) with <strong>Today = 0</strong> and{" "}
-              <strong>Planned = 13</strong> (the new hires entering the pool).
+              <strong>Planned = {engTempPlanned}</strong> (the new hires
+              entering the pool).
               When those engineers are assigned to a permanent pillar, both
               Mode and the sheet will reflect the move.
             </p>

@@ -4,20 +4,27 @@
  * by email. Lets local dev tools (Claude Preview, curl, etc.) inspect
  * authed pages without going through the SSO flow.
  *
- * Triple-gated:
+ * Quadruple-gated:
  *   1. `NODE_ENV !== "production"`
  *   2. `DEV_PREVIEW_USER_EMAIL` env var must be set
- *   3. The email must resolve to a real Clerk user (failure falls back to
+ *   3. The email must end with the allowed domain (`@meetcleo.com`) — this
+ *      enforces the same domain restriction the middleware would normally
+ *      apply, so the bypass cannot serve pages to other Clerk users
+ *   4. The email must resolve to a real Clerk user (failure falls back to
  *      the unauth path — no mock user is fabricated)
  *
  * Render sets `NODE_ENV=production` in render.yaml, and Doppler `prd` does
  * not (and must not) set `DEV_PREVIEW_USER_EMAIL`, so this cannot activate
  * in production.
  */
+export const DEV_PREVIEW_ALLOWED_DOMAIN = "meetcleo.com";
+
 export function getDevPreviewUserEmail(): string | null {
   if (process.env.NODE_ENV === "production") return null;
-  const email = process.env.DEV_PREVIEW_USER_EMAIL?.trim();
-  return email && email.length > 0 ? email : null;
+  const email = process.env.DEV_PREVIEW_USER_EMAIL?.trim().toLowerCase();
+  if (!email || email.length === 0) return null;
+  if (!email.endsWith(`@${DEV_PREVIEW_ALLOWED_DOMAIN}`)) return null;
+  return email;
 }
 
 export function isDevPreviewEnabled(): boolean {
