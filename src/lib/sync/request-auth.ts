@@ -2,9 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { getUserRole, hasAccess, type Role } from "@/lib/auth/roles";
 import {
+  getDashboardPermissionDefinition,
+  type DashboardPermissionId,
+} from "@/lib/auth/dashboard-permissions";
+import {
   getRequiredRoleForDashboardPermission,
 } from "@/lib/auth/dashboard-permissions.server";
-import type { DashboardPermissionId } from "@/lib/auth/dashboard-permissions";
 
 export type AuthCheckResult =
   | { ok: true }
@@ -70,9 +73,14 @@ export async function authorizeSyncRequest(
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
 
-  const requiredRole = manualPermissionId
-    ? await getRequiredRoleForDashboardPermission(manualPermissionId)
-    : "ceo";
+  let requiredRole: Role = "ceo";
+  if (manualPermissionId) {
+    const definition = getDashboardPermissionDefinition(manualPermissionId);
+    requiredRole =
+      definition.editable === false
+        ? definition.defaultRole
+        : await getRequiredRoleForDashboardPermission(manualPermissionId);
+  }
 
   return hasAccess(role, requiredRole) ? "manual" : "forbidden";
 }
