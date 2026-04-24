@@ -1415,9 +1415,9 @@ function CompositeTopTable({
   return (
     <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
       <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        Top {composite.topN.length} by composite
+        All {composite.ranked.length} engineers by composite
       </h4>
-      {composite.topN.length === 0 ? (
+      {composite.ranked.length === 0 ? (
         <p className="mt-3 text-xs italic text-muted-foreground">
           No engineers have a composite yet — fewer than two methods are scored
           for any competitive engineer in this snapshot.
@@ -1442,7 +1442,7 @@ function CompositeTopTable({
               </tr>
             </thead>
             <tbody>
-              {composite.topN.map((e) => {
+              {composite.ranked.map((e) => {
                 const ci = ciByHash.get(e.emailHash);
                 return (
                   <tr

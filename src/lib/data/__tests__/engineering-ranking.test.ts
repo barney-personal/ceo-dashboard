@@ -8,7 +8,6 @@ import {
   RANKING_COMPOSITE_METHOD_LABELS,
   RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
   RANKING_COMPOSITE_MIN_METHODS,
-  RANKING_COMPOSITE_TOP_N,
   RANKING_DISAGREEMENT_EPSILON,
   RANKING_DISAGREEMENT_MIN_LENSES,
   RANKING_DOMINANCE_WIDENING,
@@ -2354,7 +2353,6 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT).toBeLessThanOrEqual(1);
     expect(RANKING_MAX_ACTIVITY_CORRELATION).toBeGreaterThan(0);
     expect(RANKING_MAX_ACTIVITY_CORRELATION).toBeLessThanOrEqual(1);
-    expect(RANKING_COMPOSITE_TOP_N).toBeGreaterThan(0);
     expect(RANKING_LEAVE_ONE_OUT_TOP_MOVERS).toBeGreaterThan(0);
     // The four composite methods are named with human-readable labels so the
     // effective-weight decomposition and leave-one-out rows can be rendered
@@ -2777,15 +2775,18 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(names).toEqual(["Engineer 1"]);
   });
 
-  it("topN is capped at RANKING_COMPOSITE_TOP_N and sorted ascending by rank", () => {
-    const size = RANKING_COMPOSITE_TOP_N + 5;
+  it("ranked includes every scored engineer sorted ascending by rank", () => {
+    const size = 30;
     const entries = Array.from({ length: size }, (_, i) => competitiveEntry(i + 1));
     const signals = Array.from({ length: size }, (_, i) => signalRow(i + 1));
     const lenses = buildLenses({ entries, signals });
     const normalisation = buildNormalisation({ entries, signals });
     const composite = buildComposite({ entries, lenses, normalisation, signals });
-    expect(composite.topN.length).toBeLessThanOrEqual(RANKING_COMPOSITE_TOP_N);
-    const ranks = composite.topN.map((e) => e.rank as number);
+    const scored = composite.entries.filter(
+      (e) => e.composite !== null && e.rank !== null,
+    );
+    expect(composite.ranked.length).toBe(scored.length);
+    const ranks = composite.ranked.map((e) => e.rank as number);
     for (let i = 1; i < ranks.length; i += 1) {
       expect(ranks[i]).toBeGreaterThan(ranks[i - 1]);
     }
@@ -3246,7 +3247,7 @@ describe("M14 confidence bands and statistical tie handling", () => {
           methodsSummary: "",
         },
       ],
-      topN: [],
+      ranked: [],
       effectiveSignalWeights: [],
       leaveOneOut: [],
       finalRankCorrelations: [],
@@ -4664,7 +4665,7 @@ describe("M18 movers view", () => {
       maxSingleSignalEffectiveWeight: 0.3,
       dominanceCorrelationThreshold: 0.75,
       entries,
-      topN: scored,
+      ranked: scored,
       effectiveSignalWeights: [],
       leaveOneOut: [],
       finalRankCorrelations: [],
@@ -6228,7 +6229,7 @@ describe("M24 stability check", () => {
       maxSingleSignalEffectiveWeight: 0.3,
       dominanceCorrelationThreshold: 0.75,
       entries,
-      topN: scored,
+      ranked: scored,
       effectiveSignalWeights: [],
       leaveOneOut: [],
       finalRankCorrelations: [],

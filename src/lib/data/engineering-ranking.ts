@@ -2669,9 +2669,6 @@ export const RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT = 0.3 as const;
  */
 export const RANKING_MAX_ACTIVITY_CORRELATION = 0.75 as const;
 
-/** Engineers surfaced in the composite top-N on the page. */
-export const RANKING_COMPOSITE_TOP_N = 25 as const;
-
 /** Top N movers surfaced per leave-one-method-out row. */
 export const RANKING_LEAVE_ONE_OUT_TOP_MOVERS = 10 as const;
 
@@ -2828,8 +2825,8 @@ export interface CompositeBundle {
   dominanceCorrelationThreshold: number;
   /** Every competitive engineer, scored or unscored. */
   entries: EngineerCompositeEntry[];
-  /** Top `RANKING_COMPOSITE_TOP_N` scored engineers by composite. */
-  topN: EngineerCompositeEntry[];
+  /** All scored engineers ordered ascending by composite rank. */
+  ranked: EngineerCompositeEntry[];
   /** Decomposition of the composite's raw-signal weights. */
   effectiveSignalWeights: EffectiveSignalWeight[];
   /** One row per composite method, measuring that method's leverage on the rank. */
@@ -3055,13 +3052,12 @@ export function buildComposite({
     rank: ranks[i],
   }));
 
-  const topN = [...entriesOut]
+  const ranked = [...entriesOut]
     .filter(
       (e): e is EngineerCompositeEntry & { composite: number; rank: number } =>
         e.composite !== null && e.rank !== null,
     )
-    .sort((a, b) => a.rank - b.rank)
-    .slice(0, RANKING_COMPOSITE_TOP_N);
+    .sort((a, b) => a.rank - b.rank);
 
   const effectiveSignalWeights = computeEffectiveSignalWeights(methods);
 
@@ -3179,7 +3175,7 @@ export function buildComposite({
     maxSingleSignalEffectiveWeight: RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
     dominanceCorrelationThreshold: RANKING_MAX_ACTIVITY_CORRELATION,
     entries: entriesOut,
-    topN,
+    ranked,
     effectiveSignalWeights,
     leaveOneOut,
     finalRankCorrelations,
