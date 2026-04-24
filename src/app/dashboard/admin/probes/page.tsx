@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getProbeStatusSummary, getProbeTimeline } from "@/lib/data/probes";
 import {
   getSchemaCompatibilityMessage,
@@ -20,11 +18,7 @@ import {
 const KNOWN_CHECKS = ["ceo-ping-auth"];
 
 export default async function ProbesPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("admin.probes");
 
   const now = new Date();
   let serializedSummaries: SerializedProbeCheckSummary[] = [];

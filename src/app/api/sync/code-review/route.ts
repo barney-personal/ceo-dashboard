@@ -34,7 +34,7 @@ const MANUAL_DEFAULT_LIMIT = 50;
 
 export async function POST(request: NextRequest) {
   try {
-    const access = await authorizeSyncRequest(request);
+    const access = await authorizeSyncRequest(request, "engineering.codeReview");
     const accessError = syncRequestAccessErrorResponse(access);
     if (accessError) return accessError;
 

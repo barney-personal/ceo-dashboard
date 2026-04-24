@@ -1,16 +1,10 @@
-import { redirect } from "next/navigation";
 import { clerkClient } from "@clerk/nextjs/server";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UserAdmin } from "@/components/dashboard/user-admin";
 
 export default async function UsersAdminPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("admin.users");
 
   const client = await clerkClient();
   const { data: users } = await client.users.getUserList({ limit: 100 });

@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { SlackMembersSyncCard } from "@/components/dashboard/slack-members-sync-card";
@@ -38,11 +36,7 @@ import {
 } from "lucide-react";
 
 export default async function DataStatusPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("admin.status");
 
   const warnings: string[] = [];
 

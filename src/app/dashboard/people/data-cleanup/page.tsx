@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/dashboard/page-header";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { detectDataIssues } from "@/lib/data/data-cleanup";
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 
@@ -27,6 +28,8 @@ const SEVERITY_CONFIG = {
 } as const;
 
 export default async function DataCleanupPage() {
+  await requireDashboardPermission("dashboard.people.dataCleanup");
+
   const { categories, hasSourceData } = await detectDataIssues();
   const totalIssues = categories.reduce((sum, c) => sum + c.issues.length, 0);
 

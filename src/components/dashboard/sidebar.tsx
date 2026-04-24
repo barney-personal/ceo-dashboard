@@ -1,416 +1,51 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { type Role, hasAccess } from "@/lib/auth/roles";
-import { RolePreview } from "@/components/dashboard/role-preview";
-import { cn } from "@/lib/utils";
+import { type Role } from "@/lib/auth/roles";
+import { getDashboardNavGroups } from "@/lib/auth/dashboard-permissions.server";
 import {
-  LayoutDashboard,
-  Calculator,
-  PoundSterling,
-  BarChart3,
-  Target,
-  Users,
-  Settings,
-  Activity,
-  TrendingUp,
-  Heart,
-  Database,
-  Calendar,
-  AlertTriangle,
-  GitPullRequest,
-  HeartPulse,
-  MessageSquare,
-  Menu,
-  X,
-  Sparkles,
-  Compass,
-  UserPlus,
-  ClipboardList,
-} from "lucide-react";
+  MobileSidebarClient,
+  SidebarClient,
+  type ImpersonationInfo,
+} from "./sidebar.client";
 
-interface NavItem {
-  label: string;
-  href: string;
-  requiredRole: Role;
-  icon: React.ElementType;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Overview",
-    items: [
-      {
-        label: "Dashboard",
-        href: "/dashboard",
-        requiredRole: "everyone",
-        icon: LayoutDashboard,
-      },
-    ],
-  },
-  {
-    label: "Performance",
-    items: [
-      {
-        label: "Unit Economics",
-        href: "/dashboard/unit-economics",
-        requiredRole: "everyone",
-        icon: Calculator,
-      },
-      {
-        label: "Financial",
-        href: "/dashboard/financial",
-        requiredRole: "leadership",
-        icon: PoundSterling,
-      },
-      {
-        label: "Product",
-        href: "/dashboard/product",
-        requiredRole: "everyone",
-        icon: BarChart3,
-      },
-    ],
-  },
-  {
-    label: "Goals",
-    items: [
-      {
-        label: "Strategy",
-        href: "/dashboard/strategy",
-        requiredRole: "everyone",
-        icon: Compass,
-      },
-      {
-        label: "OKRs",
-        href: "/dashboard/okrs",
-        requiredRole: "everyone",
-        icon: Target,
-      },
-    ],
-  },
-  {
-    label: "Meetings",
-    items: [
-      {
-        label: "Meetings",
-        href: "/dashboard/meetings",
-        requiredRole: "everyone",
-        icon: Calendar,
-      },
-    ],
-  },
-  {
-    label: "Team",
-    items: [
-      {
-        label: "Org",
-        href: "/dashboard/people",
-        requiredRole: "everyone",
-        icon: Users,
-      },
-      {
-        label: "Performance",
-        href: "/dashboard/people/performance",
-        requiredRole: "leadership",
-        icon: TrendingUp,
-      },
-      {
-        label: "Engineering",
-        href: "/dashboard/engineering",
-        requiredRole: "everyone",
-        icon: GitPullRequest,
-      },
-      {
-        label: "My Team",
-        href: "/dashboard/managers",
-        requiredRole: "manager",
-        icon: Users,
-      },
-      {
-        label: "Slack",
-        href: "/dashboard/slack",
-        requiredRole: "leadership",
-        icon: MessageSquare,
-      },
-      {
-        label: "Engagement",
-        href: "/dashboard/people/engagement",
-        requiredRole: "leadership",
-        icon: Heart,
-      },
-      {
-        label: "Happiness",
-        href: "/dashboard/admin/enps",
-        requiredRole: "ceo",
-        icon: Heart,
-      },
-      {
-        label: "Attrition",
-        href: "/dashboard/people/attrition",
-        requiredRole: "leadership",
-        icon: TrendingUp,
-      },
-      {
-        label: "Talent",
-        href: "/dashboard/people/talent",
-        requiredRole: "leadership",
-        icon: UserPlus,
-      },
-      {
-        label: "Headcount planning",
-        href: "/dashboard/people/headcount-planning",
-        requiredRole: "leadership",
-        icon: ClipboardList,
-      },
-      {
-        label: "AI Usage",
-        href: "/dashboard/people/ai-usage",
-        requiredRole: "everyone",
-        icon: Sparkles,
-      },
-      {
-        label: "Data Cleanup",
-        href: "/dashboard/people/data-cleanup",
-        requiredRole: "everyone",
-        icon: AlertTriangle,
-      },
-    ],
-  },
-  {
-    label: "Settings",
-    items: [
-      {
-        label: "Integrations",
-        href: "/dashboard/settings",
-        requiredRole: "everyone",
-        icon: Settings,
-      },
-    ],
-  },
-  {
-    label: "Admin",
-    items: [
-      {
-        label: "Users",
-        href: "/dashboard/admin/users",
-        requiredRole: "ceo",
-        icon: Users,
-      },
-      {
-        label: "Squads",
-        href: "/dashboard/admin/squads",
-        requiredRole: "ceo",
-        icon: Settings,
-      },
-      {
-        label: "Data Status",
-        href: "/dashboard/admin/status",
-        requiredRole: "ceo",
-        icon: Activity,
-      },
-      {
-        label: "Mode Explorer",
-        href: "/dashboard/admin/mode-explorer",
-        requiredRole: "ceo",
-        icon: Database,
-      },
-      {
-        label: "Analytics",
-        href: "/dashboard/admin/analytics",
-        requiredRole: "ceo",
-        icon: BarChart3,
-      },
-      {
-        label: "Probes",
-        href: "/dashboard/admin/probes",
-        requiredRole: "ceo",
-        icon: HeartPulse,
-      },
-    ],
-  },
-];
-
-// Paths that have sibling child routes need exact matching to avoid
-// multiple items highlighting at once (e.g. /dashboard/people vs /dashboard/people/performance).
-const exactMatchPaths = new Set<string>(["/dashboard"]);
-for (const group of NAV_GROUPS) {
-  for (const item of group.items) {
-    for (const sibling of group.items) {
-      if (sibling.href !== item.href && sibling.href.startsWith(item.href + "/")) {
-        exactMatchPaths.add(item.href);
-      }
-    }
-  }
-}
-
-export interface ImpersonationInfo {
-  name: string;
+export async function Sidebar({
+  role,
+  isCeo = false,
+  impersonation,
+}: {
   role: Role;
-}
-
-interface SidebarContentProps {
-  role: Role;
-  isCeo: boolean;
+  isCeo?: boolean;
   impersonation?: ImpersonationInfo | null;
-  onNavigate?: () => void;
-}
-
-function SidebarContent({ role, isCeo, impersonation, onNavigate }: SidebarContentProps) {
-  const pathname = usePathname();
-
-  const visibleGroups = NAV_GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => hasAccess(role, item.requiredRole)),
-  })).filter((group) => group.items.length > 0);
+}) {
+  const navGroups = await getDashboardNavGroups();
 
   return (
-    <>
-      {/* Logo area */}
-      <div className="flex h-14 items-center border-b border-sidebar-border px-5">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
-            <div className="h-2 w-2 rounded-full bg-primary" />
-          </div>
-          <span className="text-sm font-semibold tracking-tight text-foreground">
-            Command
-          </span>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex flex-1 flex-col gap-4 overflow-y-auto px-3 py-3">
-        {visibleGroups.map((group) => (
-          <div key={group.label} className="flex flex-col gap-0.5">
-            <span className="mb-0.5 px-2 text-[10px] font-medium uppercase tracking-[0.15em] text-muted-foreground/70">
-              {group.label}
-            </span>
-            {group.items.map((item) => {
-              const Icon = item.icon;
-              const isActive = exactMatchPaths.has(item.href)
-                ? pathname === item.href
-                : pathname.startsWith(item.href);
-
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={onNavigate}
-                  className={cn(
-                    "group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-all duration-150",
-                    isActive
-                      ? "bg-primary/8 text-primary shadow-sm"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground"
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      "h-4 w-4 shrink-0 transition-colors",
-                      isActive
-                        ? "text-primary"
-                        : "text-muted-foreground/70 group-hover:text-foreground"
-                    )}
-                  />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-
-      {/* Role preview — CEO only */}
-      {isCeo && <RolePreview activeRole={role} impersonation={impersonation ?? undefined} />}
-
-      {/* Bottom section */}
-      <div className="border-t border-sidebar-border px-4 py-3">
-        <div className="flex items-center gap-2 rounded-lg px-1">
-          <div className="h-1.5 w-1.5 rounded-full bg-positive" />
-          <span className="text-[11px] text-muted-foreground">
-            All systems operational
-          </span>
-        </div>
-      </div>
-    </>
+    <SidebarClient
+      role={role}
+      isCeo={isCeo}
+      navGroups={navGroups}
+      impersonation={impersonation}
+    />
   );
 }
 
-export function Sidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
+export async function MobileSidebar({
+  role,
+  isCeo = false,
+  impersonation,
+}: {
+  role: Role;
+  isCeo?: boolean;
+  impersonation?: ImpersonationInfo | null;
+}) {
+  const navGroups = await getDashboardNavGroups();
+
   return (
-    <aside className="hidden w-56 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-      <SidebarContent role={role} isCeo={isCeo} impersonation={impersonation} />
-    </aside>
+    <MobileSidebarClient
+      role={role}
+      isCeo={isCeo}
+      navGroups={navGroups}
+      impersonation={impersonation}
+    />
   );
 }
 
-export function MobileSidebar({ role, isCeo = false, impersonation }: { role: Role; isCeo?: boolean; impersonation?: ImpersonationInfo | null }) {
-  const [open, setOpen] = useState(false);
-  const pathname = usePathname();
-
-  // Close drawer on route change (URL is the external system being synced)
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing UI to pathname (external system)
-    setOpen(false);
-  }, [pathname]);
-
-  // Lock body scroll + close on Escape when open
-  useEffect(() => {
-    if (!open) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <>
-      <button
-        type="button"
-        aria-label="Open navigation"
-        aria-expanded={open}
-        aria-controls="mobile-nav-drawer"
-        onClick={() => setOpen(true)}
-        className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
-      >
-        <Menu className="h-4 w-4" />
-      </button>
-
-      {open && (
-        <div id="mobile-nav-drawer" className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true">
-          <div
-            className="absolute inset-0 bg-foreground/40 backdrop-blur-sm"
-            onClick={() => setOpen(false)}
-          />
-          <aside className="absolute left-0 top-0 flex h-full w-64 max-w-[80%] flex-col border-r border-sidebar-border bg-sidebar shadow-xl">
-            <button
-              type="button"
-              aria-label="Close navigation"
-              onClick={() => setOpen(false)}
-              className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-            <SidebarContent
-              role={role}
-              isCeo={isCeo}
-              impersonation={impersonation}
-              onNavigate={() => setOpen(false)}
-            />
-          </aside>
-        </div>
-      )}
-    </>
-  );
-}
+export type { ImpersonationInfo } from "./sidebar.client";

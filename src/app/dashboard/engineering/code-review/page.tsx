@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getCodeReviewView } from "@/lib/data/code-review";
 import { CodeReviewReport } from "./_components/code-review-report";
 
@@ -13,10 +11,7 @@ export const metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function CodeReviewPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard/engineering");
-  }
+  await requireDashboardPermission("engineering.codeReview");
 
   const view = await getCodeReviewView({ includePrevious: true });
   return <CodeReviewReport view={view} />;

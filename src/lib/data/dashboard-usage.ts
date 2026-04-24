@@ -6,6 +6,7 @@ import {
   isSchemaCompatibilityError,
   normalizeDatabaseError,
 } from "@/lib/db/errors";
+import { getDashboardSectionLabelMap } from "@/lib/auth/dashboard-permissions";
 
 /**
  * Return the fallback value when `page_views` has not been migrated yet
@@ -165,23 +166,7 @@ export function getDashboardRetention(): Promise<
   }, []);
 }
 
-export const SECTION_LABELS: Record<string, string> = {
-  "": "Overview",
-  "unit-economics": "Unit Economics",
-  financial: "Financial",
-  product: "Product",
-  okrs: "OKRs",
-  people: "People",
-  "people/performance": "Performance",
-  "people/engagement": "Engagement",
-  meetings: "Meetings",
-  "admin/status": "Data Status",
-  "admin/squads": "Squads",
-  "admin/users": "Users",
-  "admin/mode-explorer": "Mode Explorer",
-  "admin/analytics": "Analytics",
-  settings: "Settings",
-};
+export const SECTION_LABELS = getDashboardSectionLabelMap();
 
 /**
  * Page views grouped by dashboard section, last 30 days.

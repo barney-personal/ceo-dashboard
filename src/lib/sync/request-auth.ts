@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { getUserRole, hasAccess, type Role } from "@/lib/auth/roles";
+import {
+  getRequiredRoleForDashboardPermission,
+} from "@/lib/auth/dashboard-permissions.server";
+import type { DashboardPermissionId } from "@/lib/auth/dashboard-permissions";
 
 export type AuthCheckResult =
   | { ok: true }
@@ -49,7 +53,8 @@ export async function isCronRequest(request: NextRequest): Promise<boolean> {
 }
 
 export async function authorizeSyncRequest(
-  request: NextRequest
+  request: NextRequest,
+  manualPermissionId?: DashboardPermissionId,
 ): Promise<SyncRequestAccess> {
   if (await isCronRequest(request)) {
     return "cron";
@@ -65,7 +70,11 @@ export async function authorizeSyncRequest(
     (result.user.publicMetadata as Record<string, unknown>) ?? {}
   );
 
-  return hasAccess(role, "ceo") ? "manual" : "forbidden";
+  const requiredRole = manualPermissionId
+    ? await getRequiredRoleForDashboardPermission(manualPermissionId)
+    : "ceo";
+
+  return hasAccess(role, requiredRole) ? "manual" : "forbidden";
 }
 
 export function syncRequestAccessErrorResponse(

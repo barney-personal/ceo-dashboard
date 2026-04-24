@@ -1,5 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
-import { getCurrentUserRole, getImpersonation } from "@/lib/auth/roles.server";
+import { getImpersonation } from "@/lib/auth/roles.server";
+import {
+  getDashboardPermissionRoleMap,
+  requireDashboardPermission,
+} from "@/lib/auth/dashboard-permissions.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
@@ -62,9 +66,13 @@ function SectionLink({
 }
 
 export default async function DashboardOverview() {
-  const role = await getCurrentUserRole();
-  const { userId: realUserId } = await auth();
-  const impersonation = await getImpersonation();
+  const [role, permissionRoles, authState, impersonation] = await Promise.all([
+    requireDashboardPermission("dashboard.overview"),
+    getDashboardPermissionRoleMap(),
+    auth(),
+    getImpersonation(),
+  ]);
+  const { userId: realUserId } = authState;
 
   // Use the impersonated user's ID when active, otherwise the real user
   const effectiveUserId = impersonation?.userId ?? realUserId;
@@ -152,7 +160,10 @@ export default async function DashboardOverview() {
 
       {/* Hero metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <PermissionGate role={role} requiredRole="everyone">
+        <PermissionGate
+          role={role}
+          requiredRole={permissionRoles["dashboard.unitEconomics"]}
+        >
           <MetricCard
             label="LTV:Paid CAC"
             value={ltvCacRatio != null ? `${ltvCacRatio.toFixed(2)}x` : "—"}
@@ -163,7 +174,10 @@ export default async function DashboardOverview() {
             delay={0}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="leadership">
+        <PermissionGate
+          role={role}
+          requiredRole={permissionRoles["dashboard.financial"]}
+        >
           <MetricCard
             label="ARR"
             value={latestARR ? `$${formatCompact(latestARR.value)}` : "—"}
@@ -171,7 +185,10 @@ export default async function DashboardOverview() {
             delay={50}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="everyone">
+        <PermissionGate
+          role={role}
+          requiredRole={permissionRoles["dashboard.product"]}
+        >
           <MetricCard
             label="MAU"
             value={latestMAU != null ? formatCompact(latestMAU) : "—"}
@@ -182,7 +199,10 @@ export default async function DashboardOverview() {
             delay={100}
           />
         </PermissionGate>
-        <PermissionGate role={role} requiredRole="everyone">
+        <PermissionGate
+          role={role}
+          requiredRole={permissionRoles["dashboard.people"]}
+        >
           <MetricCard
             label="Headcount"
             value={headcount?.total?.toString() ?? "—"}
@@ -202,13 +222,21 @@ export default async function DashboardOverview() {
           Sections
         </h3>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <SectionLink
-            href="/dashboard/unit-economics"
-            icon={Calculator}
-            title="Unit Economics"
-            description="LTV:Paid CAC ratio, 36-month LTV by cohort, paid CPA trend, marketing spend and new user acquisition — all from Mode"
-          />
-          <PermissionGate role={role} requiredRole="leadership">
+          <PermissionGate
+            role={role}
+            requiredRole={permissionRoles["dashboard.unitEconomics"]}
+          >
+            <SectionLink
+              href="/dashboard/unit-economics"
+              icon={Calculator}
+              title="Unit Economics"
+              description="LTV:Paid CAC ratio, 36-month LTV by cohort, paid CPA trend, marketing spend and new user acquisition — all from Mode"
+            />
+          </PermissionGate>
+          <PermissionGate
+            role={role}
+            requiredRole={permissionRoles["dashboard.financial"]}
+          >
             <SectionLink
               href="/dashboard/financial"
               icon={PoundSterling}
@@ -216,35 +244,46 @@ export default async function DashboardOverview() {
               description="Embedded P&L Summary, Balance Sheet, Cash Flow, Treasury Dashboard, KPIs, and Headcount from Slack xlsx files"
             />
           </PermissionGate>
-          <SectionLink
-            href="/dashboard/product"
-            icon={BarChart3}
-            title="Product"
-            description="MAU, WAU, and DAU bar charts, WAU/MAU engagement trend, and MAU retention cohort heatmap"
-          />
-          <SectionLink
-            href="/dashboard/okrs"
-            icon={Target}
-            title="OKRs"
-            description="Key results by pillar and squad, parsed from Slack updates with RAG status indicators"
-          />
-          <SectionLink
-            href="/dashboard/meetings"
-            icon={Calendar}
-            title="Meetings"
-            description="Your calendar, meeting notes from Granola, and pre-reads from Slack"
-          />
-          <SectionLink
-            href="/dashboard/people"
-            icon={Users}
-            title="People"
-            description="Team directory with pillar and squad drill-down, headcount by department, joiners and departures"
-          />
+          <PermissionGate role={role} requiredRole={permissionRoles["dashboard.product"]}>
+            <SectionLink
+              href="/dashboard/product"
+              icon={BarChart3}
+              title="Product"
+              description="MAU, WAU, and DAU bar charts, WAU/MAU engagement trend, and MAU retention cohort heatmap"
+            />
+          </PermissionGate>
+          <PermissionGate role={role} requiredRole={permissionRoles["dashboard.okrs"]}>
+            <SectionLink
+              href="/dashboard/okrs"
+              icon={Target}
+              title="OKRs"
+              description="Key results by pillar and squad, parsed from Slack updates with RAG status indicators"
+            />
+          </PermissionGate>
+          <PermissionGate
+            role={role}
+            requiredRole={permissionRoles["dashboard.meetings"]}
+          >
+            <SectionLink
+              href="/dashboard/meetings"
+              icon={Calendar}
+              title="Meetings"
+              description="Your calendar, meeting notes from Granola, and pre-reads from Slack"
+            />
+          </PermissionGate>
+          <PermissionGate role={role} requiredRole={permissionRoles["dashboard.people"]}>
+            <SectionLink
+              href="/dashboard/people"
+              icon={Users}
+              title="People"
+              description="Team directory with pillar and squad drill-down, headcount by department, joiners and departures"
+            />
+          </PermissionGate>
         </div>
       </div>
 
       {/* Bottom detail cards — CEO only */}
-      <PermissionGate role={role} requiredRole="ceo">
+      <PermissionGate role={role} requiredRole={permissionRoles["admin.status"]}>
         <div className="grid gap-4 lg:grid-cols-2">
           <SectionCard
             title="Recent Sync Activity"

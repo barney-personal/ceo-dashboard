@@ -1,18 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { clerkClient } from "@clerk/nextjs/server";
-import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
+import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { type Role } from "@/lib/auth/roles";
 
 const VALID_ROLES: Role[] = ["everyone", "leadership", "ceo"];
 
 export async function GET() {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.users");
+    if (authError) return authError;
 
     const client = await clerkClient();
     const { data: users } = await client.users.getUserList({ limit: 100 });
@@ -56,11 +53,8 @@ export async function GET() {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.users");
+    if (authError) return authError;
 
     const body = await request.json();
     const { userId, role } = body as { userId?: string; role?: string };

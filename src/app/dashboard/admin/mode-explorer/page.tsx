@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { db } from "@/lib/db";
 import { modeReports, modeReportData } from "@/lib/db/schema";
@@ -12,11 +10,7 @@ import { ModeExplorer } from "./mode-explorer";
 import type { QuerySummary, ReportSummary } from "./types";
 
 export default async function ModeExplorerPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("admin.modeExplorer");
 
   let reports: ReportSummary[] = [];
   let queries: QuerySummary[] = [];

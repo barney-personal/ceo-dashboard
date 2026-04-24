@@ -1,8 +1,8 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
@@ -32,13 +32,7 @@ export default async function PersonProfilePage({
 }: {
   params: Promise<{ slug: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  // Profile is accessible to manager+ so team leads can click through from
-  // their team view. The Performance section below is additionally gated to
-  // CEO-or-own-manager, because ratings are sensitive.
-  if (!hasAccess(role, "manager")) {
-    redirect("/dashboard");
-  }
+  const role = await requireDashboardPermission("people.profile");
   const { slug } = await params;
   const profile = await getPersonProfile(decodeURIComponent(slug));
   if (!profile) notFound();

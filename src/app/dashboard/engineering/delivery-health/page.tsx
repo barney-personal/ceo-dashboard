@@ -3,6 +3,7 @@ import { DoraScorecardCard } from "@/components/dashboard/dora-scorecard-card";
 import { PillarMoversPanel } from "@/components/dashboard/pillar-movers-panel";
 import { PillarTrendGrid } from "@/components/dashboard/pillar-trend-grid";
 import { BarChart } from "@/components/charts/bar-chart";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import {
   getDoraScorecard,
   getDoraTrend,
@@ -24,6 +25,8 @@ import {
 } from "../_shared";
 
 export default async function EngineeringDeliveryHealthPage() {
+  await requireDashboardPermission("dashboard.engineering");
+
   const [dora, doraTrend, pillarTrend, leaderboard] = await Promise.all([
     getDoraScorecard(),
     getDoraTrend(),

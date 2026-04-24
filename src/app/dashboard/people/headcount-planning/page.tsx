@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { HeadcountPlanningClient } from "@/components/dashboard/headcount-planning-client";
 import { getTalentData } from "@/lib/data/talent";
@@ -70,10 +68,7 @@ function computeRollingRates(
 }
 
 export default async function HeadcountPlanningPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.people.headcountPlanning");
 
   const [talent, attrition] = await Promise.all([
     getTalentData(),

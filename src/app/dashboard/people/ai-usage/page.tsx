@@ -22,19 +22,23 @@ import {
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { getRequiredRoleForDashboardPermission, requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 
 const CLAUDE_DATA_START_ISO = "2026-03-23";
 
 export default async function PeopleAiUsagePage() {
-  // The page itself is everyone-accessible (layout gates to "everyone").
-  // The user leaderboard can link through to /dashboard/people/${slug},
-  // which is manager-gated — so only render those links when the viewer
-  // can actually reach that page. Non-managers still see the full data,
-  // just no dead-end profile links.
+  await requireDashboardPermission("dashboard.people.aiUsage");
+
+  // The leaderboard can link through to /dashboard/people/${slug}. Only
+  // render those links when the viewer can actually reach the profile page.
+  // Everyone else still sees the same data, just without dead-end links.
   let canViewProfiles = false;
   try {
-    const role = await getCurrentUserRole();
-    canViewProfiles = hasAccess(role, "manager");
+    const [role, requiredRole] = await Promise.all([
+      getCurrentUserRole(),
+      getRequiredRoleForDashboardPermission("people.profile"),
+    ]);
+    canViewProfiles = hasAccess(role, requiredRole);
   } catch {
     // Clerk hiccup → degrade to non-linking names rather than breaking.
   }
