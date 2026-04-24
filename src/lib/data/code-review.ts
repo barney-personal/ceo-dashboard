@@ -746,7 +746,9 @@ export async function getEngineerCodeReview(
   login: string,
   opts: RollupOptions = {},
 ): Promise<EngineerCodeReviewView> {
-  const view = await getCodeReviewView({ ...opts, includePrevious: true });
+  // The profile section doesn't render the vs-prior-window delta, so skip
+  // the second query by default. Callers can still opt in via `opts`.
+  const view = await getCodeReviewView(opts);
   const match = login.toLowerCase();
   const engineer =
     view.engineers.find(
