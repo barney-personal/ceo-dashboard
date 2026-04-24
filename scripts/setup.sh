@@ -58,7 +58,7 @@ if [ ! -f "$REPO_ROOT/.env" ]; then
         echo "  Skipped."
       fi
     else
-      echo "Skipping .env creation (non-interactive). Use Doppler or copy .env.example manually."
+      echo "  Skipping .env creation (non-interactive). Use Doppler or copy .env.example manually."
     fi
   fi
 else
