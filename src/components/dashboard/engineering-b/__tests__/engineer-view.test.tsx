@@ -7,6 +7,8 @@ vi.mock("@/lib/data/engineering-composite.server", () => ({
 
 import {
   buildComposite,
+  COMPOSITE_METHODOLOGY_ROWS,
+  COMPOSITE_METHODOLOGY_SECTIONS,
   type CompositeBundle,
   type EngineerCompositeInput,
 } from "@/lib/data/engineering-composite";
@@ -329,5 +331,48 @@ describe("EngineerView", () => {
     expect(within(squadGroup).getByText("your squad")).toBeInTheDocument();
     expect(within(squadGroup).queryByText("Alice")).not.toBeInTheDocument();
     expect(within(squadGroup).queryByText("Bob")).not.toBeInTheDocument();
+  });
+
+  it("renders every canonical methodology row field on the engineer panel", async () => {
+    const bundle = buildEngineerBundle();
+    const element = await EngineerView({
+      viewerEmail: "alice@meetcleo.com",
+      bundle,
+    });
+    render(element);
+
+    const panel = screen.getByTestId("engineering-b-engineer-methodology-signals");
+    for (const row of COMPOSITE_METHODOLOGY_ROWS) {
+      const card = panel.querySelector(`[data-methodology-signal="${row.key}"]`);
+      expect(card).not.toBeNull();
+      const text = card!.textContent ?? "";
+      expect(text).toContain(row.label);
+      expect(text).toContain(row.description);
+      expect(text).toContain(row.normalizationRule);
+      expect(text).toContain(row.minimumSampleRule);
+      expect(text).toContain(row.knownLimitations);
+    }
+  });
+
+  it("renders every canonical methodology section on the engineer panel", async () => {
+    const bundle = buildEngineerBundle();
+    const element = await EngineerView({
+      viewerEmail: "alice@meetcleo.com",
+      bundle,
+    });
+    render(element);
+
+    const sections = screen.getByTestId(
+      "engineering-b-engineer-methodology-sections",
+    );
+    for (const section of COMPOSITE_METHODOLOGY_SECTIONS) {
+      const card = sections.querySelector(
+        `[data-methodology-section="${section.title}"]`,
+      );
+      expect(card).not.toBeNull();
+      const text = card!.textContent ?? "";
+      expect(text).toContain(section.title);
+      expect(text).toContain(section.body);
+    }
   });
 });

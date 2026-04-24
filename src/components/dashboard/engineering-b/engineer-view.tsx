@@ -337,9 +337,32 @@ function MethodologyNote({ bundle }: { bundle: CompositeBundle }) {
                 <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
                   {row.description}
                 </p>
-                <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                  {row.normalizationRule}
-                </p>
+                <dl className="mt-2 space-y-1 text-[10px] leading-snug text-muted-foreground">
+                  <div>
+                    <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                      Normalisation
+                    </dt>
+                    <dd className="text-muted-foreground">
+                      {row.normalizationRule}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                      Minimum sample
+                    </dt>
+                    <dd className="text-muted-foreground">
+                      {row.minimumSampleRule}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                      Limitations
+                    </dt>
+                    <dd className="text-muted-foreground">
+                      {row.knownLimitations}
+                    </dd>
+                  </div>
+                </dl>
               </div>
             ))}
           </div>
