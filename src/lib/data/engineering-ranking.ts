@@ -448,9 +448,10 @@ export interface PerEngineerSignalRow {
   aiTokens: number | null;
   aiSpend: number | null;
   /**
-   * Squad-level delivery-health context from Swarmia. These are contextual
-   * team signals, not individual labels; they are audited for orthogonality
-   * but later scoring must cap/down-weight them to avoid ecological fallacy.
+   * Squad-level delivery-health context from Swarmia. These are scored via
+   * lens C but down-weighted — they are team signals, not individual labels,
+   * and the composite-median cap holds each squad-delivery signal at a
+   * ~7.5-10% effective share to avoid ecological fallacy.
    */
   squadCycleTimeHours: number | null;
   squadReviewRatePercent: number | null;
@@ -1513,13 +1514,13 @@ function likelyDisagreementCause(row: {
     case "impact>output":
       return "SHAP impact above activity volume — impact model scores highly but merged-PR throughput is low; look for low-count, high-impact work (infra, ML, review-heavy, pairing).";
     case "output>delivery":
-      return "Individual output above squad-delivery context — engineer ships more than the squad's aggregate delivery health; C is squad-context and may mask individual signal.";
+      return "Individual output above squad-delivery context — engineer ships more than the squad's aggregate delivery health; C is scored squad-delivery context (team-level, down-weighted to a ~7.5–10% effective share per signal) and may mask individual signal.";
     case "delivery>output":
       return "Squad delivery health above individual output — team-level signals may be carrying this row; individual output is the lens to trust for an individual ranking.";
     case "impact>delivery":
       return "SHAP impact above squad-delivery context — impact is model-driven individual, delivery is team-level; favours the individual reading.";
     case "delivery>impact":
-      return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is squad-context only and should not be read as individual impact.";
+      return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is scored squad-delivery context (team-level, down-weighted to a ~7.5–10% effective share per signal via the composite-median cap) and should not be read as individual impact.";
     default:
       return "Lenses disagree; see component breakdown for attribution.";
   }
@@ -1620,14 +1621,14 @@ const LENS_DEFINITIONS: readonly LensDefinition[] = [
     key: "delivery",
     name: "C — Squad delivery context",
     description:
-      "Squad-level delivery-health signals from Swarmia (review rate, cycle time, time-to-first-review). Individual review/cycle-time signals are not persisted in `githubPrs` or `githubPrMetrics`, so this lens is intentionally squad-context, not an individual label. Every engineer on the same squad shares the same C score.",
+      "Squad-level delivery-health signals from Swarmia (review rate, cycle time, time-to-first-review). Individual review/cycle-time signals are not persisted in `githubPrs` or `githubPrMetrics`, so this lens is intentionally team-level — scored, but down-weighted so no squad-delivery signal exceeds a ~7.5–10% effective share of the composite. Every engineer on the same squad shares the same C score.",
     components: [
       { name: "Squad review rate %", weight: 0.4 },
       { name: "Squad cycle time (inverted)", weight: 0.3 },
       { name: "Squad time-to-first-review (inverted)", weight: 0.3 },
     ],
     limitation:
-      "Squad-context only. Cannot differentiate engineers within the same squad. Capped at the lens level so it does not pretend to be an individual delivery-health label.",
+      "Scored squad-delivery context — team-level, down-weighted by the composite-median cap so each squad signal sits at a ~7.5–10% effective share (well inside the 30% ceiling). Cannot differentiate engineers within the same squad — every squad-mate shares the same C score — so readers must not treat C as an individual delivery-health label.",
   },
 ];
 
@@ -4391,7 +4392,7 @@ const KNOWN_LIMITATIONS: readonly string[] = [
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
   "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub are implemented. The stability check is the only pending methodology milestone — the composite is an evidence rank, not a final adjudication until it lands.",
   "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers GitHub activity, SHAP impact, and squad delivery context — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
-  "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
+  "Swarmia DORA is scored squad-delivery context — team-level signals (review rate, cycle time, time-to-first-review) enter lens C but are down-weighted via the composite-median cap to a ~7.5–10% effective share per signal. They describe teams, not individuals, and must not be read as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
 ];
@@ -4410,9 +4411,9 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
     note: "`squads` table supplies squad name, pillar, PM name, and Slack `channel_id`. All four are threaded through the eligibility snapshot when the registry is fetched. Does not contain manager or manager-email fields.",
   },
   {
-    name: "Swarmia DORA — squad/pillar context, not individual signal",
+    name: "Swarmia DORA — scored squad-delivery context, not an individual signal",
     state: "available",
-    note: "Team-level cycle time, deploy frequency, CFR, MTTR. Context only; capped/contextual contribution to individual rank.",
+    note: "Team-level review rate, cycle time, time-to-first-review (plus deploy frequency, CFR, MTTR for the audit view). Scored via lens C but down-weighted — the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share. Team-level context; must not be read as individual review evidence.",
   },
   {
     name: "AI usage (contextual, audit only)",
@@ -4706,7 +4707,7 @@ const METHODOLOGY_LENS_DESCRIPTIONS: Record<CompositeMethod, string> = {
   impact:
     "ML-predicted and measured impact from the SHAP model in `src/data/impact-model.json`, plus the residual between them.",
   delivery:
-    "Squad-level delivery health from Swarmia — context only, capped at 25% of the composite.",
+    "Squad-level delivery health from Swarmia — scored squad-delivery context (team-level, not an individual signal). Lens C is one of four composite methods, and the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share per signal.",
   adjusted:
     "Tenure and role-adjusted percentile layer over the log-impact composite: discipline-partitioned percentiles with documented pooling, level residual percentiles (OLS), and tenure-exposure adjustment.",
 };
@@ -4784,7 +4785,7 @@ function buildFreshnessBadges(params: {
       timestamp: params.signalWindowEnd,
       window,
       availability: "available",
-      note: "Squad/pillar-level DORA over `last_180_days`. Contextual only.",
+      note: "Squad/pillar-level DORA over `last_180_days`. Scored squad-delivery context — team-level, down-weighted via lens C so each squad-delivery signal sits at a ~7.5–10% effective share per signal.",
     },
     {
       label: "AI usage",

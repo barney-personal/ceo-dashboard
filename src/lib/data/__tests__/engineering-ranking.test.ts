@@ -5807,3 +5807,230 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
     ).toBe("2026-04-24");
   });
 });
+
+describe("M23 scored squad-delivery copy truthfulness", () => {
+  // Phrase reserved for the `contextual_only` posture (zero effective weight).
+  // Any scored squad-delivery signal that uses it would imply zero-weight and
+  // contradict the M22 anti-gaming contract.
+  const ZERO_WEIGHT_PHRASE = /\bcontext(?:ual)? only\b/i;
+
+  const SQUAD_DELIVERY_SCORED_SIGNALS = [
+    "Squad review rate %",
+    "Squad cycle time (inverted)",
+    "Squad time-to-first-review (inverted)",
+  ] as const;
+
+  function buildDefaultSnapshot() {
+    return buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [], generated_at: "2026-04-20T12:00:00Z" },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+  }
+
+  it("M23: the three scored squad-delivery anti-gaming rows remain down_weighted", () => {
+    for (const signal of SQUAD_DELIVERY_SCORED_SIGNALS) {
+      const row = RANKING_ANTI_GAMING_ROWS.find((r) => r.signal === signal);
+      expect(row, `Missing anti-gaming row for ${signal}`).toBeDefined();
+      expect(
+        row?.downweightStatus,
+        `Scored squad-delivery signal "${signal}" must be down_weighted, not ${row?.downweightStatus}`,
+      ).toBe("down_weighted");
+    }
+  });
+
+  it("M23: AI usage and individual review graph remain contextual_only (genuinely zero-weight)", () => {
+    const aiRow = RANKING_ANTI_GAMING_ROWS.find((r) =>
+      /ai tokens|ai spend/i.test(r.signal),
+    );
+    const reviewRow = RANKING_ANTI_GAMING_ROWS.find((r) =>
+      /self-review|review graph/i.test(r.signal),
+    );
+    expect(aiRow?.downweightStatus).toBe("contextual_only");
+    expect(reviewRow?.downweightStatus).toBe("contextual_only");
+  });
+
+  it("M23: anti-gaming copy for every scored signal avoids the 'context(ual) only' phrase", () => {
+    const scoredSignals = new Set<string>();
+    for (const method of Object.keys(
+      RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
+    ) as Array<keyof typeof RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS>) {
+      for (const { signal } of RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[
+        method
+      ]) {
+        scoredSignals.add(signal);
+      }
+    }
+
+    for (const row of RANKING_ANTI_GAMING_ROWS) {
+      if (!scoredSignals.has(row.signal)) continue;
+      const blob = `${row.gamingPath} ${row.mitigation} ${row.residualWeakness}`;
+      expect(
+        ZERO_WEIGHT_PHRASE.test(blob),
+        `Scored signal "${row.signal}" uses zero-weight phrasing in anti-gaming copy: ${blob}`,
+      ).toBe(false);
+    }
+  });
+
+  it("M23: methodology lens descriptions avoid the 'context(ual) only' phrase", () => {
+    const snapshot = buildDefaultSnapshot();
+    for (const lens of snapshot.methodology.lenses) {
+      expect(
+        ZERO_WEIGHT_PHRASE.test(lens.description),
+        `Methodology lens "${lens.label}" description uses zero-weight phrasing: ${lens.description}`,
+      ).toBe(false);
+    }
+  });
+
+  it("M23: freshness badge notes for scored sources avoid 'context(ual) only'", () => {
+    const snapshot = buildDefaultSnapshot();
+    for (const badge of snapshot.methodology.freshness) {
+      if (/ai usage/i.test(badge.label)) continue;
+      if (/rubric/i.test(`${badge.label} ${badge.source}`)) continue;
+      if (!badge.note) continue;
+      expect(
+        ZERO_WEIGHT_PHRASE.test(badge.note),
+        `Freshness badge "${badge.label}" note uses zero-weight phrasing: ${badge.note}`,
+      ).toBe(false);
+    }
+  });
+
+  it("M23: known limitations that mention squad delivery avoid 'context(ual) only'", () => {
+    const snapshot = buildDefaultSnapshot();
+    for (const line of snapshot.methodology.knownLimitations) {
+      const mentionsSquadDelivery =
+        /swarmia|squad delivery|squad-delivery|squad cycle|squad review|squad time-to-first-review/i.test(
+          line,
+        );
+      if (!mentionsSquadDelivery) continue;
+      const mentionsZeroWeightSignal =
+        /\bai (tokens|spend|usage)\b/i.test(line) ||
+        /self-review|review graph|reviewer graph/i.test(line);
+      if (mentionsZeroWeightSignal) continue;
+      expect(
+        ZERO_WEIGHT_PHRASE.test(line),
+        `Known limitation about squad delivery uses zero-weight phrasing: ${line}`,
+      ).toBe(false);
+    }
+  });
+
+  it("M23: Swarmia DORA planned signal is described as scored and team-level (not context-only)", () => {
+    const snapshot = buildDefaultSnapshot();
+    const swarmia = snapshot.plannedSignals.find((s) =>
+      /swarmia/i.test(s.name),
+    );
+    expect(swarmia).toBeDefined();
+    const haystack = `${swarmia?.name ?? ""} ${swarmia?.note ?? ""}`;
+    expect(ZERO_WEIGHT_PHRASE.test(haystack)).toBe(false);
+    // Positively describes itself as scored so the reader does not read it
+    // as audit-only.
+    expect(haystack.toLowerCase()).toMatch(/scored|lens c|down[- ]weighted/);
+    // Still calls out that it is team-level and must not be read as an
+    // individual signal.
+    expect(haystack.toLowerCase()).toMatch(
+      /team[- ]level|not an individual|not be read as individual|individual review evidence/,
+    );
+  });
+
+  it("M23: Lens C description and limitation say scored + down-weighted, not context-only", () => {
+    const lensC = RANKING_LENS_DEFINITIONS.find((d) => d.key === "delivery");
+    expect(lensC).toBeDefined();
+    const blob = `${lensC?.description} ${lensC?.limitation}`;
+    expect(ZERO_WEIGHT_PHRASE.test(blob)).toBe(false);
+    expect(blob.toLowerCase()).toMatch(/scored|down[- ]weighted/);
+    // Must still flag this as team-level so the CEO knows C is squad-level.
+    expect(blob.toLowerCase()).toMatch(
+      /team[- ]level|shares the same c score|not an individual/,
+    );
+  });
+
+  it("M23: lens-disagreement narratives that mention lens C avoid zero-weight phrasing", () => {
+    // The `likelyCause` narrative prose is a page-facing surface via the
+    // disagreement table. Build a synthetic disagreement where lens C scores
+    // highest so the `delivery>*` branches are exercised, then assert the
+    // rendered narrative strings avoid the banned phrase.
+    const rosterEntries = [
+      {
+        emailHash: hashEmailForRanking("a@meetcleo.com"),
+        displayName: "A",
+        email: "a@meetcleo.com",
+        githubLogin: "a",
+        discipline: "BE" as const,
+        levelLabel: "L4",
+        squad: "Alpha",
+        pillar: "Core",
+        canonicalSquad: null,
+        manager: "Boss",
+        startDate: "2023-01-01",
+        tenureDays: 800,
+        isLeaverOrInactive: false,
+        hasImpactModelRow: true,
+        eligibility: "competitive" as const,
+        reason: "Eligible",
+      },
+      {
+        emailHash: hashEmailForRanking("b@meetcleo.com"),
+        displayName: "B",
+        email: "b@meetcleo.com",
+        githubLogin: "b",
+        discipline: "BE" as const,
+        levelLabel: "L4",
+        squad: "Bravo",
+        pillar: "Core",
+        canonicalSquad: null,
+        manager: "Boss",
+        startDate: "2023-01-01",
+        tenureDays: 800,
+        isLeaverOrInactive: false,
+        hasImpactModelRow: true,
+        eligibility: "competitive" as const,
+        reason: "Eligible",
+      },
+    ];
+    // Push A to have low output + low impact but great squad delivery, and B
+    // the opposite, so every lens disagreement tag is exercised across the
+    // two rows.
+    const signals: PerEngineerSignalRow[] = [
+      {
+        emailHash: rosterEntries[0].emailHash,
+        prCount: 1,
+        commitCount: 1,
+        additions: 10,
+        deletions: 1,
+        shapPredicted: 1,
+        shapActual: 1,
+        shapResidual: 0,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: 4,
+        squadReviewRatePercent: 99,
+        squadTimeToFirstReviewHours: 0.5,
+        squadPrsInProgress: 0,
+      },
+      {
+        emailHash: rosterEntries[1].emailHash,
+        prCount: 100,
+        commitCount: 200,
+        additions: 10_000,
+        deletions: 100,
+        shapPredicted: 900,
+        shapActual: 950,
+        shapResidual: 50,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: 200,
+        squadReviewRatePercent: 5,
+        squadTimeToFirstReviewHours: 50,
+        squadPrsInProgress: 20,
+      },
+    ];
+    const bundle = buildLenses({ entries: rosterEntries, signals });
+    for (const row of bundle.disagreement.rows) {
+      expect(
+        ZERO_WEIGHT_PHRASE.test(row.likelyCause),
+        `Lens disagreement narrative "${row.likelyCause}" uses zero-weight phrasing`,
+      ).toBe(false);
+    }
+  });
+});
