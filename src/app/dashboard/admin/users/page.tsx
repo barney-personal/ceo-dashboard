@@ -21,23 +21,27 @@ export default async function UsersAdminPage() {
     if (data.length < PAGE_SIZE || users.length >= totalCount) break;
   }
 
-  // Fetch session counts for all users in parallel
-  const sessionCounts = await Promise.all(
-    users.map(async (u) => {
-      try {
-        const { data: sessions } = await client.sessions.getSessionList({
-          userId: u.id,
-          limit: 100,
-        });
-        return { userId: u.id, count: sessions.length };
-      } catch {
-        return { userId: u.id, count: 0 };
-      }
-    })
-  );
-  const sessionCountMap = new Map(
-    sessionCounts.map((s) => [s.userId, s.count])
-  );
+  // Fetch session counts in bounded-concurrency batches to avoid hammering
+  // Clerk's per-user endpoint with hundreds of simultaneous requests.
+  const SESSION_FETCH_CONCURRENCY = 20;
+  const sessionCountMap = new Map<string, number>();
+  for (let i = 0; i < users.length; i += SESSION_FETCH_CONCURRENCY) {
+    const batch = users.slice(i, i + SESSION_FETCH_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (u) => {
+        try {
+          const { data: sessions } = await client.sessions.getSessionList({
+            userId: u.id,
+            limit: 100,
+          });
+          return { userId: u.id, count: sessions.length };
+        } catch {
+          return { userId: u.id, count: 0 };
+        }
+      })
+    );
+    for (const { userId, count } of results) sessionCountMap.set(userId, count);
+  }
 
   const serialized = users.map((u) => ({
     id: u.id,
