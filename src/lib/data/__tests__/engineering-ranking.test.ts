@@ -5224,3 +5224,73 @@ describe("M18 movers view", () => {
     expect(v).toMatch(/mover|stability/);
   });
 });
+
+describe("M19 page limitations no longer claim movers are pending", () => {
+  /**
+   * M18 made movers live. The composite/confidence/attribution limitation
+   * strings are rendered verbatim on the page, so stale copy there leaks
+   * untrue "movers is pending" statements to the reader. This guard keeps
+   * the three live stages' limitation arrays honest.
+   */
+  function assertNoMoversPending(
+    stage: string,
+    limitations: readonly string[],
+  ) {
+    for (const line of limitations) {
+      const lower = line.toLowerCase();
+      const claimsMoversPending =
+        /movers[^.]*\b(pending|outstanding|not yet)\b/.test(lower) ||
+        /\bmovers\b[^.]*\bremain(s)?\b/.test(lower);
+      expect(
+        claimsMoversPending,
+        `${stage} limitation still claims movers is pending: ${line}`,
+      ).toBe(false);
+    }
+  }
+
+  it("composite, confidence, attribution, and snapshot limitations do not say movers are pending", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+
+    assertNoMoversPending("composite", snapshot.composite.limitations);
+    assertNoMoversPending("confidence", snapshot.confidence.limitations);
+    assertNoMoversPending("attribution", snapshot.attribution.limitations);
+    assertNoMoversPending("knownLimitations", snapshot.knownLimitations);
+  });
+
+  it("only the remaining milestones (methodology panel, stability) are named as pending", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+
+    // Every limitation line that mentions something remaining must also name
+    // one of the remaining milestones — anti-gaming, methodology, manager
+    // calibration, or stability — so the page never says "pending" without
+    // telling the reader what is pending.
+    const remainingTerms =
+      /anti-gaming|methodology panel|manager calibration|stability/;
+    const stages: Array<[string, readonly string[]]> = [
+      ["composite", snapshot.composite.limitations],
+      ["confidence", snapshot.confidence.limitations],
+      ["attribution", snapshot.attribution.limitations],
+      ["knownLimitations", snapshot.knownLimitations],
+    ];
+    for (const [stage, lines] of stages) {
+      for (const line of lines) {
+        const lower = line.toLowerCase();
+        const mentionsPending =
+          /\b(pending|still pending|remain pending)\b/.test(lower);
+        if (!mentionsPending) continue;
+        expect(
+          remainingTerms.test(lower),
+          `${stage} limitation names "pending" without naming a remaining milestone: ${line}`,
+        ).toBe(true);
+      }
+    }
+  });
+});

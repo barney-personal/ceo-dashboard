@@ -32,15 +32,22 @@ vi.mock("@/lib/db", () => {
 });
 
 import { db } from "@/lib/db";
-import { persistRankingSnapshot } from "../engineering-ranking.server";
 import {
+  fetchPriorSnapshotRowsForMovers,
+  persistRankingSnapshot,
+} from "../engineering-ranking.server";
+import {
+  buildMovers,
   buildRankingSnapshot,
   hashEmailForRanking,
+  RANKING_METHODOLOGY_VERSION,
+  RANKING_MOVERS_MIN_GAP_DAYS,
   type EligibilityEntry,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilityImpactModelView,
   type PerEngineerSignalRow,
+  type RankingSnapshotRow,
 } from "../engineering-ranking";
 
 function competitiveEntry(
@@ -232,5 +239,210 @@ describe("persistRankingSnapshot (M17 persistence correctness)", () => {
 
     await persistRankingSnapshot(snapshot, { signals: [] });
     expect(vi.mocked(db.insert)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Build a thenable fluent stub that satisfies the Drizzle call chain used by
+ * `fetchPriorSnapshotRowsForMovers`. Every chain node forwards to itself and
+ * resolves to `result` when awaited at any depth.
+ */
+function chainFor(result: unknown) {
+  const node = {} as Record<string, unknown>;
+  const pass = () => node;
+  node.from = pass;
+  node.where = pass;
+  node.orderBy = pass;
+  node.limit = pass;
+  node.then = (onFulfilled: unknown, onRejected: unknown) =>
+    Promise.resolve(result).then(
+      onFulfilled as Parameters<typeof Promise.prototype.then>[0],
+      onRejected as Parameters<typeof Promise.prototype.then>[1],
+    );
+  return node;
+}
+
+/**
+ * Build a persisted snapshot row shape — only the fields the movers diff
+ * actually reads. `input_hash` is a stable synthetic value so hash diffing
+ * is deterministic across the test.
+ */
+function persistedRow(
+  index: number,
+  overrides: Partial<RankingSnapshotRow> = {},
+): RankingSnapshotRow {
+  const emailHash = hashEmailForRanking(`eng${index}@meetcleo.com`);
+  return {
+    snapshotDate: "2026-04-22",
+    methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    signalWindowStart: new Date("2025-10-24T00:00:00.000Z"),
+    signalWindowEnd: new Date("2026-04-22T00:00:00.000Z"),
+    emailHash,
+    eligibilityStatus: "competitive",
+    rank: index,
+    compositeScore: 60 + index,
+    adjustedPercentile: 55 + index,
+    rawPercentile: 50 + index,
+    methodA: 50,
+    methodB: 60,
+    methodC: 70,
+    confidenceLow: 45 + index,
+    confidenceHigh: 75 + index,
+    inputHash: `persisted-input-${index}`,
+    metadata: {
+      presentMethodCount: 3,
+      dominanceBlocked: false,
+      dominanceRiskApplied: false,
+      confidenceWidth: 30,
+      inTieGroup: false,
+    },
+    ...overrides,
+  };
+}
+
+describe("fetchPriorSnapshotRowsForMovers (M19 too-recent slice surfacing)", () => {
+  beforeEach(() => {
+    vi.mocked(db.select).mockReset();
+  });
+
+  it("returns a too-recent prior slice when no slice is old enough, so the live page can render insufficient_gap", async () => {
+    // Three selector queries (same methodology + old, any methodology + old,
+    // any methodology + any age) followed by the readRankingSnapshot load.
+    const currentSnapshotDate = "2026-04-24";
+    const tooRecentSlice = {
+      snapshotDate: "2026-04-23",
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    };
+    const priorRows = [persistedRow(1), persistedRow(2)];
+    const selectResults: unknown[] = [
+      [], // sameMethodologySlice — none old enough
+      [], // anyMethodologySlice — none old enough
+      [tooRecentSlice], // tooRecentSlice — the M19 fallback
+      priorRows, // readRankingSnapshot loads the row content
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () => chainFor(selectResults.shift() ?? []) as unknown as ReturnType<typeof db.select>,
+    );
+
+    const rows = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    // Pre-M19, the selector returned [] here and the page degraded to
+    // `no_prior_snapshot`. With the fallback, we surface the too-recent slice
+    // so the page can render `insufficient_gap` with the real gap.
+    expect(rows).toHaveLength(priorRows.length);
+    expect(rows[0]?.snapshotDate).toBe("2026-04-22");
+
+    // All four select calls must have fired — the fallback only runs when the
+    // first two return empty.
+    expect(vi.mocked(db.select)).toHaveBeenCalledTimes(4);
+  });
+
+  it("feeds the too-recent slice into buildMovers and produces status === insufficient_gap with the actual gap", async () => {
+    const currentSnapshotDate = "2026-04-24";
+    const tooRecentSlice = {
+      snapshotDate: "2026-04-23",
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    };
+    const priorRows = [persistedRow(1), persistedRow(2)];
+    const selectResults: unknown[] = [
+      [],
+      [],
+      [tooRecentSlice],
+      priorRows,
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () => chainFor(selectResults.shift() ?? []) as unknown as ReturnType<typeof db.select>,
+    );
+
+    const fetched = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    const movers = buildMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite: {
+        contract: "",
+        methods: [],
+        minPresentMethods: 2,
+        maxSingleSignalEffectiveWeight: 0.3,
+        dominanceCorrelationThreshold: 0.75,
+        entries: [],
+        topN: [],
+        effectiveSignalWeights: [],
+        leaveOneOut: [],
+        finalRankCorrelations: [],
+        dominanceWarnings: [],
+        dominanceBlocked: false,
+        limitations: [],
+      },
+      confidence: {
+        contract: "",
+        bootstrapIterations: 0,
+        ciCoverage: 0.8,
+        dominanceWidening: 1.5,
+        globalDominanceApplied: false,
+        entries: [],
+        tieGroups: [],
+        limitations: [],
+      },
+      eligibilityEntries: [],
+      priorRows: fetched,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(movers.status).toBe("insufficient_gap");
+    expect(movers.priorSnapshot?.snapshotDate).toBe("2026-04-22");
+    expect(movers.priorSnapshotGapDays).toBe(2);
+    expect(movers.minGapDays).toBe(RANKING_MOVERS_MIN_GAP_DAYS);
+  });
+
+  it("does not fall through to the too-recent query when an old-enough same-methodology slice exists", async () => {
+    const currentSnapshotDate = "2026-04-24";
+    const oldEnoughSlice = {
+      snapshotDate: "2026-04-01",
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    };
+    const priorRows = [persistedRow(1, { snapshotDate: "2026-04-01" })];
+    const selectResults: unknown[] = [
+      [oldEnoughSlice],
+      priorRows,
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () => chainFor(selectResults.shift() ?? []) as unknown as ReturnType<typeof db.select>,
+    );
+
+    const rows = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    // Only the same-methodology selector + readRankingSnapshot run.
+    expect(vi.mocked(db.select)).toHaveBeenCalledTimes(2);
+    expect(rows[0]?.snapshotDate).toBe("2026-04-01");
+  });
+
+  it("returns an empty array when no prior slice exists at all", async () => {
+    const selectResults: unknown[] = [[], [], []];
+    vi.mocked(db.select).mockImplementation(
+      () => chainFor(selectResults.shift() ?? []) as unknown as ReturnType<typeof db.select>,
+    );
+
+    const rows = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(rows).toEqual([]);
+    // Three probes, no readRankingSnapshot call.
+    expect(vi.mocked(db.select)).toHaveBeenCalledTimes(3);
   });
 });

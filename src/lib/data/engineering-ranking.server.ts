@@ -16,7 +16,7 @@ import {
   githubPrs,
   squads,
 } from "@/lib/db/schema";
-import { and, asc, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lt, lte, sql, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -178,16 +178,17 @@ async function fetchSquadDeliveryContext(): Promise<
 
 /**
  * Fetch the most recent prior snapshot slice to diff against for the M18
- * movers view. Prefers the same methodology version as the current run;
- * when no same-methodology slice exists within the window, falls back to
- * the most recent any-methodology slice so `buildMovers` can label the
- * diff as methodology-affected rather than silently hiding movement.
+ * movers view. Preference order:
  *
- * Returns an empty array when no prior slice is old enough — the movers
- * bundle will then emit a `no_prior_snapshot` / `insufficient_gap` empty
- * state rather than fabricating movement.
+ *   1. Most recent slice at least `minGapDays` old, same methodology.
+ *   2. Most recent slice at least `minGapDays` old, any methodology.
+ *   3. Most recent slice strictly older than the current snapshot date
+ *      (regardless of gap), so `buildMovers` can emit `insufficient_gap`
+ *      with the real gap rather than degrading to `no_prior_snapshot`.
+ *
+ * Returns an empty array only when no prior slice exists at all.
  */
-async function fetchPriorSnapshotRowsForMovers(params: {
+export async function fetchPriorSnapshotRowsForMovers(params: {
   currentSnapshotDate: string;
   currentMethodologyVersion: string;
   minGapDays: number;
@@ -230,6 +231,28 @@ async function fetchPriorSnapshotRowsForMovers(params: {
       )
       .limit(1);
     priorSlice = anyMethodologySlice[0] ?? null;
+  }
+
+  // Fallback: no slice is old enough, but a too-recent prior slice may
+  // still exist. Surface it so `buildMovers` renders `insufficient_gap`
+  // instead of the stronger `no_prior_snapshot` empty state — the reader
+  // learns the exact gap rather than being told there is no history.
+  if (!priorSlice) {
+    const tooRecentSlice = await db
+      .select({
+        snapshotDate: engineeringRankingSnapshots.snapshotDate,
+        methodologyVersion: engineeringRankingSnapshots.methodologyVersion,
+      })
+      .from(engineeringRankingSnapshots)
+      .where(
+        lt(engineeringRankingSnapshots.snapshotDate, params.currentSnapshotDate),
+      )
+      .orderBy(
+        desc(engineeringRankingSnapshots.snapshotDate),
+        desc(engineeringRankingSnapshots.methodologyVersion),
+      )
+      .limit(1);
+    priorSlice = tooRecentSlice[0] ?? null;
   }
 
   if (!priorSlice) return [];

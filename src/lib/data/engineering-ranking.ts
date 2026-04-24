@@ -10,7 +10,7 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: the movers view, the anti-gaming audit, and the
+ * not a final adjudication: the methodology panel / anti-gaming audit and the
  * stability check are still pending until `EngineeringRankingSnapshot.status
  * === "ready"`. Confidence bands and statistical-tie groups (M14) are live
  * and travel on the snapshot via `confidence`. Per-engineer attribution
@@ -18,7 +18,8 @@
  * Privacy-preserving ranking snapshot persistence (M16) is live via
  * `buildRankingSnapshotRows` + `engineeringRankingSnapshots` — rows carry
  * only the email hash, never display name, email, manager, or resolved
- * GitHub login.
+ * GitHub login. Movers view (M18) is live and travels on the snapshot via
+ * `movers`.
  */
 
 import { createHash } from "node:crypto";
@@ -77,7 +78,8 @@ import { createHash } from "node:crypto";
  *   rather than methodology noise because tenure/discipline/manager/squad
  *   and normalisation-cohort transitions are not encoded in the hash.
  *   Snapshot `status` still stays `methodology_pending` until the
- *   anti-gaming audit (M19) and stability check (M20) also land.
+ *   methodology panel / anti-gaming audit (M20) and the stability check
+ *   (M21) also land.
  */
 export const RANKING_METHODOLOGY_VERSION = "0.9.0-movers" as const;
 
@@ -2715,7 +2717,7 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel / anti-gaming audit (M20) and the stability check (M21) are still pending — the composite is an evidence rank, not a final adjudication.",
     ],
   };
 }
@@ -2771,7 +2773,7 @@ export const RANKING_MAX_SIGMA = 30 as const;
 
 /**
  * Seeded RNG constant for the M14 bootstrap. Snapshots are deterministic so
- * the M19 stability check can compare consecutive runs without picking up
+ * the M21 stability check can compare consecutive runs without picking up
  * methodology noise. Bumping the seed counts as a methodology change.
  */
 export const RANKING_BOOTSTRAP_SEED = 0x9e_37_79_b1 as const;
@@ -2838,7 +2840,7 @@ export interface ConfidenceBundle {
 /**
  * Mulberry32 — a 32-bit seeded PRNG. Deterministic, order-independent, and
  * fast. We use it instead of `Math.random` so the bootstrap is reproducible:
- * the same inputs always produce the same CI, which is what M19 stability
+ * the same inputs always produce the same CI, which is what M21 stability
  * comparisons rely on.
  */
 function mulberry32(seed: number): () => number {
@@ -3191,7 +3193,7 @@ export function buildConfidence({
       `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
       `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
       `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
-      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
+      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M18) is live and attached to the snapshot via the movers bundle. The methodology panel / anti-gaming audit (M20) and the stability check (M21) remain pending.`,
     ],
   };
 }
@@ -3709,8 +3711,8 @@ export function buildAttribution({
     limitations: [
       `Attribution's positive/negative driver tag uses a linear approximation of each component's lift on the composite percentile: (1 / ${totalMethods}) × componentWeight × (percentile − 50). The composite itself is the median of the four method scores, not a weighted sum, so the driver magnitudes are directional labels rather than exact rank contributions.`,
       `Evidence links are limited to a GitHub PR-search URL filtered to merged PRs in the window. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and appear in the absent-signals list rather than the evidence block.`,
-      `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). The drilldown structure accepts a future manager-calibration flag without widening the attribution contract; calibration itself is outstanding work for M18.`,
-      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending — attribution and snapshots land first so those later cycles can compare a defensible rank from cycle one.`,
+      `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). The drilldown structure accepts a future manager-calibration flag without widening the attribution contract; manager calibration itself is outstanding work bundled into the methodology panel milestone (M20).`,
+      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M18) is live and renders against the most recent comparable prior snapshot. The methodology panel / anti-gaming audit (M20) and the stability check (M21) remain pending — attribution, snapshots, and movers land first so those later cycles can compare a defensible rank across several cycles.`,
     ],
   };
 }
@@ -4482,9 +4484,9 @@ export function buildRankingSnapshotRows(
  * the fetching and calls this; tests call it with fixtures.
  *
  * Status stays `methodology_pending` even though the composite, confidence
- * bands, per-engineer attribution, and ranking snapshot persistence are all
- * live — the movers view, anti-gaming audit, and stability check are the
- * remaining post-attribution milestones that must land before the
+ * bands, per-engineer attribution, ranking snapshot persistence, and the
+ * movers view are all live — the methodology panel / anti-gaming audit and
+ * the stability check are the remaining milestones that must land before the
  * methodology is defensible enough to advertise as `ready`.
  */
 export function buildRankingSnapshot(
