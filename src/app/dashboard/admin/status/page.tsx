@@ -40,6 +40,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
+const CODE_REVIEW_RECENT_ACTIVITY_MS = 15 * 60 * 1000;
+
 export default async function DataStatusPage() {
   await requireDashboardPermission("admin.status");
 
@@ -182,7 +184,7 @@ export default async function DataStatusPage() {
     codeReviewBackfill.remainingCount > 0 &&
     codeReviewBackfill.latestAnalysedAt !== null &&
     now.getTime() - codeReviewBackfill.latestAnalysedAt.getTime() <
-      15 * 60 * 1000;
+      CODE_REVIEW_RECENT_ACTIVITY_MS;
   const activeModeRun = recentRuns.find((run) => {
     if (run.source !== "mode") {
       return false;
@@ -348,7 +350,7 @@ export default async function DataStatusPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Database className="h-3.5 w-3.5 text-muted-foreground/50" />
-                  <span className="text-sm font-mono font-medium tabular-nums">{table.count.toLocaleString()}</span>
+                  <span className="text-sm font-mono font-medium tabular-nums">{formatInteger(table.count)}</span>
                 </div>
               </div>
             ))}
@@ -405,7 +407,7 @@ function successRateTone(rate: number | null): string {
 }
 
 function formatInteger(value: number): string {
-  return value.toLocaleString();
+  return value.toLocaleString("en-GB");
 }
 
 function CodeReviewBackfillSection({
@@ -425,14 +427,16 @@ function CodeReviewBackfillSection({
     status.remainingCount === 0
       ? "border-positive/25 bg-positive/10 text-positive"
       : status.latestAnalysedAt !== null &&
-          now.getTime() - status.latestAnalysedAt.getTime() < 15 * 60 * 1000
+          now.getTime() - status.latestAnalysedAt.getTime() <
+            CODE_REVIEW_RECENT_ACTIVITY_MS
         ? "border-warning/25 bg-warning/10 text-warning"
         : "border-border/60 bg-muted/30 text-muted-foreground";
   const statusLabel =
     status.remainingCount === 0
       ? "Current"
       : status.latestAnalysedAt !== null &&
-          now.getTime() - status.latestAnalysedAt.getTime() < 15 * 60 * 1000
+          now.getTime() - status.latestAnalysedAt.getTime() <
+            CODE_REVIEW_RECENT_ACTIVITY_MS
         ? "Backfill running"
         : "Backlog pending";
 
