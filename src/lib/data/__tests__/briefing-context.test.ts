@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { OkrSummary } from "@/lib/data/okrs";
 import {
+  applyManagerFlagThreshold,
   normalisePillar,
   okrKeyMatchesPersonPillar,
+  pickTopShips,
   relevantSectionsFor,
   summarisePillarOkrs,
   summariseSquadOkrs,
+  type BriefingManagerFlag,
   type BriefingPerson,
+  type BriefingShip,
 } from "@/lib/data/briefing-helpers";
 
 function makeOkr(overrides: Partial<OkrSummary> = {}): OkrSummary {
@@ -238,5 +242,105 @@ describe("relevantSectionsFor", () => {
 
   it("returns only base sections when person is null", () => {
     expect(relevantSectionsFor("everyone", null)).toEqual(["Overview"]);
+  });
+});
+
+function makeShip(overrides: Partial<BriefingShip> = {}): BriefingShip {
+  return {
+    repo: "cleo/app",
+    title: "feat: something",
+    authorName: "Alice",
+    mergedAtIso: "2026-04-20T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("pickTopShips", () => {
+  it("prefers one ship per author before allowing a second", () => {
+    const ships = [
+      makeShip({ authorName: "Alice", mergedAtIso: "2026-04-22T10:00Z", title: "alice-2" }),
+      makeShip({ authorName: "Alice", mergedAtIso: "2026-04-23T10:00Z", title: "alice-1" }),
+      makeShip({ authorName: "Bob", mergedAtIso: "2026-04-21T10:00Z", title: "bob-1" }),
+      makeShip({ authorName: "Carol", mergedAtIso: "2026-04-20T10:00Z", title: "carol-1" }),
+    ];
+    const result = pickTopShips(ships, 4);
+    // First 3 slots are one per author (most recent first), then the second
+    // Alice PR fills the remaining slot.
+    expect(result.map((s) => s.title)).toEqual([
+      "alice-1",
+      "bob-1",
+      "carol-1",
+      "alice-2",
+    ]);
+  });
+
+  it("caps at `limit`", () => {
+    const ships = Array.from({ length: 10 }, (_, i) =>
+      makeShip({
+        authorName: `Author${i}`,
+        title: `ship-${i}`,
+        mergedAtIso: `2026-04-${String(10 + i).padStart(2, "0")}T10:00:00Z`,
+      }),
+    );
+    expect(pickTopShips(ships, 3)).toHaveLength(3);
+  });
+
+  it("returns an empty array when given none", () => {
+    expect(pickTopShips([], 5)).toEqual([]);
+  });
+});
+
+function makeFlag(overrides: Partial<BriefingManagerFlag> = {}): BriefingManagerFlag {
+  return {
+    name: "Test",
+    rank: 50,
+    percentile: 50,
+    confidenceHigh: 60,
+    squad: "Chat",
+    snapshotDate: "2026-04-23",
+    ...overrides,
+  };
+}
+
+describe("applyManagerFlagThreshold", () => {
+  it("flags reports in the bottom quintile with a tight upper CI", () => {
+    const flagged = applyManagerFlagThreshold([
+      makeFlag({ name: "Low+Tight", percentile: 8, confidenceHigh: 25 }),
+      makeFlag({ name: "Mid", percentile: 55, confidenceHigh: 70 }),
+    ]);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0].name).toBe("Low+Tight");
+  });
+
+  it("omits reports with wide confidence bands even if percentile is low", () => {
+    const flagged = applyManagerFlagThreshold([
+      makeFlag({ name: "Low+Wide", percentile: 8, confidenceHigh: 60 }),
+    ]);
+    // Upper CI reaches mid-cohort — noise too high to call out.
+    expect(flagged).toEqual([]);
+  });
+
+  it("orders flagged reports by percentile ascending (most severe first)", () => {
+    const flagged = applyManagerFlagThreshold([
+      makeFlag({ name: "B", percentile: 15, confidenceHigh: 30 }),
+      makeFlag({ name: "A", percentile: 5, confidenceHigh: 20 }),
+      makeFlag({ name: "C", percentile: 18, confidenceHigh: 32 }),
+    ]);
+    expect(flagged.map((f) => f.name)).toEqual(["A", "B", "C"]);
+  });
+
+  it("caps at most three reports", () => {
+    const input = Array.from({ length: 6 }, (_, i) =>
+      makeFlag({ name: `R${i}`, percentile: i + 1, confidenceHigh: i + 10 }),
+    );
+    expect(applyManagerFlagThreshold(input)).toHaveLength(3);
+  });
+
+  it("drops reports with null percentile or null confidence", () => {
+    const flagged = applyManagerFlagThreshold([
+      makeFlag({ name: "NoPct", percentile: null, confidenceHigh: 20 }),
+      makeFlag({ name: "NoCI", percentile: 5, confidenceHigh: null }),
+    ]);
+    expect(flagged).toEqual([]);
   });
 });

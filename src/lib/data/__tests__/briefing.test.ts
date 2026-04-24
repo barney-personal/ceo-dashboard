@@ -111,6 +111,8 @@ const context = {
     notStarted: 0,
     recent: [],
   },
+  squadShips: null,
+  managerFlags: null,
   meetings: null,
   relevantDashboardSections: ["Overview", "Engineering", "OKRs"],
   generatedAtIso: "2026-04-23T09:00:00.000Z",
