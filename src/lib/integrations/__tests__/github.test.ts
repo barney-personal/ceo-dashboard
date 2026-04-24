@@ -234,7 +234,11 @@ describe("getUserProfileOrNull", () => {
   it("returns the profile for a 200 response", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(
-        JSON.stringify({ login: "alice", name: "Alice", email: "alice@example.com" }),
+        JSON.stringify({
+          login: "alice",
+          name: "Alice",
+          email: "alice@example.com",
+        }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
@@ -265,6 +269,89 @@ describe("getUserProfileOrNull", () => {
     await expect(getUserProfileOrNull("alice")).rejects.toBeInstanceOf(
       GitHubApiError,
     );
+  });
+
+  describe("rate-limit retry headers", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-24T12:00:00.000Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("retries REST rate limits using Retry-After HTTP dates", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "Fri, 24 Apr 2026 12:00:02 GMT" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              login: "alice",
+              name: "Alice",
+              email: "alice@example.com",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const promise = getUserProfileOrNull("alice");
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toMatchObject({ login: "alice" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries REST secondary rate limits using x-ratelimit-reset", async () => {
+      const resetAtSeconds = Math.floor(Date.now() / 1000) + 2;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("secondary rate limit", {
+            status: 403,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": String(resetAtSeconds),
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              login: "alice",
+              name: "Alice",
+              email: "alice@example.com",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const promise = getUserProfileOrNull("alice");
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toMatchObject({ login: "alice" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

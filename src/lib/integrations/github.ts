@@ -1,6 +1,8 @@
 import * as Sentry from "@sentry/nextjs";
 import type { CodeReviewSurface } from "./code-review-rubric";
 
+import { resolveRateLimitDelay } from "./http-retry";
+
 export class GitHubApiError extends Error {
   status: number;
   path: string;
@@ -55,6 +57,21 @@ function sleep(ms: number): Promise<void> {
 
 function getRetryDelayMs(attempt: number): number {
   return 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
+}
+
+function getGitHubRateLimitDelay(input: {
+  headers: Headers;
+  attempt: number;
+}): {
+  waitMs: number;
+  source: "retry-after" | "x-ratelimit-reset" | "backoff";
+} {
+  return resolveRateLimitDelay({
+    headers: input.headers,
+    attempt: input.attempt,
+    minimumRateLimitResetDelayMs: 1000,
+    fallbackDelayMs: getRetryDelayMs,
+  });
 }
 
 async function githubRequest<T>(
@@ -121,21 +138,15 @@ async function githubRequest<T>(
         ) {
           lastError = error;
           if (isRateLimit) {
-            let waitMs: number;
-            if (retryAfter) {
-              waitMs = parseInt(retryAfter, 10) * 1000;
-            } else if (rateLimitReset) {
-              waitMs = Math.max(
-                1000,
-                parseInt(rateLimitReset, 10) * 1000 - Date.now()
-              );
-            } else {
-              waitMs = getRetryDelayMs(attempt);
-            }
+            const { waitMs, source } = getGitHubRateLimitDelay({
+              headers: res.headers,
+              attempt,
+            });
             Sentry.addBreadcrumb({
               category: "github.rate_limit",
               level: "warning",
               message: `Rate limited (${res.status}) on ${path}, waiting ${Math.round(waitMs / 1000)}s`,
+              data: { path, status: res.status, attempt, source, waitMs },
             });
             await sleep(waitMs);
           } else {
@@ -898,12 +909,19 @@ async function graphqlRequest<T>(
           (res.status >= 500 || res.status === 429)
         ) {
           lastError = error;
+          const delayMs =
+            res.status === 429
+              ? getGitHubRateLimitDelay({
+                  headers: res.headers,
+                  attempt,
+                }).waitMs
+              : getRetryDelayMs(attempt);
           Sentry.addBreadcrumb({
             category: "github.graphql",
             level: "warning",
             message: `GraphQL ${res.status} on attempt ${attempt}, retrying`,
           });
-          await sleep(getRetryDelayMs(attempt));
+          await sleep(delayMs);
           continue;
         }
 
