@@ -418,6 +418,107 @@ describe("getUserProfileOrNull", () => {
       await expect(promise).resolves.toMatchObject({ total: 1 });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+
+    it("retries GraphQL 403 with reset-only (no x-ratelimit-remaining)", async () => {
+      const resetAtSeconds = Math.floor(Date.now() / 1000) + 2;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 403,
+            headers: {
+              "x-ratelimit-reset": String(resetAtSeconds),
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          buildResponse(
+            [{ number: 100, createdAt: "2026-02-01", mergedAt: "2026-02-10" }],
+            false,
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const since = new Date("2026-01-01T00:00:00Z");
+      const promise = fetchMergedPRRecords(since, { repos: ["r1"] });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toMatchObject({ total: 1 });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("REST 403 with reset-only retries via getUserProfileOrNull", async () => {
+      const resetAtSeconds = Math.floor(Date.now() / 1000) + 2;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 403,
+            headers: {
+              "x-ratelimit-reset": String(resetAtSeconds),
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              login: "alice",
+              name: "Alice",
+              email: "alice@example.com",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const promise = getUserProfileOrNull("alice");
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toMatchObject({ login: "alice" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("403 without rate-limit headers is terminal auth error", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(getUserProfileOrNull("alice")).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("GraphQL 403 without rate-limit headers remains terminal", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(
+        new Response("forbidden", {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const since = new Date("2026-01-01T00:00:00Z");
+
+      await expect(
+        fetchMergedPRRecords(since, { repos: ["r1"] }),
+      ).rejects.toThrow("GitHub GraphQL error 403");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

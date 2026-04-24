@@ -1,7 +1,11 @@
 import * as Sentry from "@sentry/nextjs";
 import type { CodeReviewSurface } from "./code-review-rubric";
 
-import { resolveRateLimitDelay } from "./http-retry";
+import {
+  parseRateLimitResetMs,
+  parseRetryAfterMs,
+  resolveRateLimitDelay,
+} from "./http-retry";
 
 export class GitHubApiError extends Error {
   status: number;
@@ -74,6 +78,14 @@ function getGitHubRateLimitDelay(input: {
   });
 }
 
+function hasGitHubRateLimitSignal(headers: Headers): boolean {
+  return (
+    parseRetryAfterMs(headers.get("retry-after")) !== null ||
+    headers.get("x-ratelimit-remaining") === "0" ||
+    parseRateLimitResetMs(headers.get("x-ratelimit-reset")) !== null
+  );
+}
+
 async function githubRequest<T>(
   path: string,
   options: { signal?: AbortSignal; timeoutMs?: number } = {}
@@ -108,15 +120,10 @@ async function githubRequest<T>(
 
       if (!res.ok) {
         const body = await res.text();
-        const retryAfter = res.headers.get("retry-after");
-
         // Determine if this is a rate limit response (429 or 403 with rate limit info)
-        const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
-        const rateLimitReset = res.headers.get("x-ratelimit-reset");
         const isRateLimit =
           res.status === 429 ||
-          (res.status === 403 &&
-            (retryAfter || rateLimitRemaining === "0"));
+          (res.status === 403 && hasGitHubRateLimitSignal(res.headers));
 
         // Only treat 401 and non-rate-limit 403 as auth errors
         if (res.status === 401 || (res.status === 403 && !isRateLimit)) {
@@ -903,12 +910,9 @@ async function graphqlRequest<T>(
         const body = await res.text();
         const error = new Error(`GitHub GraphQL error ${res.status}: ${body}`);
 
-        const retryAfter = res.headers.get("retry-after");
-        const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
         const isRateLimit =
           res.status === 429 ||
-          (res.status === 403 &&
-            (retryAfter || rateLimitRemaining === "0"));
+          (res.status === 403 && hasGitHubRateLimitSignal(res.headers));
 
         if (
           attempt < GITHUB_MAX_RETRIES &&
