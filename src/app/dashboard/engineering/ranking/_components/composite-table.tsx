@@ -86,15 +86,24 @@ function HeaderCell({
         align === "right" ? "text-right" : ""
       } ${className}`}
     >
-      <span
-        tabIndex={0}
-        title={tooltip}
-        aria-label={`${label}: ${tooltip}`}
-        className={`inline-flex cursor-help items-center underline decoration-dotted decoration-muted-foreground/50 underline-offset-[3px] outline-none focus-visible:text-foreground ${
-          align === "right" ? "flex-row-reverse" : ""
-        }`}
-      >
-        {label}
+      <span className="group relative inline-flex">
+        <span
+          tabIndex={0}
+          aria-label={`${label}: ${tooltip}`}
+          className={`inline-flex cursor-help items-center underline decoration-dotted decoration-muted-foreground/50 underline-offset-[3px] outline-none focus-visible:text-foreground ${
+            align === "right" ? "flex-row-reverse" : ""
+          }`}
+        >
+          {label}
+        </span>
+        <span
+          role="tooltip"
+          className={`pointer-events-none absolute top-full z-50 mt-1.5 w-64 rounded-lg border border-border/60 bg-popover p-3 text-left text-[11px] font-normal normal-case leading-relaxed tracking-normal text-popover-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${
+            align === "right" ? "right-0" : "left-0"
+          }`}
+        >
+          {tooltip}
+        </span>
       </span>
     </th>
   );
