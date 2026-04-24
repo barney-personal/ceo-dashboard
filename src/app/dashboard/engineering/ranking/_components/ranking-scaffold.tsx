@@ -523,7 +523,7 @@ function LensesSection({ lenses }: { lenses: LensesBundle }) {
             None of these lenses is the final ranking. They are deliberately
             built to disagree — the disagreement table below is where the
             methodology earns its money. The composite above takes the median
-            of all four methods (A, B, C, adjusted) so a single noisy lens
+            of all five methods (A, B, C, D, adjusted) so a single noisy lens
             cannot single-handedly drag an engineer&apos;s rank.
           </p>
         </div>
@@ -2504,7 +2504,7 @@ function MethodologySection({
           Effective signal weights across the composite
         </h4>
         <p className="mt-1 text-xs text-muted-foreground">
-          Every signal&apos;s share across the four composite methods. Flagged
+          Every signal&apos;s share across the five composite methods. Flagged
           signals exceed the 30% ceiling — the dominance panel names the
           trade-off explicitly.
         </p>
@@ -2606,7 +2606,8 @@ function MethodologySection({
         </h4>
         <p className="mt-1 text-xs text-muted-foreground">
           Per-source timestamps and windows used by this ranking run. The
-          rubric version stays &ldquo;not available&rdquo; until `prReviewAnalyses` lands.
+          rubric version badge carries the live `prReviewAnalyses` rubric
+          version once rubric rows are present in the snapshot.
         </p>
         <ul className="mt-3 grid gap-3 sm:grid-cols-2">
           {methodology.freshness.map((badge) => (
