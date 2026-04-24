@@ -110,24 +110,25 @@ describe("<CodeReviewReport />", () => {
     expect(screen.getByText("@alice")).toBeInTheDocument();
     expect(screen.getAllByText("72").length).toBeGreaterThan(0);
     expect(screen.getByText("64%")).toBeInTheDocument();
-    expect(screen.getByText("Has a concerning PR")).toBeInTheDocument();
+    expect(screen.getByText("PR worth a second look")).toBeInTheDocument();
   });
 
   it("opens the drawer with PR detail on row click", () => {
     render(<CodeReviewReport view={makeView([makeRollup()])} />);
     expect(screen.queryByText(/Add the feature foo/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Alice A"));
-    expect(screen.getByText(/Add the feature foo/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Add the feature foo/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Primarily test file changes/)).toBeInTheDocument();
-    expect(screen.getByText(/Second opinion confirmed/)).toBeInTheDocument();
+    expect(screen.getByText(/Second opinion agreed/)).toBeInTheDocument();
+    expect(screen.getByText(/Worth celebrating/)).toBeInTheDocument();
   });
 
-  it("renders the calibration banner above the table", () => {
+  it("renders the reassurance banner above the table", () => {
     render(<CodeReviewReport view={makeView([makeRollup()])} />);
-    expect(screen.getByText(/Calibration input, not a verdict/)).toBeInTheDocument();
+    expect(screen.getByText(/How to read this fairly/)).toBeInTheDocument();
   });
 
-  it("filters to engineers that match the selected diagnostic flag", () => {
+  it("filters to engineers that match the selected conversation starter", () => {
     render(
       <CodeReviewReport
         view={makeView([
@@ -146,7 +147,9 @@ describe("<CodeReviewReport />", () => {
     );
 
     expect(screen.getByText("Bob B")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Review churn is high/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Lots of review back-and-forth/ }),
+    );
     expect(screen.queryByText("Bob B")).not.toBeInTheDocument();
     expect(screen.getByText("Alice A")).toBeInTheDocument();
   });

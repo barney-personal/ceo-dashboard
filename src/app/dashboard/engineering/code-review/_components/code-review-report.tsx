@@ -16,21 +16,36 @@ import type {
 } from "@/lib/integrations/code-review-analyser";
 
 const FLAG_LABEL: Record<DiagnosticFlag, string> = {
-  low_evidence: "Low evidence",
-  low_confidence: "Low confidence",
-  quality_variance_high: "Quality varies a lot",
-  review_churn_high: "Review churn is high",
-  has_concerning_pr: "Has a concerning PR",
-  reverted_pr: "Has a reverted PR",
+  low_evidence: "Light sample",
+  low_confidence: "Model wasn't sure",
+  quality_variance_high: "Mixed signals across PRs",
+  review_churn_high: "Lots of review back-and-forth",
+  has_concerning_pr: "PR worth a second look",
+  reverted_pr: "Includes a revert",
 };
 
 const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
   low_evidence: "neutral",
   low_confidence: "info",
-  quality_variance_high: "warn",
+  quality_variance_high: "info",
   review_churn_high: "warn",
   has_concerning_pr: "warn",
   reverted_pr: "warn",
+};
+
+const FLAG_HELP: Record<DiagnosticFlag, string> = {
+  low_evidence:
+    "Not many PRs landed in this window — the model is being deliberately cautious here.",
+  low_confidence:
+    "The model flagged its own reading as unsure. Treat the score as a soft signal.",
+  quality_variance_high:
+    "Some PRs read very differently from others. Often just a function of varied work.",
+  review_churn_high:
+    "Several rounds of review or post-review commits. Could be a tricky change, could be a process tweak worth a chat.",
+  has_concerning_pr:
+    "One PR in the window is worth opening together — not necessarily a problem.",
+  reverted_pr:
+    "A merged PR was reverted within 14 days. Reverts happen — context usually explains it.",
 };
 
 const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
@@ -44,10 +59,10 @@ const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
 };
 
 const STANDOUT_LABEL: Record<AnalysisStandout, string> = {
-  notably_complex: "Notably complex",
-  notably_high_quality: "Notably high quality",
-  notably_low_quality: "Notably low quality",
-  concerning: "Concerning",
+  notably_complex: "Meaty piece of work",
+  notably_high_quality: "Stand-out craft",
+  notably_low_quality: "Worth a closer look",
+  concerning: "Open this one together",
 };
 
 const STANDOUT_TONE: Record<AnalysisStandout, "good" | "warn"> = {
@@ -58,19 +73,19 @@ const STANDOUT_TONE: Record<AnalysisStandout, "good" | "warn"> = {
 };
 
 const AGREEMENT_LABEL: Record<ModelAgreementLevel, string> = {
-  single_model: "Single-model review",
-  confirmed: "Second opinion confirmed",
-  minor_adjustment: "Second opinion adjusted slightly",
-  material_adjustment: "Second opinion adjusted materially",
+  single_model: "Single-model read",
+  confirmed: "Second opinion agreed",
+  minor_adjustment: "Second opinion nudged it",
+  material_adjustment: "Second opinion shifted it meaningfully",
 };
 
 const SECOND_OPINION_LABEL: Record<SecondOpinionReason, string> = {
-  truncated_diff: "Truncated diff",
+  truncated_diff: "Diff was long",
   large_pr: "Large PR",
-  low_confidence: "Low confidence",
-  concerning_flag: "Concerning signal",
-  review_churn: "Review churn",
-  revert_signal: "Revert signal",
+  low_confidence: "Initial read was unsure",
+  concerning_flag: "First model raised something",
+  review_churn: "Lots of review activity",
+  revert_signal: "Revert nearby",
 };
 
 export function CodeReviewReport({ view }: { view: CodeReviewView }) {
@@ -90,13 +105,14 @@ export function CodeReviewReport({ view }: { view: CodeReviewView }) {
   return (
     <div className="space-y-6">
       <Header view={view} />
-      <CalibrationBanner />
+      <ReassuranceBanner />
       <FlagPills view={view} active={activeFlag} onChange={setActiveFlag} />
       <EngineerTable
         rows={visible}
         windowDays={view.windowDays}
         onSelect={setSelected}
       />
+      <FooterNote />
       {selectedEngineer && (
         <Drawer engineer={selectedEngineer} onClose={() => setSelected(null)} />
       )}
@@ -127,7 +143,7 @@ function Header({ view }: { view: CodeReviewView }) {
           ? ` · ${remaining} PR${remaining === 1 ? "" : "s"} still pending.`
           : "";
       setStatus(
-        `Analysed ${body.analysed}, cached ${body.cached}, failed ${body.failed.length}.${suffix}`,
+        `Read ${body.analysed} new PRs · re-used ${body.cached} prior reads · ${body.failed.length} skipped.${suffix}`,
       );
       startTransition(() => router.refresh());
     } catch (err) {
@@ -148,16 +164,17 @@ function Header({ view }: { view: CodeReviewView }) {
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4">
       <div>
         <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
-          Engineering · Code review
+          Engineering · Code review reflection
         </p>
         <h1 className="mt-1 font-display text-3xl italic tracking-tight text-foreground">
-          Code review quality over the last {view.windowDays} days
+          A reading of merged work over the last {view.windowDays} days
         </h1>
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Every merged PR is reviewed against a richer rubric, blended with
-          GitHub review-process signals, and rolled up into cohort-relative,
-          confidence-aware percentiles. The final score is shrunk toward the
-          cohort mean when evidence is thin.
+          An LLM reads each merged PR against a shared rubric, blends in
+          GitHub review signals, and rolls everything up into a peer-relative
+          snapshot. Sparse evidence is pulled toward the middle on purpose, so
+          you'll never get a confident judgement from a thin sample. Think of
+          this as a starting point for a conversation, not a grade.
         </p>
       </div>
       <div className="flex flex-col items-end gap-1 text-[11px] text-muted-foreground">
@@ -166,10 +183,10 @@ function Header({ view }: { view: CodeReviewView }) {
             rubric {view.rubricVersion}
           </span>
           <span className="font-mono uppercase tracking-[0.08em]">
-            · {view.totalPrs} PRs
+            · {view.totalPrs} PRs read
           </span>
           <span className="font-mono uppercase tracking-[0.08em]">
-            · last run {lastAnalysed}
+            · last refreshed {lastAnalysed}
           </span>
         </div>
         <button
@@ -178,7 +195,7 @@ function Header({ view }: { view: CodeReviewView }) {
           disabled={isPending}
           className="rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
         >
-          {isPending ? "Refreshing…" : "Re-run analysis"}
+          {isPending ? "Refreshing…" : "Refresh reading"}
         </button>
         {status && <span className="text-[11px] text-primary">{status}</span>}
         {error && <span className="text-[11px] text-rose-600">{error}</span>}
@@ -187,15 +204,30 @@ function Header({ view }: { view: CodeReviewView }) {
   );
 }
 
-function CalibrationBanner() {
+function ReassuranceBanner() {
   return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
-      <span className="font-medium text-foreground">
-        Calibration input, not a verdict.
-      </span>{" "}
-      This page is still an LLM-assisted view of merged code. It is stronger
-      than the old complexity × quality rollup, but it should still inform a
-      diagnostic conversation rather than substitute for manager judgement.
+    <div className="rounded-lg border border-sky-500/30 bg-sky-500/5 px-4 py-3 text-[12px] leading-relaxed text-foreground/90">
+      <p className="font-medium text-foreground">
+        How to read this fairly
+      </p>
+      <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-muted-foreground">
+        <li>
+          The model only sees merged diffs — it can't see design conversations,
+          pairing, mentoring, on-call work, or anything outside the PR.
+        </li>
+        <li>
+          Scores are relative to peers in your cohort. There's no "passing" bar
+          and no thresholds anyone is being held to.
+        </li>
+        <li>
+          A small number of PRs is treated as low-confidence on purpose. The
+          score is shrunk toward the middle until enough evidence accumulates.
+        </li>
+        <li>
+          This is one input alongside many others your manager already uses —
+          not a substitute for their judgement, and never used in isolation.
+        </li>
+      </ul>
     </div>
   );
 }
@@ -228,20 +260,21 @@ function FlagPills({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-        Diagnostic filters:
+        Conversation starters:
       </span>
       <button
         type="button"
         onClick={() => onChange(null)}
         className={pillClass(active === null, "neutral")}
       >
-        All ({view.engineers.length})
+        Everyone ({view.engineers.length})
       </button>
       {flags.map((flag) => (
         <button
           key={flag}
           type="button"
           onClick={() => onChange(active === flag ? null : flag)}
+          title={FLAG_HELP[flag]}
           className={pillClass(active === flag, FLAG_TONE[flag])}
         >
           {FLAG_LABEL[flag]} ({counts[flag]})
@@ -260,8 +293,8 @@ function pillClass(
   const palette =
     tone === "warn"
       ? active
-        ? "border-rose-500/60 bg-rose-500/15 text-rose-700"
-        : "border-rose-500/30 bg-rose-500/5 text-rose-700 hover:bg-rose-500/10"
+        ? "border-amber-500/60 bg-amber-500/15 text-amber-800"
+        : "border-amber-500/30 bg-amber-500/5 text-amber-800 hover:bg-amber-500/10"
       : tone === "info"
       ? active
         ? "border-sky-500/60 bg-sky-500/15 text-sky-700"
@@ -288,8 +321,8 @@ function EngineerTable({
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/10 p-5 text-sm text-muted-foreground">
-        No engineers match the current filter. Change the filter or re-run the
-        analysis if nothing has been scored yet.
+        Nobody matches this filter right now — which is a good thing if it's a
+        warning filter. Clear it to see everyone again.
       </div>
     );
   }
@@ -299,17 +332,41 @@ function EngineerTable({
       <table className="min-w-full text-[12px]">
         <thead className="bg-muted/20 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
           <tr>
-            <th className="px-3 py-2 text-left">#</th>
             <th className="px-3 py-2 text-left">Engineer</th>
-            <th className="px-3 py-2 text-left">Cohort</th>
-            <th className="px-3 py-2 text-right">PRs</th>
-            <th className="px-3 py-2 text-right">Confidence</th>
-            <th className="px-3 py-2 text-right">Quality pct</th>
-            <th className="px-3 py-2 text-right">Difficulty pct</th>
-            <th className="px-3 py-2 text-right">Outcome pct</th>
-            <th className="px-3 py-2 text-right">Final</th>
-            <th className="px-3 py-2 text-right">{`vs prev ${windowDays}d`}</th>
-            <th className="px-3 py-2 text-left">Flags</th>
+            <th className="px-3 py-2 text-left">Mostly works on</th>
+            <th className="px-3 py-2 text-right">PRs read</th>
+            <th
+              className="px-3 py-2 text-right"
+              title="How much evidence the model has. Higher is more, not better."
+            >
+              Evidence
+            </th>
+            <th
+              className="px-3 py-2 text-right"
+              title="Craft signals (execution, tests, risk handling, reviewability), peer-relative."
+            >
+              Craft
+            </th>
+            <th
+              className="px-3 py-2 text-right"
+              title="Average technical difficulty of the work in this window, peer-relative."
+            >
+              Challenge
+            </th>
+            <th
+              className="px-3 py-2 text-right"
+              title="How smoothly the work landed (no reverts, fewer post-merge fixes)."
+            >
+              Landing
+            </th>
+            <th
+              className="px-3 py-2 text-right"
+              title="Blended snapshot, shrunk toward the middle when evidence is light."
+            >
+              Snapshot
+            </th>
+            <th className="px-3 py-2 text-right">{`Δ vs prior ${windowDays}d`}</th>
+            <th className="px-3 py-2 text-left">Things to chat about</th>
           </tr>
         </thead>
         <tbody>
@@ -321,9 +378,6 @@ function EngineerTable({
                 index % 2 === 0 ? "bg-transparent" : "bg-muted/10"
               }`}
             >
-              <td className="px-3 py-2 font-mono text-muted-foreground">
-                {index + 1}
-              </td>
               <td className="px-3 py-2">
                 <div className="font-medium text-foreground">
                   {engineer.employeeName ?? engineer.authorLogin}
@@ -371,6 +425,7 @@ function EngineerTable({
                   {engineer.flags.map((flag) => (
                     <span
                       key={flag}
+                      title={FLAG_HELP[flag]}
                       className={pillClass(false, FLAG_TONE[flag])}
                     >
                       {FLAG_LABEL[flag]}
@@ -383,6 +438,16 @@ function EngineerTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function FooterNote() {
+  return (
+    <p className="text-[11px] leading-relaxed text-muted-foreground">
+      Spot something that reads unfairly? Tell your manager — the rubric and
+      weighting evolve from feedback, and noisy or unhelpful signals are exactly
+      what we want to know about.
+    </p>
   );
 }
 
@@ -401,7 +466,7 @@ function DeltaCell({
     delta > 0
       ? "text-emerald-600"
       : delta < 0
-      ? "text-rose-600"
+      ? "text-amber-700"
       : "text-muted-foreground";
   const sign = delta > 0 ? "+" : "";
   return (
@@ -425,6 +490,13 @@ function Drawer({
   engineer: EngineerRollup;
   onClose: () => void;
 }) {
+  const highlights = engineer.prs.filter(
+    (pr) =>
+      pr.standout === "notably_high_quality" ||
+      pr.standout === "notably_complex",
+  );
+  const totalPrs = engineer.prs.length;
+
   return (
     <div
       className="fixed inset-0 z-40 flex items-start justify-end bg-black/30 p-4"
@@ -440,11 +512,15 @@ function Drawer({
               {engineer.employeeName ?? engineer.authorLogin}
             </h2>
             <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-              @{engineer.authorLogin}
+              @{engineer.authorLogin} · {totalPrs} merged PR{totalPrs === 1 ? "" : "s"} read
             </p>
             <div className="mt-2 flex flex-wrap gap-1">
               {engineer.flags.map((flag) => (
-                <span key={flag} className={pillClass(false, FLAG_TONE[flag])}>
+                <span
+                  key={flag}
+                  title={FLAG_HELP[flag]}
+                  className={pillClass(false, FLAG_TONE[flag])}
+                >
                   {FLAG_LABEL[flag]}
                 </span>
               ))}
@@ -460,36 +536,60 @@ function Drawer({
           </button>
         </div>
 
+        {highlights.length > 0 && (
+          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-emerald-800">
+              Worth celebrating
+            </p>
+            <ul className="mt-1 space-y-1 text-[12px] text-foreground/90">
+              {highlights.map((pr) => (
+                <li key={`${pr.repo}#${pr.prNumber}`}>
+                  <a
+                    href={pr.githubUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium underline-offset-2 hover:underline"
+                  >
+                    {pr.repo} #{pr.prNumber}
+                  </a>{" "}
+                  — {STANDOUT_LABEL[pr.standout!].toLowerCase()}.{" "}
+                  <span className="text-muted-foreground">{pr.summary}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <dl className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Final score" value={String(Math.round(engineer.finalScore))} />
-          <Stat label="Confidence" value={`${engineer.confidencePct}%`} />
-          <Stat label="PRs" value={`${engineer.prCount} (${engineer.effectivePrCount.toFixed(1)} eff.)`} />
-          <Stat label="Cohort" value={engineer.cohort} />
-          <Stat label="Avg exec quality" value={engineer.avgExecutionQuality.toFixed(1)} />
+          <Stat label="Snapshot" value={String(Math.round(engineer.finalScore))} />
+          <Stat label="Evidence" value={`${engineer.confidencePct}%`} />
+          <Stat label="PRs read" value={`${engineer.prCount} (${engineer.effectivePrCount.toFixed(1)} eff.)`} />
+          <Stat label="Mostly works on" value={engineer.cohort} />
+          <Stat label="Avg execution" value={engineer.avgExecutionQuality.toFixed(1)} />
           <Stat label="Avg tests" value={engineer.avgTestAdequacy.toFixed(1)} />
-          <Stat label="Avg risk" value={engineer.avgRiskHandling.toFixed(1)} />
-          <Stat label="Avg outcome" value={engineer.avgOutcomeScore.toFixed(0)} />
+          <Stat label="Avg risk handling" value={engineer.avgRiskHandling.toFixed(1)} />
+          <Stat label="Avg landing" value={engineer.avgOutcomeScore.toFixed(0)} />
         </dl>
 
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          <Stat label="Quality pct" value={Math.round(engineer.qualityPercentile).toString()} />
-          <Stat label="Difficulty pct" value={Math.round(engineer.difficultyPercentile).toString()} />
-          <Stat label="Outcome pct" value={Math.round(engineer.reliabilityPercentile).toString()} />
-          <Stat label="Review pct" value={Math.round(engineer.reviewHealthPercentile).toString()} />
-          <Stat label="Throughput pct" value={Math.round(engineer.throughputPercentile).toString()} />
+          <Stat label="Craft (peer)" value={Math.round(engineer.qualityPercentile).toString()} />
+          <Stat label="Challenge (peer)" value={Math.round(engineer.difficultyPercentile).toString()} />
+          <Stat label="Landing (peer)" value={Math.round(engineer.reliabilityPercentile).toString()} />
+          <Stat label="Review flow (peer)" value={Math.round(engineer.reviewHealthPercentile).toString()} />
+          <Stat label="Throughput (peer)" value={Math.round(engineer.throughputPercentile).toString()} />
         </div>
 
         {engineer.weeklyScore.length > 1 && (
           <div className="mb-4 rounded-lg border border-border/40 bg-muted/5 p-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-              Weekly PR score trend (oldest → newest)
+              Weekly PR score (oldest → newest)
             </p>
             <Sparkline values={engineer.weeklyScore} />
           </div>
         )}
 
         <h3 className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-          PRs ({engineer.prs.length})
+          Every PR read ({engineer.prs.length})
         </h3>
         <ul className="space-y-3">
           {engineer.prs.map((pr) => (
@@ -542,7 +642,7 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
           </a>
           <p className="mt-1 text-sm text-foreground">{pr.summary}</p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {CATEGORY_LABEL[pr.category]} · merged {mergedAt} · surface {pr.primarySurface}
+            {CATEGORY_LABEL[pr.category]} · merged {mergedAt} · mostly {pr.primarySurface}
           </p>
         </div>
         <div className="text-right">
@@ -559,10 +659,10 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
         <Stat label="Difficulty" value={String(pr.technicalDifficulty)} />
         <Stat label="Execution" value={String(pr.executionQuality)} />
         <Stat label="Tests" value={String(pr.testAdequacy)} />
-        <Stat label="Risk" value={String(pr.riskHandling)} />
+        <Stat label="Risk handling" value={String(pr.riskHandling)} />
         <Stat label="Reviewability" value={String(pr.reviewability)} />
-        <Stat label="Confidence" value={`${pr.analysisConfidencePct}%`} />
-        <Stat label="Outcome" value={String(pr.outcomeScore)} />
+        <Stat label="Model confidence" value={`${pr.analysisConfidencePct}%`} />
+        <Stat label="Landing" value={String(pr.outcomeScore)} />
         <Stat label="Review rounds" value={String(pr.reviewRounds)} />
         <Stat label="Commits post-review" value={String(pr.commitsAfterFirstReview)} />
         <Stat label="Comments" value={String(pr.reviewCommentCount + pr.conversationCommentCount)} />
@@ -575,7 +675,7 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
           </span>
         )}
         {pr.revertWithin14d && (
-          <span className={pillClass(false, "warn")}>Reverted within 14d</span>
+          <span className={pillClass(false, "warn")}>Reverted within 14 days</span>
         )}
         {pr.secondOpinionUsed && (
           <span className={pillClass(false, "info")}>
@@ -595,15 +695,20 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
       )}
 
       {pr.caveats.length > 0 && (
-        <ul className="mt-3 space-y-1 text-[12px] text-muted-foreground">
-          {pr.caveats.map((caveat, index) => (
-            <li key={`${caveat}-${index}`}>- {caveat}</li>
-          ))}
-        </ul>
+        <div className="mt-3 rounded-md border border-border/40 bg-background/60 p-2 text-[12px] text-muted-foreground">
+          <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/80">
+            Caveats from the model
+          </p>
+          <ul className="mt-1 space-y-1">
+            {pr.caveats.map((caveat, index) => (
+              <li key={`${caveat}-${index}`}>– {caveat}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <p className="mt-3 text-[11px] text-muted-foreground">
-        {pr.reviewProvider} · {pr.reviewModel}
+        Read by {pr.reviewProvider} · {pr.reviewModel}
       </p>
     </li>
   );
