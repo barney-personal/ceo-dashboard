@@ -265,6 +265,34 @@ describe("runCodeReviewAnalysis", () => {
     expect(result.analysed).toBe(5);
   });
 
+  it("supports bounded parallel analysis workers when configured", async () => {
+    stubPrsQuery(
+      Array.from({ length: 4 }).map((_, index) => ({
+        repo: "acme/api",
+        prNumber: index + 1,
+        authorLogin: `user-${index}`,
+        mergedAt: new Date(),
+      })),
+      {
+        revertLookups: Array.from({ length: 4 }, () => []),
+      },
+    );
+    mockFetchPayload.mockImplementation(async (_repo, prNumber: number) => {
+      await Promise.resolve();
+      return mockPayload({ prNumber });
+    });
+    mockAnalysePR.mockImplementation(async () => {
+      await Promise.resolve();
+      return mockAnalysis();
+    });
+
+    const result = await runCodeReviewAnalysis({ limit: 4, concurrency: 3 });
+    expect(result.analysed).toBe(4);
+    expect(result.failed).toHaveLength(0);
+    expect(mockFetchPayload).toHaveBeenCalledTimes(4);
+    expect(mockAnalysePR).toHaveBeenCalledTimes(4);
+  });
+
   it("detects a revert when the revert commit references the merge SHA", async () => {
     stubSelectSequence([
       [

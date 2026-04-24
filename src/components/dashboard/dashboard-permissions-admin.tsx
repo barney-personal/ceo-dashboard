@@ -57,7 +57,6 @@ export function DashboardPermissionsAdmin({
   const lockedCount = permissions.filter((permission) => !permission.editable).length;
 
   async function updatePermission(permissionId: string, requiredRole: Role) {
-    const previous = permissions;
     const current = permissions.find((permission) => permission.id === permissionId);
     if (!current) return;
 
@@ -88,7 +87,7 @@ export function DashboardPermissionsAdmin({
         setStatusById((prev) => ({ ...prev, [permissionId]: "idle" }));
       }, 1800);
     } catch {
-      setPermissions(previous);
+      setPermissions((prev) => replacePermission(prev, current));
       setStatusById((prev) => ({ ...prev, [permissionId]: "error" }));
       window.setTimeout(() => {
         setStatusById((prev) => ({ ...prev, [permissionId]: "idle" }));
@@ -97,7 +96,6 @@ export function DashboardPermissionsAdmin({
   }
 
   async function resetPermission(permissionId: string) {
-    const previous = permissions;
     const current = permissions.find((permission) => permission.id === permissionId);
     if (!current) return;
 
@@ -128,7 +126,7 @@ export function DashboardPermissionsAdmin({
         setStatusById((prev) => ({ ...prev, [permissionId]: "idle" }));
       }, 1800);
     } catch {
-      setPermissions(previous);
+      setPermissions((prev) => replacePermission(prev, current));
       setStatusById((prev) => ({ ...prev, [permissionId]: "error" }));
       window.setTimeout(() => {
         setStatusById((prev) => ({ ...prev, [permissionId]: "idle" }));

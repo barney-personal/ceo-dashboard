@@ -1,14 +1,20 @@
+import { Suspense } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { getImpersonation } from "@/lib/auth/roles.server";
 import {
   getDashboardPermissionRoleMap,
   requireDashboardPermission,
 } from "@/lib/auth/dashboard-permissions.server";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import { PermissionGate } from "@/components/dashboard/permission-gate";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { TodayMeetings } from "@/components/dashboard/today-meetings";
+import {
+  DailyBriefing,
+  DailyBriefingSkeleton,
+} from "@/components/dashboard/daily-briefing";
 import {
   ArrowUpRight,
   Calculator,
@@ -80,6 +86,24 @@ export default async function DashboardOverview() {
   const accessToken = effectiveUserId
     ? await getUserGoogleAccessToken(effectiveUserId)
     : null;
+
+  const currentUserLookup = await getCurrentUserWithTimeout();
+  // Briefing is always the real viewer's briefing — impersonation is for UI
+  // role-gating, not identity takeover. Pass the full email set so a user
+  // whose company address is a secondary Clerk email still matches SSoT.
+  const briefingEmails: string[] =
+    currentUserLookup.status === "authenticated"
+      ? (() => {
+          const primary =
+            currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null;
+          const all = (currentUserLookup.user.emailAddresses ?? []).map(
+            (e) => e.emailAddress,
+          );
+          // Keep primary first (it's the cache key), then other unique addresses.
+          const ordered = primary ? [primary, ...all.filter((e) => e !== primary)] : all;
+          return ordered.filter((e): e is string => !!e);
+        })()
+      : [];
 
   // Today's date range for meetings
   const now = new Date();
@@ -157,6 +181,18 @@ export default async function DashboardOverview() {
           description="Some overview metrics are temporarily unavailable while the database is unreachable. Retry the page or wait for the next sync cycle."
         />
       ) : null}
+
+      {/* Personalised daily briefing — streams in so it doesn't block the rest */}
+      <Suspense fallback={<DailyBriefingSkeleton />}>
+        <DailyBriefing
+          emails={briefingEmails}
+          role={role}
+          // Real Clerk user ID — not effectiveUserId — so the briefing
+          // resolves the *real viewer's* Google token for meetings even
+          // during an impersonation session.
+          userId={realUserId}
+        />
+      </Suspense>
 
       {/* Hero metrics */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

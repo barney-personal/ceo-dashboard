@@ -2,7 +2,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { dashboardPermissionOverrides } from "@/lib/db/schema";
-import { isDatabaseUnavailableError, isSchemaCompatibilityError } from "@/lib/db/errors";
+import { isSchemaCompatibilityError } from "@/lib/db/errors";
 import { getCurrentUserRole } from "./roles.server";
 import { hasAccess, type Role } from "./roles";
 import {
@@ -30,10 +30,10 @@ const getStoredDashboardPermissionOverrides = cache(
         return acc;
       }, {});
     } catch (error) {
-      if (
-        isSchemaCompatibilityError(error) ||
-        isDatabaseUnavailableError(error)
-      ) {
+      // Missing table/column should fall back to code defaults so pre-migration
+      // environments keep working. Transient DB outages must not widen access by
+      // silently dropping persisted overrides.
+      if (isSchemaCompatibilityError(error)) {
         return {};
       }
 

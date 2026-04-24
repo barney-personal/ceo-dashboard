@@ -1,3 +1,4 @@
+import { cache } from "react";
 import {
   getManagementAccountFiles,
   type SlackFile,
@@ -73,11 +74,15 @@ export async function getManagementAccountsData(
 /**
  * Get the latest ARR from the most recent management accounts P&L.
  * Reads the "ARR" row, skipping YTD to get the latest monthly value.
+ *
+ * Wrapped in React.cache() — this call fetches + parses a Slack-hosted
+ * Excel file, and `page.tsx` + `briefing-context.ts` both request it on
+ * the same Overview render.
  */
-export async function getLatestARR(): Promise<{
+export const getLatestARR = cache(async (): Promise<{
   value: number;
   period: string;
-} | null> {
+} | null> => {
   const rawFiles = await getManagementAccountFiles();
   if (rawFiles.length === 0) return null;
 
@@ -103,4 +108,4 @@ export async function getLatestARR(): Promise<{
   }
 
   return null;
-}
+});

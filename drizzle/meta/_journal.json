@@ -145,8 +145,15 @@
     {
       "idx": 20,
       "version": "7",
-      "when": 1776984446000,
-      "tag": "0020_dashboard_permissions",
+      "when": 1776984660527,
+      "tag": "0020_add_user_briefings",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777014275465,
+      "tag": "0021_dashboard_permissions",
       "breakpoints": true
     }
   ]
