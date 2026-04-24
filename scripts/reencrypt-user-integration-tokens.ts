@@ -14,7 +14,7 @@
  * or is malformed, and skips rows that are already in envelope format so it
  * is safe to run more than once.
  */
-import { db } from "@/lib/db";
+import { db as defaultDb } from "@/lib/db";
 import { userIntegrations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import {
@@ -23,20 +23,32 @@ import {
   isEncryptedToken,
 } from "@/lib/security/user-integration-tokens.server";
 
-async function main() {
-  const dryRun = process.argv.includes("--dry-run");
+export type ReencryptSummary = {
+  total: number;
+  alreadyEncrypted: number;
+  reencrypted: number;
+  failed: number;
+  dryRun: boolean;
+};
 
-  // Fail early if the key isn't set — encryptUserIntegrationToken() will
-  // throw on first use otherwise, but we want a clean operator-facing message.
-  try {
-    encryptUserIntegrationToken("probe");
-  } catch (err) {
-    if (err instanceof UserIntegrationTokenKeyError) {
-      console.error(`[reencrypt] aborting: ${err.message}`);
-      process.exit(2);
-    }
-    throw err;
-  }
+type DbClient = typeof defaultDb;
+
+/**
+ * Re-encrypt any plaintext rows in `user_integrations.api_key`.
+ * Throws `UserIntegrationTokenKeyError` (before any DB writes) if the
+ * encryption key is missing or malformed. Uses the provided `db` client
+ * so the script is testable without real Postgres.
+ */
+export async function reencryptUserIntegrationTokens(opts: {
+  dryRun?: boolean;
+  db?: DbClient;
+  logger?: Pick<Console, "log" | "error">;
+} = {}): Promise<ReencryptSummary> {
+  const { dryRun = false, db = defaultDb, logger = console } = opts;
+
+  // Key probe — fails early with a clean operator-facing message before any
+  // writes and before we even enumerate rows.
+  encryptUserIntegrationToken("probe");
 
   const rows = await db
     .select({
@@ -48,8 +60,8 @@ async function main() {
     .from(userIntegrations);
 
   let alreadyEncrypted = 0;
-  let willReencrypt = 0;
-  let reencryptFailed = 0;
+  let reencrypted = 0;
+  let failed = 0;
 
   for (const row of rows) {
     if (isEncryptedToken(row.apiKey)) {
@@ -57,12 +69,11 @@ async function main() {
       continue;
     }
 
-    willReencrypt++;
     const shortId = row.clerkUserId.slice(-6);
     const preview = `${row.provider} / user ...${shortId} (id=${row.id})`;
 
     if (dryRun) {
-      console.log(`[reencrypt] DRY would encrypt ${preview}`);
+      logger.log(`[reencrypt] DRY would encrypt ${preview}`);
       continue;
     }
 
@@ -72,28 +83,53 @@ async function main() {
         .update(userIntegrations)
         .set({ apiKey: envelope, updatedAt: new Date() })
         .where(eq(userIntegrations.id, row.id));
-      console.log(`[reencrypt] encrypted ${preview}`);
+      logger.log(`[reencrypt] encrypted ${preview}`);
+      reencrypted++;
     } catch (err) {
-      reencryptFailed++;
-      console.error(`[reencrypt] FAILED ${preview}: ${(err as Error).message}`);
+      failed++;
+      logger.error(
+        `[reencrypt] FAILED ${preview}: ${(err as Error).message}`
+      );
     }
+  }
+
+  return { total: rows.length, alreadyEncrypted, reencrypted, failed, dryRun };
+}
+
+async function main() {
+  const dryRun = process.argv.includes("--dry-run");
+
+  let summary: ReencryptSummary;
+  try {
+    summary = await reencryptUserIntegrationTokens({ dryRun });
+  } catch (err) {
+    if (err instanceof UserIntegrationTokenKeyError) {
+      console.error(`[reencrypt] aborting: ${err.message}`);
+      process.exit(2);
+    }
+    throw err;
   }
 
   console.log("");
   console.log("[reencrypt] summary");
-  console.log(`  total rows:         ${rows.length}`);
-  console.log(`  already encrypted:  ${alreadyEncrypted}`);
-  console.log(`  needed re-encrypt:  ${willReencrypt}`);
-  console.log(`  dry run:            ${dryRun ? "yes" : "no"}`);
-  if (!dryRun) {
-    console.log(`  re-encrypt failed:  ${reencryptFailed}`);
+  console.log(`  total rows:         ${summary.total}`);
+  console.log(`  already encrypted:  ${summary.alreadyEncrypted}`);
+  console.log(`  needed re-encrypt:  ${summary.reencrypted + summary.failed + (summary.dryRun ? summary.total - summary.alreadyEncrypted : 0)}`);
+  console.log(`  dry run:            ${summary.dryRun ? "yes" : "no"}`);
+  if (!summary.dryRun) {
+    console.log(`  re-encrypted:       ${summary.reencrypted}`);
+    console.log(`  re-encrypt failed:  ${summary.failed}`);
   }
 
-  // Exit code: 0 on success, 1 if any row failed in a real run.
-  process.exit(!dryRun && reencryptFailed > 0 ? 1 : 0);
+  process.exit(!summary.dryRun && summary.failed > 0 ? 1 : 0);
 }
 
-main().catch((err) => {
-  console.error("[reencrypt] unexpected error:", err);
-  process.exit(2);
-});
+// Only run the CLI when invoked directly (not when imported for tests).
+// Use process.argv[1] so this works under tsx's ESM-style transform without
+// needing CJS-only `require.main`.
+if (process.argv[1]?.endsWith("reencrypt-user-integration-tokens.ts")) {
+  main().catch((err) => {
+    console.error("[reencrypt] unexpected error:", err);
+    process.exit(2);
+  });
+}

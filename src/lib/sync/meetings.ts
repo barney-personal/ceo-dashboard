@@ -186,8 +186,9 @@ export async function syncGranolaNotes(
 
 /**
  * Sync Granola notes from all sources: enterprise env var + all personal user keys.
+ * Exported so meetings-runner tests can exercise the per-user decrypt/classify loop.
  */
-async function syncAllGranolaNotes(
+export async function syncAllGranolaNotes(
   sinceDate: Date,
   tracker: ReturnType<typeof createPhaseTracker>,
   opts: SyncControl = {}
@@ -242,9 +243,16 @@ async function syncAllGranolaNotes(
 
     let token: string;
     try {
-      token = isEncryptedToken(apiKey)
-        ? decryptUserIntegrationToken(apiKey)
-        : apiKey;
+      // The `apiKey` column must always hold a v1 encrypted envelope after the
+      // reencrypt migration has run. Plaintext, malformed, or tampered values
+      // must be treated as decryption failures so a raw DB token never leaves
+      // the DB layer — even if the migration was missed on a given row.
+      if (!isEncryptedToken(apiKey)) {
+        throw new UserIntegrationTokenDecryptError(
+          "user_integrations.api_key is not in v1 envelope format — run scripts/reencrypt-user-integration-tokens.ts"
+        );
+      }
+      token = decryptUserIntegrationToken(apiKey);
     } catch (error) {
       // Per-user decrypt failure must not crash the whole meetings sync.
       // Classify, record, and skip this user so other users still sync.
