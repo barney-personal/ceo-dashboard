@@ -4,6 +4,9 @@ import type {
   EligibilityEntry,
   EligibilityStatus,
   EngineeringRankingSnapshot,
+  LensDisagreementRow,
+  LensScoreSummary,
+  LensesBundle,
   SignalAudit,
 } from "@/lib/data/engineering-ranking";
 
@@ -401,6 +404,198 @@ function SignalAuditSection({
   );
 }
 
+function formatPercentile(value: number | null): string {
+  if (value === null) return "—";
+  return `${value.toFixed(1)}`;
+}
+
+function LensTopTable({ lens }: { lens: LensScoreSummary }) {
+  return (
+    <div className="rounded-md border border-border/40 bg-background/60 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-foreground">
+            {lens.definition.name}
+          </h4>
+          <p className="mt-1 max-w-lg text-[11px] leading-relaxed text-muted-foreground">
+            {lens.definition.description}
+          </p>
+        </div>
+        <div className="text-right text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>
+            {lens.scored} scored · {lens.unscored} unscored
+          </div>
+          <div className="mt-1 normal-case tracking-normal">
+            {lens.definition.components
+              .map((c) => `${c.name} (${Math.round(c.weight * 100)}%)`)
+              .join(" · ")}
+          </div>
+        </div>
+      </div>
+      {lens.definition.limitation && (
+        <p className="mt-2 rounded-sm border border-warning/30 bg-warning/5 px-2 py-1 text-[11px] italic text-warning">
+          {lens.definition.limitation}
+        </p>
+      )}
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <th className="w-8 py-2 pr-2 text-right font-medium">#</th>
+              <th className="py-2 pr-3 font-medium">Engineer</th>
+              <th className="py-2 pr-3 text-right font-medium">Score</th>
+              <th className="py-2 pr-3 font-medium">Components present</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lens.topN.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={4}
+                  className="py-3 text-center text-muted-foreground"
+                >
+                  No engineers have enough components to score this lens yet.
+                </td>
+              </tr>
+            ) : (
+              lens.topN.map((engineer, idx) => (
+                <tr
+                  key={engineer.emailHash || engineer.displayName}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                    {idx + 1}
+                  </td>
+                  <td className="py-2 pr-3 text-foreground">
+                    {engineer.displayName}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
+                    {formatPercentile(engineer.score)}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {engineer.presentComponentCount} /{" "}
+                    {engineer.components.length}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function LensesSection({ lenses }: { lenses: LensesBundle }) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Three independent scoring lenses
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            None of these lenses is the final ranking. They are deliberately
+            built to disagree — the disagreement table below is where the
+            methodology earns its money. The M10 composite is built from the
+            adjusted lenses only once the disagreements are understood.
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>{lenses.windowDays}d window</div>
+          <div className="mt-1">
+            {lenses.disagreement.rows.length} engineers with ≥2 lens scores
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+        <LensTopTable lens={lenses.lenses.output} />
+        <LensTopTable lens={lenses.lenses.impact} />
+        <LensTopTable lens={lenses.lenses.delivery} />
+      </div>
+
+      <DisagreementTable rows={lenses.disagreement.widestGaps} />
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Lens-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {lenses.limitations.map((limitation) => (
+            <li key={limitation}>{limitation}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function DisagreementTable({ rows }: { rows: LensDisagreementRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <p className="mt-5 rounded-md border border-dashed border-border/50 bg-background/40 p-3 text-xs italic text-muted-foreground">
+        No engineer has ≥2 present lenses yet, so no disagreement analysis is
+        possible. Lens coverage must improve before this section is meaningful.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+      <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Widest lens disagreements
+      </h4>
+      <p className="mt-1 max-w-3xl text-[11px] text-muted-foreground">
+        Disagreement = max(present lenses) − min(present lenses). The widest
+        gaps are where the methodology has to justify itself — a plausible
+        explanation for the gap is more important than the score itself at this
+        stage.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <th className="py-2 pr-3 font-medium">Engineer</th>
+              <th className="py-2 pr-3 text-right font-medium">A output</th>
+              <th className="py-2 pr-3 text-right font-medium">B impact</th>
+              <th className="py-2 pr-3 text-right font-medium">C delivery</th>
+              <th className="py-2 pr-3 text-right font-medium">Δ</th>
+              <th className="py-2 pr-3 font-medium">Likely cause</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.emailHash || row.displayName}
+                className="border-b border-border/30 align-top"
+              >
+                <td className="py-2 pr-3 text-foreground">{row.displayName}</td>
+                <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                  {formatPercentile(row.output)}
+                </td>
+                <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                  {formatPercentile(row.impact)}
+                </td>
+                <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                  {formatPercentile(row.delivery)}
+                </td>
+                <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
+                  {row.disagreement === null
+                    ? "—"
+                    : row.disagreement.toFixed(1)}
+                </td>
+                <td className="py-2 pr-3 text-muted-foreground">
+                  {row.likelyCause}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -549,6 +744,8 @@ export function RankingScaffold({
       <CoverageSection snapshot={snapshot} />
 
       <SignalAuditSection snapshot={snapshot} />
+
+      <LensesSection lenses={snapshot.lenses} />
 
       <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
         <h3 className="text-sm font-semibold text-foreground">

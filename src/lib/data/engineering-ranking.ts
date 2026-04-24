@@ -189,6 +189,13 @@ export interface EngineeringRankingSnapshot {
   };
   /** Signal inventory + orthogonality audit over the competitive cohort. */
   audit: SignalAudit;
+  /**
+   * Three independent scoring lenses (A output / B SHAP impact /
+   * C squad-delivery context) plus the disagreement table that surfaces
+   * engineers whose lenses most disagree with each other. Not a final
+   * composite — M10 synthesises the composite once the lenses are trusted.
+   */
+  lenses: LensesBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -1042,6 +1049,505 @@ export function buildSignalAudit({
   };
 }
 
+/* --------------------------------------------------------------------------
+ * M8 — three independent scoring lenses + disagreement investigation
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Identifier for each of the three independent scoring lenses. These are
+ * NOT the final composite — M10 synthesises the composite once the lenses
+ * are trusted and their disagreements are understood.
+ */
+export type LensKey = "output" | "impact" | "delivery";
+
+/**
+ * Top N engineers surfaced per lens on the page. Chosen large enough to
+ * include the full top end of any competitive cohort we expect today, small
+ * enough that a reader can scan it without scrolling for a minute.
+ */
+export const RANKING_LENS_TOP_N = 20 as const;
+
+/**
+ * Top N widest-disagreement engineers surfaced on the page. 10 is enough to
+ * prompt investigation of the lenses without drowning the reader in cases.
+ */
+export const RANKING_DISAGREEMENT_TOP_N = 10 as const;
+
+/** Minimum present lens count for a row to appear in disagreement analysis. */
+export const RANKING_DISAGREEMENT_MIN_LENSES = 2 as const;
+
+/**
+ * Per-component contribution to a lens score for a given engineer. `rawValue`
+ * is the un-normalised signal on the competitive cohort scale (e.g. PR count
+ * or SHAP actual dollars). `percentile` is the engineer's rank-percentile
+ * for that component on [0, 100], null when the raw value is missing.
+ */
+export interface LensComponentValue {
+  name: string;
+  weight: number;
+  /**
+   * True when the underlying signal orders lower-is-better (e.g. cycle time,
+   * time-to-first-review). The percentile is inverted (100 - rank percentile)
+   * so that, consistently across every component, a higher percentile always
+   * means "better by this signal".
+   */
+  invertedForScore: boolean;
+  rawValue: number | null;
+  percentile: number | null;
+}
+
+/** Lens score for one engineer, with per-component contribution visible. */
+export interface EngineerLensScore {
+  emailHash: string;
+  displayName: string;
+  /**
+   * Weighted mean of present-component percentiles on [0, 100]. Null when
+   * no component value was present for this engineer (e.g. lens B for an
+   * engineer not in the impact model training set).
+   */
+  score: number | null;
+  presentComponentCount: number;
+  components: LensComponentValue[];
+}
+
+/** Static description of a lens, surfaced on the methodology panel. */
+export interface LensDefinition {
+  key: LensKey;
+  name: string;
+  description: string;
+  components: Array<{ name: string; weight: number }>;
+  /**
+   * Plain-language limitation of this lens, rendered on the page alongside
+   * the top-N list so the reader never reads the lens as a clean label.
+   */
+  limitation: string | null;
+}
+
+/** Per-lens summary: definition + scored/unscored counts + full + top entries. */
+export interface LensScoreSummary {
+  definition: LensDefinition;
+  scored: number;
+  unscored: number;
+  /** All competitive engineers. Null scores kept so attribution is complete. */
+  entries: EngineerLensScore[];
+  /** Top `RANKING_LENS_TOP_N` entries by score descending; nulls excluded. */
+  topN: EngineerLensScore[];
+}
+
+/** One row in the disagreement table. */
+export interface LensDisagreementRow {
+  emailHash: string;
+  displayName: string;
+  output: number | null;
+  impact: number | null;
+  delivery: number | null;
+  presentLensCount: number;
+  /** max(present lenses) - min(present lenses), null when <2 lenses present. */
+  disagreement: number | null;
+  likelyCause: string;
+}
+
+/** Output of `buildLenses` — the bundle stored on the snapshot. */
+export interface LensesBundle {
+  windowDays: number;
+  definitions: LensDefinition[];
+  lenses: {
+    output: LensScoreSummary;
+    impact: LensScoreSummary;
+    delivery: LensScoreSummary;
+  };
+  disagreement: {
+    /** All eligible rows (presentLensCount >= 2), sorted by disagreement desc. */
+    rows: LensDisagreementRow[];
+    /** Top `RANKING_DISAGREEMENT_TOP_N` for the on-page summary. */
+    widestGaps: LensDisagreementRow[];
+  };
+  /** Plain-language limitations surfaced next to the lenses on the page. */
+  limitations: string[];
+}
+
+function logSignedMagnitude(value: number | null): number | null {
+  if (value === null) return null;
+  const sign = Math.sign(value);
+  return sign * Math.log10(1 + Math.abs(value));
+}
+
+function sqrtDamp(value: number | null): number | null {
+  if (value === null) return null;
+  if (value < 0) return null;
+  return Math.sqrt(value);
+}
+
+/**
+ * Rank-percentile a parallel array of nullable numbers. Nulls stay null.
+ * Present values are converted to [0, 100] using ((rank - 0.5) / n) * 100
+ * with average ranks for ties. A lone present value returns 50 — the neutral
+ * percentile — so small-sample engineers do not look suspiciously extreme.
+ */
+function rankPercentiles(values: Array<number | null>): Array<number | null> {
+  const presentIndices: number[] = [];
+  const presentValues: number[] = [];
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (v === null || !Number.isFinite(v)) continue;
+    presentIndices.push(i);
+    presentValues.push(v);
+  }
+  const out: Array<number | null> = new Array(values.length).fill(null);
+  if (presentValues.length === 0) return out;
+  const ranks = rank(presentValues);
+  const n = presentValues.length;
+  for (let k = 0; k < presentIndices.length; k += 1) {
+    out[presentIndices[k]] = ((ranks[k] - 0.5) / n) * 100;
+  }
+  return out;
+}
+
+/**
+ * Lens-agnostic component spec used by `buildLens`. `rawValues` is the
+ * parallel array of per-engineer values (already damped / transformed) in
+ * the same order as `entries`.
+ */
+interface LensComponentSpec {
+  name: string;
+  weight: number;
+  invertedForScore: boolean;
+  rawValues: Array<number | null>;
+}
+
+function buildLens({
+  definition,
+  entries,
+  components,
+}: {
+  definition: LensDefinition;
+  entries: EligibilityEntry[];
+  components: LensComponentSpec[];
+}): LensScoreSummary {
+  const percentileMatrix = components.map((c) => ({
+    ...c,
+    percentiles: rankPercentiles(c.rawValues),
+  }));
+
+  const lensEntries: EngineerLensScore[] = entries.map((entry, idx) => {
+    const contributions: LensComponentValue[] = percentileMatrix.map((c) => {
+      const basePct = c.percentiles[idx];
+      const pct =
+        basePct === null ? null : c.invertedForScore ? 100 - basePct : basePct;
+      return {
+        name: c.name,
+        weight: c.weight,
+        invertedForScore: c.invertedForScore,
+        rawValue: c.rawValues[idx],
+        percentile: pct,
+      };
+    });
+    let totalWeight = 0;
+    let weighted = 0;
+    for (const c of contributions) {
+      if (c.percentile === null) continue;
+      totalWeight += c.weight;
+      weighted += c.percentile * c.weight;
+    }
+    const score = totalWeight > 0 ? weighted / totalWeight : null;
+    const presentComponentCount = contributions.filter(
+      (c) => c.percentile !== null,
+    ).length;
+    return {
+      emailHash: entry.emailHash,
+      displayName: entry.displayName,
+      score,
+      presentComponentCount,
+      components: contributions,
+    };
+  });
+
+  const scored = lensEntries.filter((e) => e.score !== null).length;
+  const unscored = lensEntries.length - scored;
+
+  const topN = [...lensEntries]
+    .filter((e): e is EngineerLensScore & { score: number } => e.score !== null)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, RANKING_LENS_TOP_N);
+
+  return {
+    definition,
+    scored,
+    unscored,
+    entries: lensEntries,
+    topN,
+  };
+}
+
+function likelyDisagreementCause(row: {
+  output: number | null;
+  impact: number | null;
+  delivery: number | null;
+}): string {
+  const present: Array<{ key: LensKey; score: number }> = [];
+  if (row.output !== null) present.push({ key: "output", score: row.output });
+  if (row.impact !== null) present.push({ key: "impact", score: row.impact });
+  if (row.delivery !== null)
+    present.push({ key: "delivery", score: row.delivery });
+
+  if (present.length < RANKING_DISAGREEMENT_MIN_LENSES) {
+    return "Insufficient lens coverage — at least two lenses must score this engineer to produce a disagreement reading.";
+  }
+
+  const sorted = [...present].sort((a, b) => b.score - a.score);
+  const top = sorted[0];
+  const bottom = sorted[sorted.length - 1];
+  const tag = `${top.key}>${bottom.key}` as const;
+  // Narratives are written to describe the pattern, not to pre-judge the
+  // engineer — disagreement is where the methodology earns its money, so the
+  // phrasing points the reader at what to look for rather than labelling.
+  switch (tag) {
+    case "output>impact":
+      return "Output volume above SHAP model impact — activity is visible but the impact model does not reward it strongly; look for low-impact PR/commit patterns or a model training gap.";
+    case "impact>output":
+      return "SHAP impact above activity volume — impact model scores highly but merged-PR throughput is low; look for low-count, high-impact work (infra, ML, review-heavy, pairing).";
+    case "output>delivery":
+      return "Individual output above squad-delivery context — engineer ships more than the squad's aggregate delivery health; C is squad-context and may mask individual signal.";
+    case "delivery>output":
+      return "Squad delivery health above individual output — team-level signals may be carrying this row; individual output is the lens to trust for an individual ranking.";
+    case "impact>delivery":
+      return "SHAP impact above squad-delivery context — impact is model-driven individual, delivery is team-level; favours the individual reading.";
+    case "delivery>impact":
+      return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is squad-context only and should not be read as individual impact.";
+    default:
+      return "Lenses disagree; see component breakdown for attribution.";
+  }
+}
+
+function buildDisagreementTable(lenses: {
+  output: LensScoreSummary;
+  impact: LensScoreSummary;
+  delivery: LensScoreSummary;
+}): LensesBundle["disagreement"] {
+  const byHash = new Map<string, LensDisagreementRow>();
+  const register = (
+    engineerEntry: EngineerLensScore,
+    key: LensKey,
+  ): void => {
+    const existing = byHash.get(engineerEntry.emailHash) ?? {
+      emailHash: engineerEntry.emailHash,
+      displayName: engineerEntry.displayName,
+      output: null,
+      impact: null,
+      delivery: null,
+      presentLensCount: 0,
+      disagreement: null,
+      likelyCause: "",
+    };
+    if (key === "output") existing.output = engineerEntry.score;
+    if (key === "impact") existing.impact = engineerEntry.score;
+    if (key === "delivery") existing.delivery = engineerEntry.score;
+    byHash.set(engineerEntry.emailHash, existing);
+  };
+
+  for (const e of lenses.output.entries) register(e, "output");
+  for (const e of lenses.impact.entries) register(e, "impact");
+  for (const e of lenses.delivery.entries) register(e, "delivery");
+
+  const rows: LensDisagreementRow[] = [];
+  for (const row of byHash.values()) {
+    const present: number[] = [];
+    if (row.output !== null) present.push(row.output);
+    if (row.impact !== null) present.push(row.impact);
+    if (row.delivery !== null) present.push(row.delivery);
+    row.presentLensCount = present.length;
+    if (present.length < RANKING_DISAGREEMENT_MIN_LENSES) {
+      row.disagreement = null;
+      row.likelyCause = likelyDisagreementCause(row);
+      continue;
+    }
+    row.disagreement = Math.max(...present) - Math.min(...present);
+    row.likelyCause = likelyDisagreementCause(row);
+    rows.push(row);
+  }
+
+  rows.sort((a, b) => {
+    const da = a.disagreement ?? -Infinity;
+    const db = b.disagreement ?? -Infinity;
+    if (db !== da) return db - da;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  const widestGaps = rows.slice(0, RANKING_DISAGREEMENT_TOP_N);
+  return { rows, widestGaps };
+}
+
+const LENS_DEFINITIONS: readonly LensDefinition[] = [
+  {
+    key: "output",
+    name: "A — Individual output",
+    description:
+      "Merged PRs, commits, and log-damped code volume from persisted GitHub data. Damping prevents raw PR/commit spam from dominating, but this lens still rewards volume and must be paired with impact and delivery views to avoid over-rewarding activity.",
+    components: [
+      { name: "Log-impact composite", weight: 0.5 },
+      { name: "PR count (sqrt-damped)", weight: 0.2 },
+      { name: "Commit count (sqrt-damped)", weight: 0.15 },
+      { name: "Net lines (log-signed)", weight: 0.15 },
+    ],
+    limitation:
+      "Activity-volume-adjacent; high ranks here should not be read as impact without lens B confirming. AI usage is excluded so token inflation cannot raise this score.",
+  },
+  {
+    key: "impact",
+    name: "B — SHAP impact model",
+    description:
+      "Predicted, actual, and residual impact from the ML impact model (`src/data/impact-model.json`). Engineers absent from the training set score null here, not mid-percentile — the methodology refuses to invent a neutral reading.",
+    components: [
+      { name: "SHAP predicted impact", weight: 0.4 },
+      { name: "SHAP actual impact", weight: 0.4 },
+      { name: "SHAP residual (over/under-delivery)", weight: 0.2 },
+    ],
+    limitation:
+      "Only scores engineers present in impact-model training data. Absent engineers surface as unscored so readers see the gap rather than inferring a neutral rank.",
+  },
+  {
+    key: "delivery",
+    name: "C — Squad delivery context",
+    description:
+      "Squad-level delivery-health signals from Swarmia (review rate, cycle time, time-to-first-review). Individual review/cycle-time signals are not persisted in `githubPrs` or `githubPrMetrics`, so this lens is intentionally squad-context, not an individual label. Every engineer on the same squad shares the same C score.",
+    components: [
+      { name: "Squad review rate %", weight: 0.4 },
+      { name: "Squad cycle time (inverted)", weight: 0.3 },
+      { name: "Squad time-to-first-review (inverted)", weight: 0.3 },
+    ],
+    limitation:
+      "Squad-context only. Cannot differentiate engineers within the same squad. Capped at the lens level so it does not pretend to be an individual delivery-health label.",
+  },
+];
+
+export const RANKING_LENS_DEFINITIONS = LENS_DEFINITIONS;
+
+/**
+ * Build the three scoring lenses for the competitive cohort and the
+ * disagreement table over lens pairs. Keeps AI tokens/spend out of any lens
+ * scoring so direct AI-token inflation cannot raise a row's score.
+ */
+export function buildLenses({
+  entries,
+  signals = [],
+}: {
+  entries: EligibilityEntry[];
+  signals?: PerEngineerSignalRow[];
+}): LensesBundle {
+  const competitive = entries.filter((e) => e.eligibility === "competitive");
+  const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
+
+  const signalRows = competitive.map((entry) => signalByHash.get(entry.emailHash));
+
+  const outputComponents: LensComponentSpec[] = [
+    {
+      name: "Log-impact composite",
+      weight: 0.5,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => logImpact(s)),
+    },
+    {
+      name: "PR count (sqrt-damped)",
+      weight: 0.2,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => sqrtDamp(finiteOrNull(s?.prCount))),
+    },
+    {
+      name: "Commit count (sqrt-damped)",
+      weight: 0.15,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => sqrtDamp(finiteOrNull(s?.commitCount))),
+    },
+    {
+      name: "Net lines (log-signed)",
+      weight: 0.15,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => logSignedMagnitude(netLines(s))),
+    },
+  ];
+
+  const impactComponents: LensComponentSpec[] = [
+    {
+      name: "SHAP predicted impact",
+      weight: 0.4,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => finiteOrNull(s?.shapPredicted)),
+    },
+    {
+      name: "SHAP actual impact",
+      weight: 0.4,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => finiteOrNull(s?.shapActual)),
+    },
+    {
+      name: "SHAP residual (over/under-delivery)",
+      weight: 0.2,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => finiteOrNull(s?.shapResidual)),
+    },
+  ];
+
+  const deliveryComponents: LensComponentSpec[] = [
+    {
+      name: "Squad review rate %",
+      weight: 0.4,
+      invertedForScore: false,
+      rawValues: signalRows.map((s) => finiteOrNull(s?.squadReviewRatePercent)),
+    },
+    {
+      name: "Squad cycle time (inverted)",
+      weight: 0.3,
+      invertedForScore: true,
+      rawValues: signalRows.map((s) => finiteOrNull(s?.squadCycleTimeHours)),
+    },
+    {
+      name: "Squad time-to-first-review (inverted)",
+      weight: 0.3,
+      invertedForScore: true,
+      rawValues: signalRows.map((s) =>
+        finiteOrNull(s?.squadTimeToFirstReviewHours),
+      ),
+    },
+  ];
+
+  const definitionByKey = new Map(LENS_DEFINITIONS.map((d) => [d.key, d]));
+
+  const output = buildLens({
+    definition: definitionByKey.get("output")!,
+    entries: competitive,
+    components: outputComponents,
+  });
+  const impact = buildLens({
+    definition: definitionByKey.get("impact")!,
+    entries: competitive,
+    components: impactComponents,
+  });
+  const delivery = buildLens({
+    definition: definitionByKey.get("delivery")!,
+    entries: competitive,
+    components: deliveryComponents,
+  });
+
+  const lenses = { output, impact, delivery };
+  const disagreement = buildDisagreementTable(lenses);
+
+  return {
+    windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+    definitions: LENS_DEFINITIONS.map((d) => ({
+      ...d,
+      components: d.components.map((c) => ({ ...c })),
+    })),
+    lenses,
+    disagreement,
+    limitations: [
+      "AI tokens and AI spend are excluded from every lens, so direct AI-token inflation cannot raise an engineer's lens score — AI usage remains latest-month context, not a 180-day score input.",
+      "Lens C is squad-delivery context, not an individual review/cycle-time signal. Individual review turnaround and PR cycle time are not persisted in the current GitHub schema.",
+      "Engineers absent from the impact-model training set score null on lens B — the methodology refuses to fabricate a neutral-looking impact reading.",
+      "These three lenses are exploratory; M10 synthesises the final composite once the disagreements are understood and the weights justified.",
+    ],
+  };
+}
+
 /**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
@@ -1155,6 +1661,7 @@ export function buildRankingSnapshot(
     windowDays,
     reviewSignalsPersisted: inputs.reviewSignalsPersisted,
   });
+  const lenses = buildLenses({ entries, signals: inputs.signals });
 
   return {
     status: "methodology_pending",
@@ -1168,6 +1675,7 @@ export function buildRankingSnapshot(
       sourceNotes: buildSourceNotes(inputs),
     },
     audit,
+    lenses,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -1224,6 +1732,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
       reviewSignalsPersisted: false,
     }),
+    lenses: buildLenses({ entries }),
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

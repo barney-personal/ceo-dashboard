@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  RANKING_DISAGREEMENT_MIN_LENSES,
+  RANKING_LENS_DEFINITIONS,
+  RANKING_LENS_TOP_N,
   RANKING_METHODOLOGY_VERSION,
   RANKING_MIN_OVERLAP_SAMPLES,
   RANKING_NOMINAL_SIGNAL_NAMES,
   RANKING_NUMERIC_SIGNAL_NAMES,
   RANKING_RAMP_UP_DAYS,
   buildEligibleRoster,
+  buildLenses,
   buildRankingSnapshot,
   buildSignalAudit,
   buildSourceNotes,
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
+  type EligibilityEntry,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilityImpactModelView,
@@ -1081,5 +1086,375 @@ describe("M7 signal collection + orthogonality audit", () => {
         ),
       ).toBe(false);
     }
+  });
+});
+
+describe("M8 three independent scoring lenses + disagreement", () => {
+  const NOW = new Date("2026-04-24T00:00:00Z");
+
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function lensSignal(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  it("exposes three lens definitions in fixed output/impact/delivery order", () => {
+    expect(RANKING_LENS_DEFINITIONS.map((d) => d.key)).toEqual([
+      "output",
+      "impact",
+      "delivery",
+    ]);
+    for (const def of RANKING_LENS_DEFINITIONS) {
+      const totalWeight = def.components.reduce((sum, c) => sum + c.weight, 0);
+      expect(totalWeight).toBeCloseTo(1, 6);
+    }
+  });
+
+  it("ranks by lens A on perfectly ordered output signals", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 6 }, (_, i) => lensSignal(i + 1));
+    const { lenses } = buildLenses({ entries, signals });
+    const topNames = lenses.output.topN.map((e) => e.displayName);
+    expect(topNames).toEqual([
+      "Engineer 6",
+      "Engineer 5",
+      "Engineer 4",
+      "Engineer 3",
+      "Engineer 2",
+      "Engineer 1",
+    ]);
+    expect(lenses.output.topN[0].score).toBeGreaterThan(
+      lenses.output.topN[lenses.output.topN.length - 1].score ?? 0,
+    );
+  });
+
+  it("identical normalised signals across lenses agree on top engineer", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    // Construct signals so that the same engineer ranks #1 on all three lenses:
+    // high output, high SHAP, best squad-delivery metrics.
+    const signals = entries.map((_, i) => {
+      const rank = i + 1; // 1..5
+      return lensSignal(rank, {
+        // squad delivery differs per row so delivery can differentiate
+        squadCycleTimeHours: 50 - rank,
+        squadReviewRatePercent: 60 + rank,
+        squadTimeToFirstReviewHours: 10 - rank,
+      });
+    });
+    const { lenses } = buildLenses({ entries, signals });
+    expect(lenses.output.topN[0].displayName).toBe("Engineer 5");
+    expect(lenses.impact.topN[0].displayName).toBe("Engineer 5");
+    expect(lenses.delivery.topN[0].displayName).toBe("Engineer 5");
+  });
+
+  it("surfaces a high-SHAP / low-output engineer in the disagreement table", () => {
+    const entries = [
+      competitiveEntry(1, { displayName: "High Output" }),
+      competitiveEntry(2, { displayName: "Balanced" }),
+      competitiveEntry(3, { displayName: "High Impact Low Output" }),
+      competitiveEntry(4, { displayName: "Low Everything" }),
+    ];
+    const signals = [
+      lensSignal(1, {
+        prCount: 200,
+        commitCount: 500,
+        additions: 40_000,
+        deletions: 5_000,
+        shapPredicted: 10,
+        shapActual: 12,
+        shapResidual: 2,
+      }),
+      lensSignal(2, {
+        prCount: 40,
+        commitCount: 80,
+        additions: 5_000,
+        deletions: 1_000,
+        shapPredicted: 60,
+        shapActual: 60,
+        shapResidual: 0,
+      }),
+      lensSignal(3, {
+        prCount: 5,
+        commitCount: 10,
+        additions: 200,
+        deletions: 50,
+        shapPredicted: 150,
+        shapActual: 170,
+        shapResidual: 20,
+      }),
+      lensSignal(4, {
+        prCount: 2,
+        commitCount: 5,
+        additions: 100,
+        deletions: 20,
+        shapPredicted: 5,
+        shapActual: 4,
+        shapResidual: -1,
+      }),
+    ];
+    const { disagreement } = buildLenses({ entries, signals });
+    const widestNames = disagreement.widestGaps.map((r) => r.displayName);
+    expect(widestNames).toContain("High Impact Low Output");
+    const row = disagreement.widestGaps.find(
+      (r) => r.displayName === "High Impact Low Output",
+    )!;
+    expect(row.impact).not.toBeNull();
+    expect(row.output).not.toBeNull();
+    expect((row.impact ?? 0) > (row.output ?? 0)).toBe(true);
+    expect(row.likelyCause.toLowerCase()).toContain("shap impact above");
+  });
+
+  it("does not reward direct AI-token inflation — identical non-AI signals produce identical lens scores", () => {
+    const entries = [
+      competitiveEntry(1, { displayName: "Low AI" }),
+      competitiveEntry(2, { displayName: "High AI" }),
+    ];
+    // Same real signals, but wildly different AI tokens/spend.
+    const base = {
+      prCount: 20,
+      commitCount: 40,
+      additions: 2_000,
+      deletions: 400,
+      shapPredicted: 100,
+      shapActual: 110,
+      shapResidual: 10,
+      squadCycleTimeHours: 24,
+      squadReviewRatePercent: 80,
+      squadTimeToFirstReviewHours: 2,
+      squadPrsInProgress: 6,
+    };
+    const signals = [
+      { ...lensSignal(1, base), aiTokens: 50, aiSpend: 1 },
+      { ...lensSignal(2, base), aiTokens: 10_000_000, aiSpend: 10_000 },
+    ];
+    const { lenses } = buildLenses({ entries, signals });
+    // Same raw signals → same rank-percentile → same lens scores per lens.
+    for (const lens of [lenses.output, lenses.impact, lenses.delivery]) {
+      const a = lens.entries[0].score;
+      const b = lens.entries[1].score;
+      expect(a).not.toBeNull();
+      expect(b).not.toBeNull();
+      expect(a).toBeCloseTo(b ?? NaN, 6);
+    }
+  });
+
+  it("absent review/delivery signals produce null lens-C score, not a neutral 50", () => {
+    const entries = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3),
+    ];
+    const signals = entries.map((_, i) =>
+      lensSignal(i + 1, {
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      }),
+    );
+    const { lenses } = buildLenses({ entries, signals });
+    // Delivery lens: every component missing → every row score is null.
+    for (const row of lenses.delivery.entries) {
+      expect(row.score).toBeNull();
+      expect(row.presentComponentCount).toBe(0);
+    }
+    expect(lenses.delivery.scored).toBe(0);
+    expect(lenses.delivery.topN).toEqual([]);
+  });
+
+  it("engineers absent from the impact model score null on lens B, not mid-percentile", () => {
+    const entries = [
+      competitiveEntry(1, { displayName: "In model" }),
+      competitiveEntry(2, { displayName: "Absent from model" }),
+    ];
+    const signals = [
+      lensSignal(1, {
+        shapPredicted: 100,
+        shapActual: 110,
+        shapResidual: 10,
+      }),
+      lensSignal(2, {
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+      }),
+    ];
+    const { lenses } = buildLenses({ entries, signals });
+    const absent = lenses.impact.entries.find(
+      (e) => e.displayName === "Absent from model",
+    );
+    expect(absent?.score).toBeNull();
+    expect(absent?.presentComponentCount).toBe(0);
+    expect(lenses.impact.topN.map((e) => e.displayName)).not.toContain(
+      "Absent from model",
+    );
+  });
+
+  it("disagreement = max(present) - min(present) and rows with <2 lenses are excluded", () => {
+    const entries = [
+      competitiveEntry(1, { displayName: "Three lenses" }),
+      competitiveEntry(2, { displayName: "Only output" }),
+    ];
+    const signals = [
+      lensSignal(1, {
+        prCount: 10,
+        commitCount: 20,
+        additions: 1_000,
+        deletions: 200,
+        shapPredicted: 50,
+        shapActual: 60,
+        shapResidual: 10,
+        squadCycleTimeHours: 20,
+        squadReviewRatePercent: 90,
+        squadTimeToFirstReviewHours: 1,
+      }),
+      lensSignal(2, {
+        prCount: 5,
+        commitCount: 10,
+        additions: 200,
+        deletions: 50,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+      }),
+    ];
+    const { disagreement } = buildLenses({ entries, signals });
+    const names = disagreement.rows.map((r) => r.displayName);
+    expect(names).not.toContain("Only output");
+    // With two engineers each present in only the output lens alone for the
+    // second row, only the first row qualifies.
+    const threeLens = disagreement.rows.find(
+      (r) => r.displayName === "Three lenses",
+    );
+    expect(threeLens?.presentLensCount).toBeGreaterThanOrEqual(
+      RANKING_DISAGREEMENT_MIN_LENSES,
+    );
+    const presentScores = [
+      threeLens?.output,
+      threeLens?.impact,
+      threeLens?.delivery,
+    ].filter((v): v is number => v !== null && v !== undefined);
+    const expected = Math.max(...presentScores) - Math.min(...presentScores);
+    expect(threeLens?.disagreement).toBeCloseTo(expected, 6);
+  });
+
+  it("top-N per lens is capped at RANKING_LENS_TOP_N and sorted descending by score", () => {
+    const count = RANKING_LENS_TOP_N + 5;
+    const entries = Array.from({ length: count }, (_, i) =>
+      competitiveEntry(i + 1),
+    );
+    const signals = Array.from({ length: count }, (_, i) => lensSignal(i + 1));
+    const { lenses } = buildLenses({ entries, signals });
+    expect(lenses.output.topN.length).toBe(RANKING_LENS_TOP_N);
+    for (let i = 0; i < lenses.output.topN.length - 1; i += 1) {
+      const a = lenses.output.topN[i].score ?? -Infinity;
+      const b = lenses.output.topN[i + 1].score ?? -Infinity;
+      expect(a).toBeGreaterThanOrEqual(b);
+    }
+  });
+
+  it("only competitive entries enter the lenses — ramp-up and leavers are excluded", () => {
+    const entries = [
+      competitiveEntry(1),
+      competitiveEntry(2, {
+        eligibility: "ramp_up",
+        tenureDays: 30,
+        reason: "Ramp-up",
+      }),
+      competitiveEntry(3, {
+        eligibility: "inactive_or_leaver",
+        isLeaverOrInactive: true,
+        reason: "Leaver",
+      }),
+    ];
+    const signals = Array.from({ length: 3 }, (_, i) => lensSignal(i + 1));
+    const { lenses } = buildLenses({ entries, signals });
+    for (const lens of [lenses.output, lenses.impact, lenses.delivery]) {
+      const names = lens.entries.map((e) => e.displayName);
+      expect(names).toEqual(["Engineer 1"]);
+    }
+  });
+
+  it("buildRankingSnapshot attaches the lenses bundle to the snapshot", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [
+        {
+          email: "eng1@meetcleo.com",
+          preferred_name: "Engineer 1",
+          hb_function: "Engineering",
+          hb_level: "L4",
+          hb_squad: "Platform",
+          rp_specialisation: "Backend Engineer",
+          rp_department_name: "Core Pillar",
+          job_title: "Software Engineer",
+          manager: "Boss",
+          line_manager_email: "boss@meetcleo.com",
+          start_date: "2023-01-01",
+        },
+      ],
+      githubMap: [
+        {
+          githubLogin: "eng1",
+          employeeEmail: "eng1@meetcleo.com",
+          isBot: false,
+        },
+      ],
+      impactModel: { engineers: [] } as EligibilityImpactModelView,
+      signals: [lensSignal(1)],
+      now: NOW,
+    });
+    expect(snapshot.lenses).toBeDefined();
+    expect(snapshot.lenses.definitions.map((d) => d.key)).toEqual([
+      "output",
+      "impact",
+      "delivery",
+    ]);
+    expect(snapshot.lenses.lenses.output.entries.length).toBe(1);
   });
 });
