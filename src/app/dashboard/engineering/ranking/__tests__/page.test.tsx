@@ -5,12 +5,14 @@ const {
   mockRequireDashboardPermission,
   mockGetRequiredRoleForDashboardPermission,
   mockGetEngineeringRankingPageData,
+  mockGetHrAuxiliaryData,
   mockBuildHrEvidencePack,
   mockRankingScaffold,
 } = vi.hoisted(() => ({
   mockRequireDashboardPermission: vi.fn(),
   mockGetRequiredRoleForDashboardPermission: vi.fn(),
   mockGetEngineeringRankingPageData: vi.fn(),
+  mockGetHrAuxiliaryData: vi.fn(),
   mockBuildHrEvidencePack: vi.fn(),
   mockRankingScaffold: vi.fn(
     ({
@@ -40,6 +42,7 @@ vi.mock("@/lib/auth/dashboard-permissions.server", () => ({
 
 vi.mock("@/lib/data/engineering-ranking.server", () => ({
   getEngineeringRankingPageData: mockGetEngineeringRankingPageData,
+  getHrAuxiliaryData: mockGetHrAuxiliaryData,
 }));
 
 vi.mock("@/lib/data/engineering-ranking-hr", () => ({
@@ -68,6 +71,7 @@ describe("EngineeringRankingPage permission gate", () => {
       "engineering.ranking",
     );
     expect(mockGetEngineeringRankingPageData).not.toHaveBeenCalled();
+    expect(mockGetHrAuxiliaryData).not.toHaveBeenCalled();
   });
 
   it("renders the ranking scaffold when the permission check passes", async () => {
@@ -76,6 +80,7 @@ describe("EngineeringRankingPage permission gate", () => {
     mockGetEngineeringRankingPageData.mockResolvedValue({
       snapshot: { methodologyVersion: "1.0.0-methodology" },
       profileSlugByHash: {},
+      signals: [],
     });
 
     const page = await EngineeringRankingPage();
@@ -93,56 +98,55 @@ describe("EngineeringRankingPage permission gate", () => {
     );
   });
 
-  it("does not build the HR pack when the viewer is below the HR role threshold", async () => {
+  it("does not fetch HR auxiliary data when the viewer is below the HR role threshold", async () => {
     mockRequireDashboardPermission.mockResolvedValue("engineering_manager");
     mockGetRequiredRoleForDashboardPermission.mockResolvedValue("ceo");
     mockGetEngineeringRankingPageData.mockResolvedValue({
       snapshot: { methodologyVersion: "1.0.0-methodology" },
       profileSlugByHash: {},
       signals: [],
-      slackRows: [],
-      recent30dByLogin: new Map(),
-      recent30dAnalyses: [],
-      performanceByEmail: new Map(),
     });
 
     const page = await EngineeringRankingPage();
     render(page);
 
+    // Viewers below the HR role must NOT incur the auxiliary fetches —
+    // this is the whole point of splitting HR data out of the base loader.
+    expect(mockGetHrAuxiliaryData).not.toHaveBeenCalled();
     expect(mockBuildHrEvidencePack).not.toHaveBeenCalled();
     const scaffold = screen.getByTestId("ranking-scaffold");
     expect(scaffold.dataset.canSeeHr).toBe("false");
     expect(scaffold.dataset.hrPackPresent).toBe("false");
   });
 
-  it("builds and passes the HR pack when the viewer has the HR role", async () => {
+  it("fetches HR auxiliary data and builds the pack when the viewer has the HR role", async () => {
     mockRequireDashboardPermission.mockResolvedValue("ceo");
     mockGetRequiredRoleForDashboardPermission.mockResolvedValue("ceo");
     const fakeSnapshot = { methodologyVersion: "1.0.0-methodology" };
-    const fakeSlack: never[] = [];
-    const fakeActivity = new Map();
-    const fakeAnalyses: never[] = [];
-    const fakePerf = new Map();
     mockGetEngineeringRankingPageData.mockResolvedValue({
       snapshot: fakeSnapshot,
       profileSlugByHash: {},
       signals: [],
-      slackRows: fakeSlack,
-      recent30dByLogin: fakeActivity,
-      recent30dAnalyses: fakeAnalyses,
-      performanceByEmail: fakePerf,
     });
+    const fakeAux = {
+      slackRows: [],
+      recent30dByLogin: new Map(),
+      recent30dAnalyses: [],
+      performanceByEmail: new Map(),
+    };
+    mockGetHrAuxiliaryData.mockResolvedValue(fakeAux);
     mockBuildHrEvidencePack.mockReturnValue({ bottomN: 10, engineers: [] });
 
     const page = await EngineeringRankingPage();
     render(page);
 
+    expect(mockGetHrAuxiliaryData).toHaveBeenCalledTimes(1);
     expect(mockBuildHrEvidencePack).toHaveBeenCalledWith(fakeSnapshot, {
       signals: [],
-      slackRows: fakeSlack,
-      recent30dByLogin: fakeActivity,
-      recent30dAnalyses: fakeAnalyses,
-      performanceByEmail: fakePerf,
+      slackRows: fakeAux.slackRows,
+      recent30dByLogin: fakeAux.recent30dByLogin,
+      recent30dAnalyses: fakeAux.recent30dAnalyses,
+      performanceByEmail: fakeAux.performanceByEmail,
     });
     const scaffold = screen.getByTestId("ranking-scaffold");
     expect(scaffold.dataset.canSeeHr).toBe("true");

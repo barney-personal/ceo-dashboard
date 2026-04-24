@@ -4,7 +4,10 @@ import {
 } from "@/lib/auth/dashboard-permissions.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { buildHrEvidencePack } from "@/lib/data/engineering-ranking-hr";
-import { getEngineeringRankingPageData } from "@/lib/data/engineering-ranking.server";
+import {
+  getEngineeringRankingPageData,
+  getHrAuxiliaryData,
+} from "@/lib/data/engineering-ranking.server";
 import { RankingScaffold } from "./_components/ranking-scaffold";
 
 export const metadata = {
@@ -18,25 +21,24 @@ export default async function EngineeringRankingPage() {
     getEngineeringRankingPageData(),
     getRequiredRoleForDashboardPermission("engineering.ranking.hr"),
   ]);
-  const {
-    snapshot,
-    profileSlugByHash,
-    signals,
-    slackRows,
-    recent30dByLogin,
-    recent30dAnalyses,
-    performanceByEmail,
-  } = pageData;
+  const { snapshot, profileSlugByHash, signals } = pageData;
 
   const canSeeHrReview = hasAccess(role, hrRequiredRole);
+  // The HR auxiliary fetches (Slack rows, 30d GitHub activity, 30d rubric
+  // analyses, performance ratings) are only triggered when the viewer can
+  // actually see the HR section. Viewers without the permission pay no
+  // additional DB/API cost compared to the base ranking page.
   const hrPack = canSeeHrReview
-    ? buildHrEvidencePack(snapshot, {
-        signals,
-        slackRows,
-        recent30dByLogin,
-        recent30dAnalyses,
-        performanceByEmail,
-      })
+    ? await (async () => {
+        const aux = await getHrAuxiliaryData();
+        return buildHrEvidencePack(snapshot, {
+          signals,
+          slackRows: aux.slackRows,
+          recent30dByLogin: aux.recent30dByLogin,
+          recent30dAnalyses: aux.recent30dAnalyses,
+          performanceByEmail: aux.performanceByEmail,
+        });
+      })()
     : null;
 
   return (

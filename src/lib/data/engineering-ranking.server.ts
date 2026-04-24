@@ -616,19 +616,36 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
  * fetch with `getEngineeringRankingSnapshotWithSignals` so the page only pays
  * for one round of fetches.
  *
- * Also returns HR-specific auxiliary data (Slack engagement rows, 30-day
- * GitHub activity + analysed PRs, performance review history) — consumed
- * only by the CEO-gated HR review section. Each extra fetch is best-effort;
- * a failure degrades gracefully to empty maps so the main ranking still
- * renders.
+ * HR-specific auxiliary data (Slack / 30-day activity / performance history)
+ * is fetched separately via `getHrAuxiliaryData()` so viewers without the
+ * `engineering.ranking.hr` permission do not pay for DB/API calls whose
+ * result they cannot see.
  */
 export async function getEngineeringRankingPageData(): Promise<{
   snapshot: EngineeringRankingSnapshot;
   profileSlugByHash: Record<string, string>;
   signals: PerEngineerSignalRow[];
-  /** Slack engagement rows, keyed on `employeeEmail` (may be null per row). */
+}> {
+  const core = await getEngineeringRankingSnapshotWithSignals();
+  return {
+    snapshot: core.snapshot,
+    profileSlugByHash: core.profileSlugByHash,
+    signals: core.signals,
+  };
+}
+
+/**
+ * HR-section-only auxiliary data. Fan-out of four best-effort fetches
+ * consumed only by `buildHrEvidencePack`. Callers MUST gate this behind the
+ * `engineering.ranking.hr` permission check — invoking it otherwise wastes
+ * DB/API round-trips on a viewer who cannot see the result.
+ *
+ * Each fetch is independently best-effort; a failure degrades to an empty
+ * map/array so the HR section still renders with a "no data" state rather
+ * than throwing the whole page render.
+ */
+export async function getHrAuxiliaryData(): Promise<{
   slackRows: SlackMemberRow[];
-  /** 30-day GitHub activity per author login (PR/commit counts + lines). */
   recent30dByLogin: Map<
     string,
     {
@@ -638,15 +655,10 @@ export async function getEngineeringRankingPageData(): Promise<{
       deletions: number;
     }
   >;
-  /** PR review analyses merged in the last 30 days, rubric-version filtered. */
   recent30dAnalyses: PrReviewAnalysisInput[];
-  /** Per-engineer performance ratings by lowercased email. */
   performanceByEmail: Map<string, PerformanceRating[]>;
 }> {
-  const core = await getEngineeringRankingSnapshotWithSignals();
-  const recentWindowStart = new Date(
-    Date.now() - 30 * 24 * 60 * 60 * 1000,
-  );
+  const recentWindowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   const [slackRows, recent30dByLogin, recent30dAnalyses, performanceByEmail] =
     await Promise.all([
@@ -682,9 +694,6 @@ export async function getEngineeringRankingPageData(): Promise<{
     ]);
 
   return {
-    snapshot: core.snapshot,
-    profileSlugByHash: core.profileSlugByHash,
-    signals: core.signals,
     slackRows,
     recent30dByLogin,
     recent30dAnalyses,

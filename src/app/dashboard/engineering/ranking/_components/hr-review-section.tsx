@@ -318,7 +318,17 @@ function ContrastTable({ engineer }: { engineer: HrEngineerEvidence }) {
           {engineer.contrasts.map((c) => (
             <tr key={c.signal} className="border-b border-border/20 align-top">
               <td className="py-1.5 pr-2 text-foreground">
-                <div>{c.label}</div>
+                <div className="flex items-center gap-1.5">
+                  <span>{c.label}</span>
+                  {c.direction === "lower_is_better" ? (
+                    <span
+                      title="Lower is better — the colour coding is already direction-aware."
+                      className="rounded-full border border-border/40 bg-muted/40 px-1.5 py-0 text-[9px] uppercase tracking-[0.08em] text-muted-foreground"
+                    >
+                      lower = better
+                    </span>
+                  ) : null}
+                </div>
                 {c.disciplineCohort ? (
                   <div className="text-[10px] text-muted-foreground">
                     vs {c.disciplineCohort.cohortLabel}: median{" "}
@@ -355,9 +365,13 @@ function ContrastTable({ engineer }: { engineer: HrEngineerEvidence }) {
         </tbody>
       </table>
       <p className="text-[10px] italic text-muted-foreground">
-        Values in <span className="text-destructive font-medium">red</span>{" "}
-        are below 50% of the cohort median; <span className="text-warning">amber</span>{" "}
-        is 50–80%. Discipline cohort is used for the percentile where n ≥ 5,
+        Direction-aware: for most signals, higher = better. Rows tagged{" "}
+        <span className="font-medium">lower = better</span> invert the
+        reading — the colour coding and percentile are already inverted for
+        those so <span className="text-destructive font-medium">red</span>{" "}
+        always means "this engineer is worse than the cohort on this signal."
+        Red ≲ 50% gap vs median, <span className="text-warning">amber</span>{" "}
+        ≲ 50–80%. Discipline cohort is used for the percentile where n ≥ 5,
         else the whole cohort.
       </p>
     </div>
