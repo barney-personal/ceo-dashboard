@@ -10,8 +10,9 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: the stability check is still pending until
- * `EngineeringRankingSnapshot.status === "ready"`. Confidence bands and
+ * not a final adjudication: `EngineeringRankingSnapshot.status === "ready"`
+ * additionally requires two consecutive cycles of the M24 stability check
+ * within tolerance at the same methodology version. Confidence bands and
  * statistical-tie groups (M14) are live and travel on the snapshot via
  * `confidence`. Per-engineer attribution drilldowns (M15) are live and
  * travel on the snapshot via `attribution`. Privacy-preserving ranking
@@ -92,7 +93,20 @@ import { createHash } from "node:crypto";
  *   email hash, direct-report list, `not_requested` status) so a later
  *   manager-feedback loop can validate directs without changing the
  *   ranking core. Snapshot `status` stays `methodology_pending` until the
- *   stability check (M22) also lands.
+ *   M24 stability check has produced two consecutive in-tolerance cycles
+ *   at the same methodology version.
+ *
+ *   M24 stability check is live: `buildStability` compares the current
+ *   ranking against the most recent comparable prior snapshot, classifies
+ *   each engineer as `stable` / `input_drift` / `ambiguous_context` /
+ *   `context_affected` / `cohort_transition` / `methodology_change` /
+ *   `unknown`, surfaces an ambiguous-cohort fraction and a `withinTolerance`
+ *   boolean, and embeds the reviewer adversarial-question prompts on the
+ *   page. `methodologyVersion` is intentionally NOT bumped because adding
+ *   the stability bundle does not change the composite math — the
+ *   same-methodology comparability contract with earlier v1.0.0-methodology
+ *   snapshots must be preserved so the stability check can actually run on
+ *   a like-for-like pair.
  */
 export const RANKING_METHODOLOGY_VERSION = "1.0.0-methodology" as const;
 
@@ -327,6 +341,16 @@ export interface EngineeringRankingSnapshot {
    * state when no comparable prior snapshot exists.
    */
   movers: MoversBundle;
+  /**
+   * Stability check bundle (M24): compares the current ranking against the
+   * most recent comparable prior snapshot and classifies each engineer as
+   * stable, input-drifted, cohort-transitioning, methodology-affected, or
+   * ambiguous (scoring `inputHash` unchanged but rank moved). Surfaces an
+   * aggregate `ambiguousCohortFraction` and a `withinTolerance` boolean so
+   * the reviewer can read whether the methodology is settling cycle over
+   * cycle. Adversarial review prompts travel on the bundle and on the page.
+   */
+  stability: StabilityBundle;
   /**
    * Methodology panel bundle (M21): a self-describing on-page description of
    * what this ranking actually does. Composes the already-computed lens
@@ -2768,7 +2792,7 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check is still pending — the composite is an evidence rank, not a final adjudication until it lands.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check (M24) is live and surfaces an ambiguous-cohort fraction and `withinTolerance` boolean; workflow termination additionally requires two consecutive cycles within tolerance at the same methodology version. The composite is an evidence rank and should be read alongside stability and movers.",
     ],
   };
 }
@@ -3244,7 +3268,7 @@ export function buildConfidence({
       `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
       `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
       `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
-      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M18) is live and attached to the snapshot via the movers bundle. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check remains the only outstanding methodology milestone.`,
+      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M18) is live and attached to the snapshot via the movers bundle. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. Stability check (M24) is live — workflow termination additionally requires two consecutive cycles within tolerance at the same methodology version.`,
     ],
   };
 }
@@ -3823,7 +3847,7 @@ export function buildAttribution({
       },
       calibration: {
         status: "not_requested",
-        note: "Calibration structure is present — manager email hash and direct-report list are resolved at request time. The feedback loop that lets a manager confirm or dispute a direct's position is outstanding work bundled into the stability-check milestone.",
+        note: "Calibration structure is present — manager email hash and direct-report list are resolved at request time. The feedback loop that lets a manager confirm or dispute a direct's position is the remaining manager-calibration work; it sits downstream of M24 stability and does not block the stability check itself.",
         managerEmailHash: (() => {
           const managerKey = (entry.manager ?? "").trim().toLowerCase();
           if (!managerKey) return null;
@@ -3853,7 +3877,7 @@ export function buildAttribution({
       `Attribution's positive/negative driver tag uses a linear approximation of each component's lift on the composite percentile: (1 / ${totalMethods}) × componentWeight × (percentile − 50). The composite itself is the median of the four method scores, not a weighted sum, so the driver magnitudes are directional labels rather than exact rank contributions.`,
       `Evidence links are limited to a GitHub PR-search URL filtered to merged PRs in the window. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and appear in the absent-signals list rather than the evidence block.`,
       `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). Every drilldown now carries a manager-calibration stub (direct-report count, manager email hash, \`not_requested\` status) so a later feedback loop can validate the ranking without touching the attribution contract.`,
-      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M18) is live and renders against the most recent comparable prior snapshot. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check remains the only outstanding methodology milestone — the composite is an evidence rank, not a final adjudication until that lands.`,
+      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M18) is live and renders against the most recent comparable prior snapshot. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check (M24) is live and surfaces an ambiguous-cohort fraction and \`withinTolerance\` boolean — workflow termination additionally requires two consecutive cycles within tolerance at the same methodology version before the composite graduates from evidence rank to final adjudication.`,
     ],
   };
 }
@@ -4351,6 +4375,598 @@ export function buildMovers(inputs: {
   };
 }
 
+/* --------------------------------------------------------------------------
+ * M24 stability check
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Percentile-delta magnitude above which an engineer is considered to have
+ * moved "materially" between snapshots. 5 matches the plan's tolerance
+ * ("no engineer moves > 5 percentile points from methodology churn alone").
+ */
+export const RANKING_STABILITY_PERCENTILE_THRESHOLD = 5 as const;
+
+/**
+ * Minimum calendar-day gap to the prior snapshot. Reuses the movers
+ * threshold so the two comparability contracts stay in lock-step — a snapshot
+ * pair too close for the movers view is also too close for the stability
+ * check.
+ */
+export const RANKING_STABILITY_MIN_GAP_DAYS = RANKING_MOVERS_MIN_GAP_DAYS;
+
+/**
+ * Maximum acceptable fraction of the comparable cohort flagged as
+ * `ambiguous_context` (scoring `inputHash` unchanged but rank moved by more
+ * than the percentile threshold). Above this share the snapshot pair is
+ * labelled `not within tolerance` so the reviewer can see the methodology
+ * has drifted more than the unexplained-cohort-context budget allows.
+ */
+export const RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE = 0.25 as const;
+
+/** Per-engineer stability classification. */
+export type StabilityFlag =
+  | "stable"
+  | "input_drift"
+  | "ambiguous_context"
+  | "context_affected"
+  | "cohort_transition"
+  | "methodology_change"
+  | "unknown";
+
+export type StabilityStatus =
+  | "no_prior_snapshot"
+  | "insufficient_gap"
+  | "methodology_changed"
+  | "ok";
+
+export interface StabilityEntry {
+  emailHash: string;
+  /** Resolved at request time from the current eligibility roster. */
+  displayName: string;
+  priorRank: number | null;
+  currentRank: number | null;
+  /** `currentRank - priorRank` — signed so negative = rank improvement. */
+  rankDelta: number | null;
+  /**
+   * Rank-percentile of the prior rank within the prior comparable cohort —
+   * computed from `priorRank` and the cohort size, not the persisted
+   * `compositeScore`, so the delta is scale-consistent with
+   * `currentRankPercentile`.
+   */
+  priorRankPercentile: number | null;
+  currentRankPercentile: number | null;
+  /** `currentRankPercentile - priorRankPercentile` (both non-null). */
+  percentileDelta: number | null;
+  /** `|percentileDelta|` when both sides are present. */
+  percentileMagnitude: number | null;
+  flag: StabilityFlag;
+  /** Plain-language narrative safe to display on the page. */
+  narrative: string;
+  /**
+   * True when both snapshots persisted an `inputHash` and the two differ.
+   * Null when either hash is missing — we cannot distinguish input drift
+   * from methodology/context drift from persisted state alone.
+   */
+  inputHashChanged: boolean | null;
+  methodologyChanged: boolean;
+}
+
+export interface StabilityBundle {
+  status: StabilityStatus;
+  /** Plain-language description of the stability methodology. */
+  contract: string;
+  currentSnapshot: { snapshotDate: string; methodologyVersion: string };
+  priorSnapshot: {
+    snapshotDate: string;
+    methodologyVersion: string;
+  } | null;
+  priorSnapshotGapDays: number | null;
+  minGapDays: number;
+  percentileThreshold: number;
+  ambiguousCohortTolerance: number;
+  methodologyChanged: boolean;
+  entries: StabilityEntry[];
+  /** Engineers ranked on both sides AND comparing like-for-like methodology. */
+  comparableCohortSize: number;
+  stableCount: number;
+  inputDriftCount: number;
+  ambiguousContextCount: number;
+  contextAffectedCount: number;
+  cohortTransitionCount: number;
+  methodologyChangeCount: number;
+  unknownCount: number;
+  /**
+   * Largest `percentileMagnitude` across engineers whose flag is
+   * `ambiguous_context` or `context_affected`. `null` when no comparable
+   * cohort exists or no engineer falls into those buckets.
+   */
+  maxAmbiguousPercentileShift: number | null;
+  /**
+   * Fraction of the comparable cohort in the `ambiguous_context` or
+   * `context_affected` buckets. `null` when the comparable cohort is empty.
+   */
+  ambiguousCohortFraction: number | null;
+  /**
+   * `true` only when we can compute stability (`status === "ok"`) AND the
+   * ambiguous-cohort fraction is within tolerance AND no ambiguous engineer
+   * moved by more than the percentile threshold. `false` otherwise. Callers
+   * should still read the per-engineer entries — the boolean is a summary.
+   */
+  withinTolerance: boolean;
+  /**
+   * Adversarial questions the page asks the reviewer to answer each cycle.
+   * Surfaced on the page and paraphrased in the cycle worklog; the page
+   * itself does not claim to answer them — that is a human adjudication.
+   */
+  adversarialQuestions: readonly string[];
+  /** Informational notes surfaced on the page above the table. */
+  notes: string[];
+  /** Plain-language stability-stage limitations shown on the page. */
+  limitations: string[];
+}
+
+/**
+ * Reviewer adversarial-question prompts surfaced on the page and echoed in
+ * the cycle worklog. Phrased so each question can be answered yes/no with
+ * evidence, making the review cycle quick to audit.
+ */
+export const RANKING_STABILITY_ADVERSARIAL_QUESTIONS: readonly string[] = [
+  "Does the top-10 actually match the CEO's intuition? If not, is the ranking wrong, or is the intuition wrong?",
+  "Which two signals disagree most on the disagreement table, and is the narrative satisfying?",
+  "What's the laziest way to game this ranking, and is that path blocked by the anti-gaming posture?",
+  "If a signal has an effective weight above 30%, is that weight justified by its evidence or is it just the easiest signal to compute?",
+  "Is the confidence band on the bottom-quartile engineers wider than the gap between them? If yes, the ranking is lying.",
+];
+
+const STABILITY_BASE_LIMITATIONS: readonly string[] = [
+  "The stability check compares rank-percentile positions between snapshots. `inputHash` only covers scoring signal rows (GitHub activity, SHAP impact, squad delivery context). Tenure, discipline, level, manager/squad, and cohort-composition changes are not encoded in the hash — an unchanged `inputHash` paired with a percentile move is labelled `ambiguous_context` (or `context_affected` when a cohort hint is visible), not methodology noise.",
+  "Rank-percentile is computed from rank and the comparable cohort size on each side, so an engineer whose rank did not change but whose cohort grew or shrank will show a small non-zero delta even when nothing else moved. The percentile threshold is set to tolerate this.",
+  "Workflow termination requires two consecutive cycles at the same methodology version below the ambiguous-cohort tolerance. A single cycle below tolerance is necessary but not sufficient.",
+  "`withinTolerance` is a summary boolean. It is never asserted as `true` across a methodology-version change — that would declare behaviour change stable. The page surfaces `methodology_changed` as its own status instead.",
+  "The adversarial questions on the page are prompts, not answers. The worklog must carry the cycle's actual answers; the page only guarantees the questions are asked.",
+];
+
+function sanitiseStabilityPercentileThreshold(value: number | undefined): number {
+  if (value === undefined) return RANKING_STABILITY_PERCENTILE_THRESHOLD;
+  if (!Number.isFinite(value) || value < 0) {
+    return RANKING_STABILITY_PERCENTILE_THRESHOLD;
+  }
+  return value;
+}
+
+function sanitiseStabilityAmbiguousTolerance(value: number | undefined): number {
+  if (value === undefined) return RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE;
+  if (!Number.isFinite(value) || value < 0) {
+    return RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE;
+  }
+  if (value > 1) return 1;
+  return value;
+}
+
+function rankToPercentile(rank: number, cohortSize: number): number {
+  if (cohortSize <= 1) return 50;
+  // Highest rank (1) → 100, lowest rank (cohortSize) → 0.
+  return ((cohortSize - rank) / (cohortSize - 1)) * 100;
+}
+
+/**
+ * Build the M24 stability bundle. Pure helper — the caller (server loader
+ * or test fixture) is responsible for picking a prior snapshot slice. When
+ * no prior slice is supplied or the prior is closer than `minGapDays`, the
+ * bundle emits a helpful empty state rather than fabricating stability.
+ *
+ * Per-engineer flag rules, in priority order:
+ *   1. Methodology version differs → every comparable entry flagged
+ *      `methodology_change` and `withinTolerance` is forced to `false`.
+ *   2. Present on one side only → `cohort_transition` (new hire, leaver,
+ *      newly scored, or fell out of scoring).
+ *   3. `|percentileDelta| <= percentileThreshold` → `stable`.
+ *   4. `|percentileDelta| > percentileThreshold` and the persisted
+ *      `inputHash` differs → `input_drift`.
+ *   5. `|percentileDelta| > percentileThreshold` and `inputHash` is
+ *      unchanged → `context_affected` when a visible cohort-context hint
+ *      (low tenure, thin discipline cohort) exists, else
+ *      `ambiguous_context`. The page MUST NOT claim these are methodology
+ *      noise — the hash does not cover cohort composition.
+ *   6. Either `inputHash` missing → `unknown`.
+ */
+export function buildStability(inputs: {
+  currentSnapshotDate: string;
+  currentMethodologyVersion: string;
+  composite: CompositeBundle;
+  eligibilityEntries: readonly EligibilityEntry[];
+  /**
+   * Per-engineer signal rows; used to compute the current `inputHash`
+   * values that are diffed against `priorRows[i].inputHash`. When absent,
+   * every entry reports `inputHashChanged = null` and `flag = "unknown"`.
+   */
+  signals?: readonly PerEngineerSignalRow[];
+  /**
+   * Prior snapshot slice to compare against. Every row MUST share the same
+   * `(snapshotDate, methodologyVersion)`. Server loaders should pass the
+   * same slice they already fetched for the M18 movers view.
+   */
+  priorRows?: readonly RankingSnapshotRow[];
+  /** Defaults to `RANKING_STABILITY_MIN_GAP_DAYS`. */
+  minGapDays?: number;
+  /** Defaults to `RANKING_STABILITY_PERCENTILE_THRESHOLD`. */
+  percentileThreshold?: number;
+  /** Defaults to `RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE`. */
+  ambiguousCohortTolerance?: number;
+}): StabilityBundle {
+  const minGapDays = sanitiseMinGapDays(inputs.minGapDays);
+  const percentileThreshold = sanitiseStabilityPercentileThreshold(
+    inputs.percentileThreshold,
+  );
+  const ambiguousCohortTolerance = sanitiseStabilityAmbiguousTolerance(
+    inputs.ambiguousCohortTolerance,
+  );
+  const currentSnapshot = {
+    snapshotDate: inputs.currentSnapshotDate,
+    methodologyVersion: inputs.currentMethodologyVersion,
+  };
+  const contract = `Stability diffs the current ranking against the most recent prior snapshot at least ${minGapDays} calendar days old, preferring the same methodology version. Rank-percentiles are computed from rank and comparable cohort size on each side, then differenced. An engineer who moves more than ${percentileThreshold} percentile points with an unchanged scoring \`inputHash\` is labelled \`ambiguous_context\` — the hash does not encode tenure, discipline, manager/squad, or cohort-composition changes, so an unexplained move may be methodology noise OR unpersisted cohort context. A \`context_affected\` tag is used when a visible cohort hint (low tenure, thin discipline cohort) exists. Workflow termination requires two consecutive cycles within tolerance at the same methodology version.`;
+
+  const priorRows = inputs.priorRows ?? [];
+
+  const baseEmpty: Omit<StabilityBundle, "status" | "notes" | "priorSnapshotGapDays" | "priorSnapshot" | "methodologyChanged"> = {
+    contract,
+    currentSnapshot,
+    minGapDays,
+    percentileThreshold,
+    ambiguousCohortTolerance,
+    entries: [],
+    comparableCohortSize: 0,
+    stableCount: 0,
+    inputDriftCount: 0,
+    ambiguousContextCount: 0,
+    contextAffectedCount: 0,
+    cohortTransitionCount: 0,
+    methodologyChangeCount: 0,
+    unknownCount: 0,
+    maxAmbiguousPercentileShift: null,
+    ambiguousCohortFraction: null,
+    withinTolerance: false,
+    adversarialQuestions: RANKING_STABILITY_ADVERSARIAL_QUESTIONS,
+    limitations: [...STABILITY_BASE_LIMITATIONS],
+  };
+
+  if (priorRows.length === 0) {
+    return {
+      ...baseEmpty,
+      status: "no_prior_snapshot",
+      priorSnapshot: null,
+      priorSnapshotGapDays: null,
+      methodologyChanged: false,
+      notes: [
+        "No prior ranking snapshot has been persisted yet — stability will populate after the next scheduled refresh produces a second snapshot.",
+      ],
+    };
+  }
+
+  const firstPrior = priorRows[0];
+  const priorSnapshotDate = firstPrior.snapshotDate;
+  const priorMethodologyVersion = firstPrior.methodologyVersion;
+  const priorSnapshot = {
+    snapshotDate: priorSnapshotDate,
+    methodologyVersion: priorMethodologyVersion,
+  };
+  const gapDays = diffSnapshotDates(
+    priorSnapshotDate,
+    inputs.currentSnapshotDate,
+  );
+
+  if (
+    gapDays === null ||
+    compareSnapshotDates(priorSnapshotDate, inputs.currentSnapshotDate) >= 0 ||
+    gapDays < minGapDays
+  ) {
+    return {
+      ...baseEmpty,
+      status: "insufficient_gap",
+      priorSnapshot,
+      priorSnapshotGapDays: gapDays,
+      methodologyChanged:
+        priorMethodologyVersion !== inputs.currentMethodologyVersion,
+      notes: [
+        `Prior snapshot is ${gapDays ?? 0} days old (<${minGapDays}). Stability check waits for a prior snapshot at least ${minGapDays} days before the current one so day-to-day refresh jitter is not reported as methodology noise.`,
+      ],
+    };
+  }
+
+  const methodologyChanged =
+    priorMethodologyVersion !== inputs.currentMethodologyVersion;
+
+  // Current-snapshot lookups.
+  const eligibilityByHash = new Map(
+    inputs.eligibilityEntries.map((e) => [e.emailHash, e]),
+  );
+  const currentRanked = inputs.composite.entries
+    .filter((c) => c.rank !== null && c.composite !== null)
+    .slice()
+    .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  const currentCohortSize = currentRanked.length;
+  const currentByHash = new Map(currentRanked.map((c) => [c.emailHash, c]));
+  const currentInputHashByHash = new Map<string, string | null>();
+  if (inputs.signals) {
+    for (const signal of inputs.signals) {
+      currentInputHashByHash.set(
+        signal.emailHash,
+        computeRankingInputHash(signal),
+      );
+    }
+  }
+
+  // Discipline cohort size among current competitive entries, used as a
+  // context hint for the `context_affected` label.
+  const disciplineCohortSize = new Map<Discipline, number>();
+  for (const entry of inputs.eligibilityEntries) {
+    if (entry.eligibility !== "competitive") continue;
+    disciplineCohortSize.set(
+      entry.discipline,
+      (disciplineCohortSize.get(entry.discipline) ?? 0) + 1,
+    );
+  }
+
+  // Prior-snapshot lookups.
+  const priorRanked = priorRows.filter(
+    (r) => r.rank !== null && r.compositeScore !== null,
+  );
+  const priorCohortSize = priorRanked.length;
+  const priorByHash = new Map<string, RankingSnapshotRow>();
+  for (const row of priorRanked) priorByHash.set(row.emailHash, row);
+
+  function resolveDisplayName(
+    emailHash: string,
+    prior?: RankingSnapshotRow,
+  ): string {
+    const eligibility = eligibilityByHash.get(emailHash);
+    if (eligibility) return eligibility.displayName;
+    return prior
+      ? `Unmapped (${emailHash.slice(0, 8)})`
+      : `Unknown (${emailHash.slice(0, 8)})`;
+  }
+
+  function makeEntry(
+    emailHash: string,
+    prior: RankingSnapshotRow | undefined,
+    current: EngineerCompositeEntry | undefined,
+  ): StabilityEntry {
+    const priorRank = prior?.rank ?? null;
+    const currentRank = current?.rank ?? null;
+    const rankDelta =
+      priorRank !== null && currentRank !== null
+        ? currentRank - priorRank
+        : null;
+    const priorRankPercentile =
+      priorRank !== null ? rankToPercentile(priorRank, priorCohortSize) : null;
+    const currentRankPercentile =
+      currentRank !== null
+        ? rankToPercentile(currentRank, currentCohortSize)
+        : null;
+    const percentileDelta =
+      priorRankPercentile !== null && currentRankPercentile !== null
+        ? currentRankPercentile - priorRankPercentile
+        : null;
+    const percentileMagnitude =
+      percentileDelta !== null ? Math.abs(percentileDelta) : null;
+
+    const priorInputHash = prior?.inputHash ?? null;
+    const currentInputHash = inputs.signals
+      ? (currentInputHashByHash.get(emailHash) ?? null)
+      : null;
+    const inputHashChanged =
+      priorInputHash !== null && currentInputHash !== null
+        ? priorInputHash !== currentInputHash
+        : null;
+
+    let flag: StabilityFlag;
+    let narrative: string;
+
+    if (methodologyChanged) {
+      flag = "methodology_change";
+      narrative = `Prior snapshot was methodology v${priorMethodologyVersion}; current is v${inputs.currentMethodologyVersion}. Any rank movement is methodology-affected and must not be read as stability noise.`;
+    } else if (!prior || !current) {
+      flag = "cohort_transition";
+      narrative = current
+        ? "Engineer was not ranked in the prior snapshot (new hire, newly mapped to GitHub, or finished ramp-up). Excluded from the stability budget — first-time rankings are not a stability signal."
+        : "Engineer was ranked in the prior snapshot but is not in the current competitive cohort (leaver, lost GitHub mapping, or composite dropped below the minimum present-method count). Excluded from the stability budget.";
+    } else if (percentileMagnitude === null) {
+      flag = "unknown";
+      narrative =
+        "Could not compute rank-percentiles on both sides — engineer is present but percentiles are missing. Treated as unknown rather than stable.";
+    } else if (percentileMagnitude <= percentileThreshold) {
+      flag = "stable";
+      narrative = `Rank-percentile moved ${percentileDelta === null ? "—" : percentileDelta.toFixed(1)} points (|Δ| ≤ ${percentileThreshold}). Within the stability budget.`;
+    } else if (inputHashChanged === null) {
+      flag = "unknown";
+      narrative =
+        "Rank-percentile moved but `inputHash` is missing on one or both sides — cannot distinguish input drift from methodology/context change from stored state alone.";
+    } else if (inputHashChanged) {
+      flag = "input_drift";
+      narrative = `Rank-percentile moved ${percentileDelta === null ? "—" : percentileDelta.toFixed(1)} points and scoring \`inputHash\` differs between snapshots — the movement is consistent with scoring signals actually changing (new PRs/commits, updated impact-model values, or refreshed squad delivery context).`;
+    } else {
+      const eligibility = eligibilityByHash.get(emailHash);
+      const disciplineSize = eligibility
+        ? (disciplineCohortSize.get(eligibility.discipline) ?? 0)
+        : 0;
+      const lowTenureHint =
+        eligibility?.tenureDays !== null &&
+        eligibility?.tenureDays !== undefined &&
+        eligibility.tenureDays < 180;
+      const thinCohortHint = disciplineSize > 0 && disciplineSize < 5;
+      if (lowTenureHint || thinCohortHint) {
+        const hints: string[] = [];
+        if (lowTenureHint) hints.push(`low tenure (${eligibility?.tenureDays}d)`);
+        if (thinCohortHint) hints.push(`thin discipline cohort (${disciplineSize} peers)`);
+        flag = "context_affected";
+        narrative = `Rank-percentile moved ${percentileDelta === null ? "—" : percentileDelta.toFixed(1)} points but scoring \`inputHash\` is unchanged. Visible cohort-context hint: ${hints.join(", ")}. Most likely driven by tenure/cohort context rather than methodology noise.`;
+      } else {
+        flag = "ambiguous_context";
+        narrative = `Rank-percentile moved ${percentileDelta === null ? "—" : percentileDelta.toFixed(1)} points but scoring \`inputHash\` is unchanged. The hash does not cover tenure, discipline, manager/squad, or cohort-composition changes — the shift may come from methodology churn OR unpersisted cohort context. Labelled ambiguous rather than overclaimed as definitive noise.`;
+      }
+    }
+
+    return {
+      emailHash,
+      displayName: resolveDisplayName(emailHash, prior),
+      priorRank,
+      currentRank,
+      rankDelta,
+      priorRankPercentile,
+      currentRankPercentile,
+      percentileDelta,
+      percentileMagnitude,
+      flag,
+      narrative,
+      inputHashChanged,
+      methodologyChanged,
+    };
+  }
+
+  const entries: StabilityEntry[] = [];
+  // Union of hashes from both sides.
+  const allHashes = new Set<string>([
+    ...currentByHash.keys(),
+    ...priorByHash.keys(),
+  ]);
+  for (const emailHash of allHashes) {
+    entries.push(
+      makeEntry(
+        emailHash,
+        priorByHash.get(emailHash),
+        currentByHash.get(emailHash),
+      ),
+    );
+  }
+  entries.sort((a, b) => {
+    const am = a.percentileMagnitude ?? -1;
+    const bm = b.percentileMagnitude ?? -1;
+    if (am !== bm) return bm - am; // biggest unexplained shifts first
+    const ar = a.currentRank ?? a.priorRank ?? Number.POSITIVE_INFINITY;
+    const br = b.currentRank ?? b.priorRank ?? Number.POSITIVE_INFINITY;
+    if (ar !== br) return ar - br;
+    return a.emailHash.localeCompare(b.emailHash);
+  });
+
+  let stableCount = 0;
+  let inputDriftCount = 0;
+  let ambiguousContextCount = 0;
+  let contextAffectedCount = 0;
+  let cohortTransitionCount = 0;
+  let methodologyChangeCount = 0;
+  let unknownCount = 0;
+  let maxAmbiguousPercentileShift: number | null = null;
+  for (const entry of entries) {
+    switch (entry.flag) {
+      case "stable":
+        stableCount += 1;
+        break;
+      case "input_drift":
+        inputDriftCount += 1;
+        break;
+      case "ambiguous_context":
+        ambiguousContextCount += 1;
+        if (
+          entry.percentileMagnitude !== null &&
+          (maxAmbiguousPercentileShift === null ||
+            entry.percentileMagnitude > maxAmbiguousPercentileShift)
+        ) {
+          maxAmbiguousPercentileShift = entry.percentileMagnitude;
+        }
+        break;
+      case "context_affected":
+        contextAffectedCount += 1;
+        if (
+          entry.percentileMagnitude !== null &&
+          (maxAmbiguousPercentileShift === null ||
+            entry.percentileMagnitude > maxAmbiguousPercentileShift)
+        ) {
+          maxAmbiguousPercentileShift = entry.percentileMagnitude;
+        }
+        break;
+      case "cohort_transition":
+        cohortTransitionCount += 1;
+        break;
+      case "methodology_change":
+        methodologyChangeCount += 1;
+        break;
+      case "unknown":
+        unknownCount += 1;
+        break;
+    }
+  }
+
+  const comparableCohortSize = methodologyChanged
+    ? 0
+    : stableCount + inputDriftCount + ambiguousContextCount + contextAffectedCount;
+  const ambiguousCohortFraction =
+    comparableCohortSize === 0
+      ? null
+      : (ambiguousContextCount + contextAffectedCount) /
+        Math.max(comparableCohortSize, 1);
+
+  const withinTolerance =
+    !methodologyChanged &&
+    comparableCohortSize > 0 &&
+    (ambiguousCohortFraction === null ||
+      ambiguousCohortFraction <= ambiguousCohortTolerance) &&
+    (maxAmbiguousPercentileShift === null ||
+      maxAmbiguousPercentileShift <= percentileThreshold ||
+      // Tolerate `context_affected` shifts over the threshold when the
+      // ambiguous-cohort fraction itself stays inside tolerance — the hint
+      // has visible evidence that it is not methodology noise. Pure
+      // `ambiguous_context` shifts above the threshold always fail.
+      ambiguousContextCount === 0);
+
+  const notes: string[] = [];
+  if (methodologyChanged) {
+    notes.push(
+      `Methodology version changed since prior snapshot (v${priorMethodologyVersion} → v${inputs.currentMethodologyVersion}). Every comparable engineer is flagged \`methodology_change\` and \`withinTolerance\` is forced to false — a like-for-like stability check requires two consecutive snapshots at the same methodology version.`,
+    );
+  } else {
+    notes.push(
+      `Prior snapshot: v${priorMethodologyVersion} on ${priorSnapshotDate}, ${gapDays} days before the current snapshot (${inputs.currentSnapshotDate}).`,
+    );
+    if (comparableCohortSize === 0) {
+      notes.push(
+        "No engineers are ranked in both snapshots under the current methodology — stability cannot be evaluated until the comparable cohort is non-empty.",
+      );
+    } else {
+      notes.push(
+        `Comparable cohort: ${comparableCohortSize}. Ambiguous share: ${((ambiguousCohortFraction ?? 0) * 100).toFixed(1)}% (tolerance ${(ambiguousCohortTolerance * 100).toFixed(0)}%). Max ambiguous shift: ${maxAmbiguousPercentileShift === null ? "—" : `${maxAmbiguousPercentileShift.toFixed(1)}pp`} (threshold ${percentileThreshold}pp).`,
+      );
+    }
+  }
+
+  return {
+    status: methodologyChanged ? "methodology_changed" : "ok",
+    contract,
+    currentSnapshot,
+    priorSnapshot,
+    priorSnapshotGapDays: gapDays,
+    minGapDays,
+    percentileThreshold,
+    ambiguousCohortTolerance,
+    methodologyChanged,
+    entries,
+    comparableCohortSize,
+    stableCount,
+    inputDriftCount,
+    ambiguousContextCount,
+    contextAffectedCount,
+    cohortTransitionCount,
+    methodologyChangeCount,
+    unknownCount,
+    maxAmbiguousPercentileShift,
+    ambiguousCohortFraction,
+    withinTolerance,
+    adversarialQuestions: RANKING_STABILITY_ADVERSARIAL_QUESTIONS,
+    notes,
+    limitations: [...STABILITY_BASE_LIMITATIONS],
+  };
+}
+
 /**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
@@ -4390,8 +5006,9 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub are implemented. The stability check is the only pending methodology milestone — the composite is an evidence rank, not a final adjudication until it lands.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub, and the stability check are all implemented. The composite remains an evidence rank: workflow termination additionally requires two consecutive cycles with stability within tolerance at the same methodology version.",
   "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers GitHub activity, SHAP impact, and squad delivery context — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
+  "Stability check cannot compute a like-for-like result across a methodology-version change. A single cycle within tolerance is necessary but not sufficient for workflow termination — two consecutive cycles at the same methodology version below the ambiguous-cohort tolerance are required.",
   "Swarmia DORA is scored squad-delivery context — team-level signals (review rate, cycle time, time-to-first-review) enter lens C but are down-weighted via the composite-median cap to a ~7.5–10% effective share per signal. They describe teams, not individuals, and must not be read as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -4843,7 +5460,7 @@ function buildManagerCalibrationSummary(
     managersWithDirectReports,
     directReportLinks,
     engineersWithMappedManager,
-    note: "Manager-calibration structure is present on every engineer's attribution drilldown (status: not_requested, manager email hash, direct-report list). The feedback loop — managers confirming/disputing their directs' positions — is outstanding work bundled into the stability-check milestone.",
+    note: "Manager-calibration structure is present on every engineer's attribution drilldown (status: not_requested, manager email hash, direct-report list). The feedback loop — managers confirming/disputing their directs' positions — is the remaining manager-calibration work; it sits downstream of M24 stability and does not block the stability check itself.",
   };
 }
 
@@ -5104,10 +5721,12 @@ export function buildRankingSnapshotRows(
  *
  * Status stays `methodology_pending` even though the composite, confidence
  * bands, per-engineer attribution, ranking snapshot persistence, movers,
- * and the methodology panel / anti-gaming audit / freshness badges /
- * manager-calibration stub are all live — the stability check is the
- * remaining milestone that must land before the methodology is defensible
- * enough to advertise as `ready`.
+ * the methodology panel / anti-gaming audit / freshness badges /
+ * manager-calibration stub, and the stability check are all live —
+ * advertising the snapshot as `ready` additionally requires two
+ * consecutive in-tolerance stability cycles at the same methodology
+ * version, which is a workflow-termination decision rather than a
+ * single-run observation.
  */
 export function buildRankingSnapshot(
   inputs: EligibilityInputs,
@@ -5163,6 +5782,15 @@ export function buildRankingSnapshot(
     priorRows: inputs.priorSnapshotRows,
     minGapDays: inputs.moversMinGapDays,
     topN: inputs.moversTopN,
+  });
+  const stability = buildStability({
+    currentSnapshotDate: toSnapshotDate(now),
+    currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+    composite,
+    eligibilityEntries: entries,
+    signals: inputs.signals,
+    priorRows: inputs.priorSnapshotRows,
+    minGapDays: inputs.moversMinGapDays,
   });
   const methodology = buildMethodology({
     composite,
@@ -5228,6 +5856,7 @@ export function buildRankingSnapshot(
     confidence,
     attribution,
     movers,
+    stability,
     methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
@@ -5283,6 +5912,12 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     confidence,
     eligibilityEntries: entries,
   });
+  const stability = buildStability({
+    currentSnapshotDate: toSnapshotDate(now),
+    currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+    composite,
+    eligibilityEntries: entries,
+  });
   const audit = buildSignalAudit({
     entries,
     windowDays: RANKING_SIGNAL_WINDOW_DAYS,
@@ -5324,6 +5959,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     confidence,
     attribution,
     movers,
+    stability,
     methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),

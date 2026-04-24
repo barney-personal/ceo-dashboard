@@ -26,6 +26,9 @@ import {
   type NormalisationBundle,
   type RankingFreshnessBadge,
   type SignalAudit,
+  type StabilityBundle,
+  type StabilityEntry,
+  type StabilityFlag,
 } from "@/lib/data/engineering-ranking";
 
 function formatDate(iso: string): string {
@@ -2164,6 +2167,222 @@ function MoversSection({ movers }: { movers: MoversBundle }) {
   );
 }
 
+const STABILITY_FLAG_LABEL: Record<StabilityFlag, string> = {
+  stable: "Stable",
+  input_drift: "Input drift",
+  ambiguous_context: "Ambiguous / context",
+  context_affected: "Context-affected",
+  cohort_transition: "Cohort transition",
+  methodology_change: "Methodology change",
+  unknown: "Unknown",
+};
+
+const STABILITY_FLAG_TONE: Record<StabilityFlag, string> = {
+  stable: "border-primary/40 bg-primary/10 text-primary",
+  input_drift: "border-primary/40 bg-primary/5 text-primary",
+  ambiguous_context: "border-warning/40 bg-warning/10 text-warning",
+  context_affected:
+    "border-muted-foreground/30 bg-muted/50 text-foreground",
+  cohort_transition:
+    "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
+  methodology_change: "border-warning/40 bg-warning/5 text-warning",
+  unknown: "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
+};
+
+function formatStabilityRank(value: number | null): string {
+  return value === null ? "—" : `#${value}`;
+}
+
+function formatStabilityPercentileDelta(value: number | null): string {
+  if (value === null) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "±";
+  return `${sign}${Math.abs(value).toFixed(1)}pp`;
+}
+
+function StabilitySection({ stability }: { stability: StabilityBundle }) {
+  const statusLabel =
+    stability.status === "ok"
+      ? stability.withinTolerance
+        ? "Within tolerance"
+        : "Out of tolerance"
+      : stability.status === "methodology_changed"
+        ? "Methodology changed since prior snapshot"
+        : stability.status === "insufficient_gap"
+          ? "Prior snapshot too recent"
+          : "No prior snapshot yet";
+  const statusTone =
+    stability.status === "ok" && stability.withinTolerance
+      ? "border-primary/40 bg-primary/10 text-primary"
+      : "border-warning/40 bg-warning/10 text-warning";
+
+  const flagged = stability.entries.filter(
+    (e) =>
+      e.flag === "ambiguous_context" ||
+      e.flag === "context_affected" ||
+      e.flag === "input_drift" ||
+      e.flag === "methodology_change",
+  );
+
+  const ambiguousPct =
+    stability.ambiguousCohortFraction === null
+      ? null
+      : (stability.ambiguousCohortFraction * 100).toFixed(1);
+
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Stability check vs the prior comparable snapshot
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+            {stability.contract}
+          </p>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] ${statusTone}`}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Comparable cohort
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {stability.comparableCohortSize} engineer
+            {stability.comparableCohortSize === 1 ? "" : "s"}
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Ambiguous share
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {ambiguousPct === null ? "—" : `${ambiguousPct}%`}
+            <span className="text-muted-foreground">
+              {" "}
+              (max{" "}
+              {(stability.ambiguousCohortTolerance * 100).toFixed(0)}%)
+            </span>
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Max ambiguous shift
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {stability.maxAmbiguousPercentileShift === null
+              ? "—"
+              : `${stability.maxAmbiguousPercentileShift.toFixed(1)}pp`}
+            <span className="text-muted-foreground">
+              {" "}
+              (threshold {stability.percentileThreshold}pp)
+            </span>
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Classification
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {stability.stableCount} stable · {stability.inputDriftCount} drift ·{" "}
+            {stability.ambiguousContextCount + stability.contextAffectedCount}{" "}
+            ambig · {stability.cohortTransitionCount} transition
+          </dd>
+        </div>
+      </dl>
+
+      {stability.notes.length > 0 && (
+        <ul className="mt-4 space-y-1 text-xs text-muted-foreground">
+          {stability.notes.map((n) => (
+            <li key={n}>· {n}</li>
+          ))}
+        </ul>
+      )}
+
+      {flagged.length === 0 ? (
+        <div className="mt-4 rounded-md border border-dashed border-border/60 bg-background/40 p-4 text-xs italic text-muted-foreground">
+          {stability.status === "ok"
+            ? "No engineers flagged for stability review this cycle — every comparable engineer is either stable or a cohort transition."
+            : "Stability table waits for a comparable prior snapshot under the same methodology version."}
+        </div>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/60 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Engineer</th>
+                <th className="py-2 pr-3 font-medium">Prior rank</th>
+                <th className="py-2 pr-3 font-medium">Current rank</th>
+                <th className="py-2 pr-3 font-medium">Δ percentile</th>
+                <th className="py-2 pr-3 font-medium">Flag</th>
+                <th className="py-2 pr-3 font-medium">Narrative</th>
+              </tr>
+            </thead>
+            <tbody>
+              {flagged.map((row) => (
+                <StabilityRow key={row.emailHash} row={row} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Reviewer adversarial questions (answered in each cycle worklog)
+        </h4>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+          {stability.adversarialQuestions.map((q) => (
+            <li key={q}>{q}</li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Stability-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {stability.limitations.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function StabilityRow({ row }: { row: StabilityEntry }) {
+  return (
+    <tr className="border-b border-border/30 align-top">
+      <td className="py-2 pr-3 text-foreground">{row.displayName}</td>
+      <td className="py-2 pr-3 text-muted-foreground">
+        {formatStabilityRank(row.priorRank)}
+      </td>
+      <td className="py-2 pr-3 text-foreground/80">
+        {formatStabilityRank(row.currentRank)}
+      </td>
+      <td className="py-2 pr-3 text-muted-foreground">
+        {formatStabilityPercentileDelta(row.percentileDelta)}
+      </td>
+      <td className="py-2 pr-3">
+        <span
+          className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] ${STABILITY_FLAG_TONE[row.flag]}`}
+        >
+          {STABILITY_FLAG_LABEL[row.flag]}
+        </span>
+      </td>
+      <td className="py-2 pr-3 text-[11px] italic text-muted-foreground">
+        {row.narrative}
+      </td>
+    </tr>
+  );
+}
+
 const DOWNWEIGHT_LABEL: Record<AntiGamingRow["downweightStatus"], string> = {
   full_weight: "Full weight",
   down_weighted: "Down-weighted",
@@ -2648,12 +2867,15 @@ export function RankingScaffold({
               written to the database), the movers view (risers /
               fallers / cohort entrants / cohort exits with conservative
               cause narration against the most recent comparable prior
-              snapshot), and the methodology panel (signal weights,
+              snapshot), the methodology panel (signal weights,
               anti-gaming audit for every signal, per-source freshness
               badges, and a manager-calibration stub ready for a later
-              feedback loop) are all live. The stability check is still
-              pending — so the rank is an evidence composite, not a final
-              adjudication.
+              feedback loop), and the stability check (ambiguous-cohort
+              fraction, `withinTolerance` boolean, reviewer adversarial
+              questions surfaced on the page) are all live. The rank is an
+              evidence composite: graduating to a final adjudication
+              additionally requires two consecutive cycles of the stability
+              check within tolerance at the same methodology version.
             </p>
           </div>
         </div>
@@ -2671,6 +2893,8 @@ export function RankingScaffold({
       <AttributionSection attribution={snapshot.attribution} />
 
       <MoversSection movers={snapshot.movers} />
+
+      <StabilitySection stability={snapshot.stability} />
 
       <CoverageSection snapshot={snapshot} />
 
@@ -2738,8 +2962,8 @@ export function RankingScaffold({
             {snapshot.composite.minPresentMethods} present methods. Live
             GitHub, impact-model, and Swarmia data must be populating the
             signal rows before the composite can produce a rank. The
-            anti-gaming audit and the stability check remain the
-            outstanding work.
+            stability check is live but reports `no_prior_snapshot` until
+            a second ranking run has persisted.
           </p>
         </section>
       ) : null}

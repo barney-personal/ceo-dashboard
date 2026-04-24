@@ -40,13 +40,19 @@ import {
   buildNormalisation,
   buildRankingSnapshot,
   buildSignalAudit,
+  buildStability,
   buildMethodology,
   buildSourceNotes,
+  computeRankingInputHash,
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
   RANKING_ANTI_GAMING_ROWS,
   RANKING_RUBRIC_VERSION,
+  RANKING_STABILITY_ADVERSARIAL_QUESTIONS,
+  RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE,
+  RANKING_STABILITY_MIN_GAP_DAYS,
+  RANKING_STABILITY_PERCENTILE_THRESHOLD,
   type AttributionContribution,
   type CompositeBundle,
   type CompositeMethod,
@@ -67,6 +73,9 @@ import {
   type MoversBundle,
   type PerEngineerSignalRow,
   type RankingSnapshotRow,
+  type StabilityBundle,
+  type StabilityEntry,
+  type StabilityFlag,
 } from "../engineering-ranking";
 
 describe("getEngineeringRanking (M2 signal availability)", () => {
@@ -6034,3 +6043,704 @@ describe("M23 scored squad-delivery copy truthfulness", () => {
     }
   });
 });
+
+describe("M24 stability check", () => {
+  function compositeEntry(
+    overrides: Partial<EngineerCompositeEntry> & {
+      emailHash: string;
+      displayName: string;
+      rank: number | null;
+      composite: number | null;
+    },
+  ): EngineerCompositeEntry {
+    return {
+      discipline: "BE",
+      levelLabel: "L4",
+      output: overrides.composite,
+      impact: overrides.composite,
+      delivery: overrides.composite,
+      adjusted: overrides.composite,
+      presentMethodCount: 4,
+      compositePercentile: overrides.composite,
+      methodsSummary: "median of 4 methods",
+      ...overrides,
+    };
+  }
+
+  function makeComposite(
+    entries: EngineerCompositeEntry[],
+  ): CompositeBundle {
+    const scored = entries
+      .filter((e) => e.rank !== null)
+      .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+    return {
+      contract: "",
+      methods: ["output", "impact", "delivery", "adjusted"],
+      minPresentMethods: 2,
+      maxSingleSignalEffectiveWeight: 0.3,
+      dominanceCorrelationThreshold: 0.75,
+      entries,
+      topN: scored,
+      effectiveSignalWeights: [],
+      leaveOneOut: [],
+      finalRankCorrelations: [],
+      dominanceWarnings: [],
+      dominanceBlocked: false,
+      limitations: [],
+    };
+  }
+
+  function eligibilityRow(
+    overrides: Partial<EligibilityEntry> & {
+      emailHash: string;
+      displayName: string;
+    },
+  ): EligibilityEntry {
+    return {
+      email: `${overrides.displayName.toLowerCase().replace(/\s+/g, ".")}@meetcleo.com`,
+      githubLogin: null,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: null,
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: null,
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function priorRow(
+    overrides: Partial<RankingSnapshotRow> & {
+      emailHash: string;
+      rank: number | null;
+      compositeScore: number | null;
+    },
+  ): RankingSnapshotRow {
+    return {
+      snapshotDate: "2026-04-01",
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+      signalWindowStart: new Date("2025-10-03T00:00:00Z"),
+      signalWindowEnd: new Date("2026-04-01T00:00:00Z"),
+      eligibilityStatus: "competitive",
+      adjustedPercentile: null,
+      rawPercentile: null,
+      methodA: overrides.compositeScore,
+      methodB: overrides.compositeScore,
+      methodC: overrides.compositeScore,
+      confidenceLow: null,
+      confidenceHigh: null,
+      inputHash: null,
+      metadata: {
+        presentMethodCount: 4,
+        dominanceBlocked: false,
+        dominanceRiskApplied: false,
+        confidenceWidth: null,
+        inTieGroup: false,
+      },
+      ...overrides,
+    };
+  }
+
+  function signalRowStable(emailHash: string): PerEngineerSignalRow {
+    return {
+      emailHash,
+      prCount: 10,
+      commitCount: 30,
+      additions: 500,
+      deletions: 100,
+      shapPredicted: 80_000,
+      shapActual: 85_000,
+      shapResidual: 5_000,
+      aiTokens: null,
+      aiSpend: null,
+      squadCycleTimeHours: 50,
+      squadReviewRatePercent: 70,
+      squadTimeToFirstReviewHours: 10,
+      squadPrsInProgress: 3,
+    };
+  }
+
+  it("exposes stability constants and adversarial questions with sensible defaults", () => {
+    expect(RANKING_STABILITY_PERCENTILE_THRESHOLD).toBeGreaterThan(0);
+    expect(RANKING_STABILITY_PERCENTILE_THRESHOLD).toBeLessThanOrEqual(15);
+    expect(RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE).toBeGreaterThan(0);
+    expect(RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE).toBeLessThanOrEqual(1);
+    expect(RANKING_STABILITY_MIN_GAP_DAYS).toBeGreaterThanOrEqual(1);
+    expect(RANKING_STABILITY_ADVERSARIAL_QUESTIONS.length).toBeGreaterThanOrEqual(3);
+    // One of the adversarial questions must specifically ask about the >30%
+    // effective-weight signal — this is the log-impact trade-off the page
+    // explicitly flags.
+    const joined = RANKING_STABILITY_ADVERSARIAL_QUESTIONS.join(" ").toLowerCase();
+    expect(joined).toMatch(/30/);
+    expect(joined).toMatch(/top[- ]10|intuition/);
+    expect(joined).toMatch(/confidence band|tolerance|gap/);
+  });
+
+  it("returns no_prior_snapshot with withinTolerance=false when no prior slice is supplied", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({
+        emailHash: hashA,
+        displayName: "Alpha",
+        rank: 1,
+        composite: 90,
+      }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+    });
+
+    expect(bundle.status).toBe("no_prior_snapshot");
+    expect(bundle.priorSnapshot).toBeNull();
+    expect(bundle.priorSnapshotGapDays).toBeNull();
+    expect(bundle.entries).toHaveLength(0);
+    expect(bundle.comparableCohortSize).toBe(0);
+    expect(bundle.withinTolerance).toBe(false);
+    expect(bundle.adversarialQuestions).toBe(RANKING_STABILITY_ADVERSARIAL_QUESTIONS);
+    expect(bundle.notes.join(" ")).toContain("No prior");
+  });
+
+  it("returns insufficient_gap with withinTolerance=false when prior is too recent", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({
+        emailHash: hashA,
+        displayName: "Alpha",
+        rank: 1,
+        composite: 90,
+      }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+    const prior = [
+      priorRow({
+        emailHash: hashA,
+        rank: 1,
+        compositeScore: 90,
+        snapshotDate: "2026-04-23", // 1 day gap — below the default min
+      }),
+    ];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      priorRows: prior,
+    });
+
+    expect(bundle.status).toBe("insufficient_gap");
+    expect(bundle.priorSnapshotGapDays).toBe(1);
+    expect(bundle.withinTolerance).toBe(false);
+    expect(bundle.entries).toHaveLength(0);
+    expect(bundle.notes.join(" ")).toMatch(/too recent|below|refresh jitter/);
+  });
+
+  it("flags every entry methodology_change and withinTolerance=false when methodology versions differ", () => {
+    const hashA = "a".repeat(16);
+    const hashB = "b".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+      compositeEntry({ emailHash: hashB, displayName: "Bravo", rank: 2, composite: 70 }),
+    ]);
+    const eligibility = composite.entries.map((c) =>
+      eligibilityRow({ emailHash: c.emailHash, displayName: c.displayName }),
+    );
+    const prior: RankingSnapshotRow[] = [
+      priorRow({ emailHash: hashA, rank: 1, compositeScore: 90, methodologyVersion: "0.9.0-movers" }),
+      priorRow({ emailHash: hashB, rank: 2, compositeScore: 70, methodologyVersion: "0.9.0-movers" }),
+    ];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      priorRows: prior,
+    });
+
+    expect(bundle.status).toBe("methodology_changed");
+    expect(bundle.methodologyChanged).toBe(true);
+    expect(bundle.withinTolerance).toBe(false);
+    for (const entry of bundle.entries) {
+      expect(entry.flag).toBe("methodology_change");
+    }
+    expect(bundle.methodologyChangeCount).toBe(2);
+    expect(bundle.comparableCohortSize).toBe(0);
+    expect(bundle.notes.join(" ")).toMatch(/Methodology version changed/i);
+  });
+
+  it("labels an engineer stable when |percentileDelta| <= threshold", () => {
+    const hashA = "a".repeat(16);
+    const hashB = "b".repeat(16);
+    const hashC = "c".repeat(16);
+    // Prior: A=1, B=2, C=3. Current: A=1, B=2, C=3 (identical positions).
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+      compositeEntry({ emailHash: hashB, displayName: "Bravo", rank: 2, composite: 80 }),
+      compositeEntry({ emailHash: hashC, displayName: "Charlie", rank: 3, composite: 60 }),
+    ]);
+    const eligibility = composite.entries.map((c) =>
+      eligibilityRow({ emailHash: c.emailHash, displayName: c.displayName }),
+    );
+    const signals = composite.entries.map((c) => signalRowStable(c.emailHash));
+    // Prior inputHashes match the current hashes deterministically.
+    const prior: RankingSnapshotRow[] = composite.entries.map((c, i) => {
+      return priorRow({
+        emailHash: c.emailHash,
+        rank: c.rank,
+        compositeScore: c.composite,
+        inputHash: computeRankingInputHashForTest(signals[i]),
+        methodA: c.composite,
+        methodB: c.composite,
+        methodC: c.composite,
+        confidenceLow: null,
+        confidenceHigh: null,
+      });
+    });
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+    });
+
+    expect(bundle.status).toBe("ok");
+    expect(bundle.stableCount).toBe(3);
+    expect(bundle.ambiguousContextCount).toBe(0);
+    expect(bundle.contextAffectedCount).toBe(0);
+    expect(bundle.comparableCohortSize).toBe(3);
+    expect(bundle.withinTolerance).toBe(true);
+    for (const entry of bundle.entries) {
+      expect(entry.flag).toBe("stable");
+      expect(entry.percentileMagnitude).toBeLessThanOrEqual(RANKING_STABILITY_PERCENTILE_THRESHOLD);
+    }
+  });
+
+  it("labels an engineer input_drift when inputHash differs AND percentile moved > threshold", () => {
+    // 10-engineer cohort so a rank swap produces a large percentile delta
+    // well above the 5pp threshold.
+    const entries: EngineerCompositeEntry[] = [];
+    for (let i = 0; i < 10; i++) {
+      const hash = String.fromCharCode(97 + i).repeat(16);
+      entries.push(
+        compositeEntry({
+          emailHash: hash,
+          displayName: `Eng${i + 1}`,
+          rank: i + 1,
+          composite: 100 - i * 10,
+        }),
+      );
+    }
+    const composite = makeComposite(entries);
+    const eligibility = entries.map((c) =>
+      eligibilityRow({ emailHash: c.emailHash, displayName: c.displayName }),
+    );
+    const signals = entries.map((c) => signalRowStable(c.emailHash));
+    // Prior: first engineer was at rank 5, now moved to rank 1 (big jump).
+    const prior: RankingSnapshotRow[] = entries.map((c) =>
+      priorRow({
+        emailHash: c.emailHash,
+        rank: c.emailHash === entries[0].emailHash ? 5 : c.rank,
+        compositeScore: c.composite,
+        inputHash: `prior-${c.emailHash}`, // differs from current
+      }),
+    );
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+    });
+
+    const mover = bundle.entries.find((e) => e.emailHash === entries[0].emailHash);
+    expect(mover?.flag).toBe("input_drift");
+    expect(mover?.inputHashChanged).toBe(true);
+    expect(bundle.inputDriftCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("labels an engineer ambiguous_context when inputHash unchanged but percentile moved > threshold", () => {
+    // 10 engineers; one shifts ranks by 4 positions with identical inputs.
+    const entries: EngineerCompositeEntry[] = [];
+    for (let i = 0; i < 10; i++) {
+      const hash = String.fromCharCode(97 + i).repeat(16);
+      entries.push(
+        compositeEntry({
+          emailHash: hash,
+          displayName: `Eng${i + 1}`,
+          rank: i + 1,
+          composite: 100 - i * 10,
+        }),
+      );
+    }
+    const composite = makeComposite(entries);
+    const eligibility = entries.map((c) =>
+      eligibilityRow({
+        emailHash: c.emailHash,
+        displayName: c.displayName,
+        tenureDays: 800, // well above the low-tenure hint
+      }),
+    );
+    const signals = entries.map((c) => signalRowStable(c.emailHash));
+    // Compute current hashes so we can match them exactly in prior rows.
+    // Mover is entries[0] (rank 1) — was previously rank 5.
+    const prior: RankingSnapshotRow[] = entries.map((c, i) => {
+      const currentInputHash = computeRankingInputHashForTest(signals[i]);
+      const priorRank = c.emailHash === entries[0].emailHash ? 5 : c.rank;
+      return priorRow({
+        emailHash: c.emailHash,
+        rank: priorRank,
+        compositeScore: c.composite,
+        inputHash: currentInputHash, // same hash as current, unchanged inputs
+      });
+    });
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+    });
+
+    const mover = bundle.entries.find((e) => e.emailHash === entries[0].emailHash);
+    expect(mover?.flag).toBe("ambiguous_context");
+    expect(mover?.inputHashChanged).toBe(false);
+    expect(mover?.narrative.toLowerCase()).toMatch(/ambiguous|cohort|tenure|discipline|manager|squad/);
+    expect(mover?.narrative.toLowerCase()).not.toMatch(/methodology noise/);
+    expect(bundle.ambiguousContextCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("labels an engineer context_affected when inputHash unchanged and a cohort hint is visible (low tenure)", () => {
+    const entries: EngineerCompositeEntry[] = [];
+    for (let i = 0; i < 10; i++) {
+      const hash = String.fromCharCode(97 + i).repeat(16);
+      entries.push(
+        compositeEntry({
+          emailHash: hash,
+          displayName: `Eng${i + 1}`,
+          rank: i + 1,
+          composite: 100 - i * 10,
+        }),
+      );
+    }
+    const composite = makeComposite(entries);
+    const eligibility = entries.map((c, i) =>
+      eligibilityRow({
+        emailHash: c.emailHash,
+        displayName: c.displayName,
+        tenureDays: i === 0 ? 120 : 800, // mover has low tenure (<180)
+      }),
+    );
+    const signals = entries.map((c) => signalRowStable(c.emailHash));
+    const prior: RankingSnapshotRow[] = entries.map((c, i) => {
+      const currentInputHash = computeRankingInputHashForTest(signals[i]);
+      const priorRank = c.emailHash === entries[0].emailHash ? 5 : c.rank;
+      return priorRow({
+        emailHash: c.emailHash,
+        rank: priorRank,
+        compositeScore: c.composite,
+        inputHash: currentInputHash,
+      });
+    });
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+    });
+
+    const mover = bundle.entries.find((e) => e.emailHash === entries[0].emailHash);
+    expect(mover?.flag).toBe("context_affected");
+    expect(mover?.narrative.toLowerCase()).toMatch(/tenure|120/);
+    expect(bundle.contextAffectedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("classifies engineers present on only one side as cohort_transition (not as ordinary movement)", () => {
+    const hashA = "a".repeat(16);
+    const hashNew = "n".repeat(16);
+    const hashLeaver = "l".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+      compositeEntry({ emailHash: hashNew, displayName: "NewHire", rank: 2, composite: 50 }),
+    ]);
+    const eligibility = [
+      eligibilityRow({ emailHash: hashA, displayName: "Alpha" }),
+      eligibilityRow({ emailHash: hashNew, displayName: "NewHire", tenureDays: 45 }),
+    ];
+    const prior: RankingSnapshotRow[] = [
+      priorRow({ emailHash: hashA, rank: 1, compositeScore: 90 }),
+      priorRow({ emailHash: hashLeaver, rank: 2, compositeScore: 60 }),
+    ];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      priorRows: prior,
+    });
+
+    expect(bundle.status).toBe("ok");
+    const newEntrant = bundle.entries.find((e) => e.emailHash === hashNew);
+    expect(newEntrant?.flag).toBe("cohort_transition");
+    const leaver = bundle.entries.find((e) => e.emailHash === hashLeaver);
+    expect(leaver?.flag).toBe("cohort_transition");
+    expect(bundle.cohortTransitionCount).toBe(2);
+    // Cohort transitions are excluded from the comparable cohort budget.
+    expect(bundle.comparableCohortSize).toBe(1);
+  });
+
+  it("withinTolerance is false when ambiguous-cohort fraction exceeds tolerance", () => {
+    // 10 engineers, all in the same discipline (> thin cohort), all with
+    // >180d tenure (no low-tenure hint) so moves are pure ambiguous_context
+    // rather than context_affected.
+    const entries: EngineerCompositeEntry[] = [];
+    for (let i = 0; i < 10; i++) {
+      const hash = String.fromCharCode(97 + i).repeat(16);
+      entries.push(
+        compositeEntry({
+          emailHash: hash,
+          displayName: `Eng${i + 1}`,
+          rank: i + 1,
+          composite: 100 - i * 10,
+        }),
+      );
+    }
+    const composite = makeComposite(entries);
+    const eligibility = entries.map((c) =>
+      eligibilityRow({
+        emailHash: c.emailHash,
+        displayName: c.displayName,
+        tenureDays: 800, // no low-tenure hint — stays ambiguous
+        discipline: "BE",
+      }),
+    );
+    const signals = entries.map((c) => signalRowStable(c.emailHash));
+    // Reverse the ranks entirely so every engineer moves by more than the
+    // percentile threshold.
+    const prior: RankingSnapshotRow[] = entries.map((c, i) => {
+      const currentInputHash = computeRankingInputHashForTest(signals[i]);
+      return priorRow({
+        emailHash: c.emailHash,
+        rank: 10 - i,
+        compositeScore: c.composite,
+        inputHash: currentInputHash,
+      });
+    });
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+      ambiguousCohortTolerance: 0.25,
+    });
+
+    expect(
+      bundle.ambiguousContextCount + bundle.contextAffectedCount,
+    ).toBeGreaterThanOrEqual(1);
+    expect(bundle.ambiguousCohortFraction).not.toBeNull();
+    expect(bundle.ambiguousCohortFraction!).toBeGreaterThan(0.25);
+    expect(bundle.withinTolerance).toBe(false);
+  });
+
+  it("unknown flag when inputHash is missing on one side (protects against legacy prior rows)", () => {
+    const entries: EngineerCompositeEntry[] = [];
+    for (let i = 0; i < 10; i++) {
+      const hash = String.fromCharCode(97 + i).repeat(16);
+      entries.push(
+        compositeEntry({
+          emailHash: hash,
+          displayName: `Eng${i + 1}`,
+          rank: i + 1,
+          composite: 100 - i * 10,
+        }),
+      );
+    }
+    const composite = makeComposite(entries);
+    const eligibility = entries.map((c) =>
+      eligibilityRow({ emailHash: c.emailHash, displayName: c.displayName }),
+    );
+    const signals = entries.map((c) => signalRowStable(c.emailHash));
+    // Mover is rank 1, was rank 6 in prior — large shift. But prior inputHash is null.
+    const prior: RankingSnapshotRow[] = entries.map((c) => {
+      const priorRank = c.emailHash === entries[0].emailHash ? 6 : c.rank;
+      return priorRow({
+        emailHash: c.emailHash,
+        rank: priorRank,
+        compositeScore: c.composite,
+        inputHash: null, // legacy: no persisted hash
+      });
+    });
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      signals,
+      priorRows: prior,
+    });
+
+    const mover = bundle.entries.find((e) => e.emailHash === entries[0].emailHash);
+    expect(mover?.flag).toBe("unknown");
+    expect(mover?.inputHashChanged).toBeNull();
+    expect(bundle.unknownCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("persists adversarial questions on every bundle regardless of status", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+
+    const noPrior = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+    });
+    const tooRecent = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      priorRows: [priorRow({ emailHash: hashA, rank: 1, compositeScore: 90, snapshotDate: "2026-04-23" })],
+    });
+    expect(noPrior.adversarialQuestions).toEqual(RANKING_STABILITY_ADVERSARIAL_QUESTIONS);
+    expect(tooRecent.adversarialQuestions).toEqual(RANKING_STABILITY_ADVERSARIAL_QUESTIONS);
+  });
+
+  it("contract narrative names the percentile threshold and min gap so the page is self-describing", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+    });
+    expect(bundle.contract).toMatch(
+      new RegExp(`${RANKING_STABILITY_PERCENTILE_THRESHOLD} percentile`),
+    );
+    expect(bundle.contract).toMatch(
+      new RegExp(`${RANKING_STABILITY_MIN_GAP_DAYS} calendar days`),
+    );
+    expect(bundle.contract.toLowerCase()).toMatch(/ambiguous|context|methodology/);
+    expect(bundle.contract.toLowerCase()).toMatch(/two consecutive cycles/);
+  });
+
+  it("buildRankingSnapshot attaches the stability bundle, and it inherits snapshotDate/methodologyVersion from the snapshot", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    expect(snapshot.stability).toBeDefined();
+    expect(snapshot.stability.currentSnapshot.snapshotDate).toBe("2026-04-24");
+    expect(snapshot.stability.currentSnapshot.methodologyVersion).toBe(
+      RANKING_METHODOLOGY_VERSION,
+    );
+    expect(snapshot.stability.status).toBe("no_prior_snapshot");
+    expect(snapshot.stability.adversarialQuestions).toBe(
+      RANKING_STABILITY_ADVERSARIAL_QUESTIONS,
+    );
+  });
+
+  it("stability and movers bundles honour the same minGap so the two comparability contracts stay in lock-step", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+    const prior = [
+      priorRow({
+        emailHash: hashA,
+        rank: 1,
+        compositeScore: 90,
+        snapshotDate: "2026-04-22", // 2 day gap — below default min of 6
+      }),
+    ];
+
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+      priorRows: prior,
+      minGapDays: 3, // override to 3 — now the 2-day gap is still too recent
+    });
+
+    expect(bundle.status).toBe("insufficient_gap");
+    expect(bundle.minGapDays).toBe(3);
+  });
+
+  it("known limitations name stability as live (not pending) and call out the two-consecutive-cycle requirement", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/stability/);
+    expect(joined).not.toMatch(
+      /stability check[^.]*(still pending|only pending methodology milestone)/,
+    );
+    expect(joined).toMatch(/two consecutive cycles/);
+  });
+
+  it("stability-stage limitations name the same-methodology requirement and the hash-scope caveat", () => {
+    const hashA = "a".repeat(16);
+    const composite = makeComposite([
+      compositeEntry({ emailHash: hashA, displayName: "Alpha", rank: 1, composite: 90 }),
+    ]);
+    const eligibility = [eligibilityRow({ emailHash: hashA, displayName: "Alpha" })];
+    const bundle = buildStability({
+      currentSnapshotDate: "2026-04-24",
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite,
+      eligibilityEntries: eligibility,
+    });
+    const joined = bundle.limitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/inputhash|input hash/);
+    expect(joined).toMatch(/two consecutive cycles/);
+    expect(joined).toMatch(/methodology/);
+  });
+});
+
+// Helper that seeds a prior snapshot row's `inputHash` with the live
+// `computeRankingInputHash` output for the same signal row — so tests for
+// `ambiguous_context` / `context_affected` / `unknown` can pin the hash
+// on both sides of a diff deterministically.
+function computeRankingInputHashForTest(signal: PerEngineerSignalRow): string {
+  return computeRankingInputHash(signal);
+}
