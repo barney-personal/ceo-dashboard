@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireRole, authErrorResponse } from "@/lib/sync/request-auth";
 import {
-  getEngineeringRankingSnapshot,
+  getEngineeringRankingSnapshotWithSignals,
   listRankingSnapshotSlices,
   persistRankingSnapshot,
   readRankingSnapshot,
@@ -13,8 +13,14 @@ export async function POST(_request: NextRequest) {
   const authError = authErrorResponse(auth);
   if (authError) return authError;
 
-  const snapshot = await getEngineeringRankingSnapshot();
-  const { rowsWritten, snapshotDate } = await persistRankingSnapshot(snapshot);
+  // Must persist with the same signal rows the snapshot was built from so each
+  // persisted row carries a non-null `input_hash`. Passing only the snapshot
+  // would null out the hash and make M18 movers blind to input drift.
+  const { snapshot, signals } =
+    await getEngineeringRankingSnapshotWithSignals();
+  const { rowsWritten, snapshotDate } = await persistRankingSnapshot(snapshot, {
+    signals,
+  });
 
   return NextResponse.json({
     snapshotDate,

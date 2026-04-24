@@ -16,7 +16,7 @@ import {
   githubPrs,
   squads,
 } from "@/lib/db/schema";
-import { and, asc, count, desc, eq, gte, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, sql, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -253,11 +253,20 @@ function buildSignalRows({
 }
 
 /**
- * Build a real ranking snapshot from live data. If any fetch fails, fall
- * back to the empty-eligibility stub — the page still renders and the
- * coverage section makes the degraded state visible.
+ * Build a real ranking snapshot from live data AND return the same
+ * `PerEngineerSignalRow[]` the snapshot was built from. Callers that need to
+ * persist an `input_hash` alongside each row (M16/M17) must use this helper so
+ * the persisted hash aligns with the signals that produced the rank.
+ *
+ * If any fetch fails, returns the empty-eligibility stub and an empty signal
+ * array — the page still renders and the coverage section makes the degraded
+ * state visible, and the POST persistence path writes zero rows rather than
+ * persisting stale identities.
  */
-export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankingSnapshot> {
+export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
+  snapshot: EngineeringRankingSnapshot;
+  signals: PerEngineerSignalRow[];
+}> {
   try {
     const now = new Date();
     const windowStart = new Date(
@@ -288,7 +297,7 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
       now,
     });
 
-    return buildRankingSnapshot({
+    const snapshot = buildRankingSnapshot({
       headcountRows,
       githubMap,
       impactModel: getImpactModel(),
@@ -299,13 +308,27 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
       githubOrg: process.env.GITHUB_ORG ?? null,
     });
+
+    return { snapshot, signals };
   } catch (err) {
     console.warn(
       "[engineering-ranking] preflight fetch failed, serving stub:",
       err,
     );
-    return getEngineeringRanking();
+    return { snapshot: await getEngineeringRanking(), signals: [] };
   }
+}
+
+/**
+ * Convenience wrapper for callers (the ranking page server component) that
+ * only need the snapshot. Delegates to
+ * `getEngineeringRankingSnapshotWithSignals` so the snapshot and signals stay
+ * in lockstep; persistence callers must use the `WithSignals` variant
+ * directly so the per-engineer `input_hash` can be populated.
+ */
+export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankingSnapshot> {
+  const { snapshot } = await getEngineeringRankingSnapshotWithSignals();
+  return snapshot;
 }
 
 function numericString(value: number | null): string | null {
@@ -353,6 +376,7 @@ export async function persistRankingSnapshot(
     };
   }
 
+  const generatedAt = new Date();
   const values = rows.map((row) => ({
     snapshotDate: row.snapshotDate,
     methodologyVersion: row.methodologyVersion,
@@ -371,8 +395,13 @@ export async function persistRankingSnapshot(
     confidenceHigh: numericString(row.confidenceHigh),
     inputHash: row.inputHash,
     metadata: row.metadata,
+    generatedAt,
   }));
 
+  // ON CONFLICT DO UPDATE must pull from PostgreSQL's `EXCLUDED` pseudo-row
+  // (the incoming values), not from the existing row in the target table. A
+  // same-day refresh after new GitHub / impact-model / squad inputs must
+  // replace rank, scores, confidence, input_hash, metadata, and generated_at.
   await db
     .insert(engineeringRankingSnapshots)
     .values(values)
@@ -383,21 +412,21 @@ export async function persistRankingSnapshot(
         engineeringRankingSnapshots.emailHash,
       ],
       set: {
-        signalWindowStart: engineeringRankingSnapshots.signalWindowStart,
-        signalWindowEnd: engineeringRankingSnapshots.signalWindowEnd,
-        eligibilityStatus: engineeringRankingSnapshots.eligibilityStatus,
-        rank: engineeringRankingSnapshots.rank,
-        compositeScore: engineeringRankingSnapshots.compositeScore,
-        adjustedPercentile: engineeringRankingSnapshots.adjustedPercentile,
-        rawPercentile: engineeringRankingSnapshots.rawPercentile,
-        methodA: engineeringRankingSnapshots.methodA,
-        methodB: engineeringRankingSnapshots.methodB,
-        methodC: engineeringRankingSnapshots.methodC,
-        confidenceLow: engineeringRankingSnapshots.confidenceLow,
-        confidenceHigh: engineeringRankingSnapshots.confidenceHigh,
-        inputHash: engineeringRankingSnapshots.inputHash,
-        metadata: engineeringRankingSnapshots.metadata,
-        generatedAt: engineeringRankingSnapshots.generatedAt,
+        signalWindowStart: sql`excluded.signal_window_start`,
+        signalWindowEnd: sql`excluded.signal_window_end`,
+        eligibilityStatus: sql`excluded.eligibility_status`,
+        rank: sql`excluded.rank`,
+        compositeScore: sql`excluded.composite_score`,
+        adjustedPercentile: sql`excluded.adjusted_percentile`,
+        rawPercentile: sql`excluded.raw_percentile`,
+        methodA: sql`excluded.method_a`,
+        methodB: sql`excluded.method_b`,
+        methodC: sql`excluded.method_c`,
+        confidenceLow: sql`excluded.confidence_low`,
+        confidenceHigh: sql`excluded.confidence_high`,
+        inputHash: sql`excluded.input_hash`,
+        metadata: sql`excluded.metadata`,
+        generatedAt: sql`excluded.generated_at`,
       },
     });
 
