@@ -9,6 +9,7 @@ import {
   Grid3x3,
   X,
 } from "lucide-react";
+import { SLIDE_PREVIEWS, MOVE_SLIDES } from "./slide-data";
 
 type SlideTheme = "light" | "dark";
 
@@ -436,7 +437,7 @@ function OverviewGrid({
                     style={{ fontFamily: "var(--font-display)" }}
                   >
                     <span className="line-clamp-3 text-base italic leading-tight">
-                      {SLIDE_PREVIEW[s.id]}
+                      {SLIDE_PREVIEWS[s.id]}
                     </span>
                   </div>
                 </div>
@@ -448,26 +449,6 @@ function OverviewGrid({
     </div>
   );
 }
-
-// ------- Slide preview map (used in overview grid) ---------------------
-
-const SLIDE_PREVIEW: Record<string, string> = {
-  cover: "Cleo.",
-  mission: "To change the world’s relationship with money.",
-  vision: "An AI assistant between people and their money.",
-  target: "IPO. Within five years.",
-  market: "TAM · SAM · SOM",
-  users: "Who uses Cleo today.",
-  crux: "By 2026, we exhaust our core audience.",
-  "strategy-core": "Build a financial AI assistant.",
-  "move-1": "Break the high-cost credit trap.",
-  "move-2": "Save users money on recurring expenses.",
-  "move-3": "Win on data.",
-  "move-4": "Expand beyond the US.",
-  flywheel: "The compounding loop.",
-  "wont-do": "What we will not do.",
-  closing: "The loop starts now.",
-};
 
 // ------- Slides ---------------------------------------------------------
 
@@ -1700,81 +1681,20 @@ const SLIDES: SlideDef[] = [
     theme: "light",
     render: () => <StrategyCoreSlide />,
   },
-  {
-    id: "move-1",
-    label: "Move 01 · Credit",
+  ...MOVE_SLIDES.map<SlideDef>((m) => ({
+    id: m.id,
+    label: m.label,
     theme: "light",
     render: () => (
       <MoveSlide
-        n={1}
-        sectionNumber="08"
-        title="Break the high-cost credit trap."
-        principle="Help users break the credit trap with a suite of affordable products and guided support across the cycle — driving scale and profitability via retention and cross-selling."
-        focusAreas={[
-          "Build a product suite that addresses additional stages in the debt cycle.",
-          "Improve product economics to offer competitive pricing at scale.",
-          "Use AI to drive behavioural change through credit guidance.",
-          "Optimise for credit-suite-level success and retention.",
-        ]}
+        n={m.n}
+        sectionNumber={m.sectionNumber}
+        title={m.title}
+        principle={m.principle}
+        focusAreas={m.focusAreas}
       />
     ),
-  },
-  {
-    id: "move-2",
-    label: "Move 02 · Recurring",
-    theme: "light",
-    render: () => (
-      <MoveSlide
-        n={2}
-        sectionNumber="09"
-        title="Save users money on recurring expenses."
-        principle="Help users reduce recurring expenses and free up cashflow — using AI to spot savings opportunities and take action: cancel, switch, or optimise."
-        focusAreas={[
-          "Cut major expenses via bundling services directly.",
-          "Transform cashflow via consolidated payments and credit.",
-          "Save money automatically across the long-tail via affiliate offers and negotiation.",
-        ]}
-      />
-    ),
-  },
-  {
-    id: "move-3",
-    label: "Move 03 · Data",
-    theme: "light",
-    render: () => (
-      <MoveSlide
-        n={3}
-        sectionNumber="10"
-        title="Win on data."
-        principle="Use data to make the AI smarter every day — the flywheel that sharpens recommendations and decisions, boosts trust, and deepens engagement."
-        focusAreas={[
-          "Understand each user’s financial life in depth.",
-          "Prioritise data accuracy and quality.",
-          "Provide universal data accessibility across the platform.",
-        ]}
-      />
-    ),
-  },
-  {
-    id: "move-4",
-    label: "Move 04 · Geo",
-    theme: "light",
-    render: () => (
-      <MoveSlide
-        n={4}
-        sectionNumber="11"
-        title="Expand beyond the US."
-        principle="Bring Cleo to more lives by expanding into geographies where we can deliver fast value — phased, scalable, and locally informed."
-        focusAreas={[
-          "Start in markets most similar to the U.S.",
-          "Dual-track rollout: chat & EWA.",
-          "Modularise tech to enable repeatable launches.",
-          "Operate within regulations, in close contact with regulators.",
-          "Ramp paid growth only once metrics validate readiness.",
-        ]}
-      />
-    ),
-  },
+  })),
   {
     id: "flywheel",
     label: "The flywheel",
