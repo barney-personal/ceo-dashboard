@@ -11,6 +11,11 @@ interface ClerkOauthAccessToken {
   expiresAt?: number | null;
 }
 
+type GetUserOauthAccessTokenFn = (
+  userId: string,
+  provider: string
+) => Promise<{ data: ClerkOauthAccessToken[] }>;
+
 function hasCalendarScope(token: ClerkOauthAccessToken): boolean {
   return Array.isArray(token.scopes)
     ? token.scopes.includes(GOOGLE_CALENDAR_READONLY_SCOPE)
@@ -49,13 +54,12 @@ export async function getUserGoogleAccessToken(
 ): Promise<string | null> {
   try {
     const client = await clerkClient();
+    const getUserOauthAccessToken =
+      client.users.getUserOauthAccessToken as unknown as GetUserOauthAccessTokenFn;
 
     for (const provider of GOOGLE_OAUTH_PROVIDERS) {
       try {
-        const response = await client.users.getUserOauthAccessToken(
-          userId,
-          provider
-        );
+        const response = await getUserOauthAccessToken(userId, provider);
         const token = pickBestGoogleToken(
           response.data as ClerkOauthAccessToken[]
         );
