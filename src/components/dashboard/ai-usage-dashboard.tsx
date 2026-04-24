@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { StackedAreaChart } from "@/components/charts/stacked-area-chart";
 import { SmallMultiplesTimeSeries } from "@/components/charts/small-multiples-time-series";
 import { Sparkline } from "@/components/charts/sparkline";
@@ -733,6 +733,23 @@ function MonthlyModelMixChart({
 }) {
   const [mode, setMode] = useState<"absolute" | "share">("share");
 
+  interface HoverState {
+    monthStart: string;
+    modelKey: string;
+    modelName: string;
+    category: string;
+    cost: number;
+    sharePct: number;
+    momDeltaPct: number | null;
+    color: string;
+    // Pixel offset within the chart-area container so the tooltip lands
+    // near the cursor without stealing pointer events.
+    x: number;
+    y: number;
+  }
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const chartAreaRef = useRef<HTMLDivElement>(null);
+
   const totals = useMemo(() => {
     return mix.rows.map((row) => {
       let total = 0;
@@ -779,23 +796,31 @@ function MonthlyModelMixChart({
         </div>
       </div>
 
-      <div className="overflow-x-auto px-5 py-4">
+      <div
+        ref={chartAreaRef}
+        className="relative overflow-x-auto px-5 py-4"
+      >
         <div
           className="flex items-end gap-2"
           style={{ minWidth: `${Math.max(mix.rows.length * 48, 320)}px` }}
         >
           {mix.rows.map((row, i) => {
             const total = totals[i] ?? 0;
+            const priorTotal = i > 0 ? (totals[i - 1] ?? 0) : 0;
+            const priorRow = i > 0 ? mix.rows[i - 1] : null;
             // Tall bars (~440px) are the point: with ~13 models in the
             // legend, a 220px stack crushes small-share segments into
             // unreadable slivers. A taller y-axis gives each band room.
             const barHeightPx = 440;
             const scale = mode === "share" ? 1 : total / maxTotal;
             const isPartial = row.monthStart === currentMonthStart;
+            const isHoveredMonth = hover?.monthStart === row.monthStart;
             return (
               <div
                 key={row.monthStart}
-                className="flex flex-1 min-w-[32px] flex-col items-center gap-1"
+                className={`flex flex-1 min-w-[32px] flex-col items-center gap-1 transition-opacity ${
+                  hover && !isHoveredMonth ? "opacity-60" : "opacity-100"
+                }`}
               >
                 <div className="text-[10px] tabular-nums text-muted-foreground/80">
                   {formatCurrencyCompact(total)}
@@ -807,7 +832,6 @@ function MonthlyModelMixChart({
                       : "border-border/40 bg-muted/10"
                   }`}
                   style={{ height: `${barHeightPx}px` }}
-                  title={`${formatMonth(row.monthStart)} · ${formatCurrency(total)}${isPartial ? " (month-to-date)" : ""}`}
                 >
                   <div
                     className="absolute bottom-0 left-0 right-0 flex flex-col-reverse"
@@ -824,15 +848,52 @@ function MonthlyModelMixChart({
                         model.category === "other"
                           ? "#9ca3af"
                           : MODEL_PALETTE[mi % MODEL_PALETTE.length];
+                      const priorValue = priorRow
+                        ? Number(priorRow[model.key] ?? 0)
+                        : 0;
+                      const momDeltaPct =
+                        priorValue > 0
+                          ? ((value - priorValue) / priorValue) * 100
+                          : null;
+                      const isHoveredSegment =
+                        hover?.monthStart === row.monthStart &&
+                        hover.modelKey === model.key;
                       return (
                         <div
                           key={model.key}
                           style={{
                             height: `${pct}%`,
                             backgroundColor: color,
-                            opacity: 0.9,
+                            opacity: isHoveredSegment
+                              ? 1
+                              : hover && !isHoveredSegment
+                                ? 0.55
+                                : 0.9,
+                            outline: isHoveredSegment
+                              ? "1.5px solid rgba(17,24,39,0.85)"
+                              : "none",
+                            outlineOffset: "-1px",
+                            cursor: "pointer",
+                            transition: "opacity 120ms",
                           }}
-                          title={`${model.modelName} (${model.category}): ${formatCurrency(value)} (${pct.toFixed(1)}%)`}
+                          onMouseMove={(e) => {
+                            const rect =
+                              chartAreaRef.current?.getBoundingClientRect();
+                            if (!rect) return;
+                            setHover({
+                              monthStart: row.monthStart,
+                              modelKey: model.key,
+                              modelName: model.modelName,
+                              category: model.category,
+                              cost: value,
+                              sharePct: pct,
+                              momDeltaPct,
+                              color,
+                              x: e.clientX - rect.left,
+                              y: e.clientY - rect.top,
+                            });
+                          }}
+                          onMouseLeave={() => setHover(null)}
                         />
                       );
                     })}
@@ -847,11 +908,74 @@ function MonthlyModelMixChart({
                 >
                   {formatMonth(row.monthStart)}
                   {isPartial && " · MTD"}
+                  {isHoveredMonth && priorTotal > 0 && (
+                    <span className="ml-1 text-muted-foreground/70 tabular-nums">
+                      · MoM{" "}
+                      {(((total - priorTotal) / priorTotal) * 100 >= 0
+                        ? "+"
+                        : "") +
+                        (((total - priorTotal) / priorTotal) * 100).toFixed(0)}
+                      %
+                    </span>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
+
+        {hover && (
+          <div
+            className="pointer-events-none absolute z-10 min-w-[180px] rounded-md border border-border/60 bg-card/95 px-3 py-2 text-xs shadow-warm backdrop-blur"
+            style={{
+              left: Math.min(
+                hover.x + 14,
+                (chartAreaRef.current?.clientWidth ?? 0) - 200,
+              ),
+              top: Math.max(hover.y - 48, 8),
+            }}
+            role="tooltip"
+          >
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-sm"
+                style={{ backgroundColor: hover.color }}
+              />
+              <span className="font-medium text-foreground">
+                {hover.modelName}
+              </span>
+              <span className="text-muted-foreground/70">
+                · {hover.category}
+              </span>
+            </div>
+            <div className="mt-1 flex items-baseline gap-2 tabular-nums">
+              <span className="text-base font-display text-foreground">
+                {formatCurrency(hover.cost)}
+              </span>
+              <span className="text-muted-foreground">
+                {hover.sharePct.toFixed(1)}% of {formatMonth(hover.monthStart)}
+              </span>
+            </div>
+            {hover.momDeltaPct != null && (
+              <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                MoM{" "}
+                <span
+                  className={
+                    Math.abs(hover.momDeltaPct) < 3
+                      ? "text-muted-foreground"
+                      : hover.momDeltaPct > 0
+                        ? "text-foreground"
+                        : "text-foreground"
+                  }
+                >
+                  {hover.momDeltaPct > 0 ? "+" : ""}
+                  {hover.momDeltaPct.toFixed(0)}%
+                </span>
+                {" vs prior month"}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <ul className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 px-5 py-3 text-[11px]">
