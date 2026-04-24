@@ -762,15 +762,13 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
 
 function formatChurnResidual(value: number): string {
   const rounded = Math.round(value * 10) / 10;
-  if (Math.abs(rounded) < 0.05) return "In line with similar work (0.0)";
   const sign = rounded > 0 ? "+" : "";
-  const tone =
-    rounded >= 1 ? "Noticeably more"
-    : rounded >= 0.5 ? "Slightly more"
-    : rounded <= -1 ? "Noticeably less"
-    : rounded <= -0.5 ? "Slightly less"
-    : "Close to";
-  return `${tone} than similar work (${sign}${rounded.toFixed(1)})`;
+  const figure = `(${sign}${rounded.toFixed(1)})`;
+  if (rounded >= 1) return `Noticeably more than similar work ${figure}`;
+  if (rounded >= 0.5) return `Slightly more than similar work ${figure}`;
+  if (rounded <= -1) return `Noticeably less than similar work ${figure}`;
+  if (rounded <= -0.5) return `Slightly less than similar work ${figure}`;
+  return `In line with similar work ${figure}`;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
