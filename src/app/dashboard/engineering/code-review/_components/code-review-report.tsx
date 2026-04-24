@@ -173,7 +173,7 @@ function Header({ view }: { view: CodeReviewView }) {
           An LLM reads each merged PR against a shared rubric, blends in
           GitHub review signals, and rolls everything up into a peer-relative
           snapshot. Sparse evidence is pulled toward the middle on purpose, so
-          you'll never get a confident judgement from a thin sample. Think of
+          you&apos;ll never get a confident judgement from a thin sample. Think of
           this as a starting point for a conversation, not a grade.
         </p>
       </div>
@@ -212,11 +212,11 @@ function ReassuranceBanner() {
       </p>
       <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-muted-foreground">
         <li>
-          The model only sees merged diffs — it can't see design conversations,
+          The model only sees merged diffs — it can&apos;t see design conversations,
           pairing, mentoring, on-call work, or anything outside the PR.
         </li>
         <li>
-          Scores are relative to peers in your cohort. There's no "passing" bar
+          Scores are relative to peers in your cohort. There&apos;s no &ldquo;passing&rdquo; bar
           and no thresholds anyone is being held to.
         </li>
         <li>
@@ -321,7 +321,7 @@ function EngineerTable({
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/10 p-5 text-sm text-muted-foreground">
-        Nobody matches this filter right now — which is a good thing if it's a
+        Nobody matches this filter right now — which is a good thing if it&apos;s a
         warning filter. Clear it to see everyone again.
       </div>
     );
