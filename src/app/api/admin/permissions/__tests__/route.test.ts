@@ -167,6 +167,8 @@ describe("/api/admin/permissions", () => {
       expect.objectContaining({
         permissionId: "dashboard.financial",
         requiredRole: "manager",
+        createdAt: expect.any(Date),
+        updatedAt: expect.any(Date),
       }),
     );
     expect(mockOnConflictDoUpdate).toHaveBeenCalled();

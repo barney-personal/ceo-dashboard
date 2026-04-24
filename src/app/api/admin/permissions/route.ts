@@ -23,6 +23,10 @@ function revalidateDashboardPermissions() {
   revalidatePath("/dashboard/admin/permissions", "page");
 }
 
+function isEditablePermissionRole(value: string): value is Role {
+  return EDITABLE_PERMISSION_ROLES.includes(value as Role);
+}
+
 async function parseJsonBody<T>(
   request: NextRequest,
 ): Promise<
@@ -103,7 +107,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    if (!EDITABLE_PERMISSION_ROLES.includes(body.requiredRole as Role)) {
+    if (!isEditablePermissionRole(body.requiredRole)) {
       return NextResponse.json(
         {
           error: `Invalid role. Must be one of: ${EDITABLE_PERMISSION_ROLES.join(", ")}`,
@@ -130,6 +134,7 @@ export async function PATCH(request: NextRequest) {
         .values({
           permissionId: body.permissionId,
           requiredRole: body.requiredRole,
+          createdAt: new Date(),
           updatedAt: new Date(),
         })
         .onConflictDoUpdate({
