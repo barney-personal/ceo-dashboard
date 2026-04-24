@@ -60,14 +60,26 @@ import { createHash } from "node:crypto";
  *   (snapshotDate, methodologyVersion, emailHash); the Drizzle table
  *   `engineeringRankingSnapshots` stores only the email hash, methodology
  *   metadata, composite + method scores, confidence CI, an `inputHash` for
- *   M17 movers to distinguish input drift from methodology drift, and a
+ *   M18 movers to distinguish input drift from methodology drift, and a
  *   narrow non-identifying metadata jsonb. Display name, email, manager,
  *   and resolved GitHub login are never persisted. Methodology bumps
- *   produce a parallel snapshot slice so M17 movers compare like-for-like.
+ *   produce a parallel snapshot slice so M18 movers compare like-for-like.
  *   Snapshot `status` still stays `methodology_pending` until movers,
  *   anti-gaming, and stability also land.
+ * - `0.9.0-movers` — M18 movers view is live. `buildMovers` diffs the
+ *   current snapshot against the most recent prior snapshot at least
+ *   `RANKING_MOVERS_MIN_GAP_DAYS` calendar days old, preferring the same
+ *   methodology version. Cause narration is conservative: methodology
+ *   mismatches produce `methodology_change` for every row; cohort
+ *   entrants/exits are categorised separately so new hires, leavers, and
+ *   newly-scored engineers are never narrated as ordinary rank movement;
+ *   unchanged `inputHash` with rank movement is `ambiguous_context`
+ *   rather than methodology noise because tenure/discipline/manager/squad
+ *   and normalisation-cohort transitions are not encoded in the hash.
+ *   Snapshot `status` still stays `methodology_pending` until the
+ *   anti-gaming audit (M19) and stability check (M20) also land.
  */
-export const RANKING_METHODOLOGY_VERSION = "0.8.0-snapshots" as const;
+export const RANKING_METHODOLOGY_VERSION = "0.9.0-movers" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -290,6 +302,16 @@ export interface EngineeringRankingSnapshot {
    * availability by silent omission.
    */
   attribution: AttributionBundle;
+  /**
+   * Movers view: differences between this snapshot and the most recent
+   * comparable prior snapshot (at least `RANKING_MOVERS_MIN_GAP_DAYS` days
+   * old, preferring the same methodology version). Surfaces risers,
+   * fallers, new entrants, and cohort exits with likely-cause narration
+   * derived from persisted state alone — methodology version, scoring
+   * `inputHash`, and cohort presence. The loader emits a helpful empty
+   * state when no comparable prior snapshot exists.
+   */
+  movers: MoversBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -560,6 +582,19 @@ export interface EligibilityInputs {
    * login or org as an absent-evidence note rather than fabricating a link.
    */
   githubOrg?: string | null;
+  /**
+   * Optional prior ranking snapshot slice used by the M18 movers view.
+   * Every row MUST share the same `(snapshotDate, methodologyVersion)`.
+   * The server loader picks the most recent slice at least
+   * `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology
+   * version. When absent/empty, the movers bundle emits a
+   * `no_prior_snapshot` empty state rather than fabricating movement.
+   */
+  priorSnapshotRows?: readonly RankingSnapshotRow[];
+  /** Optional override for the movers minimum gap (tests). */
+  moversMinGapDays?: number;
+  /** Optional override for the movers top-N count (tests). */
+  moversTopN?: number;
 }
 
 function isEngineerRow(row: EligibilityHeadcountRow): boolean {
@@ -3681,6 +3716,499 @@ export function buildAttribution({
 }
 
 /**
+ * Minimum gap in days between the current snapshot and the prior snapshot
+ * used for the movers view. A too-short gap is not interesting: same-day
+ * refreshes of the same methodology should not be reported as movement.
+ * Six days keeps the diff weekly-ish while still allowing two cycles per
+ * week when the ranking is refreshed daily.
+ */
+export const RANKING_MOVERS_MIN_GAP_DAYS = 6 as const;
+
+/**
+ * How many engineers to surface in each of the risers / fallers /
+ * newEntrants / cohortExits tables. Kept small so the movers section reads
+ * as a narrative highlight list, not the full rank diff — the underlying
+ * persisted snapshot still contains every engineer for audit.
+ */
+export const RANKING_MOVERS_TOP_N = 10 as const;
+
+/** Category a mover row belongs to. */
+export type MoverCategory =
+  | "riser"
+  | "faller"
+  | "new_entrant"
+  | "cohort_exit";
+
+/**
+ * Best-guess cause of a mover's movement, given only what the persisted
+ * snapshot carries. Deliberately conservative: when the scoring `inputHash`
+ * is unchanged, the movement is `ambiguous_context` rather than
+ * "methodology noise" because tenure, discipline/level, manager/squad, and
+ * normalisation-cohort transitions are not encoded in the hash.
+ */
+export type MoverCauseKind =
+  | "input_drift"
+  | "ambiguous_context"
+  | "methodology_change"
+  | "cohort_transition"
+  | "unknown";
+
+/**
+ * High-level state of the movers bundle. The page renders a useful empty
+ * state for every non-`ok` status rather than silently rendering a blank
+ * table.
+ */
+export type MoversStatus =
+  | "no_prior_snapshot"
+  | "insufficient_gap"
+  | "methodology_changed"
+  | "ok";
+
+export interface MoverEntry {
+  emailHash: string;
+  /** Resolved at request time from the current eligibility roster. */
+  displayName: string;
+  priorRank: number | null;
+  currentRank: number | null;
+  /** `currentRank - priorRank`. Negative = improved, positive = regressed. */
+  rankDelta: number | null;
+  priorCompositePercentile: number | null;
+  currentCompositePercentile: number | null;
+  /** `currentCompositePercentile - priorCompositePercentile` (both non-null). */
+  percentileDelta: number | null;
+  priorConfidenceWidth: number | null;
+  currentConfidenceWidth: number | null;
+  /** `currentConfidenceWidth - priorConfidenceWidth` (both non-null). */
+  confidenceWidthDelta: number | null;
+  category: MoverCategory;
+  causeKind: MoverCauseKind;
+  /** Plain-language narrative of the likely cause (safe to display). */
+  likelyCause: string;
+  /**
+   * True when both snapshots persisted an `inputHash` and the two differ.
+   * Null when either hash is missing — in which case we cannot distinguish
+   * input drift from methodology drift from persisted state alone.
+   */
+  inputHashChanged: boolean | null;
+  /** True when the prior snapshot was taken under a different methodology. */
+  methodologyChanged: boolean;
+}
+
+export interface MoversBundle {
+  status: MoversStatus;
+  /** Plain-language description of the movers methodology. */
+  contract: string;
+  currentSnapshot: { snapshotDate: string; methodologyVersion: string };
+  priorSnapshot: {
+    snapshotDate: string;
+    methodologyVersion: string;
+  } | null;
+  /** Calendar-day gap between prior and current; null when no prior exists. */
+  priorSnapshotGapDays: number | null;
+  minGapDays: number;
+  topN: number;
+  /** True when prior and current methodology versions differ. */
+  methodologyChanged: boolean;
+  /** Top-N engineers with the biggest rank improvement (most negative delta). */
+  risers: MoverEntry[];
+  /** Top-N engineers with the biggest rank regression (most positive delta). */
+  fallers: MoverEntry[];
+  /** Engineers ranked this snapshot but not the prior one (newly competitive). */
+  newEntrants: MoverEntry[];
+  /** Engineers ranked in the prior snapshot but not this one (leavers, lost methods, etc.). */
+  cohortExits: MoverEntry[];
+  /** Informational notes surfaced on the page above the tables. */
+  notes: string[];
+  /** Plain-language movers-stage limitations shown on the page. */
+  limitations: string[];
+}
+
+function compareSnapshotDates(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
+function diffSnapshotDates(priorDate: string, currentDate: string): number | null {
+  const prior = new Date(`${priorDate}T00:00:00Z`);
+  const current = new Date(`${currentDate}T00:00:00Z`);
+  if (Number.isNaN(prior.getTime()) || Number.isNaN(current.getTime())) {
+    return null;
+  }
+  const ms = current.getTime() - prior.getTime();
+  return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function sanitiseTopN(topN: number | undefined): number {
+  if (topN === undefined) return RANKING_MOVERS_TOP_N;
+  if (!Number.isFinite(topN) || topN <= 0) return 0;
+  return Math.floor(topN);
+}
+
+function sanitiseMinGapDays(minGapDays: number | undefined): number {
+  if (minGapDays === undefined) return RANKING_MOVERS_MIN_GAP_DAYS;
+  if (!Number.isFinite(minGapDays) || minGapDays < 0) {
+    return RANKING_MOVERS_MIN_GAP_DAYS;
+  }
+  return Math.floor(minGapDays);
+}
+
+const MOVERS_BASE_LIMITATIONS: readonly string[] = [
+  "`inputHash` covers scoring signal rows only (GitHub activity, SHAP impact, and squad delivery context). Tenure, discipline, manager/squad, cohort membership, and normalisation-cohort transitions are not encoded in the hash — an unchanged `inputHash` paired with a rank change is labelled `ambiguous_context`, not methodology noise.",
+  "The movers view diffs the current snapshot against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` calendar days old, preferring the same methodology version. If only a different-methodology prior exists, every row is labelled `methodology_change` and must not be read as behaviour change.",
+  "Cohort entrants include engineers who completed ramp-up, gained a GitHub mapping, or produced enough present methods to score for the first time. Cohort exits include leavers, engineers whose composite lost enough methods to become unscored, and hashes not present in the current slice.",
+  "Top-N risers/fallers are a narrative highlight surface. Every competitive engineer is still persisted in `engineeringRankingSnapshots` so a full rank diff can be reconstructed from storage for audit.",
+];
+
+/**
+ * Build the movers bundle for M18. Pure helper — the caller (server loader
+ * or test fixture) is responsible for deciding which prior snapshot slice to
+ * pass in. When no prior slice is supplied, or the prior is closer than
+ * `minGapDays`, the bundle emits a helpful empty state rather than
+ * fabricating movement.
+ *
+ * Cause heuristics are deliberately conservative:
+ *   - Methodology version differs → `methodology_change` for every entry.
+ *   - Present on one side only → `cohort_transition`.
+ *   - Both sides, hashes both present, differ → `input_drift`.
+ *   - Both sides, hashes both present, equal → `ambiguous_context`.
+ *   - Either hash missing → `unknown`.
+ *
+ * Rank deltas are signed as `current - prior` so a negative delta reads as
+ * a rank improvement (moving from rank 8 to rank 3 → delta −5).
+ */
+export function buildMovers(inputs: {
+  currentSnapshotDate: string;
+  currentMethodologyVersion: string;
+  composite: CompositeBundle;
+  confidence: ConfidenceBundle;
+  eligibilityEntries: readonly EligibilityEntry[];
+  /**
+   * Optional per-engineer signal rows — used to compute the current
+   * `inputHash` values that are diffed against `priorRows[i].inputHash`.
+   * When absent, every entry reports `inputHashChanged = null` and
+   * `causeKind = "unknown"`.
+   */
+  signals?: readonly PerEngineerSignalRow[];
+  /**
+   * The prior snapshot slice to compare against. Every row MUST share the
+   * same `(snapshotDate, methodologyVersion)`. Server loaders should call
+   * `readRankingSnapshot({ snapshotDate, methodologyVersion })` to produce
+   * this shape; tests pass fixtures.
+   */
+  priorRows?: readonly RankingSnapshotRow[];
+  /** Defaults to `RANKING_MOVERS_MIN_GAP_DAYS`. */
+  minGapDays?: number;
+  /** Defaults to `RANKING_MOVERS_TOP_N`. */
+  topN?: number;
+}): MoversBundle {
+  const minGapDays = sanitiseMinGapDays(inputs.minGapDays);
+  const topN = sanitiseTopN(inputs.topN);
+  const currentSnapshot = {
+    snapshotDate: inputs.currentSnapshotDate,
+    methodologyVersion: inputs.currentMethodologyVersion,
+  };
+  const contract = `Movers diffs the current ranking against the most recent prior snapshot at least ${minGapDays} calendar days old, preferring the same methodology version. Risers/fallers are the top ${topN} engineers by absolute rank delta with prior and current ranks both present; newEntrants/cohortExits cover engineers who appear on only one side. Likely cause is derived from persisted state alone — methodology version, scoring \`inputHash\`, and cohort presence — so the narrative never overclaims input drift when the hash is unchanged.`;
+
+  const priorRows = inputs.priorRows ?? [];
+
+  // No prior snapshot at all.
+  if (priorRows.length === 0) {
+    return {
+      status: "no_prior_snapshot",
+      contract,
+      currentSnapshot,
+      priorSnapshot: null,
+      priorSnapshotGapDays: null,
+      minGapDays,
+      topN,
+      methodologyChanged: false,
+      risers: [],
+      fallers: [],
+      newEntrants: [],
+      cohortExits: [],
+      notes: [
+        "No prior ranking snapshot has been persisted yet. Movers view will populate after the next scheduled refresh produces a second snapshot.",
+      ],
+      limitations: [...MOVERS_BASE_LIMITATIONS],
+    };
+  }
+
+  // All prior rows are expected to share the same slice key. Guard anyway.
+  const firstPrior = priorRows[0];
+  const priorSnapshotDate = firstPrior.snapshotDate;
+  const priorMethodologyVersion = firstPrior.methodologyVersion;
+  const priorSnapshot = {
+    snapshotDate: priorSnapshotDate,
+    methodologyVersion: priorMethodologyVersion,
+  };
+
+  const gapDays = diffSnapshotDates(
+    priorSnapshotDate,
+    inputs.currentSnapshotDate,
+  );
+
+  if (gapDays === null || compareSnapshotDates(priorSnapshotDate, inputs.currentSnapshotDate) >= 0 || gapDays < minGapDays) {
+    return {
+      status: "insufficient_gap",
+      contract,
+      currentSnapshot,
+      priorSnapshot,
+      priorSnapshotGapDays: gapDays,
+      minGapDays,
+      topN,
+      methodologyChanged:
+        priorMethodologyVersion !== inputs.currentMethodologyVersion,
+      risers: [],
+      fallers: [],
+      newEntrants: [],
+      cohortExits: [],
+      notes: [
+        `Prior snapshot is ${gapDays ?? 0} days old (<${minGapDays}). Movers view waits for a prior snapshot at least ${minGapDays} days before the current one so day-to-day refresh jitter is not reported as movement.`,
+      ],
+      limitations: [...MOVERS_BASE_LIMITATIONS],
+    };
+  }
+
+  const methodologyChanged =
+    priorMethodologyVersion !== inputs.currentMethodologyVersion;
+
+  // Current-snapshot lookups.
+  const displayNameByHash = new Map(
+    inputs.eligibilityEntries.map((e) => [e.emailHash, e.displayName]),
+  );
+  const currentByHash = new Map(
+    inputs.composite.entries
+      .filter((c) => c.rank !== null && c.composite !== null)
+      .map((c) => [c.emailHash, c]),
+  );
+  const confidenceByHash = new Map(
+    inputs.confidence.entries.map((c) => [c.emailHash, c]),
+  );
+  const currentInputHashByHash = new Map<string, string | null>();
+  if (inputs.signals) {
+    for (const signal of inputs.signals) {
+      currentInputHashByHash.set(
+        signal.emailHash,
+        computeRankingInputHash(signal),
+      );
+    }
+  }
+
+  // Prior-snapshot lookups.
+  const priorByHash = new Map<string, RankingSnapshotRow>();
+  const priorRankedByHash = new Map<string, RankingSnapshotRow>();
+  for (const row of priorRows) {
+    priorByHash.set(row.emailHash, row);
+    if (row.rank !== null && row.compositeScore !== null) {
+      priorRankedByHash.set(row.emailHash, row);
+    }
+  }
+
+  function resolveDisplayName(emailHash: string, prior?: RankingSnapshotRow): string {
+    return (
+      displayNameByHash.get(emailHash) ??
+      (prior ? `Unmapped (${emailHash.slice(0, 8)})` : `Unknown (${emailHash.slice(0, 8)})`)
+    );
+  }
+
+  function computeCauseKind(params: {
+    priorPresent: boolean;
+    currentPresent: boolean;
+    inputHashChanged: boolean | null;
+  }): { causeKind: MoverCauseKind; likelyCause: string } {
+    if (methodologyChanged) {
+      return {
+        causeKind: "methodology_change",
+        likelyCause: `Prior snapshot was methodology v${priorMethodologyVersion}; current is v${inputs.currentMethodologyVersion}. Any rank movement is methodology-affected and must not be read as behaviour change.`,
+      };
+    }
+    if (!params.priorPresent || !params.currentPresent) {
+      return {
+        causeKind: "cohort_transition",
+        likelyCause: params.currentPresent
+          ? "Engineer was not ranked in the prior snapshot (new hire, newly mapped to GitHub, or finished ramp-up). Ranked for the first time this cycle."
+          : "Engineer was ranked in the prior snapshot but is not in the current competitive cohort (leaver, lost GitHub mapping, or composite dropped below the minimum present-method count).",
+      };
+    }
+    if (params.inputHashChanged === null) {
+      return {
+        causeKind: "unknown",
+        likelyCause:
+          "`inputHash` not persisted on one or both sides — cannot distinguish input drift from methodology/context change from stored state alone.",
+      };
+    }
+    if (params.inputHashChanged) {
+      return {
+        causeKind: "input_drift",
+        likelyCause:
+          "Scoring signals moved between snapshots (persisted `inputHash` differs). Most likely driven by new GitHub PRs/commits, updated impact-model values, or refreshed squad delivery context.",
+      };
+    }
+    return {
+      causeKind: "ambiguous_context",
+      likelyCause:
+        "Scoring `inputHash` is unchanged, but rank moved. Likely caused by cohort re-ranking, a different normalisation cohort, or confidence re-estimation rather than this engineer's own scoring inputs. Not methodology noise — labelled ambiguous rather than overclaimed.",
+    };
+  }
+
+  function makeEntry(
+    emailHash: string,
+    prior: RankingSnapshotRow | undefined,
+    current: EngineerCompositeEntry | undefined,
+    category: MoverCategory,
+  ): MoverEntry {
+    const priorRank = prior?.rank ?? null;
+    const currentRank = current?.rank ?? null;
+    const rankDelta =
+      priorRank !== null && currentRank !== null
+        ? currentRank - priorRank
+        : null;
+    const priorCompositePercentile = prior?.compositeScore ?? null;
+    const currentCompositePercentile = current?.compositePercentile ?? null;
+    const percentileDelta =
+      priorCompositePercentile !== null && currentCompositePercentile !== null
+        ? currentCompositePercentile - priorCompositePercentile
+        : null;
+    const currentConfidenceWidth =
+      confidenceByHash.get(emailHash)?.ciWidth ?? null;
+    const priorConfidenceWidth =
+      prior?.metadata.confidenceWidth ??
+      (prior?.confidenceLow !== null && prior?.confidenceLow !== undefined &&
+      prior?.confidenceHigh !== null && prior?.confidenceHigh !== undefined
+        ? prior.confidenceHigh - prior.confidenceLow
+        : null);
+    const confidenceWidthDelta =
+      priorConfidenceWidth !== null && currentConfidenceWidth !== null
+        ? currentConfidenceWidth - priorConfidenceWidth
+        : null;
+
+    const priorInputHash = prior?.inputHash ?? null;
+    const currentInputHash = inputs.signals
+      ? (currentInputHashByHash.get(emailHash) ?? null)
+      : null;
+    const inputHashChanged =
+      priorInputHash !== null && currentInputHash !== null
+        ? priorInputHash !== currentInputHash
+        : null;
+
+    const { causeKind, likelyCause } = computeCauseKind({
+      priorPresent: Boolean(prior && prior.rank !== null),
+      currentPresent: Boolean(current && current.rank !== null),
+      inputHashChanged,
+    });
+
+    return {
+      emailHash,
+      displayName: resolveDisplayName(emailHash, prior),
+      priorRank,
+      currentRank,
+      rankDelta,
+      priorCompositePercentile,
+      currentCompositePercentile,
+      percentileDelta,
+      priorConfidenceWidth,
+      currentConfidenceWidth,
+      confidenceWidthDelta,
+      category,
+      causeKind,
+      likelyCause,
+      inputHashChanged,
+      methodologyChanged,
+    };
+  }
+
+  const risers: MoverEntry[] = [];
+  const fallers: MoverEntry[] = [];
+  const newEntrants: MoverEntry[] = [];
+  const cohortExits: MoverEntry[] = [];
+
+  // Engineers ranked in the current snapshot.
+  for (const [emailHash, current] of currentByHash) {
+    const prior = priorRankedByHash.get(emailHash);
+    if (prior) {
+      const entry = makeEntry(emailHash, prior, current, "riser");
+      if (entry.rankDelta !== null && entry.rankDelta < 0) {
+        entry.category = "riser";
+        risers.push(entry);
+      } else if (entry.rankDelta !== null && entry.rankDelta > 0) {
+        entry.category = "faller";
+        fallers.push(entry);
+      }
+    } else {
+      newEntrants.push(
+        makeEntry(emailHash, undefined, current, "new_entrant"),
+      );
+    }
+  }
+
+  // Engineers ranked in the prior snapshot but not the current.
+  for (const [emailHash, prior] of priorRankedByHash) {
+    if (!currentByHash.has(emailHash)) {
+      cohortExits.push(
+        makeEntry(emailHash, prior, undefined, "cohort_exit"),
+      );
+    }
+  }
+
+  risers.sort((a, b) => {
+    const da = a.rankDelta ?? 0;
+    const db = b.rankDelta ?? 0;
+    if (da !== db) return da - db; // most negative first
+    return a.emailHash.localeCompare(b.emailHash);
+  });
+  fallers.sort((a, b) => {
+    const da = a.rankDelta ?? 0;
+    const db = b.rankDelta ?? 0;
+    if (da !== db) return db - da; // most positive first
+    return a.emailHash.localeCompare(b.emailHash);
+  });
+  newEntrants.sort((a, b) => {
+    const ra = a.currentRank ?? Number.POSITIVE_INFINITY;
+    const rb = b.currentRank ?? Number.POSITIVE_INFINITY;
+    if (ra !== rb) return ra - rb;
+    return a.emailHash.localeCompare(b.emailHash);
+  });
+  cohortExits.sort((a, b) => {
+    const ra = a.priorRank ?? Number.POSITIVE_INFINITY;
+    const rb = b.priorRank ?? Number.POSITIVE_INFINITY;
+    if (ra !== rb) return ra - rb;
+    return a.emailHash.localeCompare(b.emailHash);
+  });
+
+  const notes: string[] = [];
+  if (methodologyChanged) {
+    notes.push(
+      `Methodology version changed since prior snapshot (v${priorMethodologyVersion} → v${inputs.currentMethodologyVersion}). Every mover row is labelled \`methodology_change\` and must not be read as behaviour change — compare against a prior snapshot that shares the current methodology version once one has been persisted.`,
+    );
+  } else {
+    notes.push(
+      `Prior snapshot: v${priorMethodologyVersion} on ${priorSnapshotDate}, ${gapDays} days before the current snapshot (${inputs.currentSnapshotDate}).`,
+    );
+  }
+  if (newEntrants.length > 0 || cohortExits.length > 0) {
+    notes.push(
+      `${newEntrants.length} cohort entrant(s) and ${cohortExits.length} cohort exit(s) are categorised separately from risers/fallers so roster transitions are never narrated as ordinary rank movement.`,
+    );
+  }
+
+  return {
+    status: methodologyChanged ? "methodology_changed" : "ok",
+    contract,
+    currentSnapshot,
+    priorSnapshot,
+    priorSnapshotGapDays: gapDays,
+    minGapDays,
+    topN,
+    methodologyChanged,
+    risers: topN === 0 ? risers : risers.slice(0, topN),
+    fallers: topN === 0 ? fallers : fallers.slice(0, topN),
+    newEntrants: topN === 0 ? newEntrants : newEntrants.slice(0, topN),
+    cohortExits: topN === 0 ? cohortExits : cohortExits.slice(0, topN),
+    notes,
+    limitations: [...MOVERS_BASE_LIMITATIONS],
+  };
+}
+
+/**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
  * assert on the constant surface.
@@ -3719,7 +4247,8 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, and privacy-preserving ranking snapshot persistence are implemented. The movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, and the movers view are implemented. The anti-gaming audit and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers GitHub activity, SHAP impact, and squad delivery context — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -4002,6 +4531,17 @@ export function buildRankingSnapshot(
     windowEndIso: windowEnd,
     githubOrg: inputs.githubOrg ?? null,
   });
+  const movers = buildMovers({
+    currentSnapshotDate: toSnapshotDate(now),
+    currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+    composite,
+    confidence,
+    eligibilityEntries: entries,
+    signals: inputs.signals,
+    priorRows: inputs.priorSnapshotRows,
+    minGapDays: inputs.moversMinGapDays,
+    topN: inputs.moversTopN,
+  });
 
   // Only engineers with a non-null composite rank are materialised into the
   // top-level `engineers` array — unscored competitive engineers remain
@@ -4052,6 +4592,7 @@ export function buildRankingSnapshot(
     composite,
     confidence,
     attribution,
+    movers,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -4099,6 +4640,13 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     windowStartIso: windowStart,
     windowEndIso: windowEnd,
   });
+  const movers = buildMovers({
+    currentSnapshotDate: toSnapshotDate(now),
+    currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+    composite,
+    confidence,
+    eligibilityEntries: entries,
+  });
 
   return {
     status: "methodology_pending",
@@ -4125,6 +4673,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     composite,
     confidence,
     attribution,
+    movers,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

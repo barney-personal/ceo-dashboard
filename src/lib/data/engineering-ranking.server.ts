@@ -16,7 +16,7 @@ import {
   githubPrs,
   squads,
 } from "@/lib/db/schema";
-import { and, asc, count, desc, eq, gte, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -30,6 +30,8 @@ import {
   type TeamSwarmiaMetrics,
 } from "@/lib/data/swarmia";
 import {
+  RANKING_METHODOLOGY_VERSION,
+  RANKING_MOVERS_MIN_GAP_DAYS,
   RANKING_SIGNAL_WINDOW_DAYS,
   buildEligibleRoster,
   buildRankingSnapshot,
@@ -174,6 +176,69 @@ async function fetchSquadDeliveryContext(): Promise<
   return new Map(Object.entries(result.data.squads));
 }
 
+/**
+ * Fetch the most recent prior snapshot slice to diff against for the M18
+ * movers view. Prefers the same methodology version as the current run;
+ * when no same-methodology slice exists within the window, falls back to
+ * the most recent any-methodology slice so `buildMovers` can label the
+ * diff as methodology-affected rather than silently hiding movement.
+ *
+ * Returns an empty array when no prior slice is old enough — the movers
+ * bundle will then emit a `no_prior_snapshot` / `insufficient_gap` empty
+ * state rather than fabricating movement.
+ */
+async function fetchPriorSnapshotRowsForMovers(params: {
+  currentSnapshotDate: string;
+  currentMethodologyVersion: string;
+  minGapDays: number;
+}): Promise<RankingSnapshotRow[]> {
+  const cutoffDate = new Date(`${params.currentSnapshotDate}T00:00:00Z`);
+  if (Number.isNaN(cutoffDate.getTime())) return [];
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - params.minGapDays);
+  const cutoffIso = toSnapshotDate(cutoffDate);
+
+  const sameMethodologySlice = await db
+    .select({
+      snapshotDate: engineeringRankingSnapshots.snapshotDate,
+      methodologyVersion: engineeringRankingSnapshots.methodologyVersion,
+    })
+    .from(engineeringRankingSnapshots)
+    .where(
+      and(
+        eq(
+          engineeringRankingSnapshots.methodologyVersion,
+          params.currentMethodologyVersion,
+        ),
+        lte(engineeringRankingSnapshots.snapshotDate, cutoffIso),
+      ),
+    )
+    .orderBy(desc(engineeringRankingSnapshots.snapshotDate))
+    .limit(1);
+
+  let priorSlice = sameMethodologySlice[0] ?? null;
+  if (!priorSlice) {
+    const anyMethodologySlice = await db
+      .select({
+        snapshotDate: engineeringRankingSnapshots.snapshotDate,
+        methodologyVersion: engineeringRankingSnapshots.methodologyVersion,
+      })
+      .from(engineeringRankingSnapshots)
+      .where(lte(engineeringRankingSnapshots.snapshotDate, cutoffIso))
+      .orderBy(
+        desc(engineeringRankingSnapshots.snapshotDate),
+        desc(engineeringRankingSnapshots.methodologyVersion),
+      )
+      .limit(1);
+    priorSlice = anyMethodologySlice[0] ?? null;
+  }
+
+  if (!priorSlice) return [];
+  return readRankingSnapshot({
+    snapshotDate: priorSlice.snapshotDate,
+    methodologyVersion: priorSlice.methodologyVersion,
+  });
+}
+
 function buildSignalRows({
   headcountRows,
   githubMap,
@@ -279,6 +344,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       githubActivityByLogin,
       aiUsageByEmail,
       squadDeliveryByName,
+      priorSnapshotRows,
     ] = await Promise.all([
       fetchHeadcountRows(),
       fetchGithubMap(),
@@ -286,6 +352,17 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       fetchGithubActivityByLogin(windowStart),
       fetchAiUsageByEmail(),
       fetchSquadDeliveryContext(),
+      fetchPriorSnapshotRowsForMovers({
+        currentSnapshotDate: toSnapshotDate(now),
+        currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+        minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+      }).catch((err) => {
+        console.warn(
+          "[engineering-ranking] prior snapshot fetch failed, movers will render empty state:",
+          err,
+        );
+        return [] as RankingSnapshotRow[];
+      }),
     ]);
     const signals = buildSignalRows({
       headcountRows,
@@ -307,6 +384,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       now,
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
       githubOrg: process.env.GITHUB_ORG ?? null,
+      priorSnapshotRows,
     });
 
     return { snapshot, signals };

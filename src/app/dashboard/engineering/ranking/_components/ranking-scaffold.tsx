@@ -17,6 +17,9 @@ import {
   type LensDisagreementRow,
   type LensScoreSummary,
   type LensesBundle,
+  type MoverCauseKind,
+  type MoverEntry,
+  type MoversBundle,
   type NormalisationBundle,
   type SignalAudit,
 } from "@/lib/data/engineering-ranking";
@@ -1890,6 +1893,273 @@ function AttributionSection({
   );
 }
 
+const MOVER_CAUSE_LABEL: Record<MoverCauseKind, string> = {
+  input_drift: "Input drift",
+  ambiguous_context: "Ambiguous / context",
+  methodology_change: "Methodology change",
+  cohort_transition: "Cohort transition",
+  unknown: "Unknown",
+};
+
+const MOVER_CAUSE_TONE: Record<MoverCauseKind, string> = {
+  input_drift: "border-primary/40 bg-primary/5 text-primary",
+  ambiguous_context:
+    "border-muted-foreground/30 bg-muted/40 text-foreground",
+  methodology_change: "border-warning/40 bg-warning/5 text-warning",
+  cohort_transition:
+    "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
+  unknown: "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
+};
+
+function formatMoverRank(value: number | null): string {
+  return value === null ? "—" : `#${value}`;
+}
+
+function formatMoverDelta(value: number | null): string {
+  if (value === null) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "±";
+  return `${sign}${Math.abs(value).toFixed(0)}`;
+}
+
+function formatMoverPercentileDelta(value: number | null): string {
+  if (value === null) return "—";
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "±";
+  return `${sign}${Math.abs(value).toFixed(1)}pp`;
+}
+
+function MoverTable({
+  title,
+  subtitle,
+  rows,
+  emptyCopy,
+  rankDeltaLegend,
+}: {
+  title: string;
+  subtitle: string;
+  rows: MoverEntry[];
+  emptyCopy: string;
+  rankDeltaLegend: "improvement" | "regression" | "cohort";
+}) {
+  return (
+    <div className="rounded-md border border-border/40 bg-background/60 p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+        <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          {rankDeltaLegend === "improvement"
+            ? "Lower rank = better"
+            : rankDeltaLegend === "regression"
+              ? "Higher rank = worse"
+              : "Roster transition"}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-xs italic text-muted-foreground">
+          {emptyCopy}
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/60 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Engineer</th>
+                <th className="py-2 pr-3 font-medium">Prior rank</th>
+                <th className="py-2 pr-3 font-medium">Current rank</th>
+                <th className="py-2 pr-3 font-medium">Δ rank</th>
+                <th className="py-2 pr-3 font-medium">Δ percentile</th>
+                <th className="py-2 pr-3 font-medium">Likely cause</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr
+                  key={`${row.category}-${row.emailHash}`}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td className="py-2 pr-3 text-foreground">
+                    {row.displayName}
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                      {row.category.replace("_", " ")}
+                    </div>
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {formatMoverRank(row.priorRank)}
+                  </td>
+                  <td className="py-2 pr-3 text-foreground/80">
+                    {formatMoverRank(row.currentRank)}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {formatMoverDelta(row.rankDelta)}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {formatMoverPercentileDelta(row.percentileDelta)}
+                  </td>
+                  <td className="py-2 pr-3">
+                    <span
+                      className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] ${MOVER_CAUSE_TONE[row.causeKind]}`}
+                    >
+                      {MOVER_CAUSE_LABEL[row.causeKind]}
+                    </span>
+                    <div className="mt-1 text-[11px] italic text-muted-foreground">
+                      {row.likelyCause}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MoversSection({ movers }: { movers: MoversBundle }) {
+  const totalRows =
+    movers.risers.length +
+    movers.fallers.length +
+    movers.newEntrants.length +
+    movers.cohortExits.length;
+  const statusLabel =
+    movers.status === "ok"
+      ? "Comparable prior snapshot"
+      : movers.status === "methodology_changed"
+        ? "Methodology changed since prior snapshot"
+        : movers.status === "insufficient_gap"
+          ? "Prior snapshot too recent"
+          : "No prior snapshot yet";
+  const statusTone =
+    movers.status === "ok"
+      ? "border-primary/40 bg-primary/10 text-primary"
+      : "border-warning/40 bg-warning/10 text-warning";
+
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Movers vs the prior comparable snapshot
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
+            {movers.contract}
+          </p>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] ${statusTone}`}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Current
+          </dt>
+          <dd className="mt-1 text-foreground">
+            v{movers.currentSnapshot.methodologyVersion} · {movers.currentSnapshot.snapshotDate}
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Prior
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {movers.priorSnapshot
+              ? `v${movers.priorSnapshot.methodologyVersion} · ${movers.priorSnapshot.snapshotDate}`
+              : "—"}
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Gap
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {movers.priorSnapshotGapDays === null
+              ? "—"
+              : `${movers.priorSnapshotGapDays}d`}{" "}
+            <span className="text-muted-foreground">
+              (min {movers.minGapDays}d)
+            </span>
+          </dd>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-3">
+          <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            Rows
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {movers.risers.length} risers · {movers.fallers.length} fallers ·{" "}
+            {movers.newEntrants.length} in · {movers.cohortExits.length} out
+          </dd>
+        </div>
+      </dl>
+
+      {movers.notes.length > 0 && (
+        <ul className="mt-4 space-y-1 text-xs text-muted-foreground">
+          {movers.notes.map((n) => (
+            <li key={n}>· {n}</li>
+          ))}
+        </ul>
+      )}
+
+      {movers.status === "ok" || movers.status === "methodology_changed" ? (
+        <div className="mt-5 space-y-4">
+          <MoverTable
+            title="Biggest risers"
+            subtitle={`Top ${movers.topN} engineers by rank improvement (most negative Δ rank).`}
+            rows={movers.risers}
+            emptyCopy="No engineers improved their rank since the prior snapshot."
+            rankDeltaLegend="improvement"
+          />
+          <MoverTable
+            title="Biggest fallers"
+            subtitle={`Top ${movers.topN} engineers by rank regression (most positive Δ rank).`}
+            rows={movers.fallers}
+            emptyCopy="No engineers regressed in rank since the prior snapshot."
+            rankDeltaLegend="regression"
+          />
+          <MoverTable
+            title="New cohort entrants"
+            subtitle="Engineers ranked this snapshot but not the prior one — new hires finishing ramp-up, newly GitHub-mapped engineers, or newly scored rows. Not counted as ordinary movers."
+            rows={movers.newEntrants}
+            emptyCopy="No engineers entered the competitive cohort since the prior snapshot."
+            rankDeltaLegend="cohort"
+          />
+          <MoverTable
+            title="Cohort exits"
+            subtitle="Engineers ranked in the prior snapshot but not this one — leavers, lost GitHub mapping, or composite dropped below the minimum present-method count. Not counted as ordinary movers."
+            rows={movers.cohortExits}
+            emptyCopy="No engineers left the competitive cohort since the prior snapshot."
+            rankDeltaLegend="cohort"
+          />
+        </div>
+      ) : (
+        <div className="mt-4 rounded-md border border-dashed border-border/60 bg-background/40 p-4 text-xs italic text-muted-foreground">
+          {movers.status === "no_prior_snapshot"
+            ? "No comparable prior snapshot has been persisted yet. The movers tables will populate after the next scheduled refresh produces a second snapshot at least " +
+              movers.minGapDays +
+              " days after the first."
+            : "Movers view is paused until a prior snapshot at least " +
+              movers.minGapDays +
+              " days old exists."}{" "}
+          {totalRows > 0 ? `(Raw candidate count: ${totalRows}.)` : null}
+        </div>
+      )}
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Movers-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {movers.limitations.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -2032,13 +2302,15 @@ export function RankingScaffold({
               signal-weight decomposition, leave-one-method-out sensitivity,
               a PR/log-impact dominance check, 80% bootstrap confidence
               bands with statistical-tie groups, per-engineer attribution
-              drilldowns, and privacy-preserving snapshot persistence (keyed
-              on snapshot date + methodology version + email hash, with no
+              drilldowns, privacy-preserving snapshot persistence (keyed on
+              snapshot date + methodology version + email hash, with no
               display name, email, manager, or resolved GitHub login
-              written to the database) are all live. The movers view, the
-              anti-gaming audit, and the stability check are still pending
-              — so the rank is an evidence composite, not a final
-              adjudication.
+              written to the database), and the movers view (risers /
+              fallers / cohort entrants / cohort exits with conservative
+              cause narration against the most recent comparable prior
+              snapshot) are all live. The anti-gaming audit and the
+              stability check are still pending — so the rank is an
+              evidence composite, not a final adjudication.
             </p>
           </div>
         </div>
@@ -2052,6 +2324,8 @@ export function RankingScaffold({
       <ConfidenceSection confidence={snapshot.confidence} />
 
       <AttributionSection attribution={snapshot.attribution} />
+
+      <MoversSection movers={snapshot.movers} />
 
       <CoverageSection snapshot={snapshot} />
 
@@ -2118,9 +2392,9 @@ export function RankingScaffold({
             competitive engineer currently has fewer than{" "}
             {snapshot.composite.minPresentMethods} present methods. Live
             GitHub, impact-model, and Swarmia data must be populating the
-            signal rows before the composite can produce a rank.
-            Ranking snapshots, the movers view, the anti-gaming audit, and
-            the stability check remain the outstanding work.
+            signal rows before the composite can produce a rank. The
+            anti-gaming audit and the stability check remain the
+            outstanding work.
           </p>
         </section>
       ) : null}
