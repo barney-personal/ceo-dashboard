@@ -36,7 +36,11 @@ vi.mock("@/lib/integrations/github", () => ({
   fetchPRAnalysisPayload: mockFetchPayload,
 }));
 
-import { detectRevertWithin14d, runCodeReviewAnalysis } from "../code-review";
+import {
+  detectRevertWithin14d,
+  getCodeReviewBackfillStatus,
+  runCodeReviewAnalysis,
+} from "../code-review";
 
 interface FakePr {
   repo: string;
@@ -355,5 +359,108 @@ describe("maybeRunCodeReviewFromCron (cooldown gate)", () => {
     stubSelectSequence([[], [], [], []]);
     const result = await mod.maybeRunCodeReviewFromCron();
     expect("skippedBy" in result).toBe(false);
+  });
+});
+
+describe("getCodeReviewBackfillStatus", () => {
+  const originalExcluded = process.env.CODE_REVIEW_EXCLUDED_REPOS;
+
+  afterEach(() => {
+    if (originalExcluded === undefined) {
+      delete process.env.CODE_REVIEW_EXCLUDED_REPOS;
+    } else {
+      process.env.CODE_REVIEW_EXCLUDED_REPOS = originalExcluded;
+    }
+  });
+
+  it("reports analysed, remaining, and skipped counts using the live backlog rules", async () => {
+    const latestAnalysedAt = new Date("2026-04-24T09:00:00Z");
+    const oldestMissing = new Date("2026-04-18T10:00:00Z");
+    const newestMissing = new Date("2026-04-22T10:00:00Z");
+    process.env.CODE_REVIEW_EXCLUDED_REPOS = "acme/secret";
+    stubSelectSequence([
+      [
+        {
+          repo: "acme/api",
+          prNumber: 1,
+          authorLogin: "alice",
+          mergedAt: new Date("2026-04-23T10:00:00Z"),
+        },
+        {
+          repo: "acme/api",
+          prNumber: 2,
+          authorLogin: "dependabot[bot]",
+          mergedAt: new Date("2026-04-23T11:00:00Z"),
+        },
+        {
+          repo: "acme/secret",
+          prNumber: 3,
+          authorLogin: "alice",
+          mergedAt: new Date("2026-04-23T12:00:00Z"),
+        },
+        {
+          repo: "acme/api",
+          prNumber: 4,
+          authorLogin: "bob",
+          mergedAt: newestMissing,
+        },
+        {
+          repo: "acme/web",
+          prNumber: 5,
+          authorLogin: "charlie",
+          mergedAt: oldestMissing,
+        },
+      ],
+      [{ githubLogin: "release-bot" }],
+      [
+        {
+          repo: "acme/api",
+          prNumber: 1,
+          analysedAt: latestAnalysedAt,
+        },
+        {
+          repo: "acme/secret",
+          prNumber: 3,
+          analysedAt: new Date("2026-04-24T08:00:00Z"),
+        },
+      ],
+    ]);
+
+    const status = await getCodeReviewBackfillStatus();
+
+    expect(status.candidatesConsidered).toBe(5);
+    expect(status.eligibleTotal).toBe(3);
+    expect(status.analysedCount).toBe(1);
+    expect(status.remainingCount).toBe(2);
+    expect(status.progressPct).toBeCloseTo((1 / 3) * 100, 5);
+    expect(status.skippedBotCount).toBe(1);
+    expect(status.skippedExcludedCount).toBe(1);
+    expect(status.latestAnalysedAt).toEqual(latestAnalysedAt);
+    expect(status.oldestRemainingMergedAt).toEqual(oldestMissing);
+    expect(status.newestRemainingMergedAt).toEqual(newestMissing);
+  });
+
+  it("returns 100% progress when no PRs are eligible for review", async () => {
+    stubSelectSequence([
+      [
+        {
+          repo: "acme/api",
+          prNumber: 1,
+          authorLogin: "dependabot[bot]",
+          mergedAt: new Date("2026-04-23T10:00:00Z"),
+        },
+      ],
+      [],
+      [],
+    ]);
+
+    const status = await getCodeReviewBackfillStatus();
+
+    expect(status.eligibleTotal).toBe(0);
+    expect(status.analysedCount).toBe(0);
+    expect(status.remainingCount).toBe(0);
+    expect(status.progressPct).toBe(100);
+    expect(status.latestAnalysedAt).toBeNull();
+    expect(status.oldestRemainingMergedAt).toBeNull();
   });
 });
