@@ -67,6 +67,27 @@ describe("dashboard-permissions.server", () => {
     });
   });
 
+  it("ignores invalid stored roles and falls back to defaults", async () => {
+    fromMock.mockResolvedValueOnce([
+      {
+        permissionId: "dashboard.financial",
+        requiredRole: "owner",
+      },
+    ]);
+
+    const { getDashboardPermissionSummaries } = await import(
+      "../dashboard-permissions.server"
+    );
+
+    const summaries = await getDashboardPermissionSummaries();
+    const financial = summaries.find(
+      (summary) => summary.id === "dashboard.financial",
+    );
+
+    expect(financial?.requiredRole).toBe("leadership");
+    expect(financial?.isOverride).toBe(false);
+  });
+
   it("redirects away from routes when the current user lacks access", async () => {
     fromMock.mockResolvedValueOnce([]);
     getCurrentUserRoleMock.mockResolvedValueOnce("everyone");
@@ -77,6 +98,7 @@ describe("dashboard-permissions.server", () => {
 
     await requireDashboardPermission("admin.users");
 
+    expect(selectMock).not.toHaveBeenCalled();
     expect(redirectMock).toHaveBeenCalledWith("/dashboard");
   });
 });

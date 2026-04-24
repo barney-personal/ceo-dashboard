@@ -6,6 +6,7 @@ import { isSchemaCompatibilityError } from "@/lib/db/errors";
 import { getCurrentUserRole } from "./roles.server";
 import { hasAccess, type Role } from "./roles";
 import {
+  EDITABLE_PERMISSION_ROLES,
   buildDashboardNavGroups,
   buildDashboardPermissionSummaries,
   getDashboardPermissionDefinition,
@@ -14,6 +15,10 @@ import {
   type DashboardPermissionRoleMap,
   type DashboardPermissionSummary,
 } from "./dashboard-permissions";
+
+function isEditablePermissionRole(value: string): value is Role {
+  return EDITABLE_PERMISSION_ROLES.includes(value as Role);
+}
 
 const getStoredDashboardPermissionOverrides = cache(
   async (): Promise<DashboardPermissionRoleMap> => {
@@ -26,7 +31,19 @@ const getStoredDashboardPermissionOverrides = cache(
         .from(dashboardPermissionOverrides);
 
       return rows.reduce<DashboardPermissionRoleMap>((acc, row) => {
-        acc[row.permissionId as DashboardPermissionId] = row.requiredRole as Role;
+        try {
+          const definition = getDashboardPermissionDefinition(
+            row.permissionId as DashboardPermissionId,
+          );
+
+          if (isEditablePermissionRole(row.requiredRole)) {
+            acc[definition.id] = row.requiredRole;
+          }
+        } catch {
+          // Ignore invalid stored permission IDs or roles and fall back to the
+          // registry defaults for the affected route.
+        }
+
         return acc;
       }, {});
     } catch (error) {
@@ -81,13 +98,15 @@ export async function getRequiredRoleForDashboardPermission(
 export async function requireDashboardPermission(
   permissionId: DashboardPermissionId,
 ): Promise<Role> {
+  const definition = getDashboardPermissionDefinition(permissionId);
   const [role, requiredRole] = await Promise.all([
     getCurrentUserRole(),
-    getRequiredRoleForDashboardPermission(permissionId),
+    definition.editable === false
+      ? Promise.resolve(definition.defaultRole)
+      : getRequiredRoleForDashboardPermission(permissionId),
   ]);
 
   if (!hasAccess(role, requiredRole)) {
-    const definition = getDashboardPermissionDefinition(permissionId);
     redirect(definition.redirectTo ?? "/dashboard");
   }
 

@@ -31,11 +31,11 @@ describe("dashboard-permissions.api", () => {
     await expect(
       dashboardPermissionErrorResponse("dashboard.managers"),
     ).resolves.toBeNull();
+    expect(getRequiredRoleMock).toHaveBeenCalledWith("dashboard.managers");
   });
 
   it("returns a 403 response when the current user lacks access", async () => {
     getCurrentUserRoleMock.mockResolvedValueOnce("manager");
-    getRequiredRoleMock.mockResolvedValueOnce("ceo");
 
     const { dashboardPermissionErrorResponse } = await import(
       "../dashboard-permissions.api"
@@ -44,6 +44,7 @@ describe("dashboard-permissions.api", () => {
     const response = await dashboardPermissionErrorResponse("admin.users");
 
     expect(response?.status).toBe(403);
+    expect(getRequiredRoleMock).not.toHaveBeenCalled();
     await expect(response?.json()).resolves.toEqual({ error: "Forbidden" });
   });
 });

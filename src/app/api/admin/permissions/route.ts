@@ -20,7 +20,7 @@ function isDashboardPermissionId(value: string): value is DashboardPermissionId 
 
 function revalidateDashboardPermissions() {
   revalidatePath("/dashboard", "layout");
-  revalidatePath("/dashboard/admin/permissions");
+  revalidatePath("/dashboard/admin/permissions", "page");
 }
 
 async function parseJsonBody<T>(

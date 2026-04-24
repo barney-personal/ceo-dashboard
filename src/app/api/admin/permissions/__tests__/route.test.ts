@@ -174,6 +174,7 @@ describe("/api/admin/permissions", () => {
     expect(mockRevalidatePath).toHaveBeenNthCalledWith(
       2,
       "/dashboard/admin/permissions",
+      "page",
     );
     expect(await response.json()).toMatchObject({
       id: "dashboard.financial",
@@ -194,6 +195,29 @@ describe("/api/admin/permissions", () => {
       error: "This permission is locked and cannot be reset",
     });
     expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("deletes overrides and revalidates on successful DELETE", async () => {
+    const response = await DELETE(
+      request("DELETE", {
+        permissionId: "dashboard.financial",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockDelete).toHaveBeenCalled();
+    expect(mockDeleteWhere).toHaveBeenCalledWith("eq-clause");
+    expect(mockRevalidatePath).toHaveBeenNthCalledWith(1, "/dashboard", "layout");
+    expect(mockRevalidatePath).toHaveBeenNthCalledWith(
+      2,
+      "/dashboard/admin/permissions",
+      "page",
+    );
+    expect(await response.json()).toMatchObject({
+      id: "dashboard.financial",
+      requiredRole: "leadership",
+      isOverride: false,
+    });
   });
 
   it("returns 400 for malformed DELETE json", async () => {
