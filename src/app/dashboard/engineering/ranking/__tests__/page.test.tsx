@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockRequireDashboardPermission,
-  mockGetEngineeringRankingSnapshot,
+  mockGetEngineeringRankingPageData,
   mockRankingScaffold,
 } = vi.hoisted(() => ({
   mockRequireDashboardPermission: vi.fn(),
-  mockGetEngineeringRankingSnapshot: vi.fn(),
+  mockGetEngineeringRankingPageData: vi.fn(),
   mockRankingScaffold: vi.fn(
     ({ snapshot }: { snapshot: { methodologyVersion: string } }) => (
       <div data-testid="ranking-scaffold">{snapshot.methodologyVersion}</div>
@@ -20,7 +20,7 @@ vi.mock("@/lib/auth/dashboard-permissions.server", () => ({
 }));
 
 vi.mock("@/lib/data/engineering-ranking.server", () => ({
-  getEngineeringRankingSnapshot: mockGetEngineeringRankingSnapshot,
+  getEngineeringRankingPageData: mockGetEngineeringRankingPageData,
 }));
 
 vi.mock("../_components/ranking-scaffold", () => ({
@@ -44,13 +44,14 @@ describe("EngineeringRankingPage permission gate", () => {
     expect(mockRequireDashboardPermission).toHaveBeenCalledWith(
       "engineering.ranking",
     );
-    expect(mockGetEngineeringRankingSnapshot).not.toHaveBeenCalled();
+    expect(mockGetEngineeringRankingPageData).not.toHaveBeenCalled();
   });
 
   it("renders the ranking scaffold when the permission check passes", async () => {
     mockRequireDashboardPermission.mockResolvedValue("engineering_manager");
-    mockGetEngineeringRankingSnapshot.mockResolvedValue({
-      methodologyVersion: "1.0.0-methodology",
+    mockGetEngineeringRankingPageData.mockResolvedValue({
+      snapshot: { methodologyVersion: "1.0.0-methodology" },
+      profileSlugByHash: {},
     });
 
     const page = await EngineeringRankingPage();
@@ -59,7 +60,7 @@ describe("EngineeringRankingPage permission gate", () => {
     expect(mockRequireDashboardPermission).toHaveBeenCalledWith(
       "engineering.ranking",
     );
-    expect(mockGetEngineeringRankingSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockGetEngineeringRankingPageData).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("ranking-scaffold")).toHaveTextContent(
       "1.0.0-methodology",
     );

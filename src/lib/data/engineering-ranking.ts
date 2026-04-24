@@ -1425,7 +1425,7 @@ function unavailableSignalsForAudit(
     unavailable.push({
       name: "Squad delivery context",
       reason:
-        "No persisted squad-delivery source was supplied to this snapshot build. The ranking path does not call Swarmia live, so lens C falls back to all-null scores until a synced source is wired.",
+        "No squad-delivery source was supplied to this snapshot build. Swarmia may not be configured or the live fetch failed; lens C falls back to all-null scores until a source returns data.",
     });
   }
 
@@ -5424,7 +5424,7 @@ const KNOWN_LIMITATIONS: readonly string[] = [
   "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub, and the stability check are all implemented. The composite remains an evidence rank: workflow termination additionally requires two consecutive cycles with stability within tolerance at the same methodology version.",
   "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers the scoring signal rows supplied to the snapshot build (GitHub activity, SHAP impact, and squad delivery context when present) — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
   "Stability check cannot compute a like-for-like result across a methodology-version change. A single cycle within tolerance is necessary but not sufficient for workflow termination — two consecutive cycles at the same methodology version below the ambiguous-cohort tolerance are required.",
-  "Persisted squad-delivery signals enter lens C only when a synced source is supplied to the snapshot build. The ranking path does not call Swarmia live; when those rows are wired, the team-level signals remain down-weighted and must not be read as individual review evidence.",
+  "Squad-delivery signals enter lens C only when a source returns data to the snapshot build. The ranking server pulls these live from Swarmia on each render; when Swarmia is unconfigured or the fetch fails the map is empty and lens C falls back to unavailable. When the signals are present they remain team-level and down-weighted — they must not be read as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
 ];
@@ -5897,7 +5897,7 @@ function buildFreshnessBadges(params: {
         : "unavailable",
       note: params.squadDeliverySignalsPresent
         ? "Persisted squad-delivery signals are present on this snapshot and feed lens C. Team-level, down-weighted evidence only — not an individual review signal."
-        : "No persisted squad-delivery source was supplied to this snapshot build. The ranking path does not call Swarmia live, so lens C is unavailable here.",
+        : "No squad-delivery source was supplied to this snapshot build. Swarmia may not be configured or the live fetch failed; lens C is unavailable here.",
     },
     {
       label: "AI usage",

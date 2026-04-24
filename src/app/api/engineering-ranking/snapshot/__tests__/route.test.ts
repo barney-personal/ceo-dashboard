@@ -86,7 +86,11 @@ describe("POST /api/engineering-ranking/snapshot (M17 signal passthrough)", () =
     mockRequireRole.mockResolvedValue({ ok: true });
     const snapshot = fakeSnapshot();
     const signals = fakeSignals();
-    mockLoadWithSignals.mockResolvedValue({ snapshot, signals });
+    mockLoadWithSignals.mockResolvedValue({
+      snapshot,
+      signals,
+      profileSlugByHash: {},
+    });
     mockPersist.mockResolvedValue({ rowsWritten: 1, snapshotDate: "2026-04-24" });
 
     const res = await POST(makeRequest());

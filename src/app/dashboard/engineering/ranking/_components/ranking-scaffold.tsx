@@ -3,7 +3,6 @@ import {
   bucketNormalisationDeltas,
   type AntiGamingRow,
   type AttributionBundle,
-  type AttributionContribution,
   type CompositeBundle,
   type ConfidenceBundle,
   type ConfidenceTieGroup,
@@ -11,9 +10,6 @@ import {
   type EffectiveSignalWeight,
   type EligibilityEntry,
   type EligibilityStatus,
-  type EngineerAttribution,
-  type EngineerAttributionMethod,
-  type EngineerConfidence,
   type EngineerNormalisation,
   type EngineeringRankingSnapshot,
   type LensDisagreementRow,
@@ -30,6 +26,7 @@ import {
   type StabilityEntry,
   type StabilityFlag,
 } from "@/lib/data/engineering-ranking";
+import { CompositeTopTable } from "./composite-table";
 
 function formatDate(iso: string): string {
   // Snapshot dates are always UTC midnight (either a bare `YYYY-MM-DD` string
@@ -934,9 +931,13 @@ function formatPct(value: number): string {
 function CompositeSection({
   composite,
   confidence,
+  attribution,
+  profileSlugByHash,
 }: {
   composite: CompositeBundle;
   confidence: ConfidenceBundle;
+  attribution: AttributionBundle;
+  profileSlugByHash: Record<string, string>;
 }) {
   const scored = composite.entries.filter(
     (e) => e.composite !== null && e.rank !== null,
@@ -990,7 +991,12 @@ function CompositeSection({
         </div>
       )}
 
-      <CompositeTopTable composite={composite} confidence={confidence} />
+      <CompositeTopTable
+        composite={composite}
+        confidence={confidence}
+        attribution={attribution}
+        profileSlugByHash={profileSlugByHash}
+      />
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="rounded-md border border-border/40 bg-background/60 p-4">
@@ -1367,453 +1373,6 @@ function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
   );
 }
 
-function ConfidenceBand({ entry }: { entry: EngineerConfidence | undefined }) {
-  if (!entry || entry.composite === null || entry.ciLow === null || entry.ciHigh === null) {
-    return <span className="text-[10px] italic text-muted-foreground">no band</span>;
-  }
-  const low = Math.max(0, Math.min(100, entry.ciLow));
-  const high = Math.max(0, Math.min(100, entry.ciHigh));
-  const point = Math.max(0, Math.min(100, entry.composite));
-  const tone = entry.inTieGroup ? "bg-warning/30" : "bg-primary/25";
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="relative h-2 w-32 rounded-full bg-muted/50">
-        <div
-          className={`absolute top-0 h-2 rounded-full ${tone}`}
-          style={{
-            left: `${low}%`,
-            width: `${Math.max(0.5, high - low)}%`,
-          }}
-        />
-        <div
-          className="absolute top-[-2px] h-3 w-[2px] bg-foreground"
-          style={{ left: `calc(${point}% - 1px)` }}
-        />
-      </div>
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-        <span>
-          {low.toFixed(0)}–{high.toFixed(0)}
-        </span>
-        {entry.inTieGroup && entry.tieGroupId !== null && (
-          <span className="rounded-sm border border-warning/40 bg-warning/10 px-1 text-warning">
-            tie {entry.tieGroupId}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CompositeTopTable({
-  composite,
-  confidence,
-}: {
-  composite: CompositeBundle;
-  confidence: ConfidenceBundle;
-}) {
-  const ciByHash = new Map(confidence.entries.map((c) => [c.emailHash, c]));
-  return (
-    <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
-      <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        All {composite.ranked.length} engineers by composite
-      </h4>
-      {composite.ranked.length === 0 ? (
-        <p className="mt-3 text-xs italic text-muted-foreground">
-          No engineers have a composite yet — fewer than two methods are scored
-          for any competitive engineer in this snapshot.
-        </p>
-      ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs">
-            <thead>
-              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                <th className="w-8 py-2 pr-2 text-right font-medium">#</th>
-                <th className="py-2 pr-3 font-medium">Engineer</th>
-                <th className="py-2 pr-3 font-medium">Discipline · Level</th>
-                <th className="py-2 pr-3 text-right font-medium">A output</th>
-                <th className="py-2 pr-3 text-right font-medium">B impact</th>
-                <th className="py-2 pr-3 text-right font-medium">C delivery</th>
-                <th className="py-2 pr-3 text-right font-medium">D quality</th>
-                <th className="py-2 pr-3 text-right font-medium">Adjusted</th>
-                <th className="py-2 pr-3 text-right font-medium">Composite</th>
-                <th className="py-2 pr-3 font-medium">80% CI</th>
-                <th className="py-2 pr-3 text-right font-medium">Rank CI</th>
-                <th className="py-2 pr-3 text-right font-medium">Methods</th>
-              </tr>
-            </thead>
-            <tbody>
-              {composite.ranked.map((e) => {
-                const ci = ciByHash.get(e.emailHash);
-                return (
-                  <tr
-                    key={e.emailHash || e.displayName}
-                    className="border-b border-border/30 align-top"
-                  >
-                    <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
-                      {e.rank}
-                    </td>
-                    <td className="py-2 pr-3 text-foreground">
-                      {e.displayName}
-                    </td>
-                    <td className="py-2 pr-3 text-muted-foreground">
-                      {e.discipline} · {e.levelLabel}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {formatPercentile(e.output)}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {formatPercentile(e.impact)}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {formatPercentile(e.delivery)}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {formatPercentile(e.quality)}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {formatPercentile(e.adjusted)}
-                    </td>
-                    <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
-                      {formatPercentile(e.composite)}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <ConfidenceBand entry={ci} />
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {ci && ci.ciRankLow !== null && ci.ciRankHigh !== null
-                        ? `${ci.ciRankLow}–${ci.ciRankHigh}`
-                        : "—"}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {e.presentMethodCount} / 5
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ATTRIBUTION_TOP_N = 25 as const;
-
-function formatRawValue(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  const abs = Math.abs(value);
-  if (abs >= 1_000 || abs < 0.01) {
-    return value.toLocaleString(undefined, {
-      maximumFractionDigits: 0,
-    });
-  }
-  return value.toFixed(2);
-}
-
-function formatLift(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}`;
-}
-
-function MethodBreakdown({
-  method,
-}: {
-  method: EngineerAttributionMethod;
-}) {
-  return (
-    <div className="rounded-md border border-border/40 bg-background/60 p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            {method.label}
-          </div>
-          <div className="text-[11px] italic text-muted-foreground/80">
-            {method.presentReason}
-          </div>
-        </div>
-        <div
-          className={`font-display text-lg italic tabular-nums ${
-            method.present ? "text-foreground" : "text-muted-foreground"
-          }`}
-        >
-          {method.present ? formatPercentile(method.score) : "absent"}
-        </div>
-      </div>
-      {method.components.length === 0 ? (
-        <p className="mt-2 text-[11px] italic text-muted-foreground">
-          No components surfaced for this method.
-        </p>
-      ) : (
-        <table className="mt-2 w-full border-collapse text-left text-[11px]">
-          <thead>
-            <tr className="border-b border-border/40 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              <th className="py-1 pr-2 font-medium">Signal</th>
-              <th className="py-1 pr-2 text-right font-medium">Weight</th>
-              <th className="py-1 pr-2 text-right font-medium">Raw</th>
-              <th className="py-1 pr-2 text-right font-medium">Percentile</th>
-              <th className="py-1 pr-2 text-right font-medium">Lift</th>
-            </tr>
-          </thead>
-          <tbody>
-            {method.components.map((component) => (
-              <tr
-                key={`${method.method}-${component.signal}`}
-                className="border-b border-border/20 align-top"
-              >
-                <td
-                  className={`py-1 pr-2 ${
-                    component.kind === "absent"
-                      ? "italic text-muted-foreground"
-                      : "text-foreground"
-                  }`}
-                >
-                  {component.signal}
-                  {component.kind === "absent" && component.absenceReason && (
-                    <div className="text-[10px] italic text-muted-foreground/80">
-                      {component.absenceReason}
-                    </div>
-                  )}
-                </td>
-                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
-                  {(component.weightInMethod * 100).toFixed(0)}%
-                </td>
-                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
-                  {formatRawValue(component.rawValue)}
-                </td>
-                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
-                  {formatPercentile(component.percentile)}
-                </td>
-                <td
-                  className={`py-1 pr-2 text-right tabular-nums ${
-                    component.approxCompositeLift === null
-                      ? "text-muted-foreground"
-                      : component.approxCompositeLift > 0
-                        ? "text-primary"
-                        : "text-destructive"
-                  }`}
-                >
-                  {formatLift(component.approxCompositeLift)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-}
-
-function DriverList({
-  drivers,
-  tone,
-  emptyText,
-}: {
-  drivers: AttributionContribution[];
-  tone: "positive" | "negative";
-  emptyText: string;
-}) {
-  if (drivers.length === 0) {
-    return (
-      <p className="text-[11px] italic text-muted-foreground">{emptyText}</p>
-    );
-  }
-  const color = tone === "positive" ? "text-primary" : "text-destructive";
-  return (
-    <ul className="space-y-1 text-[11px]">
-      {drivers.map((driver) => (
-        <li
-          key={`${driver.method}-${driver.signal}`}
-          className="flex items-baseline justify-between gap-2"
-        >
-          <span className="text-foreground">
-            <span className="text-muted-foreground">[{driver.method}]</span>{" "}
-            {driver.signal}
-          </span>
-          <span className={`tabular-nums ${color}`}>
-            {formatLift(driver.approxCompositeLift)}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function EngineerAttributionPanel({
-  entry,
-}: {
-  entry: EngineerAttribution;
-}) {
-  const rankLabel =
-    entry.rank === null ? "Unranked" : `#${entry.rank}`;
-  const composite = formatPercentile(entry.compositeScore);
-  const reconciliationTone = entry.reconciliation.matches
-    ? "text-primary"
-    : "text-destructive";
-  return (
-    <details className="rounded-md border border-border/40 bg-background/60 open:border-border/70 open:bg-background/80">
-      <summary className="flex cursor-pointer flex-wrap items-baseline gap-3 px-3 py-2 text-xs">
-        <span className="w-10 font-mono text-muted-foreground">
-          {rankLabel}
-        </span>
-        <span className="flex-1 font-semibold text-foreground">
-          {entry.displayName}
-        </span>
-        <span className="text-muted-foreground">
-          {entry.discipline} · {entry.levelLabel}
-        </span>
-        <span className="font-display italic text-foreground">
-          {composite}
-        </span>
-        <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          {entry.presentMethodCount} / 5 methods
-        </span>
-      </summary>
-      <div className="space-y-4 border-t border-border/30 p-3">
-        <div className="grid gap-3 lg:grid-cols-2">
-          {entry.methods.map((method) => (
-            <MethodBreakdown key={method.method} method={method} />
-          ))}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <div className="rounded-md border border-border/40 bg-background/60 p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
-              Top lifts (what pushed them up)
-            </div>
-            <div className="mt-2">
-              <DriverList
-                drivers={entry.topPositiveDrivers}
-                tone="positive"
-                emptyText="No present signal lifted this engineer above the neutral 50."
-              />
-            </div>
-          </div>
-          <div className="rounded-md border border-border/40 bg-background/60 p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-destructive">
-              Top drags (what held them down)
-            </div>
-            <div className="mt-2">
-              <DriverList
-                drivers={entry.topNegativeDrivers}
-                tone="negative"
-                emptyText="No present signal dragged this engineer below the neutral 50."
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-3">
-          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
-            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Reconciliation
-            </div>
-            <p className={`mt-1 italic ${reconciliationTone}`}>
-              {entry.reconciliation.matches
-                ? "median(methods) = composite"
-                : "median(methods) ≠ composite — methodology defect"}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              recomputed {formatPercentile(entry.reconciliation.recomputedComposite)}
-              {" "}·{" "}stored {composite}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              delta{" "}
-              {entry.reconciliation.delta === null
-                ? "—"
-                : entry.reconciliation.delta.toFixed(3)}
-            </p>
-          </div>
-          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
-            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Discipline peer comparison
-            </div>
-            <p className="mt-1 text-muted-foreground">
-              {entry.peerComparison.disciplineCohort?.note ??
-                "No discipline cohort attached (engineer unscored)."}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              raw{" "}
-              {formatPercentile(entry.peerComparison.rawPercentile)}
-              {" "}→ adjusted{" "}
-              {formatPercentile(entry.peerComparison.adjustedPercentile)}{" "}
-              ({formatLift(entry.peerComparison.adjustmentLift)})
-            </p>
-          </div>
-          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
-            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Evidence
-            </div>
-            <p className="mt-1 text-muted-foreground">
-              GitHub:{" "}
-              {entry.evidence.githubLogin ? (
-                entry.evidence.githubPrSearchUrl ? (
-                  <a
-                    href={entry.evidence.githubPrSearchUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-primary underline"
-                  >
-                    {entry.evidence.githubLogin}
-                  </a>
-                ) : (
-                  <span>{entry.evidence.githubLogin}</span>
-                )
-              ) : (
-                <span className="italic">unmapped</span>
-              )}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              Impact model:{" "}
-              {entry.evidence.impactModelPresent ? "in training set" : "absent"}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              Squad context:{" "}
-              {entry.evidence.squadContextPresent ? "joined" : "not joined"}
-            </p>
-            {entry.evidence.notes.length > 0 && (
-              <ul className="mt-2 list-disc space-y-1 pl-4 italic">
-                {entry.evidence.notes.map((note) => (
-                  <li key={note}>{note}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
-          <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            Manager · squad · pillar
-          </div>
-          <p className="mt-1 text-muted-foreground">
-            Manager: {entry.context.manager ?? "—"}
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            Squad:{" "}
-            {entry.context.canonicalSquad?.name ??
-              entry.context.rawSquad ??
-              "—"}
-            {entry.context.canonicalSquad?.pmName
-              ? ` · PM ${entry.context.canonicalSquad.pmName}`
-              : ""}
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            Pillar: {entry.context.canonicalSquad?.pillar ?? entry.context.pillar}
-          </p>
-        </div>
-
-        {entry.absentSignals.length > 0 && (
-          <p className="text-[11px] italic text-muted-foreground">
-            Labelled absent for this engineer:{" "}
-            {entry.absentSignals.join(", ")}.
-          </p>
-        )}
-      </div>
-    </details>
-  );
-}
-
 function AttributionSection({
   attribution,
 }: {
@@ -1825,7 +1384,6 @@ function AttributionSection({
   const unscored = attribution.entries.filter(
     (e) => e.rank === null || e.compositeScore === null,
   );
-  const surfaced = scored.slice(0, ATTRIBUTION_TOP_N);
   const reconciliationFailures = attribution.entries.filter(
     (e) => !e.reconciliation.matches,
   );
@@ -1838,6 +1396,11 @@ function AttributionSection({
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
             {attribution.contract}
+          </p>
+          <p className="mt-2 text-xs italic text-muted-foreground">
+            Per-engineer score breakdowns and PR evidence now live inline with
+            the composite table above — click any engineer row to expand the
+            methods, top lifts / drags, and evidence links.
           </p>
         </div>
         <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -1854,32 +1417,10 @@ function AttributionSection({
         <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[11px] text-destructive">
           {reconciliationFailures.length} engineer
           {reconciliationFailures.length === 1 ? "" : "s"} failed the
-          reconciliation check — methodology bug, not display noise. Rows are
-          tagged below.
+          reconciliation check — methodology bug, not display noise. Expand
+          the offending rows in the composite table for details.
         </div>
       )}
-
-      <div className="mt-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          Top {surfaced.length} ranked engineers — click to expand
-        </div>
-        {surfaced.length === 0 ? (
-          <p className="mt-3 text-xs italic text-muted-foreground">
-            No scored engineers yet. Live GitHub, impact-model, and Swarmia
-            data must be populating the signal rows before the composite can
-            produce a ranked drilldown.
-          </p>
-        ) : (
-          <div className="mt-3 space-y-2">
-            {surfaced.map((entry) => (
-              <EngineerAttributionPanel
-                key={entry.emailHash || entry.displayName}
-                entry={entry}
-              />
-            ))}
-          </div>
-        )}
-      </div>
 
       {unscored.length > 0 && (
         <details className="mt-4 rounded-md border border-border/40 bg-background/60 p-3 text-xs">
@@ -2833,8 +2374,10 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
 
 export function RankingScaffold({
   snapshot,
+  profileSlugByHash,
 }: {
   snapshot: EngineeringRankingSnapshot;
+  profileSlugByHash: Record<string, string>;
 }) {
   return (
     <div className="space-y-6">
@@ -2905,6 +2448,8 @@ export function RankingScaffold({
       <CompositeSection
         composite={snapshot.composite}
         confidence={snapshot.confidence}
+        attribution={snapshot.attribution}
+        profileSlugByHash={profileSlugByHash}
       />
 
       <ConfidenceSection confidence={snapshot.confidence} />
