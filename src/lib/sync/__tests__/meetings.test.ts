@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 // Hoisted mocks so factories can see them
 // ---------------------------------------------------------------------------
 
-const { granolaMock, phaseTrackerMock, dbState } = vi.hoisted(() => {
+const { granolaMock, phaseTrackerMock, dbState, insertSpy } = vi.hoisted(() => {
   return {
     granolaMock: {
       getAllNotesSince: vi.fn(),
@@ -18,6 +18,13 @@ const { granolaMock, phaseTrackerMock, dbState } = vi.hoisted(() => {
     dbState: {
       selectQueue: [] as unknown[][],
       selectIndex: 0,
+    },
+    // Captures rows passed to db.insert(...).values(...) and the set
+    // payload passed to .onConflictDoUpdate({ set }) so tests can assert
+    // the shape persisted to the DB (e.g. sanitized summary).
+    insertSpy: {
+      values: vi.fn(),
+      setOnConflict: vi.fn(),
     },
   };
 });
@@ -91,10 +98,16 @@ vi.mock("@/lib/db", () => {
     db: {
       select,
       insert: vi.fn(() => ({
-        values: vi.fn(() => ({
-          onConflictDoUpdate: vi.fn(() => Promise.resolve()),
-          returning: vi.fn(() => Promise.resolve([{ id: 999 }])),
-        })),
+        values: vi.fn((row: unknown) => {
+          insertSpy.values(row);
+          return {
+            onConflictDoUpdate: vi.fn((args: { set?: unknown } = {}) => {
+              insertSpy.setOnConflict(args.set);
+              return Promise.resolve();
+            }),
+            returning: vi.fn(() => Promise.resolve([{ id: 999 }])),
+          };
+        }),
       })),
       update: vi.fn(() => ({
         set: vi.fn(() => ({
@@ -136,6 +149,8 @@ describe("syncAllGranolaNotes personal-token handling", () => {
     phaseTrackerMock.endPhase.mockReset();
     phaseTrackerMock.startPhase.mockImplementation(async () => 1);
     phaseTrackerMock.endPhase.mockImplementation(async () => undefined);
+    insertSpy.values.mockReset();
+    insertSpy.setOnConflict.mockReset();
     dbState.selectQueue = [];
     dbState.selectIndex = 0;
   });
@@ -265,5 +280,103 @@ describe("syncAllGranolaNotes personal-token handling", () => {
     expect(granolaMock.getAllNotesSince).toHaveBeenCalledTimes(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("roken_"); // last 6 of "user_broken_"
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2: Summary sanitization — Granola summary_markdown / summary_text must be
+// sanitized before it is persisted to meetingNotes.summary.
+// ---------------------------------------------------------------------------
+
+describe("syncAllGranolaNotes summary sanitization", () => {
+  beforeEach(() => {
+    process.env.USER_INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
+    delete process.env.GRANOLA_API_TOKEN;
+    granolaMock.getAllNotesSince.mockReset();
+    granolaMock.getNote.mockReset();
+    phaseTrackerMock.startPhase.mockReset();
+    phaseTrackerMock.endPhase.mockReset();
+    phaseTrackerMock.startPhase.mockImplementation(async () => 1);
+    phaseTrackerMock.endPhase.mockImplementation(async () => undefined);
+    insertSpy.values.mockReset();
+    insertSpy.setOnConflict.mockReset();
+    dbState.selectQueue = [];
+    dbState.selectIndex = 0;
+  });
+
+  afterEach(() => {
+    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
+  });
+
+  async function runWithSummary(summaryMarkdown: string | null, summaryText: string | null) {
+    const envelope = encryptUserIntegrationToken("grn_real_token");
+    queueSelectResults([{ clerkUserId: "user_san__", apiKey: envelope }], []);
+
+    granolaMock.getAllNotesSince.mockResolvedValueOnce([
+      { id: "note_san", title: "t", updated_at: "2026-04-01T00:00:00Z" },
+    ]);
+    granolaMock.getNote.mockResolvedValueOnce({
+      id: "note_san",
+      title: "t",
+      summary_markdown: summaryMarkdown,
+      summary_text: summaryText,
+      transcript: null,
+      attendees: [],
+      created_at: "2026-04-01T00:00:00Z",
+      calendar_event: null,
+    });
+
+    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
+    expect(result.errors).toEqual([]);
+    expect(insertSpy.values).toHaveBeenCalledTimes(1);
+    expect(insertSpy.setOnConflict).toHaveBeenCalledTimes(1);
+    const insertedRow = insertSpy.values.mock.calls[0][0] as { summary: string | null };
+    const onConflictSet = insertSpy.setOnConflict.mock.calls[0][0] as {
+      summary: string | null;
+    };
+    return { inserted: insertedRow.summary, onConflict: onConflictSet.summary };
+  }
+
+  it("strips <script> from Granola summary_markdown before persisting", async () => {
+    const malicious =
+      "# Summary\n<script>steal()</script>\n- action item one\n- action item two";
+    const { inserted, onConflict } = await runWithSummary(malicious, null);
+
+    expect(inserted).not.toContain("<script>");
+    expect(inserted).toContain("# Summary");
+    expect(inserted).toContain("action item one");
+    // Both the initial insert and the onConflict update use the same sanitized value.
+    expect(onConflict).toBe(inserted);
+  });
+
+  it("strips event handlers, iframes, and javascript: URLs together", async () => {
+    const malicious =
+      '# Hi\n<iframe src="https://evil.tld"></iframe>\n' +
+      '<a href="javascript:alert(1)" onclick="pwn()">click</a>';
+    const { inserted } = await runWithSummary(malicious, null);
+
+    expect(inserted).not.toContain("<iframe");
+    expect(inserted).not.toContain("onclick");
+    expect(inserted).not.toContain("javascript:");
+    expect(inserted).toContain("blocked:");
+  });
+
+  it("falls back to summary_text when summary_markdown is null and sanitizes it", async () => {
+    const { inserted } = await runWithSummary(
+      null,
+      "<script>alert(1)</script>clean text"
+    );
+    expect(inserted).toBe("clean text");
+  });
+
+  it("passes through benign markdown unchanged", async () => {
+    const benign = "# Meeting\n\n- followup: ship it\n[docs](https://example.com)";
+    const { inserted } = await runWithSummary(benign, null);
+    expect(inserted).toBe(benign);
+  });
+
+  it("persists null summary when Granola returns neither markdown nor text", async () => {
+    const { inserted } = await runWithSummary(null, null);
+    expect(inserted).toBeNull();
   });
 });

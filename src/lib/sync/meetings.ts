@@ -21,6 +21,7 @@ import {
   decryptUserIntegrationToken,
   isEncryptedToken,
 } from "@/lib/security/user-integration-tokens.server";
+import { sanitizeSummaryHtml } from "@/lib/validation/sanitize-html";
 
 type MeetingsSyncResult = {
   status: "success" | "partial" | "error" | "cancelled";
@@ -129,7 +130,8 @@ export async function syncGranolaNotes(
         ?.map((entry) => `${entry.speaker_source}: ${entry.text}`)
         .join("\n") ?? null;
 
-      const summary = full.summary_markdown ?? full.summary_text ?? null;
+      const rawSummary = full.summary_markdown ?? full.summary_text ?? null;
+      const summary = sanitizeSummaryHtml(rawSummary);
 
       await db
         .insert(meetingNotes)
