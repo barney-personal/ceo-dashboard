@@ -185,6 +185,7 @@ export default async function DataStatusPage() {
     codeReviewBackfill.latestAnalysedAt !== null &&
     now.getTime() - codeReviewBackfill.latestAnalysedAt.getTime() <
       CODE_REVIEW_RECENT_ACTIVITY_MS;
+  const isCodeReviewBackfillRunning = hasRecentCodeReviewActivity;
   const activeModeRun = recentRuns.find((run) => {
     if (run.source !== "mode") {
       return false;
@@ -313,7 +314,11 @@ export default async function DataStatusPage() {
 
       <SourceHealthSection healths={sourceHealths} />
 
-      <CodeReviewBackfillSection status={codeReviewBackfill} now={now} />
+      <CodeReviewBackfillSection
+        status={codeReviewBackfill}
+        now={now}
+        isBackfillRunning={isCodeReviewBackfillRunning}
+      />
 
       {slackSyncStatus && <SlackMembersSyncCard status={slackSyncStatus} />}
 
@@ -413,9 +418,11 @@ function formatInteger(value: number): string {
 function CodeReviewBackfillSection({
   status,
   now,
+  isBackfillRunning,
 }: {
   status: CodeReviewBackfillStatus | null;
   now: Date;
+  isBackfillRunning: boolean;
 }) {
   if (!status) {
     return null;
@@ -426,17 +433,13 @@ function CodeReviewBackfillSection({
   const statusTone =
     status.remainingCount === 0
       ? "border-positive/25 bg-positive/10 text-positive"
-      : status.latestAnalysedAt !== null &&
-          now.getTime() - status.latestAnalysedAt.getTime() <
-            CODE_REVIEW_RECENT_ACTIVITY_MS
+      : isBackfillRunning
         ? "border-warning/25 bg-warning/10 text-warning"
         : "border-border/60 bg-muted/30 text-muted-foreground";
   const statusLabel =
     status.remainingCount === 0
       ? "Current"
-      : status.latestAnalysedAt !== null &&
-          now.getTime() - status.latestAnalysedAt.getTime() <
-            CODE_REVIEW_RECENT_ACTIVITY_MS
+      : isBackfillRunning
         ? "Backfill running"
         : "Backlog pending";
 

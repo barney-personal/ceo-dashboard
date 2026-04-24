@@ -463,4 +463,37 @@ describe("getCodeReviewBackfillStatus", () => {
     expect(status.latestAnalysedAt).toBeNull();
     expect(status.oldestRemainingMergedAt).toBeNull();
   });
+
+  it("reports zero progress and null latest analysis when the backlog has not started", async () => {
+    const oldestMissing = new Date("2026-04-18T10:00:00Z");
+    const newestMissing = new Date("2026-04-22T10:00:00Z");
+    stubSelectSequence([
+      [
+        {
+          repo: "acme/api",
+          prNumber: 1,
+          authorLogin: "alice",
+          mergedAt: oldestMissing,
+        },
+        {
+          repo: "acme/web",
+          prNumber: 2,
+          authorLogin: "bob",
+          mergedAt: newestMissing,
+        },
+      ],
+      [],
+      [],
+    ]);
+
+    const status = await getCodeReviewBackfillStatus();
+
+    expect(status.eligibleTotal).toBe(2);
+    expect(status.analysedCount).toBe(0);
+    expect(status.remainingCount).toBe(2);
+    expect(status.progressPct).toBe(0);
+    expect(status.latestAnalysedAt).toBeNull();
+    expect(status.oldestRemainingMergedAt).toEqual(oldestMissing);
+    expect(status.newestRemainingMergedAt).toEqual(newestMissing);
+  });
 });
