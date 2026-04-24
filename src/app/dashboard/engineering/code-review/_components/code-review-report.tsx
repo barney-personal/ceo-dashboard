@@ -319,6 +319,138 @@ function pillClass(
   return `${base} ${palette}`;
 }
 
+type SortKey =
+  | "engineer"
+  | "cohort"
+  | "prCount"
+  | "evidence"
+  | "craft"
+  | "challenge"
+  | "landing"
+  | "snapshot"
+  | "delta"
+  | "flags";
+
+type SortDirection = "asc" | "desc";
+
+interface ColumnSpec {
+  key: SortKey;
+  label: string;
+  tooltip: string;
+  align: "left" | "right";
+  defaultDirection: SortDirection;
+  numeric: boolean;
+  getValue: (engineer: EngineerRollup) => number | string | null;
+}
+
+function buildColumns(windowDays: number): ColumnSpec[] {
+  return [
+    {
+      key: "engineer",
+      label: "Engineer",
+      tooltip:
+        "Author of the merged PRs read in this window. Click any row to open the per-PR detail.",
+      align: "left",
+      defaultDirection: "asc",
+      numeric: false,
+      getValue: (engineer) =>
+        (engineer.employeeName ?? engineer.authorLogin).toLowerCase(),
+    },
+    {
+      key: "cohort",
+      label: "Mostly works on",
+      tooltip:
+        "The surface area (backend, frontend, infra, mixed…) most of this engineer's PRs touch. Scores below are peer-relative within this cohort.",
+      align: "left",
+      defaultDirection: "asc",
+      numeric: false,
+      getValue: (engineer) => engineer.cohort.toLowerCase(),
+    },
+    {
+      key: "prCount",
+      label: "PRs read",
+      tooltip:
+        "Merged PRs the model read in this window. The 'eff.' number is the recency-weighted count — recent PRs count slightly more than older ones, and that effective count drives evidence.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.prCount,
+    },
+    {
+      key: "evidence",
+      label: "Evidence",
+      tooltip:
+        "How much the model has to go on (0–100%). Blends effective PR count with the model's average per-PR confidence. Higher is more evidence, not better quality — thin evidence pulls the snapshot toward the middle.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.confidencePct,
+    },
+    {
+      key: "craft",
+      label: "Craft",
+      tooltip:
+        "Peer-relative craft percentile (0–100) within this cohort. Blends execution, test adequacy, risk handling, and reviewability across every PR in the window.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.qualityPercentile,
+    },
+    {
+      key: "challenge",
+      label: "Challenge",
+      tooltip:
+        "Peer-relative percentile (0–100) for the technical difficulty of the work that landed. Higher means the PRs in this window were more challenging than the cohort average — it is not a judgement of the engineer.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.difficultyPercentile,
+    },
+    {
+      key: "landing",
+      label: "Landing",
+      tooltip:
+        "Peer-relative percentile (0–100) for how smoothly work landed: no reverts within 14 days, few post-review commits, and clean merges. Higher is smoother landings.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.reliabilityPercentile,
+    },
+    {
+      key: "snapshot",
+      label: "Snapshot",
+      tooltip:
+        "Blended summary (0–100) of craft, challenge, landing, review flow, and throughput percentiles. Shrunk toward the cohort median when evidence is light so thin samples never produce confident scores.",
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.finalScore,
+    },
+    {
+      key: "delta",
+      label: `Δ vs prior ${windowDays}d`,
+      tooltip: `Change in snapshot vs the previous ${windowDays}-day window of the same length. '—' means there is no prior window to compare to yet.`,
+      align: "right",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) =>
+        engineer.prevFinalScore === null
+          ? null
+          : engineer.finalScore - engineer.prevFinalScore,
+    },
+    {
+      key: "flags",
+      label: "Things to chat about",
+      tooltip:
+        "Diagnostic flags raised during the reading — light samples, mixed signals, lots of review back-and-forth, PRs worth a second look, reverts. Hover any pill for the detail.",
+      align: "left",
+      defaultDirection: "desc",
+      numeric: true,
+      getValue: (engineer) => engineer.flags.length,
+    },
+  ];
+}
+
 function EngineerTable({
   rows,
   windowDays,
@@ -328,6 +460,43 @@ function EngineerTable({
   windowDays: number;
   onSelect: (login: string) => void;
 }) {
+  const columns = useMemo(() => buildColumns(windowDays), [windowDays]);
+  const [sortKey, setSortKey] = useState<SortKey>("snapshot");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  const sortedRows = useMemo(() => {
+    const column = columns.find((col) => col.key === sortKey) ?? columns[0];
+    const direction = sortDirection === "asc" ? 1 : -1;
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const aValue = column.getValue(a);
+      const bValue = column.getValue(b);
+      // Null values always sort to the bottom regardless of direction.
+      if (aValue === null && bValue === null) return 0;
+      if (aValue === null) return 1;
+      if (bValue === null) return -1;
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        if (aValue === bValue) return 0;
+        return aValue < bValue ? -1 * direction : 1 * direction;
+      }
+      return (
+        String(aValue).localeCompare(String(bValue), undefined, {
+          sensitivity: "base",
+        }) * direction
+      );
+    });
+    return copy;
+  }, [rows, sortKey, sortDirection, columns]);
+
+  function handleSort(column: ColumnSpec) {
+    if (column.key === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(column.key);
+      setSortDirection(column.defaultDirection);
+    }
+  }
+
   if (rows.length === 0) {
     return (
       <div className="rounded-lg border border-border/60 bg-muted/10 p-5 text-sm text-muted-foreground">
@@ -342,45 +511,55 @@ function EngineerTable({
       <table className="min-w-full text-[12px]">
         <thead className="bg-muted/20 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
           <tr>
-            <th className="px-3 py-2 text-left">Engineer</th>
-            <th className="px-3 py-2 text-left">Mostly works on</th>
-            <th className="px-3 py-2 text-right">PRs read</th>
-            <th
-              className="px-3 py-2 text-right"
-              title="How much evidence the model has. Higher is more, not better."
-            >
-              Evidence
-            </th>
-            <th
-              className="px-3 py-2 text-right"
-              title="Craft signals (execution, tests, risk handling, reviewability), peer-relative."
-            >
-              Craft
-            </th>
-            <th
-              className="px-3 py-2 text-right"
-              title="Average technical difficulty of the work in this window, peer-relative."
-            >
-              Challenge
-            </th>
-            <th
-              className="px-3 py-2 text-right"
-              title="How smoothly the work landed (no reverts, fewer post-merge fixes)."
-            >
-              Landing
-            </th>
-            <th
-              className="px-3 py-2 text-right"
-              title="Blended snapshot, shrunk toward the middle when evidence is light."
-            >
-              Snapshot
-            </th>
-            <th className="px-3 py-2 text-right">{`Δ vs prior ${windowDays}d`}</th>
-            <th className="px-3 py-2 text-left">Things to chat about</th>
+            {columns.map((column) => {
+              const isActive = column.key === sortKey;
+              const indicator = isActive
+                ? sortDirection === "asc"
+                  ? "▲"
+                  : "▼"
+                : "↕";
+              return (
+                <th
+                  key={column.key}
+                  scope="col"
+                  aria-sort={
+                    isActive
+                      ? sortDirection === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                  className={`px-3 py-2 ${
+                    column.align === "right" ? "text-right" : "text-left"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleSort(column)}
+                    title={column.tooltip}
+                    className={`inline-flex cursor-help items-center gap-1 whitespace-nowrap uppercase tracking-[0.12em] transition-colors hover:text-foreground ${
+                      column.align === "right" ? "flex-row-reverse" : ""
+                    } ${isActive ? "text-foreground" : ""}`}
+                  >
+                    <span className="underline decoration-dotted decoration-muted-foreground/50 underline-offset-[3px]">
+                      {column.label}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className={`text-[9px] ${
+                        isActive ? "opacity-100" : "opacity-40"
+                      }`}
+                    >
+                      {indicator}
+                    </span>
+                  </button>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {rows.map((engineer, index) => (
+          {sortedRows.map((engineer, index) => (
             <tr
               key={engineer.authorLogin}
               onClick={() => onSelect(engineer.authorLogin)}
