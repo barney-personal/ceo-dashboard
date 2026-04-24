@@ -462,6 +462,7 @@ describe("getCodeReviewBackfillStatus", () => {
     expect(status.progressPct).toBe(100);
     expect(status.latestAnalysedAt).toBeNull();
     expect(status.oldestRemainingMergedAt).toBeNull();
+    expect(status.newestRemainingMergedAt).toBeNull();
   });
 
   it("reports zero progress and null latest analysis when the backlog has not started", async () => {

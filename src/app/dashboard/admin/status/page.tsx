@@ -40,6 +40,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
+// If no analysis has completed within this window, stop polling so the
+// admin page does not refresh forever on a stale tab.
 const CODE_REVIEW_RECENT_ACTIVITY_MS = 15 * 60 * 1000;
 
 export default async function DataStatusPage() {
@@ -179,13 +181,12 @@ export default async function DataStatusPage() {
     const effectiveState = getEffectiveSyncState(run, now);
     return effectiveState === "queued" || effectiveState === "running";
   });
-  const hasRecentCodeReviewActivity =
+  const isCodeReviewBackfillRunning =
     codeReviewBackfill !== null &&
     codeReviewBackfill.remainingCount > 0 &&
     codeReviewBackfill.latestAnalysedAt !== null &&
     now.getTime() - codeReviewBackfill.latestAnalysedAt.getTime() <
       CODE_REVIEW_RECENT_ACTIVITY_MS;
-  const isCodeReviewBackfillRunning = hasRecentCodeReviewActivity;
   const activeModeRun = recentRuns.find((run) => {
     if (run.source !== "mode") {
       return false;
@@ -285,7 +286,7 @@ export default async function DataStatusPage() {
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
-      {(hasRunning || hasRecentCodeReviewActivity) && (
+      {(hasRunning || isCodeReviewBackfillRunning) && (
         <AutoRefresh intervalMs={5000} />
       )}
 
