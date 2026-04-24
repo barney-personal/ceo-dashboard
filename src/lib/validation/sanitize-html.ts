@@ -46,6 +46,110 @@ const DATA_SCHEME = /data\s*:[^\s"')<>]+/gi;
 // the result is obviously inert rather than accidentally executable.
 const BLOCKED_SCHEME = "blocked:";
 
+// ---------------------------------------------------------------------------
+// URL-scheme obfuscation bypass defenses (M15).
+//
+// A literal regex like `/javascript\s*:/` does not catch browser-normalized
+// obfuscation. The WHATWG URL parser strips ASCII tab/LF/CR from the scheme,
+// and the HTML parser decodes numeric character references inside attribute
+// values and in markdown link targets. So `java\nscript:...`, `java&#x73;cript:...`,
+// `jav&#x09;ascript:...`, and `data&#58;text/html,...` all render as executable
+// `javascript:` / unsafe `data:` URLs even though the literal text does not
+// contain the dangerous scheme word.
+//
+// We handle this by scanning URL-accepting contexts (HTML attribute values
+// and markdown link targets), normalizing each URL value the way a browser
+// would (decode numeric char refs + strip 0x00-0x1F), and if the normalized
+// form starts with a dangerous scheme, replacing the URL content wholesale
+// with `blocked:`. Benign URLs (including ones with char refs in the path)
+// are left untouched — we only rewrite when normalization would change the
+// string AND the normalized form is dangerous.
+// ---------------------------------------------------------------------------
+
+const NUMERIC_CHAR_REF = /&#(x[0-9a-f]+|[0-9]+);/gi;
+// C0 controls (0x00-0x1F). Browsers strip ASCII tab/LF/CR from URL schemes;
+// we strip the full C0 range because other controls inside a scheme are
+// never valid and some renderers tolerate them.
+const URL_CONTROL_CHARS = /[\x00-\x1f]/g;
+
+function decodeNumericCharRefs(value: string): string {
+  return value.replace(NUMERIC_CHAR_REF, (_, codeStr: string) => {
+    const isHex = codeStr[0]?.toLowerCase() === "x";
+    const code = isHex ? parseInt(codeStr.slice(1), 16) : parseInt(codeStr, 10);
+    if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return "";
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return "";
+    }
+  });
+}
+
+function normalizeUrl(url: string): string {
+  return decodeNumericCharRefs(url).replace(URL_CONTROL_CHARS, "");
+}
+
+function isDangerousAfterNormalization(normalized: string): boolean {
+  const trimmed = normalized.replace(/^\s+/, "");
+  if (/^javascript\s*:/i.test(trimmed)) return true;
+  if (/^data\s*:/i.test(trimmed)) {
+    return !SAFE_DATA_IMAGE.test(trimmed);
+  }
+  return false;
+}
+
+// Only rewrite when normalization changed the URL AND the normalized form is
+// dangerous. Literal `javascript:` / `data:text/html,...` without obfuscation
+// is still handled by the downstream JAVASCRIPT_SCHEME / DATA_SCHEME passes
+// (which preserve more of the original string for diagnostic value).
+function maybeNeutralizeObfuscatedUrl(url: string): string | null {
+  const normalized = normalizeUrl(url);
+  if (normalized === url) return null;
+  return isDangerousAfterNormalization(normalized) ? BLOCKED_SCHEME : null;
+}
+
+const URL_ATTR_NAMES =
+  "href|src|xlink:href|formaction|action|background|poster|cite|manifest|ping";
+
+// Double-quoted URL attribute values: href="..." etc.
+const URL_ATTR_DOUBLE_QUOTED = new RegExp(
+  `\\b(${URL_ATTR_NAMES})(\\s*=\\s*)"([^"]*)"`,
+  "gi",
+);
+// Single-quoted URL attribute values: href='...' etc.
+const URL_ATTR_SINGLE_QUOTED = new RegExp(
+  `\\b(${URL_ATTR_NAMES})(\\s*=\\s*)'([^']*)'`,
+  "gi",
+);
+// Markdown link target: ](url) or ](url "title"). We only capture the URL
+// portion; title handling is unchanged.
+const MARKDOWN_LINK_TARGET = /(\]\(\s*)([^)\s]+)/g;
+
+function neutralizeObfuscatedUrlsInAttributes(input: string): string {
+  let out = input.replace(
+    URL_ATTR_DOUBLE_QUOTED,
+    (match, name: string, eq: string, url: string) => {
+      const replacement = maybeNeutralizeObfuscatedUrl(url);
+      return replacement == null ? match : `${name}${eq}"${replacement}"`;
+    },
+  );
+  out = out.replace(
+    URL_ATTR_SINGLE_QUOTED,
+    (match, name: string, eq: string, url: string) => {
+      const replacement = maybeNeutralizeObfuscatedUrl(url);
+      return replacement == null ? match : `${name}${eq}'${replacement}'`;
+    },
+  );
+  return out;
+}
+
+function neutralizeObfuscatedUrlsInMarkdown(input: string): string {
+  return input.replace(MARKDOWN_LINK_TARGET, (match, prefix: string, url: string) => {
+    const replacement = maybeNeutralizeObfuscatedUrl(url);
+    return replacement == null ? match : `${prefix}${replacement}`;
+  });
+}
+
 /**
  * Sanitize an untrusted markdown/HTML summary before it is persisted.
  *
@@ -84,6 +188,13 @@ export function sanitizeSummaryHtml(input: string | null | undefined): string | 
     out = out.replace(IFRAME_OPEN, "");
     out = out.replace(EVENT_HANDLER_ATTR, "");
   } while (out !== prev);
+
+  // Catch browser-normalized scheme obfuscations (control chars inside the
+  // scheme, HTML char refs in the scheme or colon) before the literal-scheme
+  // passes below. Benign URLs and literal `javascript:`/`data:` schemes are
+  // untouched here — the downstream passes handle them.
+  out = neutralizeObfuscatedUrlsInAttributes(out);
+  out = neutralizeObfuscatedUrlsInMarkdown(out);
 
   out = out.replace(JAVASCRIPT_SCHEME, BLOCKED_SCHEME);
 

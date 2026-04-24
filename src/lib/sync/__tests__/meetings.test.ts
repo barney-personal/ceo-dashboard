@@ -379,4 +379,20 @@ describe("syncAllGranolaNotes summary sanitization", () => {
     const { inserted } = await runWithSummary(null, null);
     expect(inserted).toBeNull();
   });
+
+  // M15: URL-scheme obfuscation bypass must not reach the DB.
+  it("neutralizes browser-normalized obfuscated URLs on both insert and conflict update", async () => {
+    const malicious =
+      '# Notes\n<a href="java&#x73;cript:alert(1)">click</a>\n' +
+      "[more](jav&#x09;ascript:alert(2))";
+    const { inserted, onConflict } = await runWithSummary(malicious, null);
+
+    expect(inserted).not.toMatch(/javascript\s*:/i);
+    expect(inserted).not.toContain("alert(1)");
+    expect(inserted).not.toContain("alert(2)");
+    expect(inserted).toContain("blocked:");
+    expect(inserted).toContain("# Notes");
+    // The on-conflict update path must apply the same sanitization as insert.
+    expect(onConflict).toBe(inserted);
+  });
 });

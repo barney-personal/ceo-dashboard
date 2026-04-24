@@ -178,6 +178,107 @@ describe("sanitizeSummaryHtml", () => {
     });
   });
 
+  describe("URL-scheme obfuscation (M15)", () => {
+    describe("control chars inside scheme", () => {
+      it("neutralizes javascript: with embedded newline in href", () => {
+        const input = '<a href="java\nscript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).not.toMatch(/java\s*script\s*:/i);
+        expect(result).toContain("blocked:");
+      });
+
+      it("neutralizes javascript: with embedded tab in href", () => {
+        const input = '<a href="java\tscript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes javascript: with embedded carriage return", () => {
+        const input = '<a href="java\rscript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+
+      it("neutralizes control-char obfuscated javascript: in single-quoted href", () => {
+        const input = "<a href='java\nscript:alert(1)'>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+    });
+
+    describe("HTML character reference obfuscation", () => {
+      it("neutralizes hex-encoded scheme letter in href", () => {
+        // &#x73; = 's'
+        const input = '<a href="java&#x73;cript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes decimal-encoded scheme letter in href", () => {
+        // &#115; = 's'
+        const input = '<a href="java&#115;cript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+
+      it("neutralizes hex-encoded colon in data: URL", () => {
+        // &#58; = ':'
+        const input = '<a href="data&#58;text/html,<b>x</b>">y</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("data&#58;");
+        expect(result).not.toContain("data:text/html");
+      });
+
+      it("neutralizes hex-encoded tab inside javascript scheme in markdown link", () => {
+        // &#x09; = tab
+        const input = "[x](jav&#x09;ascript:alert(1))";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+        // Markdown link prefix is preserved
+        expect(result).toContain("[x](");
+      });
+
+      it("neutralizes uppercase hex char ref", () => {
+        // &#X73; (uppercase X) = 's'
+        const input = '<a href="java&#X73;cript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+    });
+
+    describe("benign obfuscation-adjacent content is preserved", () => {
+      it("leaves http links with decimal char ref in path untouched", () => {
+        // &#47; = '/' — not dangerous even after decode
+        const input = '<a href="https://example.com&#47;path">docs</a>';
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves ordinary markdown http link with newline-adjacent text untouched", () => {
+        const input = "hi\n\n[docs](https://example.com/a?b=1)\n\nbye";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves plain text char refs untouched outside URL contexts", () => {
+        const input = "Temperature was 98.6&#176;F at the meeting.";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+    });
+
+    describe("idempotence for obfuscated payloads", () => {
+      it("re-sanitizing a neutralized obfuscated payload is a no-op", () => {
+        const dirty = '<a href="java&#x73;cript:alert(1)">x</a>';
+        const once = sanitizeSummaryHtml(dirty);
+        const twice = sanitizeSummaryHtml(once);
+        expect(twice).toBe(once);
+      });
+    });
+  });
+
   describe("idempotence", () => {
     it("sanitizing a sanitized malicious payload is a no-op", () => {
       const dirty =
