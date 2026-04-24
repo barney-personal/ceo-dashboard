@@ -7,6 +7,7 @@ import { getEngineeringViewResolution } from "@/lib/auth/engineering-view.server
 import { PageHeader } from "@/components/dashboard/page-header";
 import { EngineeringTabs } from "@/components/dashboard/engineering-tabs";
 import { EngineeringViewToggle } from "@/components/dashboard/engineering-view-toggle";
+import { EngineeringBRoot } from "@/components/dashboard/engineering-b/root";
 
 export default async function EngineeringLayout({
   children,
@@ -19,12 +20,18 @@ export default async function EngineeringLayout({
     getEngineeringViewResolution(),
   ]);
 
+  const isBSide = engineeringView.surface === "b-side";
+
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-6 2xl:max-w-[96rem]">
       <div className="flex items-start justify-between gap-4">
         <PageHeader
           title="Engineering"
-          description="Delivery health, team velocity, and individual activity."
+          description={
+            isBSide
+              ? "Single composite score, two personas — methodology visible on page."
+              : "Delivery health, team velocity, and individual activity."
+          }
         />
         <div className="flex flex-col items-end gap-2">
           {engineeringView.actualCeo && (
@@ -32,19 +39,21 @@ export default async function EngineeringLayout({
               initialToggleOn={engineeringView.toggleOn}
             />
           )}
-          <a
-            href="https://app.swarmia.com/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-xs text-muted-foreground shadow-warm transition-colors hover:text-primary"
-          >
-            Open in Swarmia
-            <ExternalLink className="h-3 w-3" />
-          </a>
+          {!isBSide && (
+            <a
+              href="https://app.swarmia.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-xs text-muted-foreground shadow-warm transition-colors hover:text-primary"
+            >
+              Open in Swarmia
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </div>
       </div>
 
-      {engineeringView.surface === "a-side" && (
+      {!isBSide && (
         /* Suspense boundary — EngineeringTabs uses useSearchParams(), which
             Next.js requires to sit under Suspense to avoid bailout warnings
             and to survive any future static rendering of children. */
@@ -67,7 +76,13 @@ export default async function EngineeringLayout({
         </Suspense>
       )}
 
-      <div className="pt-2">{children}</div>
+      <div className="pt-2">
+        {isBSide ? (
+          <EngineeringBRoot effectiveRole={engineeringView.effectiveRole} />
+        ) : (
+          children
+        )}
+      </div>
     </div>
   );
 }
