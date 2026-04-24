@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sync/request-auth", () => ({
   authorizeSyncRequest: vi.fn(),
+  authorizeSyncRequestWithIdentity: vi.fn(),
   syncRequestAccessErrorResponse: vi.fn(),
 }));
 
@@ -22,9 +23,16 @@ vi.mock("@/lib/sync/mode", () => ({
 
 import {
   authorizeSyncRequest,
+  authorizeSyncRequestWithIdentity,
   syncRequestAccessErrorResponse,
+  type SyncRequestAccess,
 } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
+import {
+  MANUAL_SYNC_RATE_LIMIT_MAX,
+  manualSyncRateLimitKey,
+  manualSyncRateLimiter,
+} from "@/lib/sync/rate-limit";
 import { validateModeReportSyncTarget } from "@/lib/sync/mode";
 import {
   awaitDrainStarted,
@@ -32,11 +40,15 @@ import {
   startBackgroundSyncDrain,
 } from "@/lib/sync/runtime";
 import { POST as postManagementAccounts } from "@/app/api/sync/management-accounts/route";
+import { POST as postGitHub } from "@/app/api/sync/github/route";
 import { POST as postMode } from "@/app/api/sync/mode/route";
 import { POST as postModeReport } from "@/app/api/sync/mode/report/route";
 import { POST as postSlack } from "@/app/api/sync/slack/route";
 
 const mockAuthorizeSyncRequest = vi.mocked(authorizeSyncRequest);
+const mockAuthorizeSyncRequestWithIdentity = vi.mocked(
+  authorizeSyncRequestWithIdentity
+);
 const mockSyncRequestAccessErrorResponse = vi.mocked(
   syncRequestAccessErrorResponse
 );
@@ -51,14 +63,15 @@ function drainHandle() {
 }
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-const routes = [
-  {
-    name: "mode",
-    source: "mode",
-    workerId: "web-mode",
-    handler: postMode,
-    url: "http://localhost/api/sync/mode",
-  },
+const modeRoute = {
+  name: "mode",
+  source: "mode",
+  workerId: "web-mode",
+  handler: postMode,
+  url: "http://localhost/api/sync/mode",
+} as const;
+
+const llmRoutes = [
   {
     name: "slack",
     source: "slack",
@@ -73,7 +86,31 @@ const routes = [
     handler: postManagementAccounts,
     url: "http://localhost/api/sync/management-accounts",
   },
+  {
+    name: "github",
+    source: "github",
+    workerId: "web-github",
+    handler: postGitHub,
+    url: "http://localhost/api/sync/github",
+  },
 ] as const;
+
+const routes = [modeRoute, ...llmRoutes] as const;
+type LlmRouteSource = (typeof llmRoutes)[number]["source"];
+
+function mockSyncAccess(access: SyncRequestAccess, userId = "user_ceo") {
+  mockAuthorizeSyncRequest.mockResolvedValue(access);
+  mockAuthorizeSyncRequestWithIdentity.mockResolvedValue(
+    access === "manual" ? { access: "manual", userId } : { access }
+  );
+}
+
+function exhaustManualRateLimit(source: LlmRouteSource, userId: string) {
+  const key = manualSyncRateLimitKey(source, userId);
+  for (let i = 0; i < MANUAL_SYNC_RATE_LIMIT_MAX; i += 1) {
+    expect(manualSyncRateLimiter.check(key).ok).toBe(true);
+  }
+}
 
 function makeRequest(url: string, body?: unknown) {
   const request = new Request(url, {
@@ -91,6 +128,7 @@ function makeRequest(url: string, body?: unknown) {
 describe("manual sync routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    manualSyncRateLimiter.reset();
     mockCreateWorkerId.mockImplementation((label) => label);
     mockStartBackgroundSyncDrain.mockImplementation(() => drainHandle());
     mockAwaitDrainStarted.mockResolvedValue("started");
@@ -121,7 +159,7 @@ describe("manual sync routes", () => {
   });
 
   it.each(routes)("returns 401 for unauthenticated $name requests", async ({ handler, url }) => {
-    mockAuthorizeSyncRequest.mockResolvedValue("unauthenticated");
+    mockSyncAccess("unauthenticated");
 
     const response = await handler(makeRequest(url));
 
@@ -131,7 +169,7 @@ describe("manual sync routes", () => {
   });
 
   it.each(routes)("returns 403 for forbidden $name requests", async ({ handler, url }) => {
-    mockAuthorizeSyncRequest.mockResolvedValue("forbidden");
+    mockSyncAccess("forbidden");
 
     const response = await handler(makeRequest(url));
 
@@ -143,7 +181,7 @@ describe("manual sync routes", () => {
   it.each(routes)(
     "serializes queued $name responses and starts the worker",
     async ({ handler, source, workerId, url }) => {
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "queued",
         runId: 17,
@@ -177,7 +215,7 @@ describe("manual sync routes", () => {
   it.each(routes)(
     "returns drain_started:'pending' when $name's first claim cycle has not settled in time",
     async ({ handler, source, url }) => {
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "queued",
         runId: 71,
@@ -201,7 +239,7 @@ describe("manual sync routes", () => {
   it.each(routes)(
     "returns 503 with drain_started:false when $name's first claim cycle throws",
     async ({ handler, source, url }) => {
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "queued",
         runId: 81,
@@ -225,7 +263,7 @@ describe("manual sync routes", () => {
   );
 
   it("returns 400 when the scoped Mode route is missing reportToken", async () => {
-    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockSyncAccess("manual");
     mockValidateModeReportSyncTarget.mockResolvedValue({
       ok: false,
       status: 400,
@@ -241,7 +279,7 @@ describe("manual sync routes", () => {
   });
 
   it("returns 404 when the scoped Mode route gets an unknown token", async () => {
-    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockSyncAccess("manual");
     mockValidateModeReportSyncTarget.mockResolvedValue({
       ok: false,
       status: 404,
@@ -262,7 +300,7 @@ describe("manual sync routes", () => {
   });
 
   it("returns 409 when the scoped Mode route gets an inactive or disabled token", async () => {
-    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockSyncAccess("manual");
     mockValidateModeReportSyncTarget.mockResolvedValue({
       ok: false,
       status: 409,
@@ -283,7 +321,7 @@ describe("manual sync routes", () => {
   });
 
   it("queues a scoped Mode report sync and starts the worker", async () => {
-    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockSyncAccess("manual");
     mockEnqueueSyncRun.mockResolvedValue({
       outcome: "queued",
       runId: 44,
@@ -321,7 +359,7 @@ describe("manual sync routes", () => {
   });
 
   it("returns active scope details when a scoped Mode report conflicts with an active full sync", async () => {
-    mockAuthorizeSyncRequest.mockResolvedValue("manual");
+    mockSyncAccess("manual");
     mockEnqueueSyncRun.mockResolvedValue({
       outcome: "already-running",
       runId: 52,
@@ -349,7 +387,7 @@ describe("manual sync routes", () => {
   it.each(routes)(
     "serializes skipped $name responses without starting the worker",
     async ({ handler, source, url }) => {
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "skipped",
         runId: 9,
@@ -376,7 +414,7 @@ describe("manual sync routes", () => {
   it.each(routes)(
     "serializes forced $name responses consistently",
     async ({ handler, source, workerId, url }) => {
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "forced",
         runId: 23,
@@ -407,11 +445,86 @@ describe("manual sync routes", () => {
     }
   );
 
+  it.each(llmRoutes)(
+    "returns 429 with Retry-After for rate-limited manual $name requests",
+    async ({ handler, source, url }) => {
+      const userId = "user_limited";
+      mockSyncAccess("manual", userId);
+      exhaustManualRateLimit(source, userId);
+
+      const response = await handler(makeRequest(url));
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(body).toEqual({
+        error: "Too many requests",
+        retryAfterSeconds: expect.any(Number),
+        source,
+      });
+      expect(response.headers.get("Retry-After")).toBe(
+        String(body.retryAfterSeconds)
+      );
+      expect(mockEnqueueSyncRun).not.toHaveBeenCalled();
+      expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(llmRoutes)(
+    "does not let force=1 bypass the manual $name rate limit",
+    async ({ handler, source, url }) => {
+      const userId = "user_forced_limited";
+      mockSyncAccess("manual", userId);
+      exhaustManualRateLimit(source, userId);
+
+      const response = await handler(makeRequest(`${url}?force=1`));
+
+      expect(response.status).toBe(429);
+      expect(mockEnqueueSyncRun).not.toHaveBeenCalled();
+      expect(mockStartBackgroundSyncDrain).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(llmRoutes)(
+    "exempts cron-authorized $name requests from the manual rate limit",
+    async ({ handler, source, workerId, url }) => {
+      mockSyncAccess("cron");
+      exhaustManualRateLimit(source, "user_ceo");
+      mockEnqueueSyncRun.mockResolvedValue({
+        outcome: "queued",
+        runId: 77,
+        reason: null,
+        nextEligibleAt: new Date("2026-04-08T09:00:00.000Z"),
+      });
+
+      const response = await handler(makeRequest(url));
+
+      expect(mockEnqueueSyncRun).toHaveBeenCalledWith(source, {
+        trigger: "cron",
+        force: false,
+      });
+      expect(mockCreateWorkerId).toHaveBeenCalledWith(workerId);
+      expect(mockStartBackgroundSyncDrain).toHaveBeenCalledWith(workerId, {
+        source,
+        runIds: [77],
+        triggerLabel: "cron " + source + " sync request",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        outcome: "queued",
+        runId: 77,
+        reason: null,
+        nextEligibleAt: "2026-04-08T09:00:00.000Z",
+        drain_started: true,
+      });
+    }
+  );
+
   it.each(routes)(
     "returns 500 for unexpected auth errors on $name",
     async ({ handler, name, url }) => {
       const error = new Error(`${name} auth exploded`);
       mockAuthorizeSyncRequest.mockRejectedValue(error);
+      mockAuthorizeSyncRequestWithIdentity.mockRejectedValue(error);
 
       const response = await handler(makeRequest(url));
 
@@ -428,7 +541,7 @@ describe("manual sync routes", () => {
     "returns 500 for unexpected enqueue errors on $name",
     async ({ handler, name, url }) => {
       const error = new Error(`${name} enqueue exploded`);
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockRejectedValue(error);
 
       const response = await handler(makeRequest(url));
@@ -446,7 +559,7 @@ describe("manual sync routes", () => {
     "returns 500 for unexpected worker startup errors on $name",
     async ({ handler, name, source, url }) => {
       const error = new Error(`${name} worker exploded`);
-      mockAuthorizeSyncRequest.mockResolvedValue("manual");
+      mockSyncAccess("manual");
       mockEnqueueSyncRun.mockResolvedValue({
         outcome: "queued",
         runId: 17,
