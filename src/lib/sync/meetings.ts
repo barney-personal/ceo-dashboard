@@ -68,6 +68,10 @@ export async function syncGranolaNotes(
       signal: opts.signal,
     });
   } catch (error) {
+    if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+      throw error;
+    }
+
     return {
       count: 0,
       errors: [`Failed to fetch Granola notes: ${formatSyncError(error)}`],
@@ -76,7 +80,8 @@ export async function syncGranolaNotes(
 
   // Skip notes already in the DB that haven't been updated since last sync.
   // This avoids expensive getNote() calls (with transcript) for unchanged notes.
-  // Notes without syncedByUserId are always re-processed to backfill ownership.
+  // Notes without syncedByUserId are backfilled via UPDATE without refetching
+  // the full transcript, so unchanged rows stay cheap to process.
   const existingIds = new Set<string>();
   const needsOwnerBackfill = new Set<string>();
   if (noteList.length > 0) {
@@ -93,9 +98,11 @@ export async function syncGranolaNotes(
       if (row.syncedByUserId === "_pending") {
         // Migration-era note — must backfill with correct owner (or null for enterprise)
         needsOwnerBackfill.add(row.granolaMeetingId);
+        existingIds.add(row.granolaMeetingId);
       } else if (row.syncedByUserId === null && opts.syncedByUserId) {
-        // Existing note missing ownership — must re-process to stamp owner
+        // Existing note missing ownership — stamp owner without refetching details.
         needsOwnerBackfill.add(row.granolaMeetingId);
+        existingIds.add(row.granolaMeetingId);
       } else {
         existingIds.add(row.granolaMeetingId);
       }
@@ -166,6 +173,10 @@ export async function syncGranolaNotes(
         });
       count++;
     } catch (error) {
+      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
+        throw error;
+      }
+
       errors.push(`Failed to store Granola note ${note.id}: ${formatSyncError(error)}`);
     }
   }
