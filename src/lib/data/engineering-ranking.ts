@@ -111,12 +111,19 @@ import { createHash } from "node:crypto";
 export const RANKING_METHODOLOGY_VERSION = "1.1.0-quality" as const;
 
 /**
- * Rubric version consumed by the code-quality lens. Only rows with this
- * `rubric_version` feed the lens — older rubrics (e.g. `v1.1-opus`) were
- * single-reviewed and carry a different calibration, so mixing would
- * distort the per-engineer means.
+ * Rubric version consumed by the code-quality lens. Tracks `RUBRIC_VERSION`
+ * in `code-review-rubric.ts` so the ranking always reads whatever the
+ * code-review pipeline is currently emitting — when the rubric bumps
+ * (e.g. to `v2.1-*`), both the code-review page and lens D switch over
+ * together rather than lens D silently going stale on the old version.
+ *
+ * The fetcher in `engineering-ranking.server.ts` filters
+ * `prReviewAnalyses.rubric_version = RANKING_QUALITY_RUBRIC_VERSION`, so
+ * older rows (e.g. `v1.1-opus`) are excluded regardless of when they were
+ * written — different calibrations cannot be averaged together.
  */
-export const RANKING_QUALITY_RUBRIC_VERSION = "v2.0-dual-review" as const;
+import { RUBRIC_VERSION } from "@/lib/integrations/code-review-rubric";
+export const RANKING_QUALITY_RUBRIC_VERSION = RUBRIC_VERSION;
 
 /**
  * Minimum number of analysed PRs an engineer needs for a code-quality lens
@@ -159,16 +166,30 @@ export type EligibilityStatus =
   | "ramp_up"
   | "insufficient_mapping"
   | "inactive_or_leaver"
-  | "missing_required_data";
+  | "missing_required_data"
+  // Engineers whose discipline is not in `RANKABLE_DISCIPLINES` (EMs, QA,
+  // Ops, ML, or any specialisation the classifier cannot confidently
+  // tag). Tracked explicitly so the coverage panel can say "15 rows
+  // excluded because they are managers / QA / ML / etc." rather than
+  // silently dropping them. Not scored.
+  | "non_rankable_role";
 
-export type Discipline =
-  | "BE"
-  | "FE"
-  | "EM"
-  | "QA"
-  | "ML"
-  | "Ops"
-  | "Other";
+// Discipline classification lives in `./disciplines.ts` — the single source
+// of truth shared by the ranking, impact, and engineers pages. Re-exported
+// from here so existing `import { classifyDiscipline } from "./engineering-ranking"`
+// call sites keep working.
+import {
+  classifyDiscipline,
+  isRankableDiscipline,
+  RANKABLE_DISCIPLINES,
+  type Discipline,
+} from "./disciplines";
+export {
+  classifyDiscipline,
+  isRankableDiscipline,
+  RANKABLE_DISCIPLINES,
+  type Discipline,
+};
 
 /**
  * Days below which an engineer is routed to the Ramp-up cohort rather than
@@ -276,6 +297,13 @@ export interface EligibilityCoverage {
   rampUpThresholdDays: number;
   /** True iff the squads registry was supplied to the preflight. */
   squadsRegistryPresent: boolean;
+  /**
+   * Engineers whose `rp_specialisation` classified into a discipline not
+   * in `RANKABLE_DISCIPLINES` — managers (EM), QA, ML, Ops, and any
+   * unclassifiable specialisation. Tracked so the coverage panel can
+   * surface the excluded headcount rather than silently dropping them.
+   */
+  nonRankableRole: number;
 }
 
 export interface EngineeringRankingSnapshot {
@@ -707,71 +735,6 @@ export function hashEmailForRanking(email: string): string {
     .slice(0, 16);
 }
 
-export function classifyDiscipline(
-  rpSpecialisation: string | undefined,
-  jobTitle: string | undefined,
-): Discipline {
-  const s = (rpSpecialisation ?? "").trim().toLowerCase();
-  const j = (jobTitle ?? "").toLowerCase();
-  // The "(M)" suffix on rp_specialisation marks managers across every
-  // discipline (e.g. "Engineer - Backend (M)", "Data Engineer - ML Ops (M)").
-  // Detect first so a manager variant never inherits the IC discipline below.
-  if (/\(m\)\s*$/.test(s)) return "EM";
-  if (s === "backend engineer" || s === "python engineer") return "BE";
-  if (s === "frontend engineer") return "FE";
-  if (s === "engineering manager") return "EM";
-  if (s === "qa engineer") return "QA";
-  if (
-    s === "machine learning engineer" ||
-    s === "ml ops engineer" ||
-    s === "head of machine learning" ||
-    s === "machine learning engineering manager"
-  ) {
-    return "ML";
-  }
-  if (s === "technical operations") return "Ops";
-  if (s.includes("backend") || j.includes("backend")) return "BE";
-  if (s.includes("frontend") || j.includes("frontend")) return "FE";
-  if (s.includes("engineering manager") || j.includes("engineering manager")) {
-    return "EM";
-  }
-  if (s.includes("qa") || j.includes("qa")) return "QA";
-  if (s.includes("machine learning") || s.includes("ml ") || j.includes("ml ")) {
-    return "ML";
-  }
-  if (s.includes("python")) return "BE";
-  if (s.includes("technical operations")) return "Ops";
-  return "Other";
-}
-
-/**
- * Disciplines eligible for the competitive cohort — product-engineering IC
- * roles (Backend and Frontend) whose primary output is merging code into
- * product repos. Every other discipline is deliberately excluded:
- *
- *  - EM: managers ship less code by role design — ranking alongside ICs
- *    mislabels the role itself as underperformance.
- *  - QA: test / quality engineering has a different shipping cadence and
- *    often lands changes via non-PR surfaces.
- *  - ML: model training / data-science work does not line up with the
- *    per-PR rubric and impact model on which this ranking is built.
- *  - Ops: platform / infra / DevOps roles deploy changes via different
- *    pipelines and often land fewer but higher-risk PRs.
- *  - Other: any specialisation the discipline classifier could not
- *    confidently tag (Data engineers, Graduate buckets, etc.).
- *
- * Rows that classify into any of those disciplines are dropped from the
- * roster entirely — they do not appear in the eligibility coverage counts.
- */
-const RANKABLE_DISCIPLINES: ReadonlySet<Discipline> = new Set<Discipline>([
-  "BE",
-  "FE",
-]);
-
-export function isRankableDiscipline(discipline: Discipline): boolean {
-  return RANKABLE_DISCIPLINES.has(discipline);
-}
-
 function classifyLevel(raw: string | undefined | null): string {
   if (!raw) return "unknown";
   const r = raw.toUpperCase();
@@ -1009,15 +972,6 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
 
   for (const row of inputs.headcountRows) {
     if (!isEngineerRow(row)) continue;
-    // Non-shipping roles (EMs, QA, Ops, data engineers, Other) are dropped
-    // from the roster — their output distribution is structurally different
-    // from IC shipping engineers, so ranking them alongside ICs would
-    // mislabel the role itself as underperformance.
-    const __disciplineForFilter = classifyDiscipline(
-      row.rp_specialisation ?? undefined,
-      row.job_title ?? undefined,
-    );
-    if (!isRankableDiscipline(__disciplineForFilter)) continue;
 
     const emailRaw = row.email ?? "";
     const email = emailRaw.toLowerCase();
@@ -1028,6 +982,40 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
       "(unknown)";
 
     const canonicalSquad = resolveCanonicalSquad(row.hb_squad, squadByName);
+
+    // Non-shipping-IC roles (EMs, QA, Ops, ML, data engineers, Other) are
+    // recorded on the roster as `non_rankable_role` rather than dropped
+    // silently — their output distribution is structurally different from
+    // IC shipping engineers, so ranking them alongside ICs would mislabel
+    // the role itself as underperformance. Coverage surfaces how many
+    // rows landed here so the page can say "15 managers excluded" rather
+    // than having them disappear.
+    const rowDiscipline = classifyDiscipline(
+      row.rp_specialisation ?? undefined,
+      row.job_title ?? undefined,
+    );
+    if (!isRankableDiscipline(rowDiscipline)) {
+      entries.push({
+        emailHash: email ? hashEmailForRanking(email) : "",
+        displayName,
+        email,
+        githubLogin: null,
+        discipline: rowDiscipline,
+        levelLabel: classifyLevel(row.hb_level),
+        squad: row.hb_squad ?? null,
+        pillar: cleanPillar(row.rp_department_name),
+        canonicalSquad,
+        manager:
+          row.manager?.trim() || row.line_manager_email?.trim() || null,
+        startDate: row.start_date ?? null,
+        tenureDays: null,
+        isLeaverOrInactive: false,
+        hasImpactModelRow: false,
+        eligibility: "non_rankable_role",
+        reason: `Discipline ${rowDiscipline} is not in the competitive cohort — the ranking is scoped to IC Backend and Frontend engineers. Not scored; surfaced on coverage only.`,
+      });
+      continue;
+    }
 
     if (!email || !row.start_date) {
       entries.push({
@@ -1130,7 +1118,8 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     ramp_up: 1,
     insufficient_mapping: 2,
     missing_required_data: 3,
-    inactive_or_leaver: 4,
+    non_rankable_role: 4,
+    inactive_or_leaver: 5,
   };
   entries.sort((a, b) => {
     const ba = bucketOrder[a.eligibility];
@@ -1160,6 +1149,9 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     ).length,
     rampUpThresholdDays: rampUpDays,
     squadsRegistryPresent,
+    nonRankableRole: entries.filter(
+      (e) => e.eligibility === "non_rankable_role",
+    ).length,
   };
 
   return { entries, coverage };
@@ -6349,6 +6341,7 @@ function emptyCoverage(): EligibilityCoverage {
     squadRegistryUnmatched: 0,
     rampUpThresholdDays: RANKING_RAMP_UP_DAYS,
     squadsRegistryPresent: false,
+    nonRankableRole: 0,
   };
 }
 

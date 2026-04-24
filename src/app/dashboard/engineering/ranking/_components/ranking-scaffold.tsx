@@ -89,6 +89,7 @@ const ELIGIBILITY_LABEL: Record<EligibilityStatus, string> = {
   insufficient_mapping: "Insufficient GitHub mapping",
   inactive_or_leaver: "Inactive / leaver",
   missing_required_data: "Missing required data",
+  non_rankable_role: "Non-IC shipping role (EM / QA / ML / Ops)",
 };
 
 const ELIGIBILITY_TONE: Record<EligibilityStatus, string> = {
@@ -100,6 +101,8 @@ const ELIGIBILITY_TONE: Record<EligibilityStatus, string> = {
     "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
   missing_required_data:
     "border-destructive/40 bg-destructive/5 text-destructive",
+  non_rankable_role:
+    "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
 };
 
 function CoverageSection({
@@ -113,6 +116,7 @@ function CoverageSection({
     { status: "ramp_up", count: coverage.rampUp },
     { status: "insufficient_mapping", count: coverage.insufficientMapping },
     { status: "missing_required_data", count: coverage.missingRequiredData },
+    { status: "non_rankable_role", count: coverage.nonRankableRole },
     { status: "inactive_or_leaver", count: coverage.inactiveOrLeaver },
   ];
 

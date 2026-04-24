@@ -31,7 +31,8 @@ const MS_PER_DAY = 86_400_000;
 export const BUCKET_DAYS = 30;
 
 export type LevelTrack = "IC" | "EM" | "QA" | "Other" | "unknown";
-export type Discipline = "BE" | "FE" | "EM" | "QA" | "ML" | "Ops" | "Other";
+export type { Discipline } from "./disciplines";
+import { classifyDiscipline, type Discipline } from "./disciplines";
 
 export interface ImpactEngineer {
   email: string;
@@ -135,51 +136,6 @@ function classifyLevel(raw: string | null): {
     return { track: "Other", num, label: raw };
   }
   return { track: "IC", num, label: `L${num}` };
-}
-
-// `rp_specialisation` is the authoritative signal post-April-2026 standardisation.
-// Values are canonical role names ("Backend Engineer", "Machine Learning Engineer",
-// etc.) with no seniority prefix, so exact matches are cheap and reliable. The
-// substring fallback catches anyone whose `rp_specialisation` is still blank
-// during the HiBob rollout.
-const DISCIPLINE_BY_SPECIALISATION: Record<string, Discipline> = {
-  "backend engineer": "BE",
-  "python engineer": "BE",
-  "frontend engineer": "FE",
-  "engineering manager": "EM",
-  "qa engineer": "QA",
-  "machine learning engineer": "ML",
-  "ml ops engineer": "ML",
-  "head of machine learning": "ML",
-  "machine learning engineering manager": "ML",
-  "technical operations": "Ops",
-};
-
-function classifyDiscipline(
-  spec: string | null,
-  jobTitle: string | null,
-): Discipline {
-  const s = (spec ?? "").trim().toLowerCase();
-  // The "(M)" suffix on rp_specialisation marks managers across every
-  // discipline (e.g. "Engineer - Backend (M)"). Detect first so a manager
-  // variant never inherits an IC discipline below.
-  if (/\(m\)\s*$/.test(s)) return "EM";
-  const exact = DISCIPLINE_BY_SPECIALISATION[s];
-  if (exact) return exact;
-
-  const j = (jobTitle ?? "").toLowerCase();
-  if (s.includes("backend") || j.includes("backend")) return "BE";
-  if (s.includes("frontend") || j.includes("frontend")) return "FE";
-  if (s.includes("engineering manager") || j.includes("engineering manager")) {
-    return "EM";
-  }
-  if (s.includes("qa") || j.includes("qa")) return "QA";
-  if (s.includes("machine learning") || s.includes("ml ") || j.includes("ml ")) {
-    return "ML";
-  }
-  if (s.includes("python")) return "BE";
-  if (s.includes("technical operations")) return "Ops";
-  return "Other";
 }
 
 function cleanPillar(deptName: string | null): string {
