@@ -1077,6 +1077,19 @@ export const RANKING_DISAGREEMENT_TOP_N = 10 as const;
 export const RANKING_DISAGREEMENT_MIN_LENSES = 2 as const;
 
 /**
+ * Minimum `max(present) - min(present)` lens-score gap (in percentile points)
+ * for a row to count as a material disagreement. Rows at or below this
+ * threshold are treated as agreement, never as a disagreement — otherwise a
+ * tied or near-tied pair would be surfaced as a widest-gap row with a
+ * directional `top>bottom` narrative even though the lenses agree.
+ *
+ * 0.5 percentile points is within rounding noise of the `((rank - 0.5) / n)`
+ * rank-percentile grid this methodology uses, so any gap larger than this is
+ * the smallest difference that cannot be explained by tie-breaking alone.
+ */
+export const RANKING_DISAGREEMENT_EPSILON = 0.5 as const;
+
+/**
  * Per-component contribution to a lens score for a given engineer. `rawValue`
  * is the un-normalised signal on the competitive cohort scale (e.g. PR count
  * or SHAP actual dollars). `percentile` is the engineer's rank-percentile
@@ -1297,6 +1310,11 @@ function likelyDisagreementCause(row: {
   const sorted = [...present].sort((a, b) => b.score - a.score);
   const top = sorted[0];
   const bottom = sorted[sorted.length - 1];
+  // Tied / near-tied scores must never be narrated as a directional
+  // `top>bottom` pattern — that would dress up agreement as disagreement.
+  if (top.score - bottom.score <= RANKING_DISAGREEMENT_EPSILON) {
+    return "No material lens disagreement — present lens scores agree within the disagreement epsilon.";
+  }
   const tag = `${top.key}>${bottom.key}` as const;
   // Narratives are written to describe the pattern, not to pre-judge the
   // engineer — disagreement is where the methodology earns its money, so the
@@ -1361,8 +1379,13 @@ function buildDisagreementTable(lenses: {
       row.likelyCause = likelyDisagreementCause(row);
       continue;
     }
-    row.disagreement = Math.max(...present) - Math.min(...present);
+    const gap = Math.max(...present) - Math.min(...present);
+    row.disagreement = gap;
     row.likelyCause = likelyDisagreementCause(row);
+    // Non-material gaps (ties / near-ties within the epsilon) are not
+    // disagreements and must not appear in the table, otherwise agreement
+    // gets dressed up as evidence that the lenses disagree.
+    if (gap <= RANKING_DISAGREEMENT_EPSILON) continue;
     rows.push(row);
   }
 
@@ -1543,6 +1566,7 @@ export function buildLenses({
       "AI tokens and AI spend are excluded from every lens, so direct AI-token inflation cannot raise an engineer's lens score — AI usage remains latest-month context, not a 180-day score input.",
       "Lens C is squad-delivery context, not an individual review/cycle-time signal. Individual review turnaround and PR cycle time are not persisted in the current GitHub schema.",
       "Engineers absent from the impact-model training set score null on lens B — the methodology refuses to fabricate a neutral-looking impact reading.",
+      `Disagreement table only surfaces rows where max(present lenses) − min(present lenses) exceeds ${RANKING_DISAGREEMENT_EPSILON} percentile points. Ties and near-ties are treated as agreement and omitted, so the table never presents a directional narrative for lenses that actually agree.`,
       "These three lenses are exploratory; M10 synthesises the final composite once the disagreements are understood and the weights justified.",
     ],
   };

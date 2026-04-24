@@ -504,7 +504,7 @@ function LensesSection({ lenses }: { lenses: LensesBundle }) {
         <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <div>{lenses.windowDays}d window</div>
           <div className="mt-1">
-            {lenses.disagreement.rows.length} engineers with ≥2 lens scores
+            {lenses.disagreement.rows.length} material disagreements
           </div>
         </div>
       </div>
@@ -535,8 +535,9 @@ function DisagreementTable({ rows }: { rows: LensDisagreementRow[] }) {
   if (rows.length === 0) {
     return (
       <p className="mt-5 rounded-md border border-dashed border-border/50 bg-background/40 p-3 text-xs italic text-muted-foreground">
-        No engineer has ≥2 present lenses yet, so no disagreement analysis is
-        possible. Lens coverage must improve before this section is meaningful.
+        No material lens disagreements — either no engineer has ≥2 present
+        lenses, or every lens pair agrees within the disagreement epsilon. Ties
+        are not a disagreement and are intentionally omitted.
       </p>
     );
   }

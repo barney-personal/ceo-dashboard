@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  RANKING_DISAGREEMENT_EPSILON,
   RANKING_DISAGREEMENT_MIN_LENSES,
   RANKING_LENS_DEFINITIONS,
   RANKING_LENS_TOP_N,
@@ -1456,5 +1457,245 @@ describe("M8 three independent scoring lenses + disagreement", () => {
       "delivery",
     ]);
     expect(snapshot.lenses.lenses.output.entries.length).toBe(1);
+  });
+});
+
+describe("M9 suppress non-disagreements in lens disagreement table", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function lensSignal(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  it("exposes RANKING_DISAGREEMENT_EPSILON as a positive, sub-1 threshold", () => {
+    expect(RANKING_DISAGREEMENT_EPSILON).toBeGreaterThan(0);
+    // Above 1 percentile point would swallow real small gaps; anchor to the
+    // plan's 0.5 default so a future edit cannot silently broaden the filter.
+    expect(RANKING_DISAGREEMENT_EPSILON).toBeLessThanOrEqual(1);
+  });
+
+  it("identical signals across every engineer produce no disagreement rows and no widest gaps", () => {
+    // Identical signal values → identical rank percentiles → every lens score
+    // is identical → every pair agrees exactly. Nothing should be narrated as
+    // a disagreement.
+    const entries = Array.from({ length: 4 }, (_, i) =>
+      competitiveEntry(i + 1, {
+        squad: "Platform",
+        pillar: "Core",
+      }),
+    );
+    const signals = entries.map((_, i) =>
+      lensSignal(i + 1, {
+        prCount: 10,
+        commitCount: 20,
+        additions: 1_000,
+        deletions: 200,
+        shapPredicted: 50,
+        shapActual: 60,
+        shapResidual: 10,
+        squadCycleTimeHours: 24,
+        squadReviewRatePercent: 80,
+        squadTimeToFirstReviewHours: 2,
+        squadPrsInProgress: 6,
+      }),
+    );
+    const { disagreement } = buildLenses({ entries, signals });
+    expect(disagreement.rows).toEqual([]);
+    expect(disagreement.widestGaps).toEqual([]);
+  });
+
+  it("directional `top>bottom` narrative never appears for non-material gaps", () => {
+    // Construct two engineers with identical signal ranks so their lens
+    // scores tie. The rows are filtered from the table, but assert
+    // defensively that likelyDisagreementCause (used on any row, including
+    // the <2-lens path) never emits `>` directional text for a tied row.
+    const entries = [
+      competitiveEntry(1, { squad: "Platform" }),
+      competitiveEntry(2, { squad: "Platform" }),
+    ];
+    const shared = {
+      prCount: 7,
+      commitCount: 14,
+      additions: 800,
+      deletions: 100,
+      shapPredicted: 40,
+      shapActual: 45,
+      shapResidual: 5,
+      squadCycleTimeHours: 30,
+      squadReviewRatePercent: 75,
+      squadTimeToFirstReviewHours: 3,
+      squadPrsInProgress: 5,
+    };
+    const signals = [
+      lensSignal(1, shared),
+      lensSignal(2, shared),
+    ];
+    const { disagreement } = buildLenses({ entries, signals });
+    expect(disagreement.rows).toEqual([]);
+    // Even if a UI regression later renders all rows, the cause helper must
+    // not emit directional `top>bottom` text for tied scores. Here no row is
+    // returned, so nothing to inspect — this test locks in the filter side.
+    expect(disagreement.widestGaps).toEqual([]);
+  });
+
+  it("a real high-SHAP / low-output gap still appears in widestGaps", () => {
+    const entries = [
+      competitiveEntry(1, { displayName: "High Output" }),
+      competitiveEntry(2, { displayName: "Balanced" }),
+      competitiveEntry(3, { displayName: "High Impact Low Output" }),
+      competitiveEntry(4, { displayName: "Low Everything" }),
+    ];
+    const signals = [
+      lensSignal(1, {
+        prCount: 200,
+        commitCount: 500,
+        additions: 40_000,
+        deletions: 5_000,
+        shapPredicted: 10,
+        shapActual: 12,
+        shapResidual: 2,
+      }),
+      lensSignal(2, {
+        prCount: 40,
+        commitCount: 80,
+        additions: 5_000,
+        deletions: 1_000,
+        shapPredicted: 60,
+        shapActual: 60,
+        shapResidual: 0,
+      }),
+      lensSignal(3, {
+        prCount: 5,
+        commitCount: 10,
+        additions: 200,
+        deletions: 50,
+        shapPredicted: 150,
+        shapActual: 170,
+        shapResidual: 20,
+      }),
+      lensSignal(4, {
+        prCount: 2,
+        commitCount: 5,
+        additions: 100,
+        deletions: 20,
+        shapPredicted: 5,
+        shapActual: 4,
+        shapResidual: -1,
+      }),
+    ];
+    const { disagreement } = buildLenses({ entries, signals });
+    // Regression: M8 surfaced this row; M9's filter must keep it because the
+    // gap is materially larger than the epsilon.
+    const names = disagreement.widestGaps.map((r) => r.displayName);
+    expect(names).toContain("High Impact Low Output");
+    const row = disagreement.widestGaps.find(
+      (r) => r.displayName === "High Impact Low Output",
+    )!;
+    expect(row.disagreement).not.toBeNull();
+    expect(row.disagreement!).toBeGreaterThan(RANKING_DISAGREEMENT_EPSILON);
+  });
+
+  it("every surfaced disagreement row has a material gap and non-tied narrative", () => {
+    // Use a mixed cohort so the filter has both filter-eligible and
+    // filter-ineligible candidates. The invariant we lock in is that every
+    // row that survives the filter has gap > EPSILON and a narrative that is
+    // not the tied-case reason — regardless of which specific engineers pass.
+    const entries = [
+      competitiveEntry(1, { displayName: "High Output Low Impact" }),
+      competitiveEntry(2, { displayName: "Balanced" }),
+      competitiveEntry(3, { displayName: "High Impact Low Output" }),
+      competitiveEntry(4, { displayName: "Low Everything" }),
+    ];
+    const signals = [
+      lensSignal(1, {
+        prCount: 200,
+        commitCount: 500,
+        additions: 40_000,
+        deletions: 5_000,
+        shapPredicted: 10,
+        shapActual: 12,
+        shapResidual: 2,
+      }),
+      lensSignal(2, {
+        prCount: 40,
+        commitCount: 80,
+        additions: 5_000,
+        deletions: 1_000,
+        shapPredicted: 60,
+        shapActual: 60,
+        shapResidual: 0,
+      }),
+      lensSignal(3, {
+        prCount: 5,
+        commitCount: 10,
+        additions: 200,
+        deletions: 50,
+        shapPredicted: 150,
+        shapActual: 170,
+        shapResidual: 20,
+      }),
+      lensSignal(4, {
+        prCount: 2,
+        commitCount: 5,
+        additions: 100,
+        deletions: 20,
+        shapPredicted: 5,
+        shapActual: 4,
+        shapResidual: -1,
+      }),
+    ];
+    const { disagreement } = buildLenses({ entries, signals });
+    // At least one genuinely disagreeing row should survive the filter.
+    expect(disagreement.rows.length).toBeGreaterThan(0);
+    for (const row of disagreement.rows) {
+      expect(row.disagreement).not.toBeNull();
+      expect(row.disagreement!).toBeGreaterThan(RANKING_DISAGREEMENT_EPSILON);
+      expect(row.likelyCause.toLowerCase()).not.toContain(
+        "no material lens disagreement",
+      );
+    }
   });
 });
