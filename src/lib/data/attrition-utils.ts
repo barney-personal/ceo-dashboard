@@ -1,6 +1,94 @@
 // Pure functions for attrition data transformation.
 // Client-safe — no server-only imports (mode.ts, db, etc.).
 
+// ── Tenure bucket classifier ──
+
+/** Classify a Mode tenure-bucket label into <1yr / >=1yr / unknown. Used by
+ *  headcount planning, attrition forecast comparison scripts, and preview
+ *  scripts to collapse Mode's sometimes-granular tenure labels into the two
+ *  buckets the team's HC forecast uses. */
+export type TenureBucketClass = "sub1yr" | "over1yr" | "unknown";
+
+export function classifyTenureBucket(bucket: string): TenureBucketClass {
+  const b = bucket.toLowerCase().trim();
+  if (b.startsWith("<") || b.includes("< 1") || b.includes("<1")) return "sub1yr";
+  if (b.startsWith(">") || b.includes("> 1") || b.includes(">1")) return "over1yr";
+  if (b.includes("1+") || b.includes("1 +")) return "over1yr";
+  // Granular sub-year buckets like "0-3m", "3-6m", "9-12m": digit followed
+  // by 'm' (end-of-string or word boundary) → sub-1yr.
+  if (/\d+\s*m\b/i.test(bucket)) return "sub1yr";
+  return "unknown";
+}
+
+// ── Department rename map ──
+//
+// Mode's attrition query keys by whatever HiBob department an employee had at
+// the time of the monthly snapshot. When People Ops renames/merges a
+// department, past leavers stay pinned to the old name while the surviving
+// headcount migrates to the new one. The result: the old name shows as a tiny
+// team with huge attrition %, and the new name shows as growing with 0%.
+//
+// This map rewrites rows to the current department name so both leavers and
+// headcount are tallied together. Mappings confirmed with Barney 2026-04-24
+// from the full set of legacy / zombie department names in the attrition
+// query. Keep in sync with HiBob renames.
+const DEPARTMENT_ALIASES: Record<string, string> = {
+  // Experience (Design practice consolidation)
+  Design: "Experience",
+  "Content Design": "Experience",
+  "User Researcher": "Experience",
+
+  // Engineering (sub-discipline rollup)
+  "Engineering Management": "Engineering",
+  Frontend: "Engineering",
+  QA: "Engineering",
+  Software: "Engineering",
+  "Product Engineering": "Engineering",
+
+  // Analytics (data functions consolidation)
+  Data: "Analytics",
+  "Data Engineering": "Analytics",
+  "Analytics Engineering": "Analytics",
+  "Product Analytics": "Analytics",
+
+  // Marketing (all marketing/brand/content functions)
+  "Project Marketing": "Marketing",
+  "Product Marketing": "Marketing",
+  "Marketing Design": "Marketing",
+  Copywriting: "Marketing",
+  Content: "Marketing",
+  "Creative Studios": "Marketing",
+  Communications: "Marketing",
+  Brand: "Marketing",
+  "Social Media": "Marketing",
+
+  // Growth (marketing-ops rollup into Growth)
+  "Growth Marketing": "Growth",
+
+  // Product (PM discipline → Product dept)
+  "Product Manager": "Product",
+
+  // People (Talent and Workplace Experience mergers)
+  Talent: "People",
+  "Workplace Experience": "People",
+
+  // Strategy & Operations (CEO Office rename)
+  "CEO Office": "Strategy & Operations",
+
+  // Product Performance (Commercial rename)
+  Commercial: "Product Performance",
+
+  // Credit (Fraud folded into Credit/Risk)
+  Fraud: "Credit",
+
+  // Operations and Banking Partnerships (Operations merger)
+  Operations: "Operations and Banking Partnerships",
+};
+
+export function canonicalDepartment(dept: string): string {
+  return DEPARTMENT_ALIASES[dept] ?? dept;
+}
+
 // ── Types ──
 
 export interface AttritionRow {
@@ -154,17 +242,23 @@ export function getRollingAttritionSeries(
   return [total, regretted, volNonReg, involuntary];
 }
 
+/** How many departments to plot in the by-department attrition chart. Legacy
+ *  departments with ~0 current headcount produce nonsensical spikes (1 leaver
+ *  / 0.1 avg HC = 1000%+), so we cap to the largest live departments. */
+const TOP_DEPARTMENTS_FOR_CHART = 8;
+
 export function getAttritionByDepartment(rows: AttritionRow[]): ChartSeries[] {
-  const departments = [...new Set(rows.map((r) => r.department))]
-    .filter((d) => d !== "All" && d !== "")
-    .sort();
+  const liveDepartments = getDepartments(rows)
+    .slice(0, TOP_DEPARTMENTS_FOR_CHART)
+    .map((d) => d.name);
+
   const palette = [
     COLORS.total, COLORS.regretted, COLORS.voluntaryNonRegretted, COLORS.involuntary,
     "var(--chart-2)", "var(--chart-4)", "var(--chart-5)",
     "#6366f1", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
   ];
 
-  return departments.map((dept, i) => {
+  return liveDepartments.map((dept, i) => {
     // Sum across all tenure splits for this department
     const deptRows = rows.filter((r) => r.department === dept && r.tenure !== "All" && r.tenure !== "");
     const byPeriod = aggregateByPeriod(deptRows, dept);
@@ -285,10 +379,36 @@ export function getLatestY1Metrics(rows: Y1AttritionRow[]): Y1AttritionMetrics {
 
 // ── Helpers ──
 
-export function getDepartments(rows: AttritionRow[]): string[] {
-  return [...new Set(rows.map((r) => r.department))]
-    .filter((d) => d !== "All" && d !== "")
-    .sort();
+export interface DepartmentOption {
+  name: string;
+  headcount: number;
+}
+
+/**
+ * Departments with their latest-period rolling-12-month average headcount,
+ * sorted largest first. Departments with zero current headcount (renamed,
+ * restructured, or fully offboarded) are omitted. Uses `avgHeadcountL12m` to
+ * match the headcount used in the attrition-rate calculations elsewhere.
+ */
+export function getDepartments(rows: AttritionRow[]): DepartmentOption[] {
+  const latest = rows.reduce((acc, r) => (r.reportingPeriod > acc ? r.reportingPeriod : acc), "");
+  if (!latest) return [];
+
+  const headcountByDept = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.department || r.department === "All") continue;
+    if (r.tenure === "All" || r.tenure === "") continue;
+    if (r.reportingPeriod !== latest) continue;
+    headcountByDept.set(
+      r.department,
+      (headcountByDept.get(r.department) ?? 0) + r.avgHeadcountL12m,
+    );
+  }
+
+  return [...headcountByDept.entries()]
+    .map(([name, headcount]) => ({ name, headcount: Math.round(headcount) }))
+    .filter((d) => d.headcount > 0)
+    .sort((a, b) => b.headcount - a.headcount || a.name.localeCompare(b.name));
 }
 
 export function getTenureBuckets(rows: AttritionRow[]): string[] {

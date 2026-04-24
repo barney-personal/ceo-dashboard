@@ -62,7 +62,18 @@ function SectionHead({
   );
 }
 
-export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
+export function ImpactReport({
+  analysis,
+  canSeeIndividuals,
+}: {
+  analysis: ImpactAnalysis;
+  // When false (non-leadership viewers), hide charts that name or plot
+  // individual engineers — Cleveland dots, spaghetti trajectories, pillar
+  // box jitter, the entire watchlist section, and the AI spend scatter.
+  // Aggregate shapes (histograms, median ramp-up curves, pillar curves,
+  // cohorted AI ramp-ups) stay visible.
+  canSeeIndividuals: boolean;
+}) {
   const { engineers, tenureBuckets, metadata } = analysis;
 
   const fmtDate = (s: string) =>
@@ -177,7 +188,7 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
             mostly restated the same shape, so we cut them per Tufte's
             data-density principle. The cohort-by-cohort view lives in
             Section B (ramp-up) and Section C (pillar). */}
-        <DistCleveland engineers={engineers} />
+        {canSeeIndividuals && <DistCleveland engineers={engineers} />}
         <DistHistogram engineers={engineers} />
       </section>
 
@@ -189,7 +200,9 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
           lede="The central question: how long does a new engineer take to reach the typical impact of their tenured peers?"
         />
         <RampUpMain engineers={engineers} buckets={tenureBuckets} />
-        <RampUpSpaghetti engineers={engineers} buckets={tenureBuckets} />
+        {canSeeIndividuals && (
+          <RampUpSpaghetti engineers={engineers} buckets={tenureBuckets} />
+        )}
         <RampUpByDiscipline engineers={engineers} buckets={tenureBuckets} />
         <RampUpByLevel engineers={engineers} buckets={tenureBuckets} />
       </section>
@@ -201,23 +214,25 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
           title="Does ramp-up differ by pillar?"
           lede="Pillars differ in codebase maturity, tooling, onboarding, squad size, and manager. How much does ramp-up actually diverge?"
         />
-        <PillarBoxes engineers={engineers} />
+        {canSeeIndividuals && <PillarBoxes engineers={engineers} />}
         <PillarCurves engineers={engineers} buckets={tenureBuckets} />
         <PillarLollipop engineers={engineers} buckets={tenureBuckets} />
       </section>
 
-      {/* Section D */}
-      <section className="space-y-6">
-        <SectionHead
-          letter="D"
-          title="Who to be concerned about"
-          lede="Engineers whose PR output is meaningfully below peers at the same level and discipline — or whose recent trajectory is sharply down versus their own 90-day baseline."
-        />
-        <WatchlistCaveat />
-        <BottomPerformers engineers={engineers} />
-        <TrajectoryScatter engineers={engineers} />
-        <WatchlistTable engineers={engineers} />
-      </section>
+      {/* Section D — leadership only: names individuals as low performers. */}
+      {canSeeIndividuals && (
+        <section className="space-y-6">
+          <SectionHead
+            letter="D"
+            title="Who to be concerned about"
+            lede="Engineers whose PR output is meaningfully below peers at the same level and discipline — or whose recent trajectory is sharply down versus their own 90-day baseline."
+          />
+          <WatchlistCaveat />
+          <BottomPerformers engineers={engineers} />
+          <TrajectoryScatter engineers={engineers} />
+          <WatchlistTable engineers={engineers} />
+        </section>
+      )}
 
       {/* Section E */}
       <section className="space-y-6">
@@ -226,7 +241,9 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
           title="AI tooling — does it move the needle?"
           lede={`Three lenses on whether AI usage shows up in shipping output. Cohort: ICs with AI usage rows in the ${aiMonthLabel(metadata.aiMonthStart)} (${metadata.aiMatchedEngineers} of ${metadata.matchedEngineers} matched engineers).`}
         />
-        <AiSpendVsImpactScatter engineers={engineers} />
+        {canSeeIndividuals && (
+          <AiSpendVsImpactScatter engineers={engineers} />
+        )}
         <RampUpByAiUsage engineers={engineers} buckets={tenureBuckets} />
         <AiAdoptionByTenure engineers={engineers} />
       </section>
@@ -266,17 +283,21 @@ export function ImpactReport({ analysis }: { analysis: ImpactAnalysis }) {
             </p>
           </div>
           <div className="space-y-3">
-            <p>
-              <strong>Peer group (D.1–D.3).</strong> Other ICs at the same
-              level and discipline. Minimum 5 peers; fewer marks an
-              engineer &ldquo;uncomparable&rdquo; (excluded from the
-              watchlist).
-            </p>
-            <p>
-              <strong>Declining trajectory.</strong>{" "}
-              <code>impact_30d × 3 &lt; 0.6 × impact_90d</code> and the
-              engineer has a meaningful baseline (≥ 50).
-            </p>
+            {canSeeIndividuals && (
+              <>
+                <p>
+                  <strong>Peer group (D.1–D.3).</strong> Other ICs at the
+                  same level and discipline. Minimum 5 peers; fewer marks an
+                  engineer &ldquo;uncomparable&rdquo; (excluded from the
+                  watchlist).
+                </p>
+                <p>
+                  <strong>Declining trajectory.</strong>{" "}
+                  <code>impact_30d × 3 &lt; 0.6 × impact_90d</code> and the
+                  engineer has a meaningful baseline (≥ 50).
+                </p>
+              </>
+            )}
             <p>
               <strong>Reliable window.</strong> GitHub sync has been
               backfilled unevenly — we auto-detect the first calendar

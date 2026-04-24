@@ -45,7 +45,8 @@ const GROUP_COLOR: Record<string, string> = {
   "Slack engagement": "#3f7ca0",
   "AI usage": "#c4673f",
   "Performance review": "#6a8b4c",
-  "Code style": "#2d6a5c",
+  "PR cadence": "#2d6a5c",
+  "PR habits": "#4a8b7c",
   Pillar: "#8b5a9c",
   Discipline: "#9c5d2e",
   Level: "#4a6b7c",
@@ -320,17 +321,17 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
     () => [...engineers].sort((a, b) => a.name.localeCompare(b.name)),
     [engineers],
   );
-  const defaultEmail = useMemo(
+  const defaultId = useMemo(
     () =>
       [...engineers].sort((a, b) => b.residual - a.residual)[0]?.email ??
       sorted[0]?.email ??
       "",
     [engineers, sorted],
   );
-  const [email, setEmail] = useState(defaultEmail);
+  const [selectedId, setSelectedId] = useState(defaultId);
   const [query, setQuery] = useState("");
 
-  const engineer = sorted.find((e) => e.email === email) ?? sorted[0];
+  const engineer = sorted.find((e) => e.email === selectedId) ?? sorted[0];
   if (!engineer) return null;
 
   const filtered = query
@@ -378,7 +379,7 @@ export function ShapWaterfall({ engineers, expectedImpact }: Props) {
           />
           <select
             value={engineer.email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => setSelectedId(e.target.value)}
             className="w-full rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-xs outline-none focus:border-primary/50 sm:w-60"
           >
             {filtered.map((e) => (

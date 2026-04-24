@@ -1,20 +1,47 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
-import { getImpactAnalysis } from "@/lib/data/engineering-impact";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
+import {
+  getImpactAnalysis,
+  type ImpactAnalysis,
+} from "@/lib/data/engineering-impact";
 import { ImpactReport } from "./_components/impact-report";
 
 export const metadata = {
   title: "Impact · Engineering",
 };
 
+// Non-leadership viewers get the same engineer payload with fields that
+// aren't exposed on the everyone-accessible Engineers table scrubbed.
+// `startDate` is excluded from the engineer-ranking payload deliberately
+// (see src/lib/data/engineering.ts) to avoid leaking hire dates to the
+// whole company; `location` isn't on that page at all. `bucketStart` on
+// tenureMonth=0 rows is effectively the hire date, so it has to go too —
+// charts only need the bucket index. Keeping parity here means opening
+// Impact doesn't widen data exposure beyond what already ships to
+// `everyone`.
+function scrubForNonLeadership(analysis: ImpactAnalysis): ImpactAnalysis {
+  return {
+    ...analysis,
+    engineers: analysis.engineers.map((e) => ({
+      ...e,
+      startDate: "",
+      location: null,
+    })),
+    tenureBuckets: analysis.tenureBuckets.map((b) => ({
+      ...b,
+      bucketStart: "",
+    })),
+  };
+}
+
 export default async function ImpactPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard/engineering");
-  }
+  const role = await requireDashboardPermission("engineering.impact");
+  const canSeeIndividuals = hasAccess(role, "leadership");
 
-  const analysis = await getImpactAnalysis();
+  const raw = await getImpactAnalysis();
+  const analysis = canSeeIndividuals ? raw : scrubForNonLeadership(raw);
 
-  return <ImpactReport analysis={analysis} />;
+  return (
+    <ImpactReport analysis={analysis} canSeeIndividuals={canSeeIndividuals} />
+  );
 }

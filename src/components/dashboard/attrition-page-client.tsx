@@ -25,6 +25,7 @@ import {
   type Y1AttritionRow,
   type Leaver,
   type RetentionCohort,
+  type DepartmentOption,
 } from "@/lib/data/attrition-utils";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 
@@ -32,7 +33,7 @@ interface AttritionPageClientProps {
   rollingAttrition: AttritionRow[];
   y1Attrition: Y1AttritionRow[];
   recentLeavers: Leaver[];
-  departments: string[];
+  departments: DepartmentOption[];
   tenureBuckets: string[];
   retentionCohorts: RetentionCohort[];
   modeUrl: string;
@@ -227,7 +228,7 @@ export function AttritionPageClient({
             )}
 
             {!filters.department && deptSeries.length > 0 && (
-              <AttritionChart series={deptSeries} title="Attrition by Department" subtitle="12-month rolling total attrition rate" modeUrl={modeUrl} />
+              <AttritionChart series={deptSeries} title="Attrition by Department" subtitle="12-month rolling total attrition rate — top 8 departments by headcount" modeUrl={modeUrl} />
             )}
           </>
         ) : (

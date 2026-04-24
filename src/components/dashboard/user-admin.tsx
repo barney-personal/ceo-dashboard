@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ChevronDown, LogIn } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, LogIn, Search } from "lucide-react";
 
 interface User {
   id: string;
@@ -21,11 +21,24 @@ interface UserAdminProps {
   initialUsers: User[];
 }
 
-const ROLES = ["everyone", "leadership", "ceo"] as const;
+const ROLES = [
+  "everyone",
+  "engineering_manager",
+  "leadership",
+  "ceo",
+] as const;
+
+const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
+  everyone: "everyone",
+  engineering_manager: "eng manager",
+  leadership: "leadership",
+  ceo: "ceo",
+};
 
 const ROLE_BADGE_STYLES: Record<string, string> = {
   ceo: "bg-primary/10 text-primary border-primary/20",
   leadership: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+  engineering_manager: "bg-sky-500/10 text-sky-700 border-sky-500/20",
   everyone: "bg-muted text-muted-foreground border-border/60",
 };
 
@@ -54,12 +67,35 @@ function startImpersonation(user: User) {
   document.cookie = `impersonate=${encodeURIComponent(payload)}; path=/; max-age=86400`;
 }
 
+const PAGE_SIZE = 25;
+
 export function UserAdmin({ initialUsers }: UserAdminProps) {
   const [users, setUsers] = useState<User[]>(initialUsers);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
   const [errorId, setErrorId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   const router = useRouter();
+
+  const filteredUsers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const name = [u.firstName, u.lastName].filter(Boolean).join(" ").toLowerCase();
+      const email = (u.email ?? "").toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+  }, [users, query]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const pageStart = (page - 1) * PAGE_SIZE;
+  const visibleUsers = filteredUsers.slice(pageStart, pageStart + PAGE_SIZE);
 
   const updateRole = async (userId: string, newRole: string) => {
     setUpdatingId(userId);
@@ -93,6 +129,19 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
 
   return (
     <div className="space-y-6">
+      <div className="relative max-w-sm">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Search name or email…"
+          className="w-full rounded-lg border border-border/60 bg-card py-2 pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary/40"
+        />
+      </div>
       <div className="rounded-xl border border-border/60 bg-card shadow-warm overflow-hidden">
         {/* Table header */}
         <div className="grid grid-cols-[auto_1fr_1fr_140px_80px_120px_120px_auto] items-center gap-4 border-b border-border/50 bg-muted/30 px-5 py-3">
@@ -120,7 +169,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
 
         {/* User rows */}
         <div className="divide-y divide-border/30">
-          {users.map((user) => {
+          {visibleUsers.map((user) => {
             const isUpdating = updatingId === user.id;
             const isSuccess = successId === user.id;
             const isError = errorId === user.id;
@@ -174,7 +223,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
                   >
                     {ROLES.map((r) => (
                       <option key={r} value={r}>
-                        {r}
+                        {ROLE_LABELS[r]}
                       </option>
                     ))}
                   </select>
@@ -220,16 +269,50 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
         </div>
 
         {/* Empty state */}
-        {users.length === 0 && (
+        {filteredUsers.length === 0 && (
           <div className="px-5 py-12 text-center text-sm text-muted-foreground">
-            No users found
+            {query ? "No users match your search" : "No users found"}
           </div>
         )}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        {users.length} user{users.length !== 1 ? "s" : ""} total
-      </p>
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-xs text-muted-foreground">
+          {query ? (
+            <>
+              {filteredUsers.length} of {users.length} user
+              {users.length !== 1 ? "s" : ""}
+            </>
+          ) : (
+            <>
+              {users.length} user{users.length !== 1 ? "s" : ""} total
+            </>
+          )}
+        </p>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="flex items-center gap-1 rounded-lg border border-border/60 px-2 py-1 font-medium transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-primary disabled:pointer-events-none disabled:opacity-40"
+            >
+              <ChevronLeft className="h-3 w-3" />
+              Prev
+            </button>
+            <span className="tabular-nums">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="flex items-center gap-1 rounded-lg border border-border/60 px-2 py-1 font-medium transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-primary disabled:pointer-events-none disabled:opacity-40"
+            >
+              Next
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

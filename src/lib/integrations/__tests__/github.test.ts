@@ -7,9 +7,11 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 import {
+  computeReviewRounds,
   fetchMergedPRRecords,
   getUserProfileOrNull,
   GitHubApiError,
+  inferPrimarySurface,
 } from "../github";
 
 interface FakeNode {
@@ -263,5 +265,73 @@ describe("getUserProfileOrNull", () => {
     await expect(getUserProfileOrNull("alice")).rejects.toBeInstanceOf(
       GitHubApiError,
     );
+  });
+});
+
+describe("inferPrimarySurface", () => {
+  it("returns the dominant surface when one area clearly outweighs the rest", () => {
+    const surface = inferPrimarySurface([
+      {
+        filename: "src/lib/sync/code-review.ts",
+        status: "modified",
+        additions: 140,
+        deletions: 20,
+        changes: 160,
+      },
+      {
+        filename: "src/components/button.tsx",
+        status: "modified",
+        additions: 10,
+        deletions: 5,
+        changes: 15,
+      },
+    ]);
+
+    expect(surface).toBe("backend");
+  });
+
+  it("returns mixed when no single surface clears the dominance threshold", () => {
+    const surface = inferPrimarySurface([
+      {
+        filename: "src/lib/sync/code-review.ts",
+        status: "modified",
+        additions: 60,
+        deletions: 20,
+        changes: 80,
+      },
+      {
+        filename: "src/components/button.tsx",
+        status: "modified",
+        additions: 60,
+        deletions: 20,
+        changes: 80,
+      },
+    ]);
+
+    expect(surface).toBe("mixed");
+  });
+});
+
+describe("computeReviewRounds", () => {
+  it("returns zero when there are no reviews", () => {
+    expect(computeReviewRounds([], [new Date("2026-04-20T10:00:00Z")])).toBe(0);
+  });
+
+  it("increments rounds only when later commits are followed by another review", () => {
+    const rounds = computeReviewRounds(
+      [
+        new Date("2026-04-20T10:00:00Z"),
+        new Date("2026-04-20T14:00:00Z"),
+        new Date("2026-04-21T11:00:00Z"),
+      ],
+      [
+        new Date("2026-04-20T09:00:00Z"),
+        new Date("2026-04-20T12:00:00Z"),
+        new Date("2026-04-20T16:00:00Z"),
+        new Date("2026-04-22T09:00:00Z"),
+      ],
+    );
+
+    expect(rounds).toBe(3);
   });
 });

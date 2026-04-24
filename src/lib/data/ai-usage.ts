@@ -477,6 +477,206 @@ export function getTrailingWeeklyTotals(
     .slice(-weeks);
 }
 
+/**
+ * Build the "Monthly model mix" data — one row per month, one column per
+ * model, with `cost` values that sum to that month's grand total. Excludes
+ * Mode's `ALL MODELS` rollup rows. Caller renders this as a stacked bar so
+ * readers can see (a) how the mix shifts (new models taking share) and
+ * (b) the total growing over time, in one figure.
+ *
+ * `topN` bounds the distinct columns to the biggest models by all-time
+ * cost; everything else gets rolled into an "Other" bucket so the legend
+ * doesn't explode as new models are added.
+ */
+/**
+ * Return the ISO (YYYY-MM-DD) Monday of the week containing `now` in UTC.
+ * Used to mark the "current, in-progress" week on weekly charts — the last
+ * data point is always a partial week, and Cairo's *Truthful Art* is firm
+ * that partial-period bars must be visually distinguished or readers will
+ * misread the dip as real.
+ */
+export function currentWeekStartIso(now: Date = new Date()): string {
+  const d = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  // Monday-start: 1..7 (Mon=1, Sun=7). JS's UTC getDay is 0=Sun..6=Sat.
+  const dayIdx = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dayIdx);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Return the ISO (YYYY-MM-01) first day of the month containing `now` in UTC.
+ * Same rationale as `currentWeekStartIso`: the current-month bar in the
+ * `MonthlyModelMixChart` is always partial and must be flagged.
+ */
+export function currentMonthStartIso(now: Date = new Date()): string {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Lorenz-curve point series + Gini coefficient for latest-month per-user
+ * spend. Answers Wilke's question: "is spend concentrated in a handful of
+ * power users, or diffused across the org?"
+ *
+ * Points: cumulative share of users (x, 0..1) vs cumulative share of spend
+ * (y, 0..1), sorted ascending by spend. A diagonal (y = x) = perfect
+ * equality; concavity downward = concentration.
+ *
+ * Gini: 2 × the area between the diagonal and the Lorenz curve, in [0, 1].
+ * 0 means everyone spends the same; 1 means one user accounts for all
+ * spend.
+ */
+export function computeLorenzCurve(data: AiUsageData): {
+  points: Array<{ x: number; y: number }>;
+  gini: number;
+  userCount: number;
+  totalSpend: number;
+} {
+  const perUser = aggregateLatestMonthByUser(data);
+  const spends = [...perUser.values()]
+    .map((u) => u.totalCost)
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+
+  if (spends.length === 0) {
+    return {
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      gini: 0,
+      userCount: 0,
+      totalSpend: 0,
+    };
+  }
+
+  const total = spends.reduce((s, v) => s + v, 0);
+  const n = spends.length;
+  const points: Array<{ x: number; y: number }> = [{ x: 0, y: 0 }];
+  let cumulative = 0;
+  for (let i = 0; i < n; i++) {
+    cumulative += spends[i];
+    points.push({ x: (i + 1) / n, y: cumulative / total });
+  }
+
+  // Gini via trapezoidal integration of the Lorenz curve. Area under L(x)
+  // equals Σ ((x_i - x_{i-1}) * (y_i + y_{i-1}) / 2). Gini = 1 - 2A.
+  let areaUnder = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    areaUnder += (dx * (points[i].y + points[i - 1].y)) / 2;
+  }
+  const gini = Math.max(0, Math.min(1, 1 - 2 * areaUnder));
+
+  return {
+    points,
+    gini,
+    userCount: n,
+    totalSpend: total,
+  };
+}
+
+/**
+ * Build a stable composite key for a (category, modelName) pair. Prod data
+ * has model names that appear under multiple tool categories (e.g. Cursor's
+ * "auto" and Claude's native model sometimes share labels), so keying on
+ * modelName alone silently merges those segments and picks whichever row
+ * happened to be written last for the category attribution.
+ */
+function modelKey(category: string, modelName: string): string {
+  return `${category}::${modelName}`;
+}
+
+export function buildMonthlyModelMix(
+  data: AiUsageData,
+  topN = 9,
+): {
+  months: string[];
+  models: Array<{
+    /** Stable composite (`category::modelName`) — use for row-cost lookups. */
+    key: string;
+    modelName: string;
+    category: string;
+    totalCost: number;
+  }>;
+  rows: Array<{ monthStart: string; [key: string]: string | number }>;
+} {
+  const byMonthModel = new Map<string, Map<string, number>>();
+  const totalByModel = new Map<
+    string,
+    { cost: number; category: string; modelName: string }
+  >();
+  const months = new Set<string>();
+
+  for (const row of data.monthlyByModel) {
+    if (row.category === "ALL MODELS" || row.modelName === "ALL MODELS") {
+      continue;
+    }
+    months.add(row.monthStart);
+    const key = modelKey(row.category, row.modelName);
+
+    const perMonth =
+      byMonthModel.get(row.monthStart) ?? new Map<string, number>();
+    perMonth.set(key, (perMonth.get(key) ?? 0) + row.totalCost);
+    byMonthModel.set(row.monthStart, perMonth);
+
+    const existing = totalByModel.get(key);
+    totalByModel.set(key, {
+      cost: (existing?.cost ?? 0) + row.totalCost,
+      category: row.category,
+      modelName: row.modelName,
+    });
+  }
+
+  const sortedModels = [...totalByModel.entries()]
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([key, { cost, category, modelName }]) => ({
+      key,
+      modelName,
+      category,
+      totalCost: cost,
+    }));
+  const topModels = sortedModels.slice(0, topN);
+  const restKeys = new Set(sortedModels.slice(topN).map((m) => m.key));
+
+  const OTHER_KEY = "other::other";
+  const sortedMonths = [...months].sort();
+  const rows = sortedMonths.map((monthStart) => {
+    const perMonth = byMonthModel.get(monthStart) ?? new Map<string, number>();
+    const row: { monthStart: string; [key: string]: string | number } = {
+      monthStart,
+    };
+    for (const model of topModels) {
+      row[model.key] = perMonth.get(model.key) ?? 0;
+    }
+    let otherCost = 0;
+    for (const k of restKeys) {
+      otherCost += perMonth.get(k) ?? 0;
+    }
+    if (restKeys.size > 0) {
+      row[OTHER_KEY] = otherCost;
+    }
+    return row;
+  });
+
+  const models = [...topModels];
+  if (restKeys.size > 0) {
+    models.push({
+      key: OTHER_KEY,
+      modelName: "Other",
+      category: "other",
+      totalCost: sortedModels.slice(topN).reduce(
+        (s, m) => s + m.totalCost,
+        0,
+      ),
+    });
+  }
+
+  return { months: sortedMonths, models, rows };
+}
+
 export function getUserTrend(
   data: AiUsageData,
   email: string,

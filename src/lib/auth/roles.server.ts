@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -12,6 +13,12 @@ export interface Impersonation {
   userId: string;
   name: string;
   role: Role;
+  /** Primary email resolved live from Clerk; null if unavailable. */
+  email: string | null;
+  /** All verified emails resolved live from Clerk; primary first. */
+  emails: string[];
+  /** Avatar URL resolved live from Clerk; null if unavailable. */
+  imageUrl: string | null;
 }
 
 /**
@@ -51,13 +58,18 @@ export async function getCurrentUserRole(): Promise<Role> {
         cookieStore.get(IMPERSONATE_COOKIE)?.value
       );
       if (cookieData) {
-        const role = await resolveUserRole(cookieData.userId);
-        return role;
+        const profile = await getClerkUserProfile(cookieData.userId);
+        return profile.role;
       }
 
       // Fall back to role preview
       const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as Role | undefined;
-      if (preview === "everyone" || preview === "leadership" || preview === "manager") {
+      if (
+        preview === "everyone" ||
+        preview === "manager" ||
+        preview === "engineering_manager" ||
+        preview === "leadership"
+      ) {
         return preview;
       }
     } catch {
@@ -140,28 +152,80 @@ export async function getImpersonation(): Promise<Impersonation | null> {
     );
     if (!cookieData) return null;
 
-    // Resolve live role from Clerk rather than trusting cookie snapshot
-    const role = await resolveUserRole(cookieData.userId);
-    return { ...cookieData, role };
+    // Resolve live identity from Clerk rather than trusting cookie snapshot.
+    // Falls back to the cookie's name if Clerk doesn't return one.
+    const profile = await getClerkUserProfile(cookieData.userId);
+    return {
+      userId: cookieData.userId,
+      name: profile.name ?? cookieData.name,
+      role: profile.role,
+      email: profile.email,
+      emails: profile.emails,
+      imageUrl: profile.imageUrl,
+    };
   } catch {
     return null;
   }
 }
 
-/** Look up a user's current role from Clerk by ID. */
-async function resolveUserRole(userId: string): Promise<Role> {
-  try {
-    const client = await clerkClient();
-    const user = await client.users.getUser(userId);
-    return getUserRole(
-      (user.publicMetadata as Record<string, unknown>) ?? {}
-    );
-  } catch {
-    return "everyone";
-  }
+interface ClerkUserProfile {
+  role: Role;
+  name: string | null;
+  email: string | null;
+  emails: string[];
+  imageUrl: string | null;
 }
 
-function parseImpersonateCookie(value: string | undefined): Impersonation | null {
+/**
+ * Fetch a Clerk user's role, display name, emails, and avatar.
+ * Wrapped in React cache() so callers within the same request (e.g. the
+ * dashboard layout + overview page) share one HTTP round-trip per userId.
+ * Returns safe defaults on Clerk error so the request keeps rendering.
+ */
+const getClerkUserProfile = cache(
+  async (userId: string): Promise<ClerkUserProfile> => {
+    try {
+      const client = await clerkClient();
+      const user = await client.users.getUser(userId);
+      const role = getUserRole(
+        (user.publicMetadata as Record<string, unknown>) ?? {}
+      );
+      const primary = user.primaryEmailAddress?.emailAddress ?? null;
+      const all = (user.emailAddresses ?? []).map((e) => e.emailAddress);
+      const ordered = primary
+        ? [primary, ...all.filter((e) => e !== primary)]
+        : all;
+      const composedName =
+        [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+        null;
+      return {
+        role,
+        name: composedName,
+        email: primary,
+        emails: ordered.filter((e): e is string => !!e),
+        imageUrl: user.imageUrl ?? null,
+      };
+    } catch {
+      return {
+        role: "everyone",
+        name: null,
+        email: null,
+        emails: [],
+        imageUrl: null,
+      };
+    }
+  },
+);
+
+interface ImpersonateCookie {
+  userId: string;
+  name: string;
+  role: Role;
+}
+
+function parseImpersonateCookie(
+  value: string | undefined,
+): ImpersonateCookie | null {
   if (!value) return null;
   try {
     const decoded = decodeURIComponent(value);
@@ -169,7 +233,11 @@ function parseImpersonateCookie(value: string | undefined): Impersonation | null
     if (
       typeof parsed.userId === "string" &&
       typeof parsed.name === "string" &&
-      (parsed.role === "everyone" || parsed.role === "manager" || parsed.role === "leadership" || parsed.role === "ceo")
+      (parsed.role === "everyone" ||
+        parsed.role === "manager" ||
+        parsed.role === "engineering_manager" ||
+        parsed.role === "leadership" ||
+        parsed.role === "ceo")
     ) {
       return { userId: parsed.userId, name: parsed.name, role: parsed.role };
     }

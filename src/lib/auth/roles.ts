@@ -1,10 +1,16 @@
-export type Role = "ceo" | "leadership" | "manager" | "everyone";
+export type Role =
+  | "ceo"
+  | "leadership"
+  | "engineering_manager"
+  | "manager"
+  | "everyone";
 
 const ROLE_LEVEL: Record<Role, number> = {
   everyone: 0,
   manager: 1,
-  leadership: 2,
-  ceo: 3,
+  engineering_manager: 2,
+  leadership: 3,
+  ceo: 4,
 };
 
 export function hasAccess(userRole: Role, requiredRole: Role): boolean {
@@ -18,6 +24,8 @@ export function hasAccess(userRole: Role, requiredRole: Role): boolean {
  */
 export function getUserRole(publicMetadata: Record<string, unknown>): Role {
   const role = publicMetadata?.role as string | undefined;
-  if (role === "ceo" || role === "leadership") return role;
+  if (role === "ceo" || role === "leadership" || role === "engineering_manager") {
+    return role;
+  }
   return "everyone";
 }

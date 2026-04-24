@@ -120,6 +120,48 @@
       "when": 1776589705682,
       "tag": "0016_add_enps",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1776955667739,
+      "tag": "0017_add_pr_review_analyses",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776961925641,
+      "tag": "0018_add_headcount_forecast_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776980340822,
+      "tag": "0019_code_review_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1776984660527,
+      "tag": "0020_add_user_briefings",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777014275465,
+      "tag": "0021_dashboard_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1777021569108,
+      "tag": "0022_engineering_ranking_snapshots",
+      "breakpoints": true
     }
   ]
 }

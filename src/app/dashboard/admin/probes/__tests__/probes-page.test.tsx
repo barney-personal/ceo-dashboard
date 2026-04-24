@@ -4,25 +4,20 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockGetCurrentUserRole, mockGetProbeStatusSummary, mockGetProbeTimeline, mockRedirect } =
+const { mockRequireDashboardPermission, mockGetProbeStatusSummary, mockGetProbeTimeline } =
   vi.hoisted(() => ({
-    mockGetCurrentUserRole: vi.fn(),
+    mockRequireDashboardPermission: vi.fn(),
     mockGetProbeStatusSummary: vi.fn(),
     mockGetProbeTimeline: vi.fn(),
-    mockRedirect: vi.fn(),
   }));
 
-vi.mock("@/lib/auth/roles.server", () => ({
-  getCurrentUserRole: mockGetCurrentUserRole,
+vi.mock("@/lib/auth/dashboard-permissions.server", () => ({
+  requireDashboardPermission: mockRequireDashboardPermission,
 }));
 
 vi.mock("@/lib/data/probes", () => ({
   getProbeStatusSummary: mockGetProbeStatusSummary,
   getProbeTimeline: mockGetProbeTimeline,
-}));
-
-vi.mock("next/navigation", () => ({
-  redirect: mockRedirect,
 }));
 
 import ProbesPage from "../page";
@@ -31,39 +26,23 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// ---------------------------------------------------------------------------
-// Role gating
-// ---------------------------------------------------------------------------
-
-describe("ProbesPage role gating", () => {
-  it("redirects non-CEO users to /dashboard", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("everyone");
+describe("ProbesPage permission guard", () => {
+  it("requires the admin probes permission before loading data", async () => {
+    mockRequireDashboardPermission.mockResolvedValue("ceo");
     mockGetProbeStatusSummary.mockResolvedValue([]);
     mockGetProbeTimeline.mockResolvedValue([]);
 
     await ProbesPage();
 
-    expect(mockRedirect).toHaveBeenCalledWith("/dashboard");
+    expect(mockRequireDashboardPermission).toHaveBeenCalledWith("admin.probes");
   });
 
-  it("redirects leadership users to /dashboard", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("leadership");
-    mockGetProbeStatusSummary.mockResolvedValue([]);
-    mockGetProbeTimeline.mockResolvedValue([]);
+  it("does not load probe data when permission gating rejects", async () => {
+    mockRequireDashboardPermission.mockRejectedValue(new Error("redirected"));
 
-    await ProbesPage();
-
-    expect(mockRedirect).toHaveBeenCalledWith("/dashboard");
-  });
-
-  it("does not redirect CEO users", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("ceo");
-    mockGetProbeStatusSummary.mockResolvedValue([]);
-    mockGetProbeTimeline.mockResolvedValue([]);
-
-    await ProbesPage();
-
-    expect(mockRedirect).not.toHaveBeenCalled();
+    await expect(ProbesPage()).rejects.toThrow("redirected");
+    expect(mockGetProbeStatusSummary).not.toHaveBeenCalled();
+    expect(mockGetProbeTimeline).not.toHaveBeenCalled();
   });
 });
 
@@ -73,7 +52,7 @@ describe("ProbesPage role gating", () => {
 
 describe("ProbesPage data loading", () => {
   it("calls getProbeStatusSummary with known check names", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("ceo");
+    mockRequireDashboardPermission.mockResolvedValue("ceo");
     mockGetProbeStatusSummary.mockResolvedValue([]);
     mockGetProbeTimeline.mockResolvedValue([]);
 
@@ -86,7 +65,7 @@ describe("ProbesPage data loading", () => {
   });
 
   it("calls getProbeTimeline with default 24 hours", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("ceo");
+    mockRequireDashboardPermission.mockResolvedValue("ceo");
     mockGetProbeStatusSummary.mockResolvedValue([]);
     mockGetProbeTimeline.mockResolvedValue([]);
 
@@ -96,7 +75,7 @@ describe("ProbesPage data loading", () => {
   });
 
   it("returns a React element (renders without error)", async () => {
-    mockGetCurrentUserRole.mockResolvedValue("ceo");
+    mockRequireDashboardPermission.mockResolvedValue("ceo");
     mockGetProbeStatusSummary.mockResolvedValue([
       {
         checkName: "ceo-ping-auth",

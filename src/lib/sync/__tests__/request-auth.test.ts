@@ -4,7 +4,12 @@ vi.mock("@clerk/nextjs/server", () => ({
   currentUser: vi.fn(),
 }));
 
+vi.mock("@/lib/auth/dashboard-permissions.server", () => ({
+  getRequiredRoleForDashboardPermission: vi.fn(),
+}));
+
 import { currentUser } from "@clerk/nextjs/server";
+import { getRequiredRoleForDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { CURRENT_USER_TIMEOUT_MS } from "@/lib/auth/current-user.server";
 import {
   authorizeSyncRequest,
@@ -13,6 +18,9 @@ import {
 } from "@/lib/sync/request-auth";
 
 const mockCurrentUser = vi.mocked(currentUser);
+const mockGetRequiredRoleForDashboardPermission = vi.mocked(
+  getRequiredRoleForDashboardPermission,
+);
 
 function asCurrentUser(publicMetadata: Record<string, unknown>) {
   return {
@@ -106,6 +114,7 @@ describe("authorizeSyncRequest", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     delete process.env.CRON_SECRET;
+    mockGetRequiredRoleForDashboardPermission.mockResolvedValue("ceo");
   });
 
   afterEach(() => {
@@ -138,6 +147,30 @@ describe("authorizeSyncRequest", () => {
     const req = makeRequest();
     const result = await authorizeSyncRequest(req);
     expect(result).toBe("manual");
+  });
+
+  it("uses the stored permission role for editable manual permissions", async () => {
+    mockCurrentUser.mockResolvedValue(asCurrentUser({ role: "leadership" }));
+    mockGetRequiredRoleForDashboardPermission.mockResolvedValue("leadership");
+
+    const result = await authorizeSyncRequest(
+      makeRequest(),
+      "dashboard.financial",
+    );
+
+    expect(result).toBe("manual");
+    expect(mockGetRequiredRoleForDashboardPermission).toHaveBeenCalledWith(
+      "dashboard.financial",
+    );
+  });
+
+  it("uses code defaults for locked manual permissions without touching the DB", async () => {
+    mockCurrentUser.mockResolvedValue(asCurrentUser({ role: "leadership" }));
+
+    const result = await authorizeSyncRequest(makeRequest(), "admin.status");
+
+    expect(result).toBe("forbidden");
+    expect(mockGetRequiredRoleForDashboardPermission).not.toHaveBeenCalled();
   });
 
   it("does not treat wrong bearer token as cron", async () => {

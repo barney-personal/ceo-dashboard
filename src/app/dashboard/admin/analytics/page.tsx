@@ -1,8 +1,6 @@
-import { redirect } from "next/navigation";
 import dynamic from "next/dynamic";
 import { clerkClient } from "@clerk/nextjs/server";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ColumnChart } from "@/components/charts/column-chart";
@@ -68,8 +66,7 @@ export default async function AnalyticsPage({
 }: {
   searchParams: Promise<{ page?: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) redirect("/dashboard");
+  await requireDashboardPermission("admin.analytics");
 
   const params = await searchParams;
   const currentPage = Math.max(1, parseInt(params.page ?? "1", 10) || 1);

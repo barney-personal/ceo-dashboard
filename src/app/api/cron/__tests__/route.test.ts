@@ -24,6 +24,15 @@ vi.mock("@/lib/debug-logger", () => ({
   cleanupDebugLogs: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Code-review analysis is gated by a 6.5d DB-driven cooldown; mock the
+// helper to default to "skipped" so pre-existing cron tests (which predate
+// this feature) don't need to know about it.
+vi.mock("@/lib/sync/code-review", () => ({
+  maybeRunCodeReviewFromCron: vi
+    .fn()
+    .mockResolvedValue({ skippedBy: "cooldown" }),
+}));
+
 import { isCronRequest } from "@/lib/sync/request-auth";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
 import {

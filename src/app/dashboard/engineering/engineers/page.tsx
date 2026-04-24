@@ -1,5 +1,6 @@
 import { EngineeringTable } from "@/components/dashboard/engineering-table";
 import { EngineerTopMetrics } from "@/components/dashboard/engineer-top-metrics";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import {
   getEngineeringRankings,
   PERIOD_OPTIONS,
@@ -12,6 +13,8 @@ export default async function EngineeringEngineersPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
+  await requireDashboardPermission("dashboard.engineering");
+
   const params = await searchParams;
   const validPeriods = PERIOD_OPTIONS.map((p) => p.value);
   const periodDays = validPeriods.includes(Number(params.period) as PeriodDays)

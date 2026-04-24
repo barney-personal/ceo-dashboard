@@ -347,6 +347,71 @@ export const githubCommits = pgTable(
   ]
 );
 
+/**
+ * Per-PR Claude analysis cache. Keyed by (repo, pr_number, rubric_version) so
+ * a rubric change forces a re-analysis but the same PR isn't re-scored
+ * repeatedly within a rubric version. Predictions and SHAP values live
+ * elsewhere — this table only holds the LLM's structured judgement so the
+ * `/dashboard/engineering/code-review` page can aggregate cheaply on load.
+ */
+export const prReviewAnalyses = pgTable(
+  "pr_review_analyses",
+  {
+    id: serial("id").primaryKey(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    mergeSha: text("merge_sha"),
+    authorLogin: text("author_login").notNull(),
+    mergedAt: timestamp("merged_at").notNull(),
+    // Scores: 1-5 integers. Enforced in application code only (see
+    // "Known deliberate gaps" in CLAUDE.md for why no CHECK constraints).
+    complexity: integer("complexity").notNull(),
+    quality: integer("quality").notNull(),
+    technicalDifficulty: integer("technical_difficulty").notNull().default(3),
+    executionQuality: integer("execution_quality").notNull().default(3),
+    testAdequacy: integer("test_adequacy").notNull().default(3),
+    riskHandling: integer("risk_handling").notNull().default(3),
+    reviewability: integer("reviewability").notNull().default(3),
+    analysisConfidencePct: integer("analysis_confidence_pct").notNull().default(60),
+    primarySurface: text("primary_surface").notNull().default("mixed"),
+    category: text("category").notNull(), // bug_fix | feature | refactor | infra | test | docs | chore
+    summary: text("summary").notNull(),
+    // caveats is always supplied by upsertAnalysis — no DB default needed.
+    caveats: jsonb("caveats").notNull(), // string[]
+    standout: text("standout"), // notably_complex | notably_high_quality | notably_low_quality | concerning | null
+    approvalCount: integer("approval_count").notNull().default(0),
+    changeRequestCount: integer("change_request_count").notNull().default(0),
+    reviewCommentCount: integer("review_comment_count").notNull().default(0),
+    conversationCommentCount: integer("conversation_comment_count")
+      .notNull()
+      .default(0),
+    reviewRounds: integer("review_rounds").notNull().default(0),
+    timeToFirstReviewMinutes: integer("time_to_first_review_minutes"),
+    timeToMergeMinutes: integer("time_to_merge_minutes").notNull().default(0),
+    commitCount: integer("commit_count").notNull().default(0),
+    commitsAfterFirstReview: integer("commits_after_first_review")
+      .notNull()
+      .default(0),
+    revertWithin14d: boolean("revert_within_14d").notNull().default(false),
+    outcomeScore: integer("outcome_score").notNull().default(75),
+    reviewProvider: text("review_provider").notNull().default("anthropic"),
+    reviewModel: text("review_model").notNull().default("claude-opus-4-7"),
+    secondOpinionUsed: boolean("second_opinion_used").notNull().default(false),
+    agreementLevel: text("agreement_level").notNull().default("single_model"),
+    secondOpinionReasons: jsonb("second_opinion_reasons")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    rubricVersion: text("rubric_version").notNull(),
+    rawJson: jsonb("raw_json").notNull(),
+    analysedAt: timestamp("analysed_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique().on(table.repo, table.prNumber, table.rubricVersion),
+    index("pr_review_merged_at_idx").on(table.mergedAt),
+    index("pr_review_author_idx").on(table.authorLogin),
+  ],
+);
+
 export const githubEmployeeMap = pgTable("github_employee_map", {
   id: serial("id").primaryKey(),
   githubLogin: text("github_login").notNull().unique(),
@@ -390,6 +455,20 @@ export const pageViews = pgTable(
     unique().on(table.clerkUserId, table.path, table.hourBucket),
     index("page_views_viewed_at_idx").on(table.viewedAt),
     index("page_views_user_viewed_idx").on(table.clerkUserId, table.viewedAt),
+  ]
+);
+
+export const dashboardPermissionOverrides = pgTable(
+  "dashboard_permission_overrides",
+  {
+    id: serial("id").primaryKey(),
+    permissionId: text("permission_id").notNull().unique(),
+    requiredRole: text("required_role").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("dashboard_permission_overrides_role_idx").on(table.requiredRole),
   ]
 );
 
@@ -479,3 +558,141 @@ export const enpsPrompts = pgTable(
   ]
 );
 
+// ---------------------------------------------------------------------------
+// Headcount forecast snapshots — used for forecast accuracy tracking.
+// Snapshotted once per calendar month (idempotent) so we can compare past
+// forecasts against actual headcount as months elapse.
+// ---------------------------------------------------------------------------
+
+export const headcountForecastSnapshots = pgTable(
+  "headcount_forecast_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    /** YYYY-MM — the month when the forecast was captured. One row per
+     *  calendar month enforced by the unique index below. */
+    asOfMonth: text("as_of_month").notNull(),
+    /** Timestamp of capture — useful when diagnosing late-month
+     *  snapshots vs early-month ones. */
+    capturedAt: timestamp("captured_at").defaultNow().notNull(),
+    /** Active FTE count at time of snapshot. */
+    startingHeadcount: integer("starting_headcount").notNull(),
+    /** Hire scenarios (P10/P50/P90 hires-per-month) used in the forecast. */
+    hireScenarios: jsonb("hire_scenarios").notNull(), // { low, mid, high }
+    /** Attrition rates used in the forecast (annualised). */
+    attritionRates: jsonb("attrition_rates").notNull(), // { under1yrAnnual, over1yrAnnual }
+    /** The monthly projection: [{month, low, mid, high, hires, departures, netChange}]. */
+    projection: jsonb("projection").notNull(),
+  },
+  (table) => [
+    unique("headcount_forecast_snapshot_month_uniq").on(table.asOfMonth),
+    index("headcount_forecast_snapshot_captured_idx").on(table.capturedAt),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// Daily briefing cache — Claude-generated personalised briefing per user/day.
+// Cached once per (email, date) so we pay the LLM cost at most once per user
+// per UTC day. Bumping the model forces regeneration by failing the
+// "model matches current" check in the loader.
+// ---------------------------------------------------------------------------
+
+export const userBriefings = pgTable(
+  "user_briefings",
+  {
+    id: serial("id").primaryKey(),
+    userEmail: text("user_email").notNull(), // lowercased
+    briefingDate: text("briefing_date").notNull(), // YYYY-MM-DD (UTC)
+    briefingText: text("briefing_text").notNull(),
+    contextJson: jsonb("context_json").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheCreationTokens: integer("cache_creation_tokens"),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("user_briefings_email_date_uniq").on(table.userEmail, table.briefingDate),
+    index("user_briefings_date_idx").on(table.briefingDate),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Engineering ranking snapshots
+// ---------------------------------------------------------------------------
+// Persisted per-engineer ranking rows keyed by `email_hash` only. Display
+// name, email, manager, and resolved GitHub login are resolved at request
+// time from Mode Headcount SSoT / `githubEmployeeMap` and are NEVER written
+// here — persistence is privacy-preserving by construction.
+//
+// IMPORTANT: `email_hash` is currently an UNSALTED SHA-256 truncated to 16
+// hex chars (see `hashEmailForRanking`). This is a deliberate short-term
+// choice so snapshot keys align with the existing `impact-model.json`
+// convention; anyone with DB read access plus the Cleo email directory
+// could recover identity by precomputing `sha256(email)[:16]` over the
+// small plausible keyspace. Tracked follow-up: wire this through the
+// `IMPACT_MODEL_HASH_KEY` HMAC before the snapshot table accumulates
+// meaningful history.
+//
+// The natural key is (snapshot_date, methodology_version, email_hash) so a
+// persist call is idempotent for a given calendar day under a given
+// methodology version. Methodology changes bump `methodology_version`
+// (`RANKING_METHODOLOGY_VERSION`) and produce a new snapshot slice rather
+// than overwriting the old one — the M17 movers view compares like with
+// like and labels cross-methodology movement separately.
+
+export const engineeringRankingSnapshots = pgTable(
+  "engineering_ranking_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    // Calendar day ("YYYY-MM-DD", UTC) the snapshot was taken. Buckets multiple
+    // persist calls on the same day into a single idempotent row per engineer.
+    snapshotDate: text("snapshot_date").notNull(),
+    methodologyVersion: text("methodology_version").notNull(),
+    signalWindowStart: timestamp("signal_window_start", {
+      withTimezone: true,
+    }).notNull(),
+    signalWindowEnd: timestamp("signal_window_end", {
+      withTimezone: true,
+    }).notNull(),
+    // Unsalted 16-char SHA-256 hash (see `hashEmailForRanking`) — reversible
+    // against the Cleo email directory; treat as pseudonymous, not anonymous.
+    // Resolution to display name / email / login happens at request time.
+    emailHash: text("email_hash").notNull(),
+    eligibilityStatus: text("eligibility_status").notNull(),
+    rank: integer("rank"),
+    compositeScore: numeric("composite_score", { precision: 7, scale: 4 }),
+    adjustedPercentile: numeric("adjusted_percentile", {
+      precision: 7,
+      scale: 4,
+    }),
+    rawPercentile: numeric("raw_percentile", { precision: 7, scale: 4 }),
+    methodA: numeric("method_a", { precision: 7, scale: 4 }),
+    methodB: numeric("method_b", { precision: 7, scale: 4 }),
+    methodC: numeric("method_c", { precision: 7, scale: 4 }),
+    methodD: numeric("method_d", { precision: 7, scale: 4 }),
+    confidenceLow: numeric("confidence_low", { precision: 7, scale: 4 }),
+    confidenceHigh: numeric("confidence_high", { precision: 7, scale: 4 }),
+    // Stable hash of the per-engineer input signals (PR/commit counts, impact
+    // model row, tenure days, etc.) so M17 movers can distinguish input drift
+    // from methodology drift without persisting the raw signals.
+    inputHash: text("input_hash"),
+    // Non-identifying metadata (present-method count, dominance flag, etc.).
+    // MUST NOT contain display name, email, resolved GitHub login, manager
+    // name, or raw signal values — any such field is a privacy leak.
+    metadata: jsonb("metadata"),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("engineering_ranking_snapshots_natural_key").on(
+      table.snapshotDate,
+      table.methodologyVersion,
+      table.emailHash,
+    ),
+    index("engineering_ranking_snapshots_date_version_idx").on(
+      table.snapshotDate,
+      table.methodologyVersion,
+    ),
+    index("engineering_ranking_snapshots_email_hash_idx").on(table.emailHash),
+  ]
+);

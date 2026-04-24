@@ -1,3 +1,4 @@
+import { cache } from "react";
 import {
   getReportData,
   rowStr,
@@ -337,12 +338,14 @@ export async function getLtvCacRatioSeries(): Promise<ChartSeries[]> {
 /**
  * Latest LTV:Paid CAC ratio (the most recent weekly data point).
  */
-export async function getLatestLtvCacRatio(): Promise<number | null> {
+// React.cache() dedupes within a single server render — `page.tsx` and
+// `briefing-context.ts` both read this on Overview load.
+export const getLatestLtvCacRatio = cache(async (): Promise<number | null> => {
   const series = await getLtvCacRatioSeries();
   const ltvCac = series.find((s) => s.label === "LTV:CAC");
   if (!ltvCac || ltvCac.data.length === 0) return null;
   return ltvCac.data[ltvCac.data.length - 1].value;
-}
+});
 
 /**
  * Latest WAU/MAU ratio from the engagement series (last complete month).
@@ -468,7 +471,8 @@ export async function getQuery3Series(): Promise<{
 /**
  * Latest MAU from the App Active Users report (most recent daily data point).
  */
-export async function getLatestMAU(): Promise<number | null> {
+// React.cache() — shared between `page.tsx` and `briefing-context.ts`.
+export const getLatestMAU = cache(async (): Promise<number | null> => {
   const data = await getReportData("product", "active-users");
   const query = data.find((d) => d.queryName === "dau-wau-mau query all time");
   if (!query || query.rows.length === 0) return null;
@@ -485,7 +489,7 @@ export async function getLatestMAU(): Promise<number | null> {
     );
 
   return sorted[0] ? rowNumOrNull(sorted[0], "maus") : null;
-}
+});
 
 // --- Product ---
 

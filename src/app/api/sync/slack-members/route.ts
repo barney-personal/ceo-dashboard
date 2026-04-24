@@ -15,7 +15,7 @@ import {
 const MAX_BYTES = 5 * 1024 * 1024;
 
 export async function POST(request: NextRequest) {
-  const access = await authorizeSyncRequest(request);
+  const access = await authorizeSyncRequest(request, "admin.status");
   const accessError = syncRequestAccessErrorResponse(access);
   if (accessError) {
     return accessError;

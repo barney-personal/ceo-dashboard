@@ -1,8 +1,22 @@
-import { currentUser } from "@clerk/nextjs/server";
+import { cache } from "react";
+import { currentUser, clerkClient } from "@clerk/nextjs/server";
+import { getDevPreviewUserEmail } from "./dev-preview";
 
 export const CURRENT_USER_TIMEOUT_MS = 5000;
 
 type ClerkUser = NonNullable<Awaited<ReturnType<typeof currentUser>>>;
+
+const getDevPreviewUser = cache(async (): Promise<ClerkUser | null> => {
+  const email = getDevPreviewUserEmail();
+  if (!email) return null;
+  try {
+    const client = await clerkClient();
+    const list = await client.users.getUserList({ emailAddress: [email] });
+    return list.data[0] ?? null;
+  } catch {
+    return null;
+  }
+});
 
 export type CurrentUserLookupResult =
   | { status: "authenticated"; user: ClerkUser }
@@ -35,6 +49,10 @@ export async function getCurrentUserWithTimeout({
     ]);
 
     if (!user) {
+      const previewUser = await getDevPreviewUser();
+      if (previewUser) {
+        return { status: "authenticated", user: previewUser };
+      }
       return { status: "unauthenticated", user: null };
     }
 

@@ -383,15 +383,31 @@ export const MODE_SYNC_PROFILES: ModeSyncProfile[] = [
     ],
   },
   {
-    // Pass 1: registered so `getModeReportLink("people", "talent")` resolves and
-    // the `mode_reports` row is seeded on next sync. Query profiles are filled
-    // in during Pass 2 once we've inspected the report's actual query shape.
     reportToken: "e9766a6cd260",
     name: "Talent",
     section: "people",
     category: "talent",
     syncEnabled: true,
-    queries: [],
+    queries: [
+      {
+        // Per-hire rows attributed (possibly fractionally) to a recruiter.
+        // Preferred over `talent_summary_gh`, whose `hires` rows stop in
+        // 2025-09 even though the report itself is fresh — `all_hires` runs
+        // through the current month.
+        name: "all_hires",
+        storageWindow: {
+          kind: "last-months",
+          field: "date_hired",
+          months: 36,
+        },
+      },
+      {
+        // Per-recruiter QTD hires vs target, ~30 rows — snapshot of the
+        // current quarter.
+        name: "target qtd team",
+        storageWindow: { kind: "all" },
+      },
+    ],
   },
 ];
 
