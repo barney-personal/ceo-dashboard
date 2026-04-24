@@ -1177,38 +1177,12 @@ async function fetchSquadLookupByLogin(): Promise<Map<string, SquadLookup>> {
   return squadByLogin;
 }
 
-export async function getSquadCodeReviewView(
-  opts: RollupOptions = {},
-): Promise<SquadCodeReviewView> {
-  const [view, squadByLogin] = await Promise.all([
-    getCodeReviewView(opts),
-    fetchSquadLookupByLogin().catch((err) => {
-      console.warn(
-        "[code-review] squad lookup fetch failed; squad view will be empty:",
-        err,
-      );
-      return new Map<string, SquadLookup>();
-    }),
-  ]);
-
-  const { squads, unassignedEngineerCount, unassignedPrCount } =
-    rollupSquadsFromEngineers(view.engineers, squadByLogin);
-
-  return {
-    windowDays: view.windowDays,
-    rubricVersion: view.rubricVersion,
-    analysedAtLatest: view.analysedAtLatest,
-    squads,
-    totalPrs: view.totalPrs,
-    unassignedEngineerCount,
-    unassignedPrCount,
-  };
-}
-
 /**
- * Page-level loader that returns both engineer and squad views, sharing a
- * single underlying fetch of `prReviewAnalyses` and `githubEmployeeMap` so
- * the squad view is effectively free on top of the engineer view.
+ * Page-level loader that returns both engineer and squad views. The engineer
+ * rollup fetch (`prReviewAnalyses` + `githubEmployeeMap`) runs in parallel
+ * with the independent squad-map fetch (Mode headcount + `githubEmployeeMap`
+ * + `squads` registry) so the squad view only adds the squad-map round trip
+ * on top of the engineer view. Both views share the same engineer rollups.
  */
 export async function getCodeReviewPageData(
   opts: RollupOptions = {},
@@ -1224,14 +1198,17 @@ export async function getCodeReviewPageData(
     }),
   ]);
 
-  const { squads, unassignedEngineerCount, unassignedPrCount } =
-    rollupSquadsFromEngineers(view.engineers, squadByLogin);
+  const {
+    squads: squadRollups,
+    unassignedEngineerCount,
+    unassignedPrCount,
+  } = rollupSquadsFromEngineers(view.engineers, squadByLogin);
 
   const squadView: SquadCodeReviewView = {
     windowDays: view.windowDays,
     rubricVersion: view.rubricVersion,
     analysedAtLatest: view.analysedAtLatest,
-    squads,
+    squads: squadRollups,
     totalPrs: view.totalPrs,
     unassignedEngineerCount,
     unassignedPrCount,
