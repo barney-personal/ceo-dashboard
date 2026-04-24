@@ -17,24 +17,38 @@ export async function GET() {
     if (authError) return authError;
 
     const client = await clerkClient();
-    const { data: users } = await client.users.getUserList({ limit: 100 });
 
-    const sessionCounts = await Promise.all(
-      users.map(async (u) => {
-        try {
-          const { data: sessions } = await client.sessions.getSessionList({
-            userId: u.id,
-            limit: 100,
-          });
-          return { userId: u.id, count: sessions.length };
-        } catch {
-          return { userId: u.id, count: 0 };
-        }
-      })
-    );
-    const sessionCountMap = new Map(
-      sessionCounts.map((s) => [s.userId, s.count])
-    );
+    const USER_PAGE_SIZE = 100;
+    const users: Awaited<ReturnType<typeof client.users.getUserList>>["data"] = [];
+    for (let offset = 0; ; offset += USER_PAGE_SIZE) {
+      const { data, totalCount } = await client.users.getUserList({
+        limit: USER_PAGE_SIZE,
+        offset,
+        orderBy: "-created_at",
+      });
+      users.push(...data);
+      if (data.length < USER_PAGE_SIZE || users.length >= totalCount) break;
+    }
+
+    const SESSION_FETCH_CONCURRENCY = 20;
+    const sessionCountMap = new Map<string, number>();
+    for (let i = 0; i < users.length; i += SESSION_FETCH_CONCURRENCY) {
+      const batch = users.slice(i, i + SESSION_FETCH_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (u) => {
+          try {
+            const { data: sessions } = await client.sessions.getSessionList({
+              userId: u.id,
+              limit: 100,
+            });
+            return { userId: u.id, count: sessions.length };
+          } catch {
+            return { userId: u.id, count: 0 };
+          }
+        })
+      );
+      for (const { userId, count } of results) sessionCountMap.set(userId, count);
+    }
 
     const serialized = users.map((u) => ({
       id: u.id,

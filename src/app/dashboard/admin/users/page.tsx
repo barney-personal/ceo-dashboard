@@ -7,25 +7,41 @@ export default async function UsersAdminPage() {
   await requireDashboardPermission("admin.users");
 
   const client = await clerkClient();
-  const { data: users } = await client.users.getUserList({ limit: 100 });
 
-  // Fetch session counts for all users in parallel
-  const sessionCounts = await Promise.all(
-    users.map(async (u) => {
-      try {
-        const { data: sessions } = await client.sessions.getSessionList({
-          userId: u.id,
-          limit: 100,
-        });
-        return { userId: u.id, count: sessions.length };
-      } catch {
-        return { userId: u.id, count: 0 };
-      }
-    })
-  );
-  const sessionCountMap = new Map(
-    sessionCounts.map((s) => [s.userId, s.count])
-  );
+  // Clerk caps each getUserList call at 100, so page through until exhausted.
+  const PAGE_SIZE = 100;
+  const users: Awaited<ReturnType<typeof client.users.getUserList>>["data"] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, totalCount } = await client.users.getUserList({
+      limit: PAGE_SIZE,
+      offset,
+      orderBy: "-created_at",
+    });
+    users.push(...data);
+    if (data.length < PAGE_SIZE || users.length >= totalCount) break;
+  }
+
+  // Fetch session counts in bounded-concurrency batches to avoid hammering
+  // Clerk's per-user endpoint with hundreds of simultaneous requests.
+  const SESSION_FETCH_CONCURRENCY = 20;
+  const sessionCountMap = new Map<string, number>();
+  for (let i = 0; i < users.length; i += SESSION_FETCH_CONCURRENCY) {
+    const batch = users.slice(i, i + SESSION_FETCH_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (u) => {
+        try {
+          const { data: sessions } = await client.sessions.getSessionList({
+            userId: u.id,
+            limit: 100,
+          });
+          return { userId: u.id, count: sessions.length };
+        } catch {
+          return { userId: u.id, count: 0 };
+        }
+      })
+    );
+    for (const { userId, count } of results) sessionCountMap.set(userId, count);
+  }
 
   const serialized = users.map((u) => ({
     id: u.id,
