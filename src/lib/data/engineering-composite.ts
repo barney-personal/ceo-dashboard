@@ -1360,6 +1360,17 @@ export function rankWithConfidence(
     }
   }
 
+  // --- Positional quartile boundaries ---
+  // Score-threshold quartiles can collapse when many entries share the same
+  // score: all 8 entries at score 50 produce p25=50, so assignQuartile(50)
+  // returns Q1 for every entry, making the whole cohort look bottom-quartile.
+  // We add a positional check: a tie group may only receive promote /
+  // performance-manage flags when its entire index span falls within the
+  // positional top / bottom 25% of the sorted array.
+  const n = sorted.length;
+  const topQSize = Math.ceil(n / 4);
+  const bottomQStart = n - Math.ceil(n / 4);
+
   // --- Flag eligibility per group ---
   const groupFlags = new Map<
     number,
@@ -1382,7 +1393,14 @@ export function rankWithConfidence(
       continue;
     }
 
+    const minIdx = Math.min(...group.indices);
+    const maxIdx = Math.max(...group.indices);
+
     if (allQ4) {
+      if (maxIdx >= topQSize) {
+        groupFlags.set(gid, { flag: null, eligible: false });
+        continue;
+      }
       let nearestNonQ4Upper = -Infinity;
       for (const [otherGid, otherGroup] of groups.entries()) {
         if (otherGid === gid) continue;
@@ -1402,6 +1420,10 @@ export function rankWithConfidence(
         eligible: gapReal,
       });
     } else {
+      if (minIdx < bottomQStart) {
+        groupFlags.set(gid, { flag: null, eligible: false });
+        continue;
+      }
       let nearestNonQ1Lower = Infinity;
       for (const [otherGid, otherGroup] of groups.entries()) {
         if (otherGid === gid) continue;

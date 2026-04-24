@@ -1451,6 +1451,90 @@ describe("rankWithConfidence", () => {
     expect(ranked[0].status).toBe("partial_window_scored");
     expect(ranked[0].rank).toBe(1);
   });
+
+  // --- Position-aware quartile flag eligibility (M9) ---
+
+  it("eight equal-score entries all tied → no promote or PM flags", () => {
+    const entries = buildBundleFromSpread(
+      [50, 50, 50, 50, 50, 50, 50, 50],
+      [5, 5, 5, 5, 5, 5, 5, 5],
+    );
+    const ranked = rankWithConfidence(entries);
+    expect(ranked).toHaveLength(8);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    expect(tieGroupIds.size).toBe(1);
+    for (const entry of ranked) {
+      expect(entry.quartileFlag).toBeNull();
+      expect(entry.flagEligible).toBe(false);
+    }
+  });
+
+  it("bottom tie group straddling positional bottom-quartile cutoff → no PM flag", () => {
+    // 8 entries, bottom quartile positionally = indices 6–7.
+    // Bottom 3 entries (indices 5,6,7) form a tie group via overlapping bands.
+    // The group spans index 5 which is outside the positional bottom quartile.
+    const entries = buildBundleFromSpread(
+      [90, 80, 70, 60, 50, 32, 30, 28],
+      [2, 2, 2, 2, 2, 5, 5, 5],
+    );
+    const ranked = rankWithConfidence(entries);
+    const bottomThree = ranked.filter(
+      (r) => r.score !== null && r.score <= 32,
+    );
+    expect(bottomThree.length).toBe(3);
+    // All three should share one tie group (32±5=[27,37], 30±5=[25,35], 28±5=[23,33] — all overlap)
+    const groupIds = new Set(bottomThree.map((r) => r.tieGroupId));
+    expect(groupIds.size).toBe(1);
+    // Group spans indices 5,6,7 but positional bottom Q is indices 6,7 only → no PM flag
+    for (const entry of bottomThree) {
+      expect(entry.quartileFlag).toBeNull();
+      expect(entry.flagEligible).toBe(false);
+    }
+  });
+
+  it("top tie group straddling positional top-quartile cutoff → no promote flag", () => {
+    // 8 entries, top quartile positionally = indices 0–1.
+    // Top 3 entries (indices 0,1,2) form a tie group via overlapping bands.
+    const entries = buildBundleFromSpread(
+      [82, 80, 78, 50, 40, 30, 20, 10],
+      [5, 5, 5, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    const topThree = ranked.filter(
+      (r) => r.score !== null && r.score >= 78,
+    );
+    expect(topThree.length).toBe(3);
+    const groupIds = new Set(topThree.map((r) => r.tieGroupId));
+    expect(groupIds.size).toBe(1);
+    // Group spans indices 0,1,2 but positional top Q is indices 0,1 only → no promote flag
+    for (const entry of topThree) {
+      expect(entry.quartileFlag).toBeNull();
+      expect(entry.flagEligible).toBe(false);
+    }
+  });
+
+  it("groups wholly inside positional top/bottom quartile still get flags", () => {
+    // Well-separated 8 entries: top 2 in their own groups, bottom 2 in their own groups
+    const entries = buildBundleFromSpread(
+      [95, 85, 75, 65, 55, 45, 35, 25],
+      [2, 2, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    // Top two: indices 0,1 — positional top Q = indices [0,1] — should get promote flags
+    const top = ranked.filter((r) => r.quartile === 4);
+    expect(top.length).toBeGreaterThan(0);
+    for (const entry of top) {
+      expect(entry.quartileFlag).toBe("promote_candidate");
+      expect(entry.flagEligible).toBe(true);
+    }
+    // Bottom two: indices 6,7 — positional bottom Q = indices [6,7] — should get PM flags
+    const bottom = ranked.filter((r) => r.quartile === 1);
+    expect(bottom.length).toBeGreaterThan(0);
+    for (const entry of bottom) {
+      expect(entry.quartileFlag).toBe("performance_manage");
+      expect(entry.flagEligible).toBe(true);
+    }
+  });
 });
 
 // ---------- end-to-end: buildComposite + rankWithConfidence -----------------
