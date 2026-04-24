@@ -56,7 +56,8 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 # Hard rail: never let this script clobber a non-localhost DB.
-if ! printf '%s' "$DATABASE_URL" | grep -qE '@(localhost|127\.0\.0\.1)(:|/)'; then
+# Covers IPv4 127.0.0.1, IPv6 [::1], and the `localhost` alias.
+if ! printf '%s' "$DATABASE_URL" | grep -qE '@(localhost|127\.0\.0\.1|\[::1\])(:|/)'; then
   red "DATABASE_URL does not point at localhost — refusing to run."
   echo "DATABASE_URL=$DATABASE_URL"
   exit 1
@@ -70,7 +71,7 @@ if [ -z "$LOCAL_DB" ]; then
 fi
 
 DUMP_FILE=$(mktemp -t ceo-dashboard-prod.XXXXXX.dump)
-trap 'rm -f "$DUMP_FILE"' EXIT
+trap 'rm -f "$DUMP_FILE" "$DUMP_FILE.log"' EXIT
 
 yellow "About to replace local database \"$LOCAL_DB\" with a fresh dump of production."
 dim    "  source: $(printf '%s' "$PROD_DATABASE_URL" | sed -E 's|://([^:]+):[^@]+@|://\1:***@|')"
@@ -88,8 +89,20 @@ fi
 
 echo
 green "[1/3] pg_dump from production…"
-pg_dump -Fc --no-owner --no-acl --verbose "$PROD_DATABASE_URL" -f "$DUMP_FILE" 2>&1 \
-  | grep -E '^pg_dump: (dumping|saving|error)' || true
+# Stream pg_dump's stderr through a progress filter but preserve pg_dump's
+# own exit code — without `set -o pipefail` the status of the tee'd grep
+# would mask a real dump failure and we'd happily drop the local DB and
+# restore from an empty file.
+LOG_FILE="$DUMP_FILE.log"
+pg_dump -Fc --no-owner --no-acl --verbose "$PROD_DATABASE_URL" -f "$DUMP_FILE" 2>"$LOG_FILE"
+grep -E '^pg_dump: (dumping|saving|error)' "$LOG_FILE" || true
+rm -f "$LOG_FILE"
+
+# Guard against an empty or truncated dump reaching the restore step.
+if [ ! -s "$DUMP_FILE" ]; then
+  red "pg_dump produced an empty file — refusing to restore."
+  exit 1
+fi
 
 echo
 green "[2/3] recreating local database \"$LOCAL_DB\"…"
@@ -100,8 +113,9 @@ psql "$LOCAL_ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$LOCAL_DB\";" >
 
 echo
 green "[3/3] pg_restore into \"$LOCAL_DB\"…"
-pg_restore --no-owner --no-acl --exit-on-error -d "$DATABASE_URL" "$DUMP_FILE" 2>&1 \
-  | grep -vE '^$' || true
+# --exit-on-error makes pg_restore abort on the first error; set -e then
+# surfaces the non-zero exit as a script failure.
+pg_restore --no-owner --no-acl --exit-on-error -d "$DATABASE_URL" "$DUMP_FILE"
 
 echo
 green "✅ done — \"$LOCAL_DB\" now mirrors production."

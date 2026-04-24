@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { clerkClient } from "@clerk/nextjs/server";
@@ -57,8 +58,8 @@ export async function getCurrentUserRole(): Promise<Role> {
         cookieStore.get(IMPERSONATE_COOKIE)?.value
       );
       if (cookieData) {
-        const role = await resolveUserRole(cookieData.userId);
-        return role;
+        const profile = await getClerkUserProfile(cookieData.userId);
+        return profile.role;
       }
 
       // Fall back to role preview
@@ -151,11 +152,12 @@ export async function getImpersonation(): Promise<Impersonation | null> {
     );
     if (!cookieData) return null;
 
-    // Resolve live identity from Clerk rather than trusting cookie snapshot
-    const profile = await resolveImpersonatedProfile(cookieData.userId);
+    // Resolve live identity from Clerk rather than trusting cookie snapshot.
+    // Falls back to the cookie's name if Clerk doesn't return one.
+    const profile = await getClerkUserProfile(cookieData.userId);
     return {
       userId: cookieData.userId,
-      name: cookieData.name,
+      name: profile.name ?? cookieData.name,
       role: profile.role,
       email: profile.email,
       emails: profile.emails,
@@ -166,47 +168,54 @@ export async function getImpersonation(): Promise<Impersonation | null> {
   }
 }
 
-/** Look up a user's current role from Clerk by ID. */
-async function resolveUserRole(userId: string): Promise<Role> {
-  try {
-    const client = await clerkClient();
-    const user = await client.users.getUser(userId);
-    return getUserRole(
-      (user.publicMetadata as Record<string, unknown>) ?? {}
-    );
-  } catch {
-    return "everyone";
-  }
-}
-
-/** Fetch the impersonated user's role, emails, and avatar from Clerk. */
-async function resolveImpersonatedProfile(userId: string): Promise<{
+interface ClerkUserProfile {
   role: Role;
+  name: string | null;
   email: string | null;
   emails: string[];
   imageUrl: string | null;
-}> {
-  try {
-    const client = await clerkClient();
-    const user = await client.users.getUser(userId);
-    const role = getUserRole(
-      (user.publicMetadata as Record<string, unknown>) ?? {}
-    );
-    const primary = user.primaryEmailAddress?.emailAddress ?? null;
-    const all = (user.emailAddresses ?? []).map((e) => e.emailAddress);
-    const ordered = primary
-      ? [primary, ...all.filter((e) => e !== primary)]
-      : all;
-    return {
-      role,
-      email: primary,
-      emails: ordered.filter((e): e is string => !!e),
-      imageUrl: user.imageUrl ?? null,
-    };
-  } catch {
-    return { role: "everyone", email: null, emails: [], imageUrl: null };
-  }
 }
+
+/**
+ * Fetch a Clerk user's role, display name, emails, and avatar.
+ * Wrapped in React cache() so callers within the same request (e.g. the
+ * dashboard layout + overview page) share one HTTP round-trip per userId.
+ * Returns safe defaults on Clerk error so the request keeps rendering.
+ */
+const getClerkUserProfile = cache(
+  async (userId: string): Promise<ClerkUserProfile> => {
+    try {
+      const client = await clerkClient();
+      const user = await client.users.getUser(userId);
+      const role = getUserRole(
+        (user.publicMetadata as Record<string, unknown>) ?? {}
+      );
+      const primary = user.primaryEmailAddress?.emailAddress ?? null;
+      const all = (user.emailAddresses ?? []).map((e) => e.emailAddress);
+      const ordered = primary
+        ? [primary, ...all.filter((e) => e !== primary)]
+        : all;
+      const composedName =
+        [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+        null;
+      return {
+        role,
+        name: composedName,
+        email: primary,
+        emails: ordered.filter((e): e is string => !!e),
+        imageUrl: user.imageUrl ?? null,
+      };
+    } catch {
+      return {
+        role: "everyone",
+        name: null,
+        email: null,
+        emails: [],
+        imageUrl: null,
+      };
+    }
+  },
+);
 
 interface ImpersonateCookie {
   userId: string;
