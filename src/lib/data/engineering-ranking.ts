@@ -108,7 +108,23 @@ import { createHash } from "node:crypto";
  *   snapshots must be preserved so the stability check can actually run on
  *   a like-for-like pair.
  */
-export const RANKING_METHODOLOGY_VERSION = "1.0.0-methodology" as const;
+export const RANKING_METHODOLOGY_VERSION = "1.1.0-quality" as const;
+
+/**
+ * Rubric version consumed by the code-quality lens. Only rows with this
+ * `rubric_version` feed the lens — older rubrics (e.g. `v1.1-opus`) were
+ * single-reviewed and carry a different calibration, so mixing would
+ * distort the per-engineer means.
+ */
+export const RANKING_QUALITY_RUBRIC_VERSION = "v2.0-dual-review" as const;
+
+/**
+ * Minimum number of analysed PRs an engineer needs for a code-quality lens
+ * score. Below this we refuse to score them (the lens emits null), on the
+ * same "don't fabricate precision from a sample of two" principle used
+ * elsewhere in the methodology.
+ */
+export const RANKING_QUALITY_MIN_ANALYSED_PRS = 3 as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -484,6 +500,191 @@ export interface PerEngineerSignalRow {
 }
 
 /**
+ * Raw per-PR LLM rubric row consumed by the code-quality lens. The server
+ * loader produces these by joining `prReviewAnalyses` → `githubEmployeeMap`
+ * → Mode Headcount SSoT and hashing the employee email. Tests supply
+ * fixtures directly so the aggregation math can be exercised without a DB.
+ *
+ * Every numeric field is `number | null`; nulls are preserved into the
+ * aggregator rather than collapsed to zero so missingness stays explicit.
+ * `analysisConfidencePct` is on [0, 100]; the aggregator treats it as a
+ * per-PR weight so a low-confidence review contributes less to the mean
+ * than a high-confidence one.
+ */
+export interface PrReviewAnalysisInput {
+  emailHash: string;
+  /** ISO timestamp when the PR was merged. Used to filter to the window. */
+  mergedAt: string;
+  /** Rubric version string; the lens filters to a single version. */
+  rubricVersion: string;
+  /** All axes are 1–5 rubric scores. Null when the reviewer abstained. */
+  technicalDifficulty: number | null;
+  executionQuality: number | null;
+  testAdequacy: number | null;
+  riskHandling: number | null;
+  reviewability: number | null;
+  /** 0–100; per-PR confidence the LLM reviewer had in its scoring. */
+  analysisConfidencePct: number | null;
+  /** Reverted in the 14 days after merge? A quality signal, lower is better. */
+  revertWithin14d: boolean;
+}
+
+/**
+ * Per-engineer code-quality aggregate. Produced by `aggregateQualitySignals`
+ * from the raw per-PR rubric rows. The lens consumes this directly so the
+ * lens-builder stays pure and schema-free.
+ *
+ * `analysedPrCount` drives confidence — engineers with < `RANKING_QUALITY_MIN_ANALYSED_PRS`
+ * analysed PRs land as null scores rather than precise-looking means on two
+ * PRs. `revertRate` is the fraction of analysed PRs reverted within 14 days
+ * (lower is better — inverted on score).
+ */
+export interface QualityAggregate {
+  emailHash: string;
+  analysedPrCount: number;
+  /** Confidence-weighted mean of execution_quality on [1, 5], null if < min. */
+  executionQualityMean: number | null;
+  /** Same, for test_adequacy. */
+  testAdequacyMean: number | null;
+  /** Same, for risk_handling. */
+  riskHandlingMean: number | null;
+  /** Same, for reviewability. */
+  reviewabilityMean: number | null;
+  /** Mean technical_difficulty; surfaced for attribution, not a score input. */
+  technicalDifficultyMean: number | null;
+  /** Fraction of analysed PRs reverted within 14d. 0 is best, lower is better. */
+  revertRate: number | null;
+  /** Mean analysis_confidence_pct on [0, 100], surfaced for attribution. */
+  meanAnalysisConfidencePct: number | null;
+}
+
+/**
+ * Aggregate raw per-PR rubric rows into per-engineer means. Pure and
+ * deterministic — the server loader calls this with the joined DB rows and
+ * tests exercise it with fixtures.
+ *
+ * - Each PR contributes with weight = `max(1, analysisConfidencePct)` so
+ *   higher-confidence reviews pull the mean more. PRs with null confidence
+ *   fall back to weight=50 (mid-calibration) rather than being dropped
+ *   entirely — their scores still count, just with average confidence.
+ * - PRs are further weighted up by `max(1, technicalDifficulty)`: a 5 is
+ *   worth 5x a 1 on the same axis, so high quality on trivial PRs doesn't
+ *   look like high quality on hard PRs. Null difficulty defaults to 3
+ *   (neutral), so a missing score doesn't zero the contribution.
+ * - Engineers with `< RANKING_QUALITY_MIN_ANALYSED_PRS` rows produce
+ *   aggregate rows (so the caller can still see their count for
+ *   attribution/confidence widening), but every mean field is null.
+ * - Rows with a mismatched `rubricVersion` are silently skipped. The
+ *   server loader filters at the SQL layer too; this defends the pure
+ *   function against a fixture that mixes versions.
+ */
+export function aggregateQualitySignals(
+  analyses: readonly PrReviewAnalysisInput[],
+  rubricVersion: string = RANKING_QUALITY_RUBRIC_VERSION,
+): Map<string, QualityAggregate> {
+  const byHash = new Map<
+    string,
+    {
+      count: number;
+      sumConfidence: number;
+      sumDifficulty: number;
+      sumDifficultyWeight: number;
+      axis: Record<
+        "execution" | "tests" | "risk" | "reviewability",
+        { weightedSum: number; weight: number }
+      >;
+      revertCount: number;
+    }
+  >();
+
+  for (const row of analyses) {
+    if (row.rubricVersion !== rubricVersion) continue;
+    const confidenceWeight =
+      row.analysisConfidencePct !== null &&
+      Number.isFinite(row.analysisConfidencePct)
+        ? Math.max(1, row.analysisConfidencePct)
+        : 50;
+    // Difficulty weight is centred so missing-difficulty PRs don't zero-out
+    // the contribution. A difficulty-1 PR still contributes (weight=1); a
+    // difficulty-5 PR contributes 5x as much on the same axis.
+    const difficultyWeight =
+      row.technicalDifficulty !== null &&
+      Number.isFinite(row.technicalDifficulty)
+        ? Math.max(1, row.technicalDifficulty)
+        : 3;
+    const weight = confidenceWeight * difficultyWeight;
+
+    const bucket = byHash.get(row.emailHash) ?? {
+      count: 0,
+      sumConfidence: 0,
+      sumDifficulty: 0,
+      sumDifficultyWeight: 0,
+      axis: {
+        execution: { weightedSum: 0, weight: 0 },
+        tests: { weightedSum: 0, weight: 0 },
+        risk: { weightedSum: 0, weight: 0 },
+        reviewability: { weightedSum: 0, weight: 0 },
+      },
+      revertCount: 0,
+    };
+    bucket.count += 1;
+    if (row.analysisConfidencePct !== null)
+      bucket.sumConfidence += row.analysisConfidencePct;
+    if (row.technicalDifficulty !== null) {
+      bucket.sumDifficulty += row.technicalDifficulty;
+      bucket.sumDifficultyWeight += 1;
+    }
+    if (row.revertWithin14d) bucket.revertCount += 1;
+
+    const accumulate = (
+      key: "execution" | "tests" | "risk" | "reviewability",
+      score: number | null,
+    ): void => {
+      if (score === null || !Number.isFinite(score)) return;
+      bucket.axis[key].weightedSum += score * weight;
+      bucket.axis[key].weight += weight;
+    };
+    accumulate("execution", row.executionQuality);
+    accumulate("tests", row.testAdequacy);
+    accumulate("risk", row.riskHandling);
+    accumulate("reviewability", row.reviewability);
+
+    byHash.set(row.emailHash, bucket);
+  }
+
+  const out = new Map<string, QualityAggregate>();
+  for (const [emailHash, b] of byHash.entries()) {
+    const meanOf = (
+      key: "execution" | "tests" | "risk" | "reviewability",
+    ): number | null => {
+      if (b.count < RANKING_QUALITY_MIN_ANALYSED_PRS) return null;
+      const a = b.axis[key];
+      if (a.weight === 0) return null;
+      return a.weightedSum / a.weight;
+    };
+    out.set(emailHash, {
+      emailHash,
+      analysedPrCount: b.count,
+      executionQualityMean: meanOf("execution"),
+      testAdequacyMean: meanOf("tests"),
+      riskHandlingMean: meanOf("risk"),
+      reviewabilityMean: meanOf("reviewability"),
+      technicalDifficultyMean:
+        b.sumDifficultyWeight === 0
+          ? null
+          : b.sumDifficulty / b.sumDifficultyWeight,
+      revertRate:
+        b.count < RANKING_QUALITY_MIN_ANALYSED_PRS
+          ? null
+          : b.revertCount / b.count,
+      meanAnalysisConfidencePct:
+        b.count === 0 ? null : b.sumConfidence / b.count,
+    });
+  }
+  return out;
+}
+
+/**
  * Hash an email for ranking. Matches the convention in
  * `src/lib/data/impact-model.server.ts` so the SHAP model lookups align with
  * the roster keys in a single snapshot.
@@ -627,6 +828,19 @@ export interface EligibilityInputs {
    * audit always emits them as unavailable today.
    */
   reviewSignalsPersisted?: boolean;
+  /**
+   * Optional raw per-PR rubric rows from `prReviewAnalyses`. The server
+   * loader filters to `rubricVersion === RANKING_QUALITY_RUBRIC_VERSION`
+   * inside the signal window and joins through `githubEmployeeMap` to hash
+   * the employee email. `buildRankingSnapshot` calls `aggregateQualitySignals`
+   * internally so the composite math stays data-driven; tests can supply
+   * fixtures directly.
+   *
+   * When absent or empty, the code-quality lens scores every engineer as
+   * null and the composite falls back to median-of-present-methods
+   * exactly as before — zero regression for callers that don't wire this.
+   */
+  qualityAnalyses?: readonly PrReviewAnalysisInput[];
   /** Defaults to new Date() — injectable so tests can pin "today". */
   now?: Date;
   /** Defaults to RANKING_RAMP_UP_DAYS. */
@@ -1126,14 +1340,19 @@ export function computeSpearmanRho(
 
 function unavailableSignalsForAudit(
   reviewSignalsPersisted: boolean,
+  qualityAnalysesPresent: boolean = false,
 ): UnavailableSignal[] {
-  const unavailable: UnavailableSignal[] = [
-    {
+  const unavailable: UnavailableSignal[] = [];
+
+  if (!qualityAnalysesPresent) {
+    unavailable.push({
       name: "Per-PR LLM rubric",
       reason:
-        "`prReviewAnalyses` / `RUBRIC_VERSION` are not present in this codebase, so no per-PR quality rubric enters the audit or scoring.",
-    },
-  ];
+        "`prReviewAnalyses` rows for rubric version `" +
+        RANKING_QUALITY_RUBRIC_VERSION +
+        "` were not supplied to this snapshot build — the code-quality lens (D) falls back to all-null scores.",
+    });
+  }
 
   if (!reviewSignalsPersisted) {
     unavailable.push(
@@ -1163,11 +1382,13 @@ export function buildSignalAudit({
   signals = [],
   windowDays = RANKING_SIGNAL_WINDOW_DAYS,
   reviewSignalsPersisted = false,
+  qualityAnalysesPresent = false,
 }: {
   entries: EligibilityEntry[];
   signals?: PerEngineerSignalRow[];
   windowDays?: number;
   reviewSignalsPersisted?: boolean;
+  qualityAnalysesPresent?: boolean;
 }): SignalAudit {
   const competitiveEntries = entries.filter(
     (entry) => entry.eligibility === "competitive",
@@ -1258,7 +1479,10 @@ export function buildSignalAudit({
     correlationMatrix,
     redundantPairs,
     underSampledPairs,
-    unavailableSignals: unavailableSignalsForAudit(reviewSignalsPersisted),
+    unavailableSignals: unavailableSignalsForAudit(
+      reviewSignalsPersisted,
+      qualityAnalysesPresent,
+    ),
   };
 }
 
@@ -1271,7 +1495,7 @@ export function buildSignalAudit({
  * NOT the final composite — the composite lands in a later milestone once
  * the lenses are trusted and their disagreements are understood.
  */
-export type LensKey = "output" | "impact" | "delivery";
+export type LensKey = "output" | "impact" | "delivery" | "quality";
 
 /**
  * Top N engineers surfaced per lens on the page. Chosen large enough to
@@ -1367,6 +1591,7 @@ export interface LensDisagreementRow {
   output: number | null;
   impact: number | null;
   delivery: number | null;
+  quality: number | null;
   presentLensCount: number;
   /** max(present lenses) - min(present lenses), null when <2 lenses present. */
   disagreement: number | null;
@@ -1381,6 +1606,7 @@ export interface LensesBundle {
     output: LensScoreSummary;
     impact: LensScoreSummary;
     delivery: LensScoreSummary;
+    quality: LensScoreSummary;
   };
   disagreement: {
     /** All eligible rows (presentLensCount >= 2), sorted by disagreement desc. */
@@ -1509,12 +1735,15 @@ function likelyDisagreementCause(row: {
   output: number | null;
   impact: number | null;
   delivery: number | null;
+  quality: number | null;
 }): string {
   const present: Array<{ key: LensKey; score: number }> = [];
   if (row.output !== null) present.push({ key: "output", score: row.output });
   if (row.impact !== null) present.push({ key: "impact", score: row.impact });
   if (row.delivery !== null)
     present.push({ key: "delivery", score: row.delivery });
+  if (row.quality !== null)
+    present.push({ key: "quality", score: row.quality });
 
   if (present.length < RANKING_DISAGREEMENT_MIN_LENSES) {
     return "Insufficient lens coverage — at least two lenses must score this engineer to produce a disagreement reading.";
@@ -1545,6 +1774,18 @@ function likelyDisagreementCause(row: {
       return "SHAP impact above squad-delivery context — impact is model-driven individual, delivery is team-level; favours the individual reading.";
     case "delivery>impact":
       return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is scored squad-delivery context (team-level, down-weighted to a ~7.5–10% effective share per signal via the composite-median cap) and should not be read as individual impact.";
+    case "output>quality":
+      return "Output volume above per-PR code-quality — ships frequently but rubric scores lag; look for small-diff, low-complexity PRs inflating volume without a matching quality per review.";
+    case "quality>output":
+      return "Per-PR quality above raw output — scores highly on the rubric per PR but merges fewer of them; low-volume, high-rubric-quality pattern (could be pairing-heavy, review-heavy, or code-review cohort is small).";
+    case "impact>quality":
+      return "SHAP impact above per-PR quality — model predicts high impact but rubric is lukewarm; the impact may be coming from non-code work or from PRs whose quality rubric has not yet run.";
+    case "quality>impact":
+      return "Per-PR quality above SHAP impact — rubric rewards careful work that the ML model under-weights; worth checking whether recent careful work has had time to show up in the impact target.";
+    case "delivery>quality":
+      return "Squad delivery above per-PR quality — team ships smoothly but individual rubric is weaker than the squad-level optics suggest; favour the individual quality reading.";
+    case "quality>delivery":
+      return "Per-PR quality above squad delivery context — individual quality is strong even though the squad's delivery-health numbers are softer; the individual signal is the one to trust for an individual ranking.";
     default:
       return "Lenses disagree; see component breakdown for attribution.";
   }
@@ -1554,6 +1795,7 @@ function buildDisagreementTable(lenses: {
   output: LensScoreSummary;
   impact: LensScoreSummary;
   delivery: LensScoreSummary;
+  quality: LensScoreSummary;
 }): LensesBundle["disagreement"] {
   const byHash = new Map<string, LensDisagreementRow>();
   const register = (
@@ -1566,6 +1808,7 @@ function buildDisagreementTable(lenses: {
       output: null,
       impact: null,
       delivery: null,
+      quality: null,
       presentLensCount: 0,
       disagreement: null,
       likelyCause: "",
@@ -1573,12 +1816,14 @@ function buildDisagreementTable(lenses: {
     if (key === "output") existing.output = engineerEntry.score;
     if (key === "impact") existing.impact = engineerEntry.score;
     if (key === "delivery") existing.delivery = engineerEntry.score;
+    if (key === "quality") existing.quality = engineerEntry.score;
     byHash.set(engineerEntry.emailHash, existing);
   };
 
   for (const e of lenses.output.entries) register(e, "output");
   for (const e of lenses.impact.entries) register(e, "impact");
   for (const e of lenses.delivery.entries) register(e, "delivery");
+  for (const e of lenses.quality.entries) register(e, "quality");
 
   const rows: LensDisagreementRow[] = [];
   for (const row of byHash.values()) {
@@ -1586,6 +1831,7 @@ function buildDisagreementTable(lenses: {
     if (row.output !== null) present.push(row.output);
     if (row.impact !== null) present.push(row.impact);
     if (row.delivery !== null) present.push(row.delivery);
+    if (row.quality !== null) present.push(row.quality);
     row.presentLensCount = present.length;
     if (present.length < RANKING_DISAGREEMENT_MIN_LENSES) {
       row.disagreement = null;
@@ -1654,6 +1900,27 @@ const LENS_DEFINITIONS: readonly LensDefinition[] = [
     limitation:
       "Scored squad-delivery context — team-level, down-weighted by the composite-median cap so each squad signal sits at a ~7.5–10% effective share (well inside the 30% ceiling). Cannot differentiate engineers within the same squad — every squad-mate shares the same C score — so readers must not treat C as an individual delivery-health label.",
   },
+  {
+    key: "quality",
+    name: "D — Code quality (per-PR rubric)",
+    description:
+      "Per-PR LLM-rubric signal from `prReviewAnalyses` (rubric version `" +
+      RANKING_QUALITY_RUBRIC_VERSION +
+      "`). Each analysed PR contributes a score on four axes — execution quality, test adequacy, risk handling, reviewability — weighted up by the PR's technical difficulty and the reviewer's confidence. A `revert_within_14d` penalty is subtracted on the composite. Engineers with fewer than " +
+      RANKING_QUALITY_MIN_ANALYSED_PRS +
+      " analysed PRs surface as unscored rather than as a precise-looking mean on a tiny sample.",
+    components: [
+      { name: "Execution quality (rubric, confidence×difficulty-weighted)", weight: 0.30 },
+      { name: "Test adequacy (rubric)", weight: 0.25 },
+      { name: "Risk handling (rubric)", weight: 0.25 },
+      { name: "Reviewability (rubric)", weight: 0.15 },
+      { name: "Revert-within-14d penalty (inverted)", weight: 0.05 },
+    ],
+    limitation:
+      "Rubric is LLM-generated and therefore gameable by writing highly polished PRs; the dual-review rubric (`" +
+      RANKING_QUALITY_RUBRIC_VERSION +
+      "`) mitigates naive gaming but does not eliminate it. Coverage depends on `prReviewAnalyses` being populated — engineers with merged PRs outside the analysed set (e.g. repos excluded via `CODE_REVIEW_EXCLUDED_REPOS`) will have a lower analysed-PR count than their raw PR count suggests.",
+  },
 ];
 
 export const RANKING_LENS_DEFINITIONS = LENS_DEFINITIONS;
@@ -1666,9 +1933,11 @@ export const RANKING_LENS_DEFINITIONS = LENS_DEFINITIONS;
 export function buildLenses({
   entries,
   signals = [],
+  qualityAggregates,
 }: {
   entries: EligibilityEntry[];
   signals?: PerEngineerSignalRow[];
+  qualityAggregates?: Map<string, QualityAggregate>;
 }): LensesBundle {
   const competitive = entries.filter((e) => e.eligibility === "competitive");
   const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
@@ -1746,6 +2015,47 @@ export function buildLenses({
     },
   ];
 
+  // Quality lens rows — each competitive engineer either has a rubric
+  // aggregate or they don't. Engineers with no aggregate (or with fewer than
+  // RANKING_QUALITY_MIN_ANALYSED_PRS analysed PRs) receive null across every
+  // component so `buildLens` surfaces them as unscored rather than as
+  // synthetic mid-percentile rows.
+  const qualityRows = competitive.map((entry) =>
+    qualityAggregates?.get(entry.emailHash) ?? null,
+  );
+  const qualityComponents: LensComponentSpec[] = [
+    {
+      name: "Execution quality (rubric, confidence×difficulty-weighted)",
+      weight: 0.30,
+      invertedForScore: false,
+      rawValues: qualityRows.map((q) => finiteOrNull(q?.executionQualityMean ?? null)),
+    },
+    {
+      name: "Test adequacy (rubric)",
+      weight: 0.25,
+      invertedForScore: false,
+      rawValues: qualityRows.map((q) => finiteOrNull(q?.testAdequacyMean ?? null)),
+    },
+    {
+      name: "Risk handling (rubric)",
+      weight: 0.25,
+      invertedForScore: false,
+      rawValues: qualityRows.map((q) => finiteOrNull(q?.riskHandlingMean ?? null)),
+    },
+    {
+      name: "Reviewability (rubric)",
+      weight: 0.15,
+      invertedForScore: false,
+      rawValues: qualityRows.map((q) => finiteOrNull(q?.reviewabilityMean ?? null)),
+    },
+    {
+      name: "Revert-within-14d penalty (inverted)",
+      weight: 0.05,
+      invertedForScore: true,
+      rawValues: qualityRows.map((q) => finiteOrNull(q?.revertRate ?? null)),
+    },
+  ];
+
   const definitionByKey = new Map(LENS_DEFINITIONS.map((d) => [d.key, d]));
 
   const output = buildLens({
@@ -1763,8 +2073,13 @@ export function buildLenses({
     entries: competitive,
     components: deliveryComponents,
   });
+  const quality = buildLens({
+    definition: definitionByKey.get("quality")!,
+    entries: competitive,
+    components: qualityComponents,
+  });
 
-  const lenses = { output, impact, delivery };
+  const lenses = { output, impact, delivery, quality };
   const disagreement = buildDisagreementTable(lenses);
 
   return {
@@ -2308,13 +2623,19 @@ export const RANKING_LEAVE_ONE_OUT_TOP_MOVERS = 10 as const;
  * (e.g. SHAP disagreement on one engineer) cannot drag the composite more
  * than the other three methods allow.
  */
-export type CompositeMethod = "output" | "impact" | "delivery" | "adjusted";
+export type CompositeMethod =
+  | "output"
+  | "impact"
+  | "delivery"
+  | "quality"
+  | "adjusted";
 
 /** Human-readable label for each composite method, shown on the page. */
 export const RANKING_COMPOSITE_METHOD_LABELS: Record<CompositeMethod, string> = {
   output: "A — Individual output",
   impact: "B — SHAP impact",
   delivery: "C — Squad delivery context",
+  quality: "D — Code quality (per-PR rubric)",
   adjusted: "Tenure/role-adjusted percentile",
 };
 
@@ -2346,6 +2667,13 @@ export const RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS: Record<
     { signal: "Squad cycle time (inverted)", weight: 0.3 },
     { signal: "Squad time-to-first-review (inverted)", weight: 0.3 },
   ],
+  quality: [
+    { signal: "Execution quality (rubric, confidence×difficulty-weighted)", weight: 0.30 },
+    { signal: "Test adequacy (rubric)", weight: 0.25 },
+    { signal: "Risk handling (rubric)", weight: 0.25 },
+    { signal: "Reviewability (rubric)", weight: 0.15 },
+    { signal: "Revert-within-14d penalty (inverted)", weight: 0.05 },
+  ],
   adjusted: [
     // Every sub-adjustment in the M10 normalisation layer uses log-impact as
     // the rawScore. Surfaced as 100% log-impact so the effective-weight sum
@@ -2363,6 +2691,7 @@ export interface EngineerCompositeEntry {
   output: number | null;
   impact: number | null;
   delivery: number | null;
+  quality: number | null;
   adjusted: number | null;
   presentMethodCount: number;
   /** Median of present methods on [0, 100]; null if fewer than the min methods. */
@@ -2597,6 +2926,7 @@ export function buildComposite({
     "output",
     "impact",
     "delivery",
+    "quality",
     "adjusted",
   ];
 
@@ -2609,6 +2939,9 @@ export function buildComposite({
   const deliveryByHash = new Map(
     lenses.lenses.delivery.entries.map((e) => [e.emailHash, e.score]),
   );
+  const qualityByHash = new Map(
+    lenses.lenses.quality.entries.map((e) => [e.emailHash, e.score]),
+  );
   const adjustedByHash = new Map(
     normalisation.entries.map((e) => [e.emailHash, e.adjustedPercentile]),
   );
@@ -2617,6 +2950,7 @@ export function buildComposite({
     const output = outputByHash.get(entry.emailHash) ?? null;
     const impact = impactByHash.get(entry.emailHash) ?? null;
     const delivery = deliveryByHash.get(entry.emailHash) ?? null;
+    const quality = qualityByHash.get(entry.emailHash) ?? null;
     const adjusted = adjustedByHash.get(entry.emailHash) ?? null;
 
     const methodScores: Array<{ key: CompositeMethod; value: number | null }> =
@@ -2624,6 +2958,7 @@ export function buildComposite({
         { key: "output", value: output },
         { key: "impact", value: impact },
         { key: "delivery", value: delivery },
+        { key: "quality", value: quality },
         { key: "adjusted", value: adjusted },
       ];
     const presentValues = methodScores
@@ -2642,6 +2977,7 @@ export function buildComposite({
       output,
       impact,
       delivery,
+      quality,
       adjusted,
       presentMethodCount: presentValues.length,
       composite,
@@ -2682,7 +3018,9 @@ export function buildComposite({
               ? e.impact
               : k === "delivery"
                 ? e.delivery
-                : e.adjusted;
+                : k === "quality"
+                  ? e.quality
+                  : e.adjusted;
         if (v !== null && Number.isFinite(v)) keep.push(v);
       }
       if (keep.length < RANKING_COMPOSITE_MIN_METHODS) return null;
@@ -3514,6 +3852,12 @@ function describeMethodPresence(
         : "Not in the impact-model training set — absent for this engineer.";
     case "delivery":
       return "No squad-delivery context joined — Swarmia squad fields are squad-level and may be missing for this engineer's squad.";
+    case "quality":
+      return "Fewer than the minimum analysed PRs (" +
+        RANKING_QUALITY_MIN_ANALYSED_PRS +
+        ") on rubric version `" +
+        RANKING_QUALITY_RUBRIC_VERSION +
+        "` in the window — absent for this engineer.";
     case "adjusted":
       return "No normalisation lift — the adjusted percentile could not be computed (e.g. no rawScore from persisted PR data).";
   }
@@ -3535,7 +3879,9 @@ function buildMethodComponents(
         ? lenses.lenses.impact
         : method === "delivery"
           ? lenses.lenses.delivery
-          : null;
+          : method === "quality"
+            ? lenses.lenses.quality
+            : null;
 
   if (lensSummary) {
     const lensEntry = lensSummary.entries.find((e) => e.emailHash === emailHash);
@@ -3714,7 +4060,9 @@ export function buildAttribution({
               ? comp.impact
               : method === "delivery"
                 ? comp.delivery
-                : comp.adjusted;
+                : method === "quality"
+                  ? comp.quality
+                  : comp.adjusted;
         const present = score !== null;
         const components = buildMethodComponents(
           method,
@@ -5067,13 +5415,13 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
 /**
  * Canonical rubric-version marker. The per-PR LLM rubric source
  * (`prReviewAnalyses` / `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts`)
- * does not exist in this codebase today, so the methodology panel surfaces
- * the version as an explicit "not available" state rather than fabricating
- * one. When a future cycle adds the rubric, this constant can be replaced
- * with a live version string and the methodology panel flips to "available"
- * without touching the panel's render.
+ * is the live rubric version consumed by the code-quality lens (D). The
+ * methodology panel renders this as "available" alongside the impact-model
+ * generated-at badge so readers can see the freshness of the per-PR
+ * signal. Previously null (rubric not wired); flipped to the live version
+ * when the quality lens landed.
  */
-export const RANKING_RUBRIC_VERSION: string | null = null;
+export const RANKING_RUBRIC_VERSION: string | null = RANKING_QUALITY_RUBRIC_VERSION;
 
 /**
  * Down-weight posture for a signal in the ranking. `full_weight` means the
@@ -5292,6 +5640,58 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     downweightStatus: "down_weighted",
   },
   {
+    signal: "Execution quality (rubric, confidence×difficulty-weighted)",
+    gamingPath:
+      "Writing highly polished PRs to boost the rubric — especially small-diff, well-named, thoroughly-tested PRs that the reviewer rewards even if the work was trivial.",
+    mitigation:
+      "The `" +
+      RANKING_QUALITY_RUBRIC_VERSION +
+      "` rubric is dual-reviewed (Opus + optional second opinion), which raises the bar for naive polishing. Per-PR contribution is weighted up by `technical_difficulty` — a high execution_quality on a difficulty-1 PR counts far less than on a difficulty-5 PR. Lens D weight is 30%; composite-median cap leaves effective share at ~6%.",
+    residualWeakness:
+      "An engineer who consistently writes easy, polished PRs can still drift the mean up even with the difficulty weighting. The methodology panel flags this residual risk alongside the rubric version.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Test adequacy (rubric)",
+    gamingPath:
+      "Writing shallow tests that inflate coverage narratives without exercising real behaviour.",
+    mitigation:
+      "The rubric reviewer evaluates test adequacy qualitatively, not just by coverage-line count; dual-review gates naive keyword-matching. Lens D weight 25%; effective share ~5%.",
+    residualWeakness:
+      "The rubric cannot detect integration-vs-unit vs snapshot-heavy test shapes reliably; some gaming surface remains.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Risk handling (rubric)",
+    gamingPath:
+      "Avoiding risky work entirely so the risk-handling axis never fires — a survivorship-bias gaming path.",
+    mitigation:
+      "Risk handling is scored over the analysed window; engineers with low-risk PRs score near the middle of the distribution rather than the top, and difficulty weighting further damps low-risk contributions. Lens D weight 25%; effective share ~5%.",
+    residualWeakness:
+      "Risk-averse engineers consistently producing trivial PRs may still score as 'acceptable' without ever being stretched — the rubric alone cannot counteract that.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Reviewability (rubric)",
+    gamingPath:
+      "Writing small, easy-to-review PRs that score well on reviewability regardless of complexity.",
+    mitigation:
+      "Weighted at only 15% of lens D — smallest axis weight in the quality lens. Difficulty weighting tilts contribution toward harder work, so small easy PRs contribute proportionally less to the mean.",
+    residualWeakness:
+      "A stream of small PRs still accumulates weighted reviewability score; the only real corrective is that lens A (output) separately captures PR count and is one of the five composite methods.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Revert-within-14d penalty (inverted)",
+    gamingPath:
+      "Writing reverts manually to blame another engineer, or delaying reverts past the 14-day window.",
+    mitigation:
+      "Small-weight axis (5% of lens D, so <1% effective share) — cannot move the composite by much even if gamed. Detection via `revert_within_14d` flag in `prReviewAnalyses` which uses the GitHub revert commit metadata, harder to fabricate than commit messages alone.",
+    residualWeakness:
+      "Delayed reverts (past 14 days) are invisible; a long-tail rollback is not captured by this signal.",
+    downweightStatus: "down_weighted",
+  },
+  {
     signal: "AI tokens / AI spend",
     gamingPath:
       "Easy to inflate — open a session, run prompts without using output, and tokens accumulate.",
@@ -5324,7 +5724,13 @@ const METHODOLOGY_LENS_DESCRIPTIONS: Record<CompositeMethod, string> = {
   impact:
     "ML-predicted and measured impact from the SHAP model in `src/data/impact-model.json`, plus the residual between them.",
   delivery:
-    "Squad-level delivery health from Swarmia — scored squad-delivery context (team-level, not an individual signal). Lens C is one of four composite methods, and the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share per signal.",
+    "Squad-level delivery health from Swarmia — scored squad-delivery context (team-level, not an individual signal). Lens C is one of five composite methods, and the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share per signal.",
+  quality:
+    "Per-PR LLM-rubric signal from `prReviewAnalyses` (rubric version `" +
+    RANKING_QUALITY_RUBRIC_VERSION +
+    "`): confidence- and difficulty-weighted means of execution quality, test adequacy, risk handling, and reviewability, with a revert-within-14d penalty. Engineers with fewer than " +
+    RANKING_QUALITY_MIN_ANALYSED_PRS +
+    " analysed PRs surface as unscored rather than as a precise-looking mean on a tiny sample.",
   adjusted:
     "Tenure and role-adjusted percentile layer over the log-impact composite: discipline-partitioned percentiles with documented pooling, level residual percentiles (OLS), and tenure-exposure adjustment.",
 };
@@ -5334,6 +5740,7 @@ function buildMethodologyLenses(): readonly MethodologyLensSpec[] {
     "output",
     "impact",
     "delivery",
+    "quality",
     "adjusted",
   ];
   return methods.map((method) => ({
@@ -5507,7 +5914,7 @@ export function buildMethodology(params: {
 
   const lenses = buildMethodologyLenses();
   const compositeRule = composite.contract;
-  const normalisationSummary = `Normalisation pipeline: rank-percentile of ${normalisation.sourceSignal}, then discipline-partitioned percentiles (min cohort ${normalisation.minCohortSize}, documented pooling in \`DISCIPLINE_POOL_FALLBACK\`), level residual percentile from an OLS fit on level number, and tenure exposure adjustment capped at the ${normalisation.windowDays}-day signal window. Final \`adjustedPercentile\` is the equal-weighted mean of the three components and feeds the composite as one of four methods.`;
+  const normalisationSummary = `Normalisation pipeline: rank-percentile of ${normalisation.sourceSignal}, then discipline-partitioned percentiles (min cohort ${normalisation.minCohortSize}, documented pooling in \`DISCIPLINE_POOL_FALLBACK\`), level residual percentile from an OLS fit on level number, and tenure exposure adjustment capped at the ${normalisation.windowDays}-day signal window. Final \`adjustedPercentile\` is the equal-weighted mean of the three components and feeds the composite as one of five methods.`;
   const freshness = buildFreshnessBadges({
     signalWindowStart,
     signalWindowEnd,
@@ -5519,7 +5926,7 @@ export function buildMethodology(params: {
   });
   const managerCalibration = buildManagerCalibrationSummary(attribution.entries);
 
-  const contract = `The ranking is the median of four methods (A individual output, B SHAP impact, C squad delivery, tenure/role-adjusted percentile). Engineers must have at least ${composite.minPresentMethods} present methods to be scored; otherwise their row is unscored rather than assigned a neutral rank. Every signal below is listed with its anti-gaming posture; every source below is listed with its current freshness. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted today and appear in the unavailable-signals list rather than the score. Manager calibration is structural — an engineer's attribution drilldown carries direct-report context and a \`not_requested\` calibration placeholder so a later feedback loop can validate the ranking without changing the ranking core.`;
+  const contract = `The ranking is the median of five methods (A individual output, B SHAP impact, C squad delivery, D per-PR code quality, tenure/role-adjusted percentile). Engineers must have at least ${composite.minPresentMethods} present methods to be scored; otherwise their row is unscored rather than assigned a neutral rank. Every signal below is listed with its anti-gaming posture; every source below is listed with its current freshness. Individual review turnaround and PR-level cycle time are not persisted today and appear in the unavailable-signals list rather than the score. Manager calibration is structural — an engineer's attribution drilldown carries direct-report context and a \`not_requested\` calibration placeholder so a later feedback loop can validate the ranking without changing the ranking core.`;
 
   return {
     contract,
@@ -5562,6 +5969,7 @@ export interface RankingSnapshotRow {
   methodA: number | null;
   methodB: number | null;
   methodC: number | null;
+  methodD: number | null;
   confidenceLow: number | null;
   confidenceHigh: number | null;
   inputHash: string | null;
@@ -5701,6 +6109,7 @@ export function buildRankingSnapshotRows(
       methodA: entry.output,
       methodB: entry.impact,
       methodC: entry.delivery,
+      methodD: entry.quality,
       confidenceLow: confidence?.ciLow ?? null,
       confidenceHigh: confidence?.ciHigh ?? null,
       inputHash: signals ? computeRankingInputHash(signals) : null,
@@ -5739,13 +6148,22 @@ export function buildRankingSnapshot(
   ).toISOString();
 
   const { entries, coverage } = buildEligibleRoster(inputs);
+  const qualityAggregates =
+    inputs.qualityAnalyses && inputs.qualityAnalyses.length > 0
+      ? aggregateQualitySignals(inputs.qualityAnalyses)
+      : undefined;
   const audit = buildSignalAudit({
     entries,
     signals: inputs.signals,
     windowDays,
     reviewSignalsPersisted: inputs.reviewSignalsPersisted,
+    qualityAnalysesPresent: !!qualityAggregates,
   });
-  const lenses = buildLenses({ entries, signals: inputs.signals });
+  const lenses = buildLenses({
+    entries,
+    signals: inputs.signals,
+    qualityAggregates,
+  });
   const normalisation = buildNormalisation({
     entries,
     signals: inputs.signals,

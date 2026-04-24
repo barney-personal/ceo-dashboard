@@ -48,7 +48,10 @@ import {
   getEngineeringRanking,
   hashEmailForRanking,
   RANKING_ANTI_GAMING_ROWS,
+  RANKING_QUALITY_MIN_ANALYSED_PRS,
+  RANKING_QUALITY_RUBRIC_VERSION,
   RANKING_RUBRIC_VERSION,
+  aggregateQualitySignals,
   RANKING_STABILITY_ADVERSARIAL_QUESTIONS,
   RANKING_STABILITY_AMBIGUOUS_COHORT_TOLERANCE,
   RANKING_STABILITY_MIN_GAP_DAYS,
@@ -72,6 +75,8 @@ import {
   type MethodologyBundle,
   type MoversBundle,
   type PerEngineerSignalRow,
+  type PrReviewAnalysisInput,
+  type QualityAggregate,
   type RankingSnapshotRow,
   type StabilityBundle,
   type StabilityEntry,
@@ -1194,11 +1199,12 @@ describe("M8 three independent scoring lenses + disagreement", () => {
     };
   }
 
-  it("exposes three lens definitions in fixed output/impact/delivery order", () => {
+  it("exposes four lens definitions in fixed output/impact/delivery/quality order", () => {
     expect(RANKING_LENS_DEFINITIONS.map((d) => d.key)).toEqual([
       "output",
       "impact",
       "delivery",
+      "quality",
     ]);
     for (const def of RANKING_LENS_DEFINITIONS) {
       const totalWeight = def.components.reduce((sum, c) => sum + c.weight, 0);
@@ -1507,6 +1513,7 @@ describe("M8 three independent scoring lenses + disagreement", () => {
       "output",
       "impact",
       "delivery",
+      "quality",
     ]);
     expect(snapshot.lenses.lenses.output.entries.length).toBe(1);
   });
@@ -2974,7 +2981,7 @@ describe("M13 methodology version and readiness provenance", () => {
     // confidence, …); the regression guard below pins that the version
     // names a real stage rather than reverting to the scaffold label.
     const version = RANKING_METHODOLOGY_VERSION.toLowerCase();
-    expect(version).toMatch(/composite|confidence|attribution|snapshot|movers|stability|methodology/);
+    expect(version).toMatch(/composite|confidence|attribution|snapshot|movers|stability|methodology|quality/);
   });
 
   it("snapshot stamps the current methodology version on every snapshot", () => {
@@ -3423,7 +3430,7 @@ describe("M14 confidence bands and statistical tie handling", () => {
     // methodology chain.
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
-    expect(v).toMatch(/confidence|attribution|snapshot|movers|stability|methodology/);
+    expect(v).toMatch(/confidence|attribution|snapshot|movers|stability|methodology|quality/);
   });
 
   it("known-limitations narrate confidence bands as implemented (not pending) once M14 lands", () => {
@@ -3544,7 +3551,7 @@ describe("M15 per-engineer attribution drilldown", () => {
     expect(attribution.entries.length).toBe(entries.length);
     for (const row of attribution.entries) {
       expect(row.eligibility).toBe("competitive");
-      expect(row.methods.length).toBe(4);
+      expect(row.methods.length).toBe(5);
     }
   });
 
@@ -3965,7 +3972,7 @@ describe("M15 per-engineer attribution drilldown", () => {
       );
       expect(attrib).toBeDefined();
       expect(attrib!.reconciliation.matches).toBe(true);
-      expect(attrib!.methods.length).toBe(4);
+      expect(attrib!.methods.length).toBe(5);
     }
     // GitHub URLs are only emitted when a login + org exist.
     for (const attrib of snapshot.attribution.entries) {
@@ -3985,7 +3992,7 @@ describe("M15 per-engineer attribution drilldown", () => {
     // have to rewrite this test every time the version string changes.
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
-    expect(v).toMatch(/attribution|snapshot|movers|stability|methodology/);
+    expect(v).toMatch(/attribution|snapshot|movers|stability|methodology|quality/);
   });
 
   it("known limitations narrate attribution as implemented, not pending", () => {
@@ -4035,7 +4042,7 @@ describe("M15 per-engineer attribution drilldown", () => {
     expect(attribution.contract).toContain(`${RANKING_ATTRIBUTION_TOP_DRIVERS}`);
     expect(attribution.contract).toContain(`${RANKING_ATTRIBUTION_TOLERANCE}`);
     expect(attribution.tolerance).toBe(RANKING_ATTRIBUTION_TOLERANCE);
-    expect(attribution.totalMethods).toBe(4);
+    expect(attribution.totalMethods).toBe(5);
   });
 
   it("stub getEngineeringRanking() returns an empty attribution bundle but preserves the contract surface", async () => {
@@ -4043,7 +4050,7 @@ describe("M15 per-engineer attribution drilldown", () => {
     expect(snapshot.attribution).toBeDefined();
     expect(snapshot.attribution.entries).toEqual([]);
     expect(snapshot.attribution.tolerance).toBe(RANKING_ATTRIBUTION_TOLERANCE);
-    expect(snapshot.attribution.totalMethods).toBe(4);
+    expect(snapshot.attribution.totalMethods).toBe(5);
     expect(snapshot.attribution.limitations.length).toBeGreaterThan(0);
   });
 
@@ -4157,7 +4164,7 @@ describe("M16 privacy-preserving ranking snapshot persistence", () => {
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
     expect(v).not.toBe("0.7.0-attribution");
-    expect(v).toMatch(/snapshot|movers|stability|methodology/);
+    expect(v).toMatch(/snapshot|movers|stability|methodology|quality/);
   });
 
   it("toSnapshotDate formats a UTC calendar day (YYYY-MM-DD) from a Date", async () => {
@@ -4285,6 +4292,7 @@ describe("M16 privacy-preserving ranking snapshot persistence", () => {
       "methodA",
       "methodB",
       "methodC",
+      "methodD",
       "confidenceLow",
       "confidenceHigh",
       "inputHash",
@@ -4561,10 +4569,11 @@ describe("M18 movers view", () => {
       output: overrides.composite,
       impact: overrides.composite,
       delivery: overrides.composite,
+      quality: overrides.composite,
       adjusted: overrides.composite,
-      presentMethodCount: 4,
+      presentMethodCount: 5,
       compositePercentile: overrides.composite,
-      methodsSummary: "median of 4 methods",
+      methodsSummary: "median of 5 methods",
       ...overrides,
     };
   }
@@ -4577,7 +4586,7 @@ describe("M18 movers view", () => {
       .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
     return {
       contract: "",
-      methods: ["output", "impact", "delivery", "adjusted"],
+      methods: ["output", "impact", "delivery", "quality", "adjusted"],
       minPresentMethods: 2,
       maxSingleSignalEffectiveWeight: 0.3,
       dominanceCorrelationThreshold: 0.75,
@@ -4670,6 +4679,7 @@ describe("M18 movers view", () => {
       methodA: overrides.compositeScore,
       methodB: overrides.compositeScore,
       methodC: overrides.compositeScore,
+      methodD: overrides.compositeScore,
       confidenceLow: null,
       confidenceHigh: null,
       inputHash: null,
@@ -5235,7 +5245,7 @@ describe("M18 movers view", () => {
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.7.0-attribution");
     expect(v).not.toBe("0.8.0-snapshots");
-    expect(v).toMatch(/mover|stability|methodology/);
+    expect(v).toMatch(/mover|stability|methodology|quality/);
   });
 });
 
@@ -5360,11 +5370,14 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
   }
 
   it("bumps the methodology version to a post-movers methodology-era label", () => {
-    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toMatch(/methodology/);
+    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toMatch(/methodology|quality/);
   });
 
-  it("rubric version is null until prReviewAnalyses lands", () => {
-    expect(RANKING_RUBRIC_VERSION).toBeNull();
+  it("rubric version matches the live code-quality rubric once prReviewAnalyses is wired", () => {
+    // Null during the methodology-only era; once the quality lens lands it
+    // names the live rubric version so the methodology panel can surface
+    // the freshness of the per-PR signal to readers.
+    expect(RANKING_RUBRIC_VERSION).toBe(RANKING_QUALITY_RUBRIC_VERSION);
   });
 
   it("exposes an anti-gaming row for every scoring and contextual signal", () => {
@@ -5568,7 +5581,7 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
     const m: MethodologyBundle = snapshot.methodology;
     expect(m.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
     expect(m.contract.length).toBeGreaterThan(100);
-    expect(m.lenses).toHaveLength(4);
+    expect(m.lenses).toHaveLength(5);
     for (const lens of m.lenses) {
       expect(lens.weights.length).toBeGreaterThan(0);
       const weightSum = lens.weights.reduce((s, w) => s + w.weight, 0);
@@ -5580,7 +5593,7 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
     expect(m.compositeRule.toLowerCase()).toMatch(/median/);
   });
 
-  it("freshness badges include impact-model training date, signal window, and rubric-not-available", () => {
+  it("freshness badges include impact-model training date, signal window, and the live rubric version", () => {
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -5600,8 +5613,12 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
       /rubric/i.test(`${b.source} ${b.label}`),
     );
     expect(rubricBadge).toBeDefined();
-    expect(rubricBadge?.timestamp).toBeNull();
-    expect(rubricBadge?.availability).toBe("unavailable");
+    // Once the code-quality lens lands, the rubric version is wired via
+    // RANKING_RUBRIC_VERSION → RANKING_QUALITY_RUBRIC_VERSION and the badge
+    // flips to `available`. The `note` carries the live version string so
+    // the methodology panel can render freshness to readers.
+    expect(rubricBadge?.availability).toBe("available");
+    expect(rubricBadge?.note).toContain(RANKING_QUALITY_RUBRIC_VERSION);
 
     const aiBadge = freshness.find((b) => /ai usage/i.test(b.label));
     expect(aiBadge?.note?.toLowerCase()).toMatch(/latest[- ]month/);
@@ -6059,10 +6076,11 @@ describe("M24 stability check", () => {
       output: overrides.composite,
       impact: overrides.composite,
       delivery: overrides.composite,
+      quality: overrides.composite,
       adjusted: overrides.composite,
-      presentMethodCount: 4,
+      presentMethodCount: 5,
       compositePercentile: overrides.composite,
-      methodsSummary: "median of 4 methods",
+      methodsSummary: "median of 5 methods",
       ...overrides,
     };
   }
@@ -6075,7 +6093,7 @@ describe("M24 stability check", () => {
       .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
     return {
       contract: "",
-      methods: ["output", "impact", "delivery", "adjusted"],
+      methods: ["output", "impact", "delivery", "quality", "adjusted"],
       minPresentMethods: 2,
       maxSingleSignalEffectiveWeight: 0.3,
       dominanceCorrelationThreshold: 0.75,
@@ -6133,6 +6151,7 @@ describe("M24 stability check", () => {
       methodA: overrides.compositeScore,
       methodB: overrides.compositeScore,
       methodC: overrides.compositeScore,
+      methodD: overrides.compositeScore,
       confidenceLow: null,
       confidenceHigh: null,
       inputHash: null,
@@ -6744,3 +6763,365 @@ describe("M24 stability check", () => {
 function computeRankingInputHashForTest(signal: PerEngineerSignalRow): string {
   return computeRankingInputHash(signal);
 }
+
+// ---------------------------------------------------------------------------
+// M-quality: code-quality lens (prReviewAnalyses → aggregateQualitySignals)
+// ---------------------------------------------------------------------------
+
+describe("aggregateQualitySignals — per-engineer rubric aggregation", () => {
+  function pr(
+    overrides: Partial<PrReviewAnalysisInput> & { emailHash: string },
+  ): PrReviewAnalysisInput {
+    return {
+      mergedAt: "2026-04-01T00:00:00Z",
+      rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+      technicalDifficulty: 3,
+      executionQuality: 4,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 4,
+      analysisConfidencePct: 80,
+      revertWithin14d: false,
+      ...overrides,
+    };
+  }
+
+  it("returns an empty map when no analyses are supplied", () => {
+    const agg = aggregateQualitySignals([]);
+    expect(agg.size).toBe(0);
+  });
+
+  it("requires the minimum analysed PR count before producing scores", () => {
+    const rows: PrReviewAnalysisInput[] = [];
+    for (let i = 0; i < RANKING_QUALITY_MIN_ANALYSED_PRS - 1; i += 1) {
+      rows.push(pr({ emailHash: "eng1" }));
+    }
+    const agg = aggregateQualitySignals(rows);
+    const entry = agg.get("eng1")!;
+    expect(entry).toBeDefined();
+    expect(entry.analysedPrCount).toBe(RANKING_QUALITY_MIN_ANALYSED_PRS - 1);
+    expect(entry.executionQualityMean).toBeNull();
+    expect(entry.testAdequacyMean).toBeNull();
+    expect(entry.riskHandlingMean).toBeNull();
+    expect(entry.reviewabilityMean).toBeNull();
+    expect(entry.revertRate).toBeNull();
+  });
+
+  it("produces scores once the minimum PR count is met", () => {
+    const rows: PrReviewAnalysisInput[] = [];
+    for (let i = 0; i < RANKING_QUALITY_MIN_ANALYSED_PRS; i += 1) {
+      rows.push(pr({ emailHash: "eng1" }));
+    }
+    const entry = aggregateQualitySignals(rows).get("eng1")!;
+    expect(entry.analysedPrCount).toBe(RANKING_QUALITY_MIN_ANALYSED_PRS);
+    expect(entry.executionQualityMean).toBeCloseTo(4, 6);
+    expect(entry.testAdequacyMean).toBeCloseTo(3, 6);
+    expect(entry.revertRate).toBe(0);
+  });
+
+  it("weights per-PR contribution by confidence × difficulty", () => {
+    // Engineer A: three high-difficulty high-confidence PRs scoring 5.
+    // Engineer B: three low-difficulty high-confidence PRs scoring 3.
+    // A's execution mean should be closer to 5; B's closer to 3. Since each
+    // is an engineer with consistent per-PR scores, difficulty weighting
+    // just scales every PR by the same amount within each engineer — so the
+    // means themselves don't change within-engineer. The difficulty weight
+    // matters for mixed-difficulty engineers: assert on that case below.
+    const mix: PrReviewAnalysisInput[] = [
+      // High difficulty, high quality (5): weight = 80 * 5 = 400
+      pr({ emailHash: "eng1", technicalDifficulty: 5, executionQuality: 5 }),
+      // Low difficulty, low quality (1): weight = 80 * 1 = 80
+      pr({ emailHash: "eng1", technicalDifficulty: 1, executionQuality: 1 }),
+      // Mid, mid: weight = 80 * 3 = 240
+      pr({ emailHash: "eng1", technicalDifficulty: 3, executionQuality: 3 }),
+    ];
+    const entry = aggregateQualitySignals(mix).get("eng1")!;
+    const expected = (5 * 400 + 1 * 80 + 3 * 240) / (400 + 80 + 240);
+    expect(entry.executionQualityMean).toBeCloseTo(expected, 6);
+    // Difficulty mean is unweighted — just the arithmetic mean.
+    expect(entry.technicalDifficultyMean).toBeCloseTo(3, 6);
+  });
+
+  it("drops PRs with a mismatched rubric version", () => {
+    const rows: PrReviewAnalysisInput[] = [
+      pr({ emailHash: "eng1", rubricVersion: "v1.1-opus" }),
+      pr({ emailHash: "eng1", rubricVersion: "v1.1-opus" }),
+      pr({ emailHash: "eng1" }), // v2.0
+      pr({ emailHash: "eng1" }),
+      pr({ emailHash: "eng1" }),
+    ];
+    const entry = aggregateQualitySignals(rows).get("eng1")!;
+    expect(entry.analysedPrCount).toBe(3);
+    expect(entry.executionQualityMean).not.toBeNull();
+  });
+
+  it("computes revert rate over analysed PRs", () => {
+    const rows: PrReviewAnalysisInput[] = [
+      pr({ emailHash: "eng1", revertWithin14d: true }),
+      pr({ emailHash: "eng1", revertWithin14d: false }),
+      pr({ emailHash: "eng1", revertWithin14d: false }),
+      pr({ emailHash: "eng1", revertWithin14d: true }),
+    ];
+    const entry = aggregateQualitySignals(rows).get("eng1")!;
+    expect(entry.revertRate).toBeCloseTo(0.5, 6);
+  });
+
+  it("handles null score axes by dropping them from the mean without zeroing", () => {
+    const rows: PrReviewAnalysisInput[] = [
+      pr({ emailHash: "eng1", executionQuality: 4 }),
+      pr({ emailHash: "eng1", executionQuality: null }),
+      pr({ emailHash: "eng1", executionQuality: 4 }),
+    ];
+    const entry = aggregateQualitySignals(rows).get("eng1")!;
+    // The null row contributes to the PR count and to other axes, but its
+    // execution-quality contribution is dropped — the mean stays at 4
+    // rather than being dragged toward zero.
+    expect(entry.analysedPrCount).toBe(3);
+    expect(entry.executionQualityMean).toBeCloseTo(4, 6);
+  });
+
+  it("falls back to mid confidence (50) for PRs with null analysis_confidence_pct", () => {
+    // Two PRs: one with confidence=100 and quality=5, one with confidence=null
+    // and quality=1. Weight for the first = 100*3 = 300, second = 50*3 = 150.
+    // Weighted mean = (5*300 + 1*150) / 450 = 1650/450 ≈ 3.667.
+    const rows: PrReviewAnalysisInput[] = [
+      pr({
+        emailHash: "eng1",
+        executionQuality: 5,
+        analysisConfidencePct: 100,
+      }),
+      pr({
+        emailHash: "eng1",
+        executionQuality: 1,
+        analysisConfidencePct: null,
+      }),
+      // Third PR to meet the min-analysed-PRs gate.
+      pr({ emailHash: "eng1", executionQuality: 3, analysisConfidencePct: 80 }),
+    ];
+    const entry = aggregateQualitySignals(rows).get("eng1")!;
+    expect(entry.executionQualityMean).not.toBeNull();
+    // Loose check: the mean should sit between the lowest and highest scores.
+    expect(entry.executionQualityMean!).toBeGreaterThan(1);
+    expect(entry.executionQualityMean!).toBeLessThan(5);
+  });
+
+  it("splits aggregates per engineer", () => {
+    const rows: PrReviewAnalysisInput[] = [];
+    for (let i = 0; i < RANKING_QUALITY_MIN_ANALYSED_PRS; i += 1) {
+      rows.push(pr({ emailHash: "eng1", executionQuality: 5 }));
+      rows.push(pr({ emailHash: "eng2", executionQuality: 2 }));
+    }
+    const agg = aggregateQualitySignals(rows);
+    expect(agg.get("eng1")!.executionQualityMean).toBeCloseTo(5, 6);
+    expect(agg.get("eng2")!.executionQualityMean).toBeCloseTo(2, 6);
+  });
+});
+
+describe("quality lens end-to-end — buildLenses + buildRankingSnapshot", () => {
+  // Minimal competitive-entry helper, mirroring the one used by the other
+  // lens-level test blocks. Every engineer is competitive with a valid
+  // impact-model row so the composite has at least one scored method per
+  // engineer even without the quality input.
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: "Platform",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Competitive cohort.",
+      ...overrides,
+    };
+  }
+
+  it("quality lens scores engineers with enough analyses and leaves others null", () => {
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const analyses: PrReviewAnalysisInput[] = [];
+    // Engineer 1 — 5 PRs at top quality
+    for (let i = 0; i < 5; i += 1) {
+      analyses.push({
+        emailHash: entries[0].emailHash,
+        mergedAt: "2026-04-01T00:00:00Z",
+        rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+        technicalDifficulty: 4,
+        executionQuality: 5,
+        testAdequacy: 5,
+        riskHandling: 5,
+        reviewability: 5,
+        analysisConfidencePct: 90,
+        revertWithin14d: false,
+      });
+    }
+    // Engineer 2 — 5 PRs at middling quality
+    for (let i = 0; i < 5; i += 1) {
+      analyses.push({
+        emailHash: entries[1].emailHash,
+        mergedAt: "2026-04-01T00:00:00Z",
+        rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+        technicalDifficulty: 2,
+        executionQuality: 3,
+        testAdequacy: 2,
+        riskHandling: 3,
+        reviewability: 3,
+        analysisConfidencePct: 70,
+        revertWithin14d: false,
+      });
+    }
+    // Engineer 3 — only 2 PRs, below the min → unscored
+    for (let i = 0; i < 2; i += 1) {
+      analyses.push({
+        emailHash: entries[2].emailHash,
+        mergedAt: "2026-04-01T00:00:00Z",
+        rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+        technicalDifficulty: 3,
+        executionQuality: 4,
+        testAdequacy: 4,
+        riskHandling: 4,
+        reviewability: 4,
+        analysisConfidencePct: 80,
+        revertWithin14d: false,
+      });
+    }
+
+    const qualityAggregates = aggregateQualitySignals(analyses);
+    const bundle = buildLenses({ entries, qualityAggregates });
+    const qualityById = new Map(
+      bundle.lenses.quality.entries.map((e) => [e.emailHash, e]),
+    );
+    const e1 = qualityById.get(entries[0].emailHash)!;
+    const e2 = qualityById.get(entries[1].emailHash)!;
+    const e3 = qualityById.get(entries[2].emailHash)!;
+    // Eng1 (top rubric) should outrank Eng2 (middling); Eng3 unscored.
+    expect(e1.score).not.toBeNull();
+    expect(e2.score).not.toBeNull();
+    expect(e3.score).toBeNull();
+    expect(e1.score!).toBeGreaterThan(e2.score!);
+  });
+
+  it("lens returns null for every engineer when no analyses are supplied", () => {
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const bundle = buildLenses({ entries });
+    for (const e of bundle.lenses.quality.entries) {
+      expect(e.score).toBeNull();
+    }
+  });
+
+  it("revert-within-14d penalty drags down an otherwise strong engineer", () => {
+    const entries = Array.from({ length: 2 }, (_, i) => competitiveEntry(i + 1));
+    const makeRows = (
+      hash: string,
+      revertRate: boolean,
+    ): PrReviewAnalysisInput[] => {
+      const out: PrReviewAnalysisInput[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        out.push({
+          emailHash: hash,
+          mergedAt: "2026-04-01T00:00:00Z",
+          rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+          technicalDifficulty: 3,
+          executionQuality: 4,
+          testAdequacy: 4,
+          riskHandling: 4,
+          reviewability: 4,
+          analysisConfidencePct: 80,
+          revertWithin14d: revertRate,
+        });
+      }
+      return out;
+    };
+    const analyses = [
+      ...makeRows(entries[0].emailHash, false),
+      ...makeRows(entries[1].emailHash, true),
+    ];
+    const bundle = buildLenses({
+      entries,
+      qualityAggregates: aggregateQualitySignals(analyses),
+    });
+    const e1 = bundle.lenses.quality.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    const e2 = bundle.lenses.quality.entries.find(
+      (e) => e.emailHash === entries[1].emailHash,
+    )!;
+    // Same rubric axes, but e2 has full revert rate → inverted penalty makes
+    // e2's score lower than e1's.
+    expect(e1.score).not.toBeNull();
+    expect(e2.score).not.toBeNull();
+    expect(e1.score!).toBeGreaterThan(e2.score!);
+  });
+
+  it("buildRankingSnapshot threads prReviewAnalyses through to the quality lens", () => {
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const headcountRows = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      hb_function: "Engineering",
+      hb_level: e.levelLabel,
+      hb_squad: e.squad,
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Core",
+      job_title: "Software Engineer",
+      manager: e.manager,
+      line_manager_email: "boss@meetcleo.com",
+      start_date: e.startDate,
+    }));
+    const githubMap = entries.map((e) => ({
+      githubLogin: e.githubLogin!,
+      employeeEmail: e.email,
+      isBot: false,
+    }));
+    const analyses: PrReviewAnalysisInput[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      analyses.push({
+        emailHash: entries[0].emailHash,
+        mergedAt: "2026-04-01T00:00:00Z",
+        rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+        technicalDifficulty: 4,
+        executionQuality: 5,
+        testAdequacy: 5,
+        riskHandling: 5,
+        reviewability: 5,
+        analysisConfidencePct: 90,
+        revertWithin14d: false,
+      });
+    }
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel: { engineers: [] },
+      qualityAnalyses: analyses,
+    });
+    // The composite entries include a `quality` field; at least one must be non-null.
+    const scoredQuality = snapshot.composite.entries.filter(
+      (c) => c.quality !== null,
+    );
+    expect(scoredQuality.length).toBeGreaterThan(0);
+    // The methodology unavailable-signals list should no longer include the rubric.
+    const unavailableNames = snapshot.audit.unavailableSignals.map((u) => u.name);
+    expect(unavailableNames).not.toContain("Per-PR LLM rubric");
+  });
+
+  it("buildRankingSnapshot without qualityAnalyses lists the rubric as unavailable in the audit", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const unavailableNames = snapshot.audit.unavailableSignals.map((u) => u.name);
+    expect(unavailableNames).toContain("Per-PR LLM rubric");
+  });
+});

@@ -646,6 +646,7 @@ export const engineeringRankingSnapshots = pgTable(
     methodA: numeric("method_a", { precision: 7, scale: 4 }),
     methodB: numeric("method_b", { precision: 7, scale: 4 }),
     methodC: numeric("method_c", { precision: 7, scale: 4 }),
+    methodD: numeric("method_d", { precision: 7, scale: 4 }),
     confidenceLow: numeric("confidence_low", { precision: 7, scale: 4 }),
     confidenceHigh: numeric("confidence_high", { precision: 7, scale: 4 }),
     // Stable hash of the per-engineer input signals (PR/commit counts, impact

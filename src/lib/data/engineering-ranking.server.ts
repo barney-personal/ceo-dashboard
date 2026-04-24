@@ -14,6 +14,7 @@ import {
   githubCommits,
   githubEmployeeMap,
   githubPrs,
+  prReviewAnalyses,
   squads,
 } from "@/lib/db/schema";
 import { and, asc, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
@@ -32,17 +33,20 @@ import {
 import {
   RANKING_METHODOLOGY_VERSION,
   RANKING_MOVERS_MIN_GAP_DAYS,
+  RANKING_QUALITY_RUBRIC_VERSION,
   RANKING_SIGNAL_WINDOW_DAYS,
   buildEligibleRoster,
   buildRankingSnapshot,
   buildRankingSnapshotRows,
   getEngineeringRanking,
+  hashEmailForRanking,
   toSnapshotDate,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilitySquadsRegistryRow,
   type EngineeringRankingSnapshot,
   type PerEngineerSignalRow,
+  type PrReviewAnalysisInput,
   type RankingSnapshotRow,
   type RankingSnapshotRowMetadata,
 } from "@/lib/data/engineering-ranking";
@@ -174,6 +178,68 @@ async function fetchSquadDeliveryContext(): Promise<
   const result = await getSquadPillarMetrics("last_180_days");
   if (result.status !== "ok" || !result.data) return new Map();
   return new Map(Object.entries(result.data.squads));
+}
+
+/**
+ * Pull per-PR rubric rows (rubric version `RANKING_QUALITY_RUBRIC_VERSION`)
+ * merged inside the signal window, joined through `githubEmployeeMap` so
+ * every row resolves to an employee email → salted hash.
+ *
+ * The quality lens is strict about rubric-version mixing — only rows with
+ * the current version are returned — and bots / unmapped GitHub logins are
+ * filtered out so the lens doesn't reward activity we can't attribute.
+ * Engineers with merged PRs outside the analysed set (e.g. repos excluded
+ * via `CODE_REVIEW_EXCLUDED_REPOS`) will be under-represented here; this is
+ * a known limitation surfaced on the methodology panel.
+ */
+async function fetchPrReviewAnalyses(
+  windowStart: Date,
+): Promise<PrReviewAnalysisInput[]> {
+  const rows = await db
+    .select({
+      authorLogin: prReviewAnalyses.authorLogin,
+      mergedAt: prReviewAnalyses.mergedAt,
+      rubricVersion: prReviewAnalyses.rubricVersion,
+      technicalDifficulty: prReviewAnalyses.technicalDifficulty,
+      executionQuality: prReviewAnalyses.executionQuality,
+      testAdequacy: prReviewAnalyses.testAdequacy,
+      riskHandling: prReviewAnalyses.riskHandling,
+      reviewability: prReviewAnalyses.reviewability,
+      analysisConfidencePct: prReviewAnalyses.analysisConfidencePct,
+      revertWithin14d: prReviewAnalyses.revertWithin14d,
+      employeeEmail: githubEmployeeMap.employeeEmail,
+      isBot: githubEmployeeMap.isBot,
+    })
+    .from(prReviewAnalyses)
+    .leftJoin(
+      githubEmployeeMap,
+      eq(githubEmployeeMap.githubLogin, prReviewAnalyses.authorLogin),
+    )
+    .where(
+      and(
+        eq(prReviewAnalyses.rubricVersion, RANKING_QUALITY_RUBRIC_VERSION),
+        gte(prReviewAnalyses.mergedAt, windowStart),
+      ),
+    );
+
+  const out: PrReviewAnalysisInput[] = [];
+  for (const row of rows) {
+    if (!row.employeeEmail) continue; // unmapped author
+    if (row.isBot) continue;
+    out.push({
+      emailHash: hashEmailForRanking(row.employeeEmail),
+      mergedAt: row.mergedAt.toISOString(),
+      rubricVersion: row.rubricVersion,
+      technicalDifficulty: row.technicalDifficulty,
+      executionQuality: row.executionQuality,
+      testAdequacy: row.testAdequacy,
+      riskHandling: row.riskHandling,
+      reviewability: row.reviewability,
+      analysisConfidencePct: row.analysisConfidencePct,
+      revertWithin14d: row.revertWithin14d ?? false,
+    });
+  }
+  return out;
 }
 
 /**
@@ -383,6 +449,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       githubActivityByLogin,
       aiUsageByEmail,
       squadDeliveryByName,
+      qualityAnalyses,
       priorSnapshotRows,
     ] = await Promise.all([
       fetchHeadcountRows(),
@@ -391,6 +458,13 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       fetchGithubActivityByLogin(windowStart),
       fetchAiUsageByEmail(),
       fetchSquadDeliveryContext(),
+      fetchPrReviewAnalyses(windowStart).catch((err) => {
+        console.warn(
+          "[engineering-ranking] pr-review analyses fetch failed, code-quality lens will render as unavailable:",
+          err,
+        );
+        return [] as PrReviewAnalysisInput[];
+      }),
       fetchPriorSnapshotRowsForMovers({
         currentSnapshotDate: toSnapshotDate(now),
         currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
@@ -429,6 +503,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       impactModel: getImpactModel(),
       squads: squadsRegistry,
       signals,
+      qualityAnalyses,
       reviewSignalsPersisted: false,
       now,
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
@@ -519,6 +594,7 @@ export async function persistRankingSnapshot(
     methodA: numericString(row.methodA),
     methodB: numericString(row.methodB),
     methodC: numericString(row.methodC),
+    methodD: numericString(row.methodD),
     confidenceLow: numericString(row.confidenceLow),
     confidenceHigh: numericString(row.confidenceHigh),
     inputHash: row.inputHash,
@@ -550,6 +626,7 @@ export async function persistRankingSnapshot(
         methodA: sql`excluded.method_a`,
         methodB: sql`excluded.method_b`,
         methodC: sql`excluded.method_c`,
+        methodD: sql`excluded.method_d`,
         confidenceLow: sql`excluded.confidence_low`,
         confidenceHigh: sql`excluded.confidence_high`,
         inputHash: sql`excluded.input_hash`,
@@ -601,6 +678,7 @@ export async function readRankingSnapshot(params: {
     methodA: parseNumeric(row.methodA),
     methodB: parseNumeric(row.methodB),
     methodC: parseNumeric(row.methodC),
+    methodD: parseNumeric(row.methodD),
     confidenceLow: parseNumeric(row.confidenceLow),
     confidenceHigh: parseNumeric(row.confidenceHigh),
     inputHash: row.inputHash,

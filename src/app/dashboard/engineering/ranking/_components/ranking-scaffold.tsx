@@ -535,6 +535,7 @@ function LensesSection({ lenses }: { lenses: LensesBundle }) {
         <LensTopTable lens={lenses.lenses.output} />
         <LensTopTable lens={lenses.lenses.impact} />
         <LensTopTable lens={lenses.lenses.delivery} />
+        <LensTopTable lens={lenses.lenses.quality} />
       </div>
 
       <DisagreementTable rows={lenses.disagreement.widestGaps} />
@@ -582,6 +583,7 @@ function DisagreementTable({ rows }: { rows: LensDisagreementRow[] }) {
               <th className="py-2 pr-3 text-right font-medium">A output</th>
               <th className="py-2 pr-3 text-right font-medium">B impact</th>
               <th className="py-2 pr-3 text-right font-medium">C delivery</th>
+              <th className="py-2 pr-3 text-right font-medium">D quality</th>
               <th className="py-2 pr-3 text-right font-medium">Δ</th>
               <th className="py-2 pr-3 font-medium">Likely cause</th>
             </tr>
@@ -601,6 +603,9 @@ function DisagreementTable({ rows }: { rows: LensDisagreementRow[] }) {
                 </td>
                 <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
                   {formatPercentile(row.delivery)}
+                </td>
+                <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                  {formatPercentile(row.quality)}
                 </td>
                 <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
                   {row.disagreement === null

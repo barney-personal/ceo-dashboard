@@ -286,11 +286,12 @@ function persistedRow(
     methodA: 50,
     methodB: 60,
     methodC: 70,
+    methodD: 65,
     confidenceLow: 45 + index,
     confidenceHigh: 75 + index,
     inputHash: `persisted-input-${index}`,
     metadata: {
-      presentMethodCount: 3,
+      presentMethodCount: 4,
       dominanceBlocked: false,
       dominanceRiskApplied: false,
       confidenceWidth: 30,
