@@ -10,6 +10,8 @@ import { eq } from "drizzle-orm";
 import { canonicalDepartment } from "@/lib/data/attrition-utils";
 
 async function main() {
+  // "Attrition Tracker" report token — see src/lib/integrations/mode-config.ts.
+  // If this token rotates, update it there and here.
   const [report] = await db
     .select()
     .from(modeReports)
