@@ -178,6 +178,11 @@ export function DashboardPermissionsAdmin({
               level based on direct reports, even though it is not assigned in
               Clerk.
             </p>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Some admin routes also protect backing APIs and manual actions. If
+              you lower Squads or Mode Explorer, you also lower who can call those
+              tools, not just who can open the page.
+            </p>
           </div>
         </div>
       </div>
