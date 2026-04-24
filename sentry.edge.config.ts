@@ -11,6 +11,11 @@ Sentry.init({
   environment: process.env.NODE_ENV || "development",
   release: process.env.RENDER_GIT_COMMIT || process.env.VERCEL_GIT_COMMIT_SHA || "local",
 
+  // See sentry.server.config.ts — prod-only by default.
+  enabled:
+    process.env.NODE_ENV === "production" ||
+    process.env.SENTRY_FORCE_ENABLE === "true",
+
   // Sample 10% of traces to avoid burning quota in production.
   tracesSampleRate: 0.1,
 

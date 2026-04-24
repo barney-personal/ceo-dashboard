@@ -10,6 +10,7 @@ import {
   getPullRequestMetrics,
   getPullRequestMetricsForRange,
   isSwarmiaConfigured,
+  SwarmiaApiError,
   type SwarmiaDora,
   type SwarmiaTimeframe,
 } from "@/lib/integrations/swarmia";
@@ -33,10 +34,23 @@ async function safeLoad<T>(
     const data = await fn();
     return { status: "ok", data };
   } catch (err) {
-    // Send the full exception (including any upstream response body) to
-    // Sentry, but return a generic message to the caller — we don't want
-    // raw API responses bleeding into UI text.
-    Sentry.captureException(err, { tags: { loader: `swarmia:${label}` } });
+    // Swarmia upstream returns transient 5xx during report regeneration.
+    // After one client-level retry (see integrations/swarmia.ts), those are
+    // handled with a UI fallback — group them under a single warning-level
+    // Sentry issue rather than paging on every user view. Non-5xx (auth
+    // failures, parse errors, network errors) keep full exception capture.
+    const is5xx =
+      err instanceof SwarmiaApiError && err.status >= 500 && err.status < 600;
+    if (is5xx) {
+      Sentry.captureMessage(`Swarmia ${label} returned ${err.status}`, {
+        level: "warning",
+        fingerprint: ["swarmia", "upstream-5xx", label],
+        tags: { loader: `swarmia:${label}`, swarmia_status: String(err.status) },
+        extra: { endpoint: err.endpoint, message: err.message },
+      });
+    } else {
+      Sentry.captureException(err, { tags: { loader: `swarmia:${label}` } });
+    }
     return { status: "error", data: null, errorMessage: `${label} unavailable` };
   }
 }
