@@ -746,7 +746,7 @@ export async function getEngineerCodeReview(
   login: string,
   opts: RollupOptions = {},
 ): Promise<EngineerCodeReviewView> {
-  const view = await getCodeReviewView({ includePrevious: true, ...opts });
+  const view = await getCodeReviewView({ ...opts, includePrevious: true });
   const match = login.toLowerCase();
   const engineer =
     view.engineers.find(
