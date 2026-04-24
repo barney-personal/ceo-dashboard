@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import {
   bucketNormalisationDeltas,
   type AntiGamingRow,
@@ -26,61 +26,7 @@ import {
   type StabilityEntry,
   type StabilityFlag,
 } from "@/lib/data/engineering-ranking";
-import type { HrEvidencePack } from "@/lib/data/engineering-ranking-hr";
-import { CompositeTopTable } from "./composite-table";
-import { HrReviewSection } from "./hr-review-section";
-
-function formatDate(iso: string): string {
-  // Snapshot dates are always UTC midnight (either a bare `YYYY-MM-DD` string
-  // or `...T00:00:00Z`). Render in UTC so viewers in negative offsets (e.g.
-  // US timezones) don't see the previous calendar day.
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function StatusBadge({
-  status,
-}: {
-  status: EngineeringRankingSnapshot["status"];
-}) {
-  const label =
-    status === "ready"
-      ? "Ranking ready"
-      : status === "insufficient_data"
-        ? "Insufficient data"
-        : "Methodology pending";
-  const tone =
-    status === "ready"
-      ? "border-primary/40 bg-primary/10 text-primary"
-      : "border-warning/40 bg-warning/10 text-warning";
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.12em] ${tone}`}
-    >
-      {label}
-    </span>
-  );
-}
-
-function SignalIcon({
-  state,
-}: {
-  state: "available" | "planned" | "unavailable";
-}) {
-  if (state === "available") {
-    return <CheckCircle2 className="h-4 w-4 text-primary" />;
-  }
-  if (state === "unavailable") {
-    return <AlertTriangle className="h-4 w-4 text-warning" />;
-  }
-  return <CircleDashed className="h-4 w-4 text-muted-foreground" />;
-}
+import { formatPct, formatPercentile, SignalIcon } from "./shared";
 
 const ELIGIBILITY_LABEL: Record<EligibilityStatus, string> = {
   competitive: "Competitive",
@@ -104,7 +50,7 @@ const ELIGIBILITY_TONE: Record<EligibilityStatus, string> = {
     "border-muted-foreground/30 bg-muted/30 text-muted-foreground",
 };
 
-function CoverageSection({
+export function CoverageSection({
   snapshot,
 }: {
   snapshot: EngineeringRankingSnapshot;
@@ -220,7 +166,7 @@ function findPair(
   );
 }
 
-function SignalAuditSection({
+export function SignalAuditSection({
   snapshot,
 }: {
   snapshot: EngineeringRankingSnapshot;
@@ -432,11 +378,6 @@ function SignalAuditSection({
   );
 }
 
-function formatPercentile(value: number | null): string {
-  if (value === null) return "—";
-  return `${value.toFixed(1)}`;
-}
-
 function LensTopTable({ lens }: { lens: LensScoreSummary }) {
   return (
     <div className="rounded-md border border-border/40 bg-background/60 p-4">
@@ -514,7 +455,7 @@ function LensTopTable({ lens }: { lens: LensScoreSummary }) {
   );
 }
 
-function LensesSection({ lenses }: { lenses: LensesBundle }) {
+export function LensesSection({ lenses }: { lenses: LensesBundle }) {
   return (
     <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -795,7 +736,7 @@ function NormalisationDeltas({
   );
 }
 
-function NormalisationSection({
+export function NormalisationSection({
   normalisation,
   rampUpCount,
 }: {
@@ -926,32 +867,51 @@ function NormalisationSection({
   );
 }
 
-function formatPct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function CompositeSection({
+export function DominanceWarnings({
   composite,
-  confidence,
-  attribution,
-  profileSlugByHash,
 }: {
   composite: CompositeBundle;
-  confidence: ConfidenceBundle;
-  attribution: AttributionBundle;
-  profileSlugByHash: Record<string, string>;
 }) {
-  const scored = composite.entries.filter(
-    (e) => e.composite !== null && e.rank !== null,
-  ).length;
-  const unscored = composite.entries.length - scored;
+  if (composite.dominanceWarnings.length === 0) return null;
+  return (
+    <div
+      className={`rounded-md border p-3 ${
+        composite.dominanceBlocked
+          ? "border-destructive/40 bg-destructive/5"
+          : "border-warning/40 bg-warning/5"
+      }`}
+    >
+      <h4
+        className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+          composite.dominanceBlocked ? "text-destructive" : "text-warning"
+        }`}
+      >
+        <AlertTriangle className="h-4 w-4" />
+        {composite.dominanceBlocked
+          ? "Dominance check BLOCKING the composite"
+          : "Dominance trade-offs"}
+      </h4>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-foreground/80">
+        {composite.dominanceWarnings.map((w) => (
+          <li key={w}>{w}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function CompositeDiagnosticsSection({
+  composite,
+}: {
+  composite: CompositeBundle;
+}) {
   const flagged = composite.effectiveSignalWeights.filter((w) => w.flagged);
   return (
     <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-foreground">
-            Composite ranking
+            Composite diagnostics
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
             {composite.contract}
@@ -959,46 +919,10 @@ function CompositeSection({
         </div>
         <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <div>
-            {scored} scored · {unscored} unscored
-          </div>
-          <div className="mt-1">
             ≥{composite.minPresentMethods} methods required
           </div>
         </div>
       </div>
-
-      {composite.dominanceWarnings.length > 0 && (
-        <div
-          className={`mt-4 rounded-md border p-3 ${
-            composite.dominanceBlocked
-              ? "border-destructive/40 bg-destructive/5"
-              : "border-warning/40 bg-warning/5"
-          }`}
-        >
-          <h4
-            className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] ${
-              composite.dominanceBlocked ? "text-destructive" : "text-warning"
-            }`}
-          >
-            <AlertTriangle className="h-4 w-4" />
-            {composite.dominanceBlocked
-              ? "Dominance check BLOCKING the composite"
-              : "Dominance trade-offs"}
-          </h4>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-foreground/80">
-            {composite.dominanceWarnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <CompositeTopTable
-        composite={composite}
-        confidence={confidence}
-        attribution={attribution}
-        profileSlugByHash={profileSlugByHash}
-      />
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="rounded-md border border-border/40 bg-background/60 p-4">
@@ -1234,7 +1158,7 @@ function TieGroupCard({ group }: { group: ConfidenceTieGroup }) {
   );
 }
 
-function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
+export function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
   const scored = confidence.entries.filter(
     (e) => e.composite !== null && e.ciLow !== null,
   );
@@ -1375,7 +1299,7 @@ function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
   );
 }
 
-function AttributionSection({
+export function AttributionSection({
   attribution,
 }: {
   attribution: AttributionBundle;
@@ -1581,7 +1505,7 @@ function MoverTable({
   );
 }
 
-function MoversSection({ movers }: { movers: MoversBundle }) {
+export function MoversSection({ movers }: { movers: MoversBundle }) {
   const totalRows =
     movers.risers.length +
     movers.fallers.length +
@@ -1759,7 +1683,7 @@ function formatStabilityPercentileDelta(value: number | null): string {
   return `${sign}${Math.abs(value).toFixed(1)}pp`;
 }
 
-function StabilitySection({ stability }: { stability: StabilityBundle }) {
+export function StabilitySection({ stability }: { stability: StabilityBundle }) {
   const statusLabel =
     stability.status === "ok"
       ? stability.withinTolerance
@@ -1972,7 +1896,7 @@ function formatEffectiveWeight(w: EffectiveSignalWeight): string {
   return `${pct}%`;
 }
 
-function MethodologySection({
+export function MethodologySection({
   methodology,
 }: {
   methodology: MethodologyBundle;
@@ -2374,173 +2298,125 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   );
 }
 
-export function RankingScaffold({
+export function PlannedSignalsSection({
   snapshot,
-  profileSlugByHash,
-  canSeeHrReview = false,
-  hrPack = null,
 }: {
   snapshot: EngineeringRankingSnapshot;
-  profileSlugByHash: Record<string, string>;
-  canSeeHrReview?: boolean;
-  hrPack?: HrEvidencePack | null;
 }) {
   return (
-    <div className="space-y-6">
-      <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-3xl space-y-2">
-            <div className="flex items-center gap-3">
-              <h2 className="font-display text-3xl italic tracking-tight text-foreground">
-                Engineer ranking
-              </h2>
-              <StatusBadge status={snapshot.status} />
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <h3 className="text-sm font-semibold text-foreground">
+        Signals this ranking will use
+      </h3>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Availability of each input signal at the time this page was rendered.
+        Unavailable signals are documented as known methodology limitations and
+        not silently synthesised.
+      </p>
+      <ul className="mt-4 space-y-2">
+        {snapshot.plannedSignals.map((signal) => (
+          <li
+            key={signal.name}
+            className="flex items-start gap-3 rounded-md border border-border/40 bg-background/60 px-3 py-2"
+          >
+            <SignalIcon state={signal.state} />
+            <div className="flex-1">
+              <div className="text-sm text-foreground">{signal.name}</div>
+              {signal.note && (
+                <div className="text-xs text-muted-foreground">
+                  {signal.note}
+                </div>
+              )}
             </div>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              A defensible, methodology-first ranking of every engineer at Cleo
-              from the signals we already collect. This page is the artifact;
-              the methodology is the product — each cycle should move the
-              ranking toward one the CEO can defend for any engineer on it.
-            </p>
-          </div>
-          <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-            <div>Methodology v{snapshot.methodologyVersion}</div>
-            <div className="mt-1">
-              Window {formatDate(snapshot.signalWindow.start)} →{" "}
-              {formatDate(snapshot.signalWindow.end)}
-            </div>
-          </div>
-        </div>
-      </section>
+            <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+              {signal.state}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
-      <section className="rounded-xl border border-warning/40 bg-warning/5 p-6">
-        <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
-          <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">
-              Why this ranked list should not be read as final
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              A composite rank now exists for every engineer with at least two
-              present methods. The composite is the median of five methods —
-              lens A (output), lens B (SHAP impact), lens C (squad-delivery
-              context), lens D (per-PR code quality), and the
-              tenure/role-adjusted percentile. Effective signal-weight
-              decomposition, leave-one-method-out sensitivity, a
-              PR/log-impact dominance check, 80% bootstrap confidence bands
-              with statistical-tie groups, per-engineer attribution
-              drilldowns, privacy-preserving snapshot persistence (keyed on
-              snapshot date + methodology version + email hash, with no
-              display name, email, manager, or resolved GitHub login
-              written to the database), the movers view (risers /
-              fallers / cohort entrants / cohort exits with conservative
-              cause narration against the most recent comparable prior
-              snapshot), the methodology panel (signal weights,
-              anti-gaming audit for every signal, per-source freshness
-              badges, and a manager-calibration stub ready for a later
-              feedback loop), and the stability check (ambiguous-cohort
-              fraction, `withinTolerance` boolean, reviewer adversarial
-              questions surfaced on the page) are all live. The rank is an
-              evidence composite: graduating to a final adjudication
-              additionally requires two consecutive cycles of the stability
-              check within tolerance at the same methodology version.
-            </p>
-          </div>
-        </div>
-      </section>
+export function KnownLimitationsSection({
+  snapshot,
+}: {
+  snapshot: EngineeringRankingSnapshot;
+}) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <h3 className="text-sm font-semibold text-foreground">
+        Known methodology limitations
+      </h3>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Surfaced on the page so the ranking never claims more than it can
+        defend. These are what the next cycles will close.
+      </p>
+      <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-muted-foreground">
+        {snapshot.knownLimitations.map((limitation) => (
+          <li key={limitation}>{limitation}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
-      <MethodologySection methodology={snapshot.methodology} />
+export function EmptyCohortState({
+  snapshot,
+}: {
+  snapshot: EngineeringRankingSnapshot;
+}) {
+  if (snapshot.engineers.length > 0) return null;
+  return (
+    <section className="rounded-xl border border-dashed border-border/60 bg-background/40 p-8 text-center">
+      <p className="text-sm text-muted-foreground">
+        No engineers have been scored by the composite yet — every competitive
+        engineer currently has fewer than{" "}
+        {snapshot.composite.minPresentMethods} present methods.
+      </p>
+    </section>
+  );
+}
 
-      <CompositeSection
-        composite={snapshot.composite}
-        confidence={snapshot.confidence}
-        attribution={snapshot.attribution}
-        profileSlugByHash={profileSlugByHash}
-      />
-
-      <ConfidenceSection confidence={snapshot.confidence} />
-
-      <AttributionSection attribution={snapshot.attribution} />
-
-      <MoversSection movers={snapshot.movers} />
-
-      {canSeeHrReview && hrPack ? (
-        <HrReviewSection pack={hrPack} profileSlugByHash={profileSlugByHash} />
-      ) : null}
-
-      <StabilitySection stability={snapshot.stability} />
-
-      <CoverageSection snapshot={snapshot} />
-
-      <SignalAuditSection snapshot={snapshot} />
-
-      <LensesSection lenses={snapshot.lenses} />
-
-      <NormalisationSection
-        normalisation={snapshot.normalisation}
-        rampUpCount={snapshot.eligibility.coverage.rampUp}
-      />
-
-      <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
-        <h3 className="text-sm font-semibold text-foreground">
-          Signals this ranking will use
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Availability of each input signal at the time this page was rendered.
-          Unavailable signals are documented as known methodology limitations
-          and not silently synthesised.
-        </p>
-        <ul className="mt-4 space-y-2">
-          {snapshot.plannedSignals.map((signal) => (
-            <li
-              key={signal.name}
-              className="flex items-start gap-3 rounded-md border border-border/40 bg-background/60 px-3 py-2"
-            >
-              <SignalIcon state={signal.state} />
-              <div className="flex-1">
-                <div className="text-sm text-foreground">{signal.name}</div>
-                {signal.note && (
-                  <div className="text-xs text-muted-foreground">
-                    {signal.note}
-                  </div>
-                )}
-              </div>
-              <span className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-                {signal.state}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
-        <h3 className="text-sm font-semibold text-foreground">
-          Known methodology limitations
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Surfaced on the page so the ranking never claims more than it can
-          defend. These are what the next cycles will close.
-        </p>
-        <ul className="mt-4 list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-          {snapshot.knownLimitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      </section>
-
-      {snapshot.engineers.length === 0 ? (
-        <section className="rounded-xl border border-dashed border-border/60 bg-background/40 p-8 text-center">
-          <p className="text-sm text-muted-foreground">
-            No engineers have been scored by the composite yet — every
-            competitive engineer currently has fewer than{" "}
-            {snapshot.composite.minPresentMethods} present methods. Live
-            GitHub, impact-model, and Swarmia data must be populating the
-            signal rows before the composite can produce a rank. The
-            stability check is live but reports `no_prior_snapshot` until
-            a second ranking run has persisted.
-          </p>
-        </section>
-      ) : null}
+export function ReconciliationFailuresBanner({
+  attribution,
+}: {
+  attribution: AttributionBundle;
+}) {
+  const reconciliationFailures = attribution.entries.filter(
+    (e) => !e.reconciliation.matches,
+  );
+  if (reconciliationFailures.length === 0) return null;
+  return (
+    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[11px] text-destructive">
+      {reconciliationFailures.length} engineer
+      {reconciliationFailures.length === 1 ? "" : "s"} failed the reconciliation
+      check — methodology bug, not display noise. Expand the offending rows in
+      the composite table for details.
     </div>
+  );
+}
+
+export function TieGroupsPanel({
+  confidence,
+}: {
+  confidence: ConfidenceBundle;
+}) {
+  if (confidence.tieGroups.length === 0) return null;
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <h3 className="text-sm font-semibold text-foreground">
+        Statistical-tie groups
+      </h3>
+      <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+        Rank-adjacent engineers whose 80% CIs overlap. Do not narrate an
+        ordering between them — the bands say the data can&apos;t defend one.
+      </p>
+      <div className="mt-4 space-y-2">
+        {confidence.tieGroups.map((g) => (
+          <TieGroupCard key={g.groupId} group={g} />
+        ))}
+      </div>
+    </section>
   );
 }
