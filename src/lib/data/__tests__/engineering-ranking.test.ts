@@ -5753,7 +5753,7 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
       /swarmia|squad-delivery/i.test(`${b.source} ${b.label}`),
     );
     expect(deliveryBadge?.availability).toBe("unavailable");
-    expect(deliveryBadge?.note).toMatch(/does not call swarmia live/i);
+    expect(deliveryBadge?.note).toMatch(/swarmia may not be configured|live fetch failed/i);
   });
 
   it("freshness badge for impact model flips to pending_source when no training date is supplied", () => {

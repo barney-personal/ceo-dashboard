@@ -2,14 +2,11 @@
  * Server-side loader for the engineer ranking page.
  *
  * Fetches the spine inputs (Mode Headcount SSoT + `githubEmployeeMap` + the
- * committed impact model) and delegates to the pure `buildRankingSnapshot`
- * helper. Fetch failures degrade to the stub `getEngineeringRanking()`
- * snapshot so the page still renders with an explicit coverage-unavailable
- * state instead of crashing.
- *
- * Important: this loader stays inside the repo's synced-data contract.
- * It deliberately does NOT call Swarmia live; lens C only scores squad-
- * delivery context when a persisted source is wired into the snapshot build.
+ * committed impact model + live Swarmia squad delivery) and delegates to the
+ * pure `buildRankingSnapshot` helper. Fetch failures degrade to the stub
+ * `getEngineeringRanking()` snapshot (or empty maps for individual sources)
+ * so the page still renders with an explicit coverage-unavailable state
+ * instead of crashing.
  */
 
 import { db } from "@/lib/db";
@@ -40,7 +37,11 @@ import {
   getAiUsageData,
   type AiUsageUserSummary,
 } from "@/lib/data/ai-usage";
-import { normalizeTeamName, type TeamSwarmiaMetrics } from "@/lib/data/swarmia";
+import {
+  getSquadPillarMetrics,
+  normalizeTeamName,
+  type TeamSwarmiaMetrics,
+} from "@/lib/data/swarmia";
 import {
   RANKING_METHODOLOGY_VERSION,
   RANKING_MOVERS_MIN_GAP_DAYS,
@@ -172,6 +173,40 @@ async function fetchGithubActivityByLogin(windowStart: Date): Promise<
   }
 
   return byLogin;
+}
+
+/**
+ * Pull per-squad delivery metrics (cycle time, review rate, time-to-first-
+ * review, PRs in progress) from Swarmia. Lens C reads these as team-level,
+ * down-weighted context — see the `squadDeliverySignalsPresent` wiring in
+ * `buildSignalRows` / the audit layer.
+ *
+ * We use the 180-day window so the timeframe matches `RANKING_SIGNAL_WINDOW_DAYS`.
+ * Failures (token missing, API down) degrade to an empty map so the rest of
+ * the snapshot still builds — lens C simply falls back to "unavailable" in
+ * that case, the same state it had before this source was wired.
+ */
+async function fetchSquadDeliveryByName(): Promise<
+  Map<string, TeamSwarmiaMetrics>
+> {
+  try {
+    const result = await getSquadPillarMetrics("last_180_days");
+    if (result.status !== "ok" || !result.data) return new Map();
+    const entries: Array<[string, TeamSwarmiaMetrics]> = [];
+    for (const [key, metrics] of Object.entries(result.data.squads)) {
+      entries.push([key, metrics]);
+    }
+    // Pillar-level rows act as a fallback when an engineer's squad label
+    // resolves to an umbrella (e.g. "Pillar Leads") that matches the
+    // pillar-level Swarmia team rather than a squad.
+    for (const [key, metrics] of Object.entries(result.data.pillars)) {
+      if (!entries.some(([k]) => k === key)) entries.push([key, metrics]);
+    }
+    return new Map(entries);
+  } catch (err) {
+    console.warn("[engineering-ranking] squad delivery fetch failed:", err);
+    return new Map();
+  }
 }
 
 async function fetchAiUsageByEmail(): Promise<Map<string, AiUsageUserSummary>> {
@@ -439,6 +474,12 @@ function buildSignalRows({
 export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
   snapshot: EngineeringRankingSnapshot;
   signals: PerEngineerSignalRow[];
+  /**
+   * Map of email hash → profile-page slug (the email local-part). Lets the
+   * ranking UI link each row to `/dashboard/people/[slug]` without re-
+   * exposing the raw email. Empty when the preflight fetch fails.
+   */
+  profileSlugByHash: Record<string, string>;
 }> {
   try {
     const now = new Date();
@@ -451,6 +492,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       squadsRegistry,
       githubActivityByLogin,
       aiUsageByEmail,
+      squadDeliveryByName,
       qualityAnalyses,
       priorSnapshotRows,
     ] = await Promise.all([
@@ -459,6 +501,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       fetchSquadsRegistry(),
       fetchGithubActivityByLogin(windowStart),
       fetchAiUsageByEmail(),
+      fetchSquadDeliveryByName(),
       fetchPrReviewAnalyses(windowStart).catch((err) => {
         console.warn(
           "[engineering-ranking] pr-review analyses fetch failed, code-quality lens will render as unavailable:",
@@ -478,10 +521,6 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
         return [] as RankingSnapshotRow[];
       }),
     ]);
-    // The ranking path intentionally does not call Swarmia live. Until a
-    // persisted squad-delivery source exists, lens C stays unavailable and
-    // the snapshot surfaces that explicitly via audit/planned-signals/freshness.
-    const squadDeliveryByName = new Map<string, TeamSwarmiaMetrics>();
     const signals = buildSignalRows({
       headcountRows,
       githubMap,
@@ -491,6 +530,25 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       squadDeliveryByName,
       now,
     });
+
+    // Build the hash → slug map from the same roster the snapshot is built
+    // over. The slug is the email local-part (same convention used by
+    // `resolveEmployeeBySlug` on the person-profile route), which is less
+    // sensitive than exposing the full email and matches data already
+    // surfaced by display name + GitHub login on the ranking page.
+    const rosterForSlugs = buildEligibleRoster({
+      headcountRows,
+      githubMap,
+      impactModel: getImpactModel(),
+      squads: squadsRegistry,
+      now,
+      windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+    });
+    const profileSlugByHash: Record<string, string> = {};
+    for (const entry of rosterForSlugs.entries) {
+      const local = entry.email.split("@")[0];
+      if (local) profileSlugByHash[entry.emailHash] = local.toLowerCase();
+    }
 
     // The AI usage latest-month marker is the same for every user in the map
     // (the rollup is per-month); picking the first entry with a non-null
@@ -517,13 +575,17 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       aiUsageLatestMonth,
     });
 
-    return { snapshot, signals };
+    return { snapshot, signals, profileSlugByHash };
   } catch (err) {
     console.warn(
       "[engineering-ranking] preflight fetch failed, serving stub:",
       err,
     );
-    return { snapshot: await getEngineeringRanking(), signals: [] };
+    return {
+      snapshot: await getEngineeringRanking(),
+      signals: [],
+      profileSlugByHash: {},
+    };
   }
 }
 
@@ -537,6 +599,22 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
 export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankingSnapshot> {
   const { snapshot } = await getEngineeringRankingSnapshotWithSignals();
   return snapshot;
+}
+
+/**
+ * Convenience wrapper returning the snapshot plus the email hash → profile
+ * slug lookup the ranking page needs to link composite-table rows into each
+ * engineer's `/dashboard/people/[slug]` profile. Shares a single preflight
+ * fetch with `getEngineeringRankingSnapshotWithSignals` so the page only pays
+ * for one round of fetches.
+ */
+export async function getEngineeringRankingPageData(): Promise<{
+  snapshot: EngineeringRankingSnapshot;
+  profileSlugByHash: Record<string, string>;
+}> {
+  const { snapshot, profileSlugByHash } =
+    await getEngineeringRankingSnapshotWithSignals();
+  return { snapshot, profileSlugByHash };
 }
 
 function numericString(value: number | null): string | null {
