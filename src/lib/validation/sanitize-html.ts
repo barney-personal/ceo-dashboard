@@ -47,22 +47,26 @@ const DATA_SCHEME = /data\s*:[^\s"')<>]+/gi;
 const BLOCKED_SCHEME = "blocked:";
 
 // ---------------------------------------------------------------------------
-// URL-scheme obfuscation bypass defenses (M15).
+// URL-scheme obfuscation bypass defenses (M15 + M16).
 //
 // A literal regex like `/javascript\s*:/` does not catch browser-normalized
 // obfuscation. The WHATWG URL parser strips ASCII tab/LF/CR from the scheme,
-// and the HTML parser decodes numeric character references inside attribute
-// values and in markdown link targets. So `java\nscript:...`, `java&#x73;cript:...`,
-// `jav&#x09;ascript:...`, and `data&#58;text/html,...` all render as executable
-// `javascript:` / unsafe `data:` URLs even though the literal text does not
-// contain the dangerous scheme word.
+// and the HTML parser decodes both numeric character references (`&#x73;`,
+// `&#115;`) and a small set of named character references (`&colon;`, `&Tab;`,
+// `&NewLine;`) inside attribute values and markdown link targets. So
+// `java\nscript:...`, `java&#x73;cript:...`, `jav&#x09;ascript:...`,
+// `data&#58;text/html,...`, and `javascript&colon;alert(1)` all render as
+// executable `javascript:` / unsafe `data:` URLs even though the literal text
+// does not contain the dangerous scheme word.
 //
-// We handle this by scanning URL-accepting contexts (HTML attribute values
-// and markdown link targets), normalizing each URL value the way a browser
-// would (decode numeric char refs + strip 0x00-0x1F), and if the normalized
-// form starts with a dangerous scheme, replacing the URL content wholesale
-// with `blocked:`. Benign URLs (including ones with char refs in the path)
-// are left untouched — we only rewrite when normalization would change the
+// We handle this by scanning URL-accepting contexts — HTML attribute values
+// (double-quoted, single-quoted, and unquoted) and markdown link targets —
+// normalizing each URL value the way a browser would (decode numeric char
+// refs + decode a narrow set of scheme-relevant named refs + strip 0x00-0x1F),
+// and if the normalized form starts with a dangerous scheme, replacing the
+// URL content wholesale with `blocked:`. Benign URLs (including ones with
+// char refs in the path or benign named entities in surrounding text) are
+// left untouched — we only rewrite when normalization would change the
 // string AND the normalized form is dangerous.
 // ---------------------------------------------------------------------------
 
@@ -71,6 +75,23 @@ const NUMERIC_CHAR_REF = /&#(x[0-9a-f]+|[0-9]+);/gi;
 // we strip the full C0 range because other controls inside a scheme are
 // never valid and some renderers tolerate them.
 const URL_CONTROL_CHARS = /[\x00-\x1f]/g;
+
+// Named HTML character references that browsers decode inside URL attribute
+// values and markdown link targets and that map to scheme-relevant characters
+// (colon, tab, newline). HTML5 defines these case-sensitively, but we accept
+// common case variants because this is a sanitizer, not a renderer —
+// over-decoding is safe, under-decoding is not. Keep this set narrow: only
+// entities whose decoded form could bypass scheme detection. Other named
+// entities are left intact so benign text outside URL contexts is unchanged.
+const NAMED_URL_CHAR_REFS: Record<string, string> = {
+  "&colon;": ":",
+  "&Colon;": ":",
+  "&Tab;": "\t",
+  "&tab;": "\t",
+  "&NewLine;": "\n",
+  "&newline;": "\n",
+};
+const NAMED_CHAR_REF = /&[A-Za-z]+;/g;
 
 function decodeNumericCharRefs(value: string): string {
   return value.replace(NUMERIC_CHAR_REF, (_, codeStr: string) => {
@@ -85,8 +106,15 @@ function decodeNumericCharRefs(value: string): string {
   });
 }
 
+function decodeNamedUrlCharRefs(value: string): string {
+  return value.replace(NAMED_CHAR_REF, (match) => NAMED_URL_CHAR_REFS[match] ?? match);
+}
+
 function normalizeUrl(url: string): string {
-  return decodeNumericCharRefs(url).replace(URL_CONTROL_CHARS, "");
+  return decodeNamedUrlCharRefs(decodeNumericCharRefs(url)).replace(
+    URL_CONTROL_CHARS,
+    "",
+  );
 }
 
 function isDangerousAfterNormalization(normalized: string): boolean {
@@ -121,6 +149,13 @@ const URL_ATTR_SINGLE_QUOTED = new RegExp(
   `\\b(${URL_ATTR_NAMES})(\\s*=\\s*)'([^']*)'`,
   "gi",
 );
+// Unquoted URL attribute values: href=value — first char must not be a quote
+// (so we don't partially match a quoted value) and the run ends at whitespace
+// or `>`. Run after the quoted passes so already-replaced values don't match.
+const URL_ATTR_UNQUOTED = new RegExp(
+  `\\b(${URL_ATTR_NAMES})(\\s*=\\s*)([^\\s"'>][^\\s>]*)`,
+  "gi",
+);
 // Markdown link target: ](url) or ](url "title"). We only capture the URL
 // portion; title handling is unchanged.
 const MARKDOWN_LINK_TARGET = /(\]\(\s*)([^)\s]+)/g;
@@ -138,6 +173,13 @@ function neutralizeObfuscatedUrlsInAttributes(input: string): string {
     (match, name: string, eq: string, url: string) => {
       const replacement = maybeNeutralizeObfuscatedUrl(url);
       return replacement == null ? match : `${name}${eq}'${replacement}'`;
+    },
+  );
+  out = out.replace(
+    URL_ATTR_UNQUOTED,
+    (match, name: string, eq: string, url: string) => {
+      const replacement = maybeNeutralizeObfuscatedUrl(url);
+      return replacement == null ? match : `${name}${eq}${replacement}`;
     },
   );
   return out;

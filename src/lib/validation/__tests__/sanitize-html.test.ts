@@ -279,6 +279,134 @@ describe("sanitizeSummaryHtml", () => {
     });
   });
 
+  describe("URL-scheme obfuscation — named entities and unquoted attrs (M16)", () => {
+    describe("named HTML character references in URL contexts", () => {
+      it("neutralizes &colon; obfuscated javascript scheme in href", () => {
+        const input = '<a href="javascript&colon;alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+        expect(result).not.toContain("javascript&colon;");
+      });
+
+      it("neutralizes &Tab; obfuscated javascript scheme in href", () => {
+        const input = '<a href="java&Tab;script:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes lowercase &tab; variant", () => {
+        const input = '<a href="java&tab;script:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+
+      it("neutralizes &NewLine; obfuscated scheme", () => {
+        const input = '<a href="java&NewLine;script:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+
+      it("neutralizes &colon; in single-quoted href", () => {
+        const input = "<a href='javascript&colon;alert(1)'>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes &colon; in markdown link target", () => {
+        const input = "[x](javascript&colon;alert(1))";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+        expect(result).toContain("[x](");
+      });
+
+      it("neutralizes unsafe data:text/html with &colon;", () => {
+        const input = '<a href="data&colon;text/html,<b>x</b>">y</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toMatch(/data&colon;/);
+        expect(result).not.toContain("data:text/html");
+      });
+    });
+
+    describe("unquoted URL attribute values", () => {
+      it("neutralizes unquoted href with numeric char ref", () => {
+        const input = "<a href=java&#x73;cript:alert(1)>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes unquoted href with named &colon; entity", () => {
+        const input = "<a href=javascript&colon;alert(1)>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+      });
+
+      it("leaves benign unquoted http href untouched", () => {
+        const input = "<a href=https://example.com>docs</a>";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("still handles literal javascript: in unquoted href via scheme pass", () => {
+        // Literal (non-obfuscated) schemes fall through to the existing
+        // JAVASCRIPT_SCHEME pass, which preserves the tail for diagnostic value.
+        const input = "<a href=javascript:alert(1)>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:alert(1)");
+        expect(result).not.toContain("javascript:");
+      });
+    });
+
+    describe("benign named entities outside URL contexts are preserved", () => {
+      it("leaves &colon; in plain body text untouched", () => {
+        const input = "Agenda&colon; review KPIs and ship.";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves &Tab; in plain body text untouched", () => {
+        const input = "col1&Tab;col2&Tab;col3";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves benign named entity (&amp;) in URL query untouched", () => {
+        const input = '<a href="https://example.com?a=1&amp;b=2">x</a>';
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves unrecognized named entity (&nbsp;) untouched", () => {
+        const input = "Hello&nbsp;world";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves benign http link with &colon; in query string untouched", () => {
+        // After normalization this is https://example.com?note=mailto:x
+        // which starts with https — not dangerous, so no rewrite.
+        const input = '<a href="https://example.com?note=mailto&colon;x">y</a>';
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+    });
+
+    describe("idempotence for M16 payloads", () => {
+      it("re-sanitizing a neutralized &colon; payload is a no-op", () => {
+        const dirty = '<a href="javascript&colon;alert(1)">x</a>';
+        const once = sanitizeSummaryHtml(dirty);
+        const twice = sanitizeSummaryHtml(once);
+        expect(twice).toBe(once);
+      });
+
+      it("re-sanitizing a neutralized unquoted payload is a no-op", () => {
+        const dirty = "<a href=java&#x73;cript:alert(1)>x</a>";
+        const once = sanitizeSummaryHtml(dirty);
+        const twice = sanitizeSummaryHtml(once);
+        expect(twice).toBe(once);
+      });
+    });
+  });
+
   describe("idempotence", () => {
     it("sanitizing a sanitized malicious payload is a no-op", () => {
       const dirty =

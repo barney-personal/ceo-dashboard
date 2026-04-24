@@ -395,4 +395,23 @@ describe("syncAllGranolaNotes summary sanitization", () => {
     // The on-conflict update path must apply the same sanitization as insert.
     expect(onConflict).toBe(inserted);
   });
+
+  // M16: Named-entity and unquoted-attribute bypasses must not reach the DB.
+  it("neutralizes named-entity and unquoted-attribute obfuscations on both insert and conflict update", async () => {
+    const malicious =
+      "# Notes\n" +
+      '<a href="javascript&colon;alert(1)">quoted</a>\n' +
+      "<a href=java&#x73;cript:alert(2)>unquoted</a>\n" +
+      "[md](javascript&colon;alert(3))";
+    const { inserted, onConflict } = await runWithSummary(malicious, null);
+
+    expect(inserted).not.toMatch(/javascript\s*:/i);
+    expect(inserted).not.toContain("javascript&colon;");
+    expect(inserted).not.toContain("alert(1)");
+    expect(inserted).not.toContain("alert(2)");
+    expect(inserted).not.toContain("alert(3)");
+    expect(inserted).toContain("blocked:");
+    expect(inserted).toContain("# Notes");
+    expect(onConflict).toBe(inserted);
+  });
 });
