@@ -48,13 +48,17 @@ fi
 # 5. Create .env from example if it doesn't exist
 if [ ! -f "$REPO_ROOT/.env" ]; then
   if [ -f "$REPO_ROOT/.env.example" ]; then
-    printf "Create .env from .env.example? [y/N] "
-    read -r answer
-    if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
-      cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
-      echo "  Created .env -- edit it to add your secrets."
+    if [ -t 0 ]; then
+      printf "Create .env from .env.example? [y/N] "
+      read -r answer
+      if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+        cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
+        echo "  Created .env -- edit it to add your secrets."
+      else
+        echo "  Skipped."
+      fi
     else
-      echo "  Skipped."
+      echo "  Skipping .env creation (non-interactive). Use Doppler or copy .env.example manually."
     fi
   fi
 else
