@@ -4,6 +4,10 @@ import { db } from "@/lib/db";
 import { userIntegrations } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { syncGranolaNotes } from "@/lib/sync/meetings";
+import {
+  UserIntegrationTokenKeyError,
+  encryptUserIntegrationToken,
+} from "@/lib/security/user-integration-tokens.server";
 
 async function getAuthenticatedUserId(): Promise<string | null> {
   const { userId } = await auth();
@@ -60,7 +64,8 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  // Validate the key by making a test API call
+  // Validate the key by making a test API call with the raw token,
+  // before anything gets encrypted/persisted.
   try {
     const res = await fetch("https://public-api.granola.ai/v1/notes?limit=1", {
       headers: { Authorization: `Bearer ${body.apiKey}` },
@@ -78,23 +83,38 @@ export async function PUT(request: NextRequest) {
     );
   }
 
+  let encryptedApiKey: string;
+  try {
+    encryptedApiKey = encryptUserIntegrationToken(body.apiKey);
+  } catch (err) {
+    if (err instanceof UserIntegrationTokenKeyError) {
+      console.error("[integrations] encryption key misconfigured:", err.message);
+      return NextResponse.json(
+        { error: "Integration token encryption is not configured. Contact an admin." },
+        { status: 500 }
+      );
+    }
+    throw err;
+  }
+
   await db
     .insert(userIntegrations)
     .values({
       clerkUserId: userId,
       provider: body.provider,
-      apiKey: body.apiKey,
+      apiKey: encryptedApiKey,
     })
     .onConflictDoUpdate({
       target: [userIntegrations.clerkUserId, userIntegrations.provider],
       set: {
-        apiKey: body.apiKey,
+        apiKey: encryptedApiKey,
         updatedAt: new Date(),
       },
     });
 
   // Fire off a background sync — don't await, so the response returns immediately.
   // The sync can take minutes for 90 days of notes and would timeout on production.
+  // Pass the raw token (not the envelope) so the sync can authenticate.
   const sinceDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
   syncGranolaNotes(sinceDate, { token: body.apiKey, syncedByUserId: userId }).catch(() => {
     // Sync failure shouldn't surface — cron will retry

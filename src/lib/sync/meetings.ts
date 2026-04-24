@@ -15,6 +15,12 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
+import {
+  UserIntegrationTokenDecryptError,
+  UserIntegrationTokenKeyError,
+  decryptUserIntegrationToken,
+  isEncryptedToken,
+} from "@/lib/security/user-integration-tokens.server";
 
 type MeetingsSyncResult = {
   status: "success" | "partial" | "error" | "cancelled";
@@ -217,7 +223,7 @@ async function syncAllGranolaNotes(
     }
   }
 
-  // Personal keys from userIntegrations
+  // Personal keys from userIntegrations (stored as encrypted envelopes).
   const userKeys = await db
     .select({ clerkUserId: userIntegrations.clerkUserId, apiKey: userIntegrations.apiKey })
     .from(userIntegrations)
@@ -233,8 +239,29 @@ async function syncAllGranolaNotes(
       `sync_granola:user_${clerkUserId.slice(-6)}`,
       `Syncing Granola notes (personal)`
     );
+
+    let token: string;
     try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey, syncedByUserId: clerkUserId });
+      token = isEncryptedToken(apiKey)
+        ? decryptUserIntegrationToken(apiKey)
+        : apiKey;
+    } catch (error) {
+      // Per-user decrypt failure must not crash the whole meetings sync.
+      // Classify, record, and skip this user so other users still sync.
+      const classifier =
+        error instanceof UserIntegrationTokenKeyError
+          ? "encryption key misconfigured"
+          : error instanceof UserIntegrationTokenDecryptError
+            ? "token envelope failed decryption"
+            : "unknown decrypt error";
+      const message = `Personal Granola sync skipped for user ${clerkUserId.slice(-6)}: ${classifier}`;
+      allErrors.push(message);
+      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
+      continue;
+    }
+
+    try {
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token, syncedByUserId: clerkUserId });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {

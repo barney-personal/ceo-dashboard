@@ -280,6 +280,7 @@ export default async function DataStatusPage() {
     },
     { key: "HIBOB_API_TOKEN", label: "HiBob API Token", required: false },
     { key: "CRON_SECRET", label: "Cron Secret", required: false },
+    { key: "USER_INTEGRATIONS_ENCRYPTION_KEY", label: "User Integrations Encryption Key", required: true },
   ];
 
   const envStatus = envChecks.map((e) => ({ ...e, present: !!process.env[e.key] }));
