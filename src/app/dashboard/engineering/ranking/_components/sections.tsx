@@ -1129,7 +1129,7 @@ export function CompositeDiagnosticsSection({
   );
 }
 
-export function TieGroupCard({ group }: { group: ConfidenceTieGroup }) {
+function TieGroupCard({ group }: { group: ConfidenceTieGroup }) {
   return (
     <div className="rounded-md border border-warning/40 bg-warning/5 p-3">
       <div className="flex items-baseline justify-between text-[11px] uppercase tracking-[0.12em] text-warning">
