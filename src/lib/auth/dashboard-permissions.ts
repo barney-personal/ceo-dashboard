@@ -84,7 +84,8 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
   {
     id: "dashboard.overview",
     label: "Overview",
-    description: "Dashboard landing page and hero metrics.",
+    description:
+      "Dashboard landing page and hero metrics. Raising this can lock lower roles out of the dashboard root.",
     href: "/dashboard",
     groupLabel: "Overview",
     defaultRole: "everyone",
@@ -373,7 +374,8 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
   {
     id: "admin.squads",
     label: "Squads",
-    description: "Squad registry management.",
+    description:
+      "Squad registry management. Lowering this also allows those roles to create and edit squad records.",
     href: "/dashboard/admin/squads",
     groupLabel: "Admin",
     defaultRole: "ceo",
@@ -401,7 +403,8 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
   {
     id: "admin.modeExplorer",
     label: "Mode Explorer",
-    description: "Ad-hoc Mode query previews and diagnostics.",
+    description:
+      "Ad-hoc Mode query previews and diagnostics. Lowering this also allows those roles to run Mode admin queries.",
     href: "/dashboard/admin/mode-explorer",
     groupLabel: "Admin",
     defaultRole: "ceo",

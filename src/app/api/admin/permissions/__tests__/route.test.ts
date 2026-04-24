@@ -89,6 +89,21 @@ describe("/api/admin/permissions", () => {
     });
   });
 
+  it("returns 400 for malformed PATCH json", async () => {
+    const response = await PATCH(
+      new NextRequest("http://localhost/api/admin/permissions", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Invalid JSON body",
+    });
+  });
+
   it("returns 404 for unknown permission ids", async () => {
     const response = await PATCH(
       request("PATCH", {
@@ -179,5 +194,20 @@ describe("/api/admin/permissions", () => {
       error: "This permission is locked and cannot be reset",
     });
     expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for malformed DELETE json", async () => {
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/admin/permissions", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Invalid JSON body",
+    });
   });
 });

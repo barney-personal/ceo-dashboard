@@ -23,6 +23,34 @@ function revalidateDashboardPermissions() {
   revalidatePath("/dashboard/admin/permissions");
 }
 
+async function parseJsonBody<T>(
+  request: NextRequest,
+): Promise<
+  | {
+      ok: true;
+      body: T;
+    }
+  | {
+      ok: false;
+      response: NextResponse;
+    }
+> {
+  try {
+    return {
+      ok: true,
+      body: (await request.json()) as T,
+    };
+  } catch {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Invalid JSON body" },
+        { status: 400 },
+      ),
+    };
+  }
+}
+
 export async function GET() {
   try {
     const auth = await requireRole("ceo");
@@ -50,10 +78,16 @@ export async function PATCH(request: NextRequest) {
       return authError;
     }
 
-    const body = (await request.json()) as {
+    const parsedBody = await parseJsonBody<{
       permissionId?: string;
       requiredRole?: string;
-    };
+    }>(request);
+
+    if (!parsedBody.ok) {
+      return parsedBody.response;
+    }
+
+    const body = parsedBody.body;
 
     if (!body.permissionId || !body.requiredRole) {
       return NextResponse.json(
@@ -129,9 +163,15 @@ export async function DELETE(request: NextRequest) {
       return authError;
     }
 
-    const body = (await request.json()) as {
+    const parsedBody = await parseJsonBody<{
       permissionId?: string;
-    };
+    }>(request);
+
+    if (!parsedBody.ok) {
+      return parsedBody.response;
+    }
+
+    const body = parsedBody.body;
 
     if (!body.permissionId) {
       return NextResponse.json(

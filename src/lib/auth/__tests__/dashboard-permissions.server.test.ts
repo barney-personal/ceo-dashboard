@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { selectMock, fromMock } = vi.hoisted(() => ({
+const { selectMock, fromMock, getCurrentUserRoleMock, redirectMock } = vi.hoisted(
+  () => ({
   selectMock: vi.fn(),
   fromMock: vi.fn(),
-}));
+    getCurrentUserRoleMock: vi.fn(),
+    redirectMock: vi.fn(),
+  }),
+);
 
 vi.mock("@/lib/db", () => ({
   db: {
@@ -11,11 +15,21 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+vi.mock("next/navigation", () => ({
+  redirect: redirectMock,
+}));
+
+vi.mock("../roles.server", () => ({
+  getCurrentUserRole: getCurrentUserRoleMock,
+}));
+
 describe("dashboard-permissions.server", () => {
   beforeEach(() => {
     vi.resetModules();
     selectMock.mockReset();
     fromMock.mockReset();
+    getCurrentUserRoleMock.mockReset();
+    redirectMock.mockReset();
     selectMock.mockReturnValue({ from: fromMock });
   });
 
@@ -51,5 +65,18 @@ describe("dashboard-permissions.server", () => {
     await expect(getDashboardPermissionSummaries()).rejects.toMatchObject({
       code: "CONNECT_TIMEOUT",
     });
+  });
+
+  it("redirects away from routes when the current user lacks access", async () => {
+    fromMock.mockResolvedValueOnce([]);
+    getCurrentUserRoleMock.mockResolvedValueOnce("everyone");
+
+    const { requireDashboardPermission } = await import(
+      "../dashboard-permissions.server"
+    );
+
+    await requireDashboardPermission("admin.users");
+
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard");
   });
 });
