@@ -2845,3 +2845,152 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(joined).toMatch(/stability/);
   });
 });
+
+describe("M13 methodology version and readiness provenance", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  it("RANKING_METHODOLOGY_VERSION is no longer the scaffold-era version", () => {
+    // Once the composite populates `snapshot.engineers`, the methodology
+    // version must distinguish composite-era snapshots from scaffold-era
+    // ones so M16 persistence and M17 movers do not compare incompatible
+    // rankings under the same label.
+    expect(RANKING_METHODOLOGY_VERSION).not.toBe("0.1.0-scaffold");
+  });
+
+  it("methodology version names the composite stage", () => {
+    // The version string is rendered verbatim in the page header and
+    // persisted on every future snapshot. It must tell a reader — and a
+    // future snapshot-reader — what methodology was actually running.
+    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("composite");
+  });
+
+  it("snapshot stamps the current methodology version on every snapshot", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    expect(snapshot.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+    expect(snapshot.methodologyVersion).not.toBe("0.1.0-scaffold");
+  });
+
+  it("composite-era snapshot populates ranked engineers and keeps a composite version", () => {
+    // Build a cohort large enough for `buildComposite()` to assign ranks,
+    // then prove that (a) composite is present, (b) `snapshot.engineers`
+    // is non-empty, and (c) the methodology version is not the scaffold
+    // label — so future persisted snapshots never mislabel composite-era
+    // rankings as scaffold-era outputs.
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const headcountRows = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: e.squad,
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Core",
+      job_title: "Senior Backend Engineer",
+      manager: e.manager,
+      line_manager_email: `${e.manager?.toLowerCase()}@meetcleo.com`,
+      start_date: "2023-01-01",
+      termination_date: null,
+    }));
+    const githubMap = entries.map((e) => ({
+      githubLogin: e.githubLogin!,
+      employeeEmail: e.email,
+      isBot: false,
+    }));
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel: {
+        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+      },
+      signals,
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+
+    expect(snapshot.composite).toBeDefined();
+    expect(snapshot.methodologyVersion).not.toBe("0.1.0-scaffold");
+    expect(snapshot.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+    expect(snapshot.engineers.length).toBeGreaterThan(0);
+    for (const engineer of snapshot.engineers) {
+      expect(engineer.rank).not.toBeNull();
+      expect(engineer.compositeScore).not.toBeNull();
+    }
+  });
+
+  it("known-limitations still describe composite as implemented but not final", () => {
+    // Regression guard: the version bump must not accidentally demote the
+    // page's honesty about what is and isn't finished. Composite is live,
+    // confidence / attribution / snapshots / movers / stability are not.
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    expect(joined).not.toMatch(
+      /(final )?composite score[^.]*(still pending|not yet|yet to|pending)/,
+    );
+    expect(joined).toMatch(/confidence bands/);
+    expect(joined).toMatch(/attribution/);
+    expect(joined).toMatch(/snapshots/);
+    expect(joined).toMatch(/movers/);
+    expect(joined).toMatch(/stability/);
+  });
+
+  it("stub getEngineeringRanking() also stamps the composite-era version", async () => {
+    const snapshot = await getEngineeringRanking();
+    expect(snapshot.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+    expect(snapshot.methodologyVersion).not.toBe("0.1.0-scaffold");
+  });
+});

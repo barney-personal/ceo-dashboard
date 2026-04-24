@@ -9,13 +9,30 @@
  * tests can exercise the ranking math against fixtures without booting the
  * database.
  *
- * Downstream callers must treat a ranking list as evidence, not as a final
- * answer, until `EngineeringRankingSnapshot.status === "ready"`.
+ * Downstream callers must treat the current composite as an evidence rank,
+ * not a final adjudication: confidence bands, per-engineer attribution,
+ * ranking snapshots, movers, and stability checks are still pending until
+ * `EngineeringRankingSnapshot.status === "ready"`.
  */
 
 import { createHash } from "node:crypto";
 
-export const RANKING_METHODOLOGY_VERSION = "0.1.0-scaffold" as const;
+/**
+ * Methodology version stamped onto every snapshot. Bump this whenever the
+ * ranking math changes in a way that makes new snapshots incomparable with
+ * older ones — the M16 snapshot table and M17 movers view both use this
+ * field to refuse cross-methodology comparisons.
+ *
+ * Version history:
+ * - `0.1.0-scaffold` — M1-M6 scaffold and eligibility preflight only; no
+ *   engineers ever materialised into `snapshot.engineers`.
+ * - `0.5.0-composite` — M12 composite is live. `buildRankingSnapshot()`
+ *   populates ranked engineers as the median of four methods (A output,
+ *   B SHAP impact, C squad delivery, tenure/role-adjusted). Confidence,
+ *   attribution, snapshots, movers, anti-gaming, and stability are still
+ *   pending, so the snapshot `status` stays `methodology_pending`.
+ */
+export const RANKING_METHODOLOGY_VERSION = "0.5.0-composite" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -68,9 +85,12 @@ export type Discipline =
 export const RANKING_RAMP_UP_DAYS = 90 as const;
 
 /**
- * Per-engineer ranking entry. Populated by later milestones; today the
- * loader emits an empty array. We define the shape here so downstream tests
- * and UI can compile against the contract while M5+ fills it in.
+ * Per-engineer ranking entry. Populated by `buildRankingSnapshot()` from the
+ * M12 composite for every competitive engineer with at least
+ * `RANKING_COMPOSITE_MIN_METHODS` present scoring methods, sorted ascending
+ * by composite rank. Engineers below that threshold remain visible in
+ * `eligibility.entries` and `composite.entries` but are deliberately absent
+ * from this array so a reader never confuses "in the roster" with "ranked".
  */
 export interface EngineerRankingEntry {
   emailHash: string;
@@ -2697,7 +2717,11 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
  * Build a snapshot from already-fetched inputs. The server-side loader does
  * the fetching and calls this; tests call it with fixtures.
  *
- * Status stays `methodology_pending` because scoring lenses land in M5+.
+ * Status stays `methodology_pending` even though the composite now populates
+ * `snapshot.engineers` — confidence bands, per-engineer attribution,
+ * persisted snapshots, movers, anti-gaming audit, and stability checks are
+ * still pending post-composite milestones and must land before the
+ * methodology is defensible enough to advertise as `ready`.
  */
 export function buildRankingSnapshot(
   inputs: EligibilityInputs,
