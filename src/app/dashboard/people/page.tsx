@@ -27,8 +27,11 @@ import {
   getMonthlyJoinersAndDepartures,
   getMonthlyMovementPeople,
 } from "@/lib/data/people";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 
 export default async function PeopleOrgPage() {
+  await requireDashboardPermission("dashboard.people");
+
   const [employeesResult, deptDataResult, latestSyncRunResult] =
     await Promise.all([
       safeLoad(() => getActiveEmployees(), {

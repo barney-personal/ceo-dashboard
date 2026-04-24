@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { TalentPageClient } from "@/components/dashboard/talent-page-client";
 import { getTalentData } from "@/lib/data/talent";
@@ -11,10 +9,7 @@ import {
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function TalentPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.people.talent");
 
   const [data, latestSyncRun] = await Promise.all([
     getTalentData(),

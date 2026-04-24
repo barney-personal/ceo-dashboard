@@ -18,6 +18,7 @@ import {
 import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 
 function formatTenure(months: number): string {
   const y = Math.floor(months / 12);
@@ -34,6 +35,8 @@ export default async function EngineerProfilePage({
   params: Promise<{ login: string }>;
   searchParams: Promise<{ period?: string }>;
 }) {
+  await requireDashboardPermission("dashboard.engineering");
+
   const { login } = await params;
   const sp = await searchParams;
 

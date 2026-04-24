@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
 import {
   buildTeamView,
@@ -24,10 +23,7 @@ export default async function ImpactModelPage({
 }: {
   searchParams: Promise<{ manager?: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "manager")) {
-    redirect("/dashboard/engineering");
-  }
+  const role = await requireDashboardPermission("engineering.impactModel");
   const canPickAnyManager = hasAccess(role, "leadership");
   const params = await searchParams;
 

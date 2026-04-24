@@ -1,8 +1,6 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import { clerkClient } from "@clerk/nextjs/server";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionDivider } from "@/components/dashboard/section-divider";
 import { ColumnChart } from "@/components/charts/column-chart";
@@ -24,8 +22,7 @@ import {
 import { Heart } from "lucide-react";
 
 export default async function EnpsAdminPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) redirect("/dashboard");
+  await requireDashboardPermission("dashboard.admin.enps");
 
   const month = currentMonth();
 

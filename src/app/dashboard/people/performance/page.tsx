@@ -1,8 +1,6 @@
-import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { PerformanceDrilldown } from "@/components/dashboard/performance-drilldown";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import {
   getPerformanceData,
   groupPerformanceByPillar,
@@ -11,10 +9,7 @@ import {
 import { getModeReportLink } from "@/lib/integrations/mode-config";
 
 export default async function PeoplePerformancePage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.people.performance");
 
   const { people, reviewCycles } = await getPerformanceData();
   const pillarGroups = groupPerformanceByPillar(people);

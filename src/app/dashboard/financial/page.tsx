@@ -1,7 +1,5 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
@@ -24,10 +22,7 @@ export default async function FinancialPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "leadership")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.financial");
 
   const { period } = await searchParams;
   const seasonalityCharts = getChartEmbeds("financial", "seasonality");

@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import {
   ArrowUpRight,
   ExternalLink,
@@ -8,8 +7,7 @@ import {
   Presentation,
   Target,
 } from "lucide-react";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 
 type StrategyLink = {
@@ -77,10 +75,7 @@ const STRATEGY_GROUPS: StrategyGroup[] = [
 ];
 
 export default async function StrategyPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "everyone")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("dashboard.strategy");
 
   return (
     <div className="mx-auto min-w-0 max-w-4xl space-y-8">

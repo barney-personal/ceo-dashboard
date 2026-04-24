@@ -1,17 +1,11 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SquadAdmin } from "@/components/dashboard/squad-admin";
 import { db } from "@/lib/db";
 import { squads } from "@/lib/db/schema";
 
 export default async function SquadsAdminPage() {
-  const role = await getCurrentUserRole();
-
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard");
-  }
+  await requireDashboardPermission("admin.squads");
 
   const allSquads = await db
     .select()

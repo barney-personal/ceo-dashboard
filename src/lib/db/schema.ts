@@ -458,6 +458,20 @@ export const pageViews = pgTable(
   ]
 );
 
+export const dashboardPermissionOverrides = pgTable(
+  "dashboard_permission_overrides",
+  {
+    id: serial("id").primaryKey(),
+    permissionId: text("permission_id").notNull().unique(),
+    requiredRole: text("required_role").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("dashboard_permission_overrides_role_idx").on(table.requiredRole),
+  ]
+);
+
 // ---------------------------------------------------------------------------
 // Production probes
 // ---------------------------------------------------------------------------
