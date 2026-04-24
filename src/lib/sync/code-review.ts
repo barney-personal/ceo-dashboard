@@ -56,6 +56,21 @@ export interface AnalyseRunResult {
   durationMs: number;
 }
 
+export interface CodeReviewBackfillStatus {
+  windowDays: number;
+  rubricVersion: string;
+  candidatesConsidered: number;
+  eligibleTotal: number;
+  analysedCount: number;
+  remainingCount: number;
+  progressPct: number;
+  skippedBotCount: number;
+  skippedExcludedCount: number;
+  latestAnalysedAt: Date | null;
+  oldestRemainingMergedAt: Date | null;
+  newestRemainingMergedAt: Date | null;
+}
+
 export interface AnalyseRunOptions {
   /** Override the 90d default window (for cron / backfills / tests). */
   windowDays?: number;
@@ -227,6 +242,127 @@ export async function runCodeReviewAnalysis(
     failed,
     skipped,
     durationMs: Date.now() - start,
+  };
+}
+
+export async function getCodeReviewBackfillStatus(
+  windowDays = CODE_REVIEW_WINDOW_DAYS,
+): Promise<CodeReviewBackfillStatus> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const excluded = getExcludedRepos();
+
+  const [candidates, botRows, analyses] = await Promise.all([
+    db
+      .select({
+        repo: githubPrs.repo,
+        prNumber: githubPrs.prNumber,
+        authorLogin: githubPrs.authorLogin,
+        mergedAt: githubPrs.mergedAt,
+      })
+      .from(githubPrs)
+      .where(gte(githubPrs.mergedAt, since))
+      .orderBy(desc(githubPrs.mergedAt)),
+    db
+      .select({ githubLogin: githubEmployeeMap.githubLogin })
+      .from(githubEmployeeMap)
+      .where(eq(githubEmployeeMap.isBot, true)),
+    db
+      .select({
+        repo: prReviewAnalyses.repo,
+        prNumber: prReviewAnalyses.prNumber,
+        analysedAt: prReviewAnalyses.analysedAt,
+      })
+      .from(prReviewAnalyses)
+      .where(
+        and(
+          eq(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
+          gte(prReviewAnalyses.mergedAt, since),
+        ),
+      ),
+  ]);
+
+  const botLogins = new Set(
+    botRows.map((row) => row.githubLogin.toLowerCase()),
+  );
+  const eligibleByKey = new Map<
+    string,
+    {
+      mergedAt: Date;
+    }
+  >();
+
+  let skippedBotCount = 0;
+  let skippedExcludedCount = 0;
+
+  for (const candidate of candidates) {
+    if (
+      isBotAuthor(candidate.authorLogin) ||
+      botLogins.has(candidate.authorLogin.toLowerCase())
+    ) {
+      skippedBotCount++;
+      continue;
+    }
+
+    if (excluded.has(candidate.repo.toLowerCase())) {
+      skippedExcludedCount++;
+      continue;
+    }
+
+    eligibleByKey.set(`${candidate.repo}#${candidate.prNumber}`, {
+      mergedAt: candidate.mergedAt,
+    });
+  }
+
+  const analysedKeys = new Set<string>();
+  let latestAnalysedAt: Date | null = null;
+
+  for (const analysis of analyses) {
+    const key = `${analysis.repo}#${analysis.prNumber}`;
+    if (!eligibleByKey.has(key)) continue;
+    analysedKeys.add(key);
+    if (latestAnalysedAt === null || analysis.analysedAt > latestAnalysedAt) {
+      latestAnalysedAt = analysis.analysedAt;
+    }
+  }
+
+  let oldestRemainingMergedAt: Date | null = null;
+  let newestRemainingMergedAt: Date | null = null;
+
+  for (const [key, candidate] of eligibleByKey) {
+    if (analysedKeys.has(key)) continue;
+    if (
+      oldestRemainingMergedAt === null ||
+      candidate.mergedAt < oldestRemainingMergedAt
+    ) {
+      oldestRemainingMergedAt = candidate.mergedAt;
+    }
+    if (
+      newestRemainingMergedAt === null ||
+      candidate.mergedAt > newestRemainingMergedAt
+    ) {
+      newestRemainingMergedAt = candidate.mergedAt;
+    }
+  }
+
+  const eligibleTotal = eligibleByKey.size;
+  const analysedCount = analysedKeys.size;
+  const remainingCount = Math.max(0, eligibleTotal - analysedCount);
+  const progressPct =
+    eligibleTotal === 0 ? 100 : (analysedCount / eligibleTotal) * 100;
+
+  return {
+    windowDays,
+    rubricVersion: RUBRIC_VERSION,
+    candidatesConsidered: candidates.length,
+    eligibleTotal,
+    analysedCount,
+    remainingCount,
+    progressPct,
+    skippedBotCount,
+    skippedExcludedCount,
+    latestAnalysedAt,
+    oldestRemainingMergedAt,
+    newestRemainingMergedAt,
   };
 }
 
