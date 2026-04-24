@@ -696,3 +696,27 @@ export const engineeringRankingSnapshots = pgTable(
     index("engineering_ranking_snapshots_email_hash_idx").on(table.emailHash),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// LLM cost tracking — daily roll-up keyed by call site so the budget guardrail
+// can short-circuit further Anthropic calls once the daily cap is exceeded.
+// ---------------------------------------------------------------------------
+
+export const llmUsage = pgTable(
+  "llm_usage",
+  {
+    id: serial("id").primaryKey(),
+    date: text("date").notNull(), // YYYY-MM-DD UTC
+    source: text("source").notNull(), // 'okr-parser' | 'excel-parser' | 'github-employee-match'
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    calls: integer("calls").notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("llm_usage_date_source_uniq").on(table.date, table.source),
+    index("llm_usage_date_idx").on(table.date),
+  ]
+);

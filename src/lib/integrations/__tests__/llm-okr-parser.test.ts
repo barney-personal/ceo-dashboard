@@ -30,6 +30,11 @@ vi.mock("@anthropic-ai/sdk", () => {
 
 vi.mock("@sentry/nextjs", () => mockSentry);
 
+vi.mock("@/lib/integrations/llm-budget", () => ({
+  assertWithinDailyBudget: vi.fn().mockResolvedValue(undefined),
+  recordLlmUsage: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { llmParseOkrUpdate, llmParseOkrUpdates } from "../llm-okr-parser";
 
 // ---------------------------------------------------------------------------
@@ -39,9 +44,11 @@ import { llmParseOkrUpdate, llmParseOkrUpdates } from "../llm-okr-parser";
 /** Returns a promise that never resolves unless `signal` fires an abort event. */
 function neverResolves(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error("Request was aborted."));
+      return;
+    }
     signal.addEventListener("abort", () => {
-      // The Anthropic SDK throws APIUserAbortError on abort; we replicate that
-      // shape here so the handler in llmParseOkrUpdate sees `signal.aborted`.
       reject(new Error("Request was aborted."));
     });
   });
@@ -143,6 +150,9 @@ describe("llmParseOkrUpdate timeout", () => {
       "system prompt"
     );
 
+    // Two microtick flushes: one for assertWithinDailyBudget, one for the
+    // rejected messages.create promise to propagate into the retry catch block.
+    await Promise.resolve();
     await Promise.resolve();
     expect(mockMessages.create).toHaveBeenCalledTimes(1);
     expect(mockSentry.addBreadcrumb).toHaveBeenCalledWith(
