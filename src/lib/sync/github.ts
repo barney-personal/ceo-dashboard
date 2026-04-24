@@ -161,6 +161,7 @@ export async function runGitHubSync(
             });
         }
         recordsSynced += page.length;
+        await opts.touchHeartbeat?.();
       },
       onRepoProgress: (repo, count) => {
         Sentry.addBreadcrumb({
@@ -258,6 +259,7 @@ export async function runGitHubSync(
             });
         }
         commitsSynced += page.length;
+        await opts.touchHeartbeat?.();
       },
       onRepoProgress: (repo, count) => {
         Sentry.addBreadcrumb({

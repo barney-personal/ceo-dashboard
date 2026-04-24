@@ -8,6 +8,7 @@ import {
   isSyncRunCancelled,
   markSyncRunsFailed,
   startSyncHeartbeat,
+  touchSyncHeartbeat,
   type SyncLogRow,
 } from "./coordinator";
 import { runModeSync } from "./mode";
@@ -335,6 +336,7 @@ export async function runClaimedSync(
     cancelledByDb ? "cancelled" : execution.control.stopReason?.();
 
   const stopHeartbeat = startSyncHeartbeat(run);
+  const touchHeartbeat = () => touchSyncHeartbeat(run);
 
   try {
     const runner = RUNNERS[run.source as SyncSource];
@@ -342,6 +344,7 @@ export async function runClaimedSync(
       ...execution.control,
       shouldStop: combinedShouldStop,
       stopReason: combinedStopReason,
+      touchHeartbeat,
     });
     if (execution.exceededBudget() && result.status !== "cancelled") {
       const timeoutMessage = getExecutionBudgetMessage(
