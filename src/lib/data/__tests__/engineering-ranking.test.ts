@@ -1,26 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
   DISCIPLINE_POOL_FALLBACK,
+  RANKING_BOOTSTRAP_ITERATIONS,
+  RANKING_CI_COVERAGE,
   RANKING_COMPOSITE_METHOD_LABELS,
   RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
   RANKING_COMPOSITE_MIN_METHODS,
   RANKING_COMPOSITE_TOP_N,
   RANKING_DISAGREEMENT_EPSILON,
   RANKING_DISAGREEMENT_MIN_LENSES,
+  RANKING_DOMINANCE_WIDENING,
   RANKING_LEAVE_ONE_OUT_TOP_MOVERS,
   RANKING_LENS_DEFINITIONS,
   RANKING_LENS_TOP_N,
+  RANKING_LOW_PR_COUNT_THRESHOLD,
+  RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE,
   RANKING_MAX_ACTIVITY_CORRELATION,
+  RANKING_MAX_SIGMA,
   RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
   RANKING_METHODOLOGY_VERSION,
   RANKING_MIN_COHORT_SIZE,
   RANKING_MIN_OVERLAP_SAMPLES,
+  RANKING_MIN_SIGMA,
   RANKING_NOMINAL_SIGNAL_NAMES,
   RANKING_NUMERIC_SIGNAL_NAMES,
   RANKING_RAMP_UP_DAYS,
   RANKING_SIGNAL_WINDOW_DAYS,
   bucketNormalisationDeltas,
   buildComposite,
+  buildConfidence,
   buildEligibleRoster,
   buildLenses,
   buildNormalisation,
@@ -38,6 +46,7 @@ import {
   type EligibilityImpactModelView,
   type EligibilityInputs,
   type EligibilitySquadsRegistryRow,
+  type EngineerConfidence,
   type EngineerNormalisation,
   type PerEngineerSignalRow,
 } from "../engineering-ranking";
@@ -2222,11 +2231,11 @@ describe("M11 normalisation delta sign buckets + truthful page copy", () => {
     // work anywhere in the on-page known-limitations list.
     expect(joined).not.toMatch(/tenure\/role normalisation[^.]*later milestones/);
     expect(joined).not.toMatch(/ranking math[^.]*later milestones/);
-    // The remaining pending work (composite, confidence bands, attribution,
-    // snapshots, movers, stability) must be named somewhere so a reader knows
-    // what is still missing.
+    // The remaining pending work (attribution, snapshots, movers, stability)
+    // must be named somewhere so a reader knows what is still missing.
+    // Composite and confidence bands are now implemented and must not be
+    // claimed as pending in the limitations.
     expect(joined).toMatch(/composite/);
-    expect(joined).toMatch(/confidence bands/);
     expect(joined).toMatch(/attribution/);
   });
 
@@ -2812,18 +2821,23 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     }
   });
 
-  it("composite limitations narrate confidence bands and attribution as still pending", () => {
+  it("composite limitations name attribution as still pending and confidence bands as implemented", () => {
     const composite = buildComposite({
       entries: [],
       lenses: buildLenses({ entries: [] }),
       normalisation: buildNormalisation({ entries: [] }),
     });
     const joined = composite.limitations.join(" ").toLowerCase();
-    expect(joined).toMatch(/confidence bands/);
+    // Per-engineer attribution is still pending.
     expect(joined).toMatch(/attribution/);
+    // Confidence bands are now live (M14) — they must not be narrated
+    // as still-pending future work in the composite limitations.
+    expect(joined).not.toMatch(
+      /confidence bands[^.]*(still pending|not yet|yet to|pending|future|outstanding)/,
+    );
   });
 
-  it("snapshot known limitations narrate composite as implemented and confidence/attribution as pending", () => {
+  it("snapshot known limitations narrate composite + confidence as implemented, and attribution/snapshots/movers/stability as pending", () => {
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -2836,9 +2850,13 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(joined).not.toMatch(
       /(final )?composite score[^.]*(still pending|not yet|yet to|pending)/,
     );
-    // Confidence bands, attribution, snapshots, movers, and stability are
-    // still genuinely pending and must be named.
-    expect(joined).toMatch(/confidence bands/);
+    // Confidence bands are now live (M14) — they must not be narrated as
+    // still-pending future work in the on-page known-limitations list.
+    expect(joined).not.toMatch(
+      /confidence bands[^.]*(still pending|not yet|yet to|pending)/,
+    );
+    // Attribution, snapshots, movers, and stability are still genuinely
+    // pending and must be named so a reader sees what is still missing.
     expect(joined).toMatch(/attribution/);
     expect(joined).toMatch(/snapshots/);
     expect(joined).toMatch(/movers/);
@@ -2904,11 +2922,15 @@ describe("M13 methodology version and readiness provenance", () => {
     expect(RANKING_METHODOLOGY_VERSION).not.toBe("0.1.0-scaffold");
   });
 
-  it("methodology version names the composite stage", () => {
+  it("methodology version names the current methodology stage", () => {
     // The version string is rendered verbatim in the page header and
     // persisted on every future snapshot. It must tell a reader — and a
-    // future snapshot-reader — what methodology was actually running.
-    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("composite");
+    // future snapshot-reader — what methodology was actually running. The
+    // version moves forward with each scoring milestone (composite,
+    // confidence, …); the regression guard below pins that the version
+    // names a real stage rather than reverting to the scaffold label.
+    const version = RANKING_METHODOLOGY_VERSION.toLowerCase();
+    expect(version).toMatch(/composite|confidence|attribution|snapshot|movers|stability/);
   });
 
   it("snapshot stamps the current methodology version on every snapshot", () => {
@@ -2968,10 +2990,11 @@ describe("M13 methodology version and readiness provenance", () => {
     }
   });
 
-  it("known-limitations still describe composite as implemented but not final", () => {
+  it("known-limitations still describe composite + confidence as implemented but not final", () => {
     // Regression guard: the version bump must not accidentally demote the
-    // page's honesty about what is and isn't finished. Composite is live,
-    // confidence / attribution / snapshots / movers / stability are not.
+    // page's honesty about what is and isn't finished. Composite and
+    // confidence bands are live; attribution / snapshots / movers /
+    // stability are not.
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -2981,7 +3004,9 @@ describe("M13 methodology version and readiness provenance", () => {
     expect(joined).not.toMatch(
       /(final )?composite score[^.]*(still pending|not yet|yet to|pending)/,
     );
-    expect(joined).toMatch(/confidence bands/);
+    expect(joined).not.toMatch(
+      /confidence bands[^.]*(still pending|not yet|yet to|pending)/,
+    );
     expect(joined).toMatch(/attribution/);
     expect(joined).toMatch(/snapshots/);
     expect(joined).toMatch(/movers/);
@@ -2992,5 +3017,383 @@ describe("M13 methodology version and readiness provenance", () => {
     const snapshot = await getEngineeringRanking();
     expect(snapshot.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
     expect(snapshot.methodologyVersion).not.toBe("0.1.0-scaffold");
+  });
+});
+
+describe("M14 confidence bands and statistical tie handling", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: 30 + index,
+      commitCount: 60 + index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  function buildBundle(entries: EligibilityEntry[], signals: PerEngineerSignalRow[]) {
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({
+      entries,
+      lenses,
+      normalisation,
+      signals,
+    });
+    const confidence = buildConfidence({
+      entries,
+      composite,
+      signals,
+    });
+    return { lenses, normalisation, composite, confidence };
+  }
+
+  it("confidence constants are sane", () => {
+    expect(RANKING_BOOTSTRAP_ITERATIONS).toBeGreaterThanOrEqual(200);
+    expect(RANKING_CI_COVERAGE).toBeGreaterThan(0);
+    expect(RANKING_CI_COVERAGE).toBeLessThan(1);
+    expect(RANKING_DOMINANCE_WIDENING).toBeGreaterThan(1);
+    expect(RANKING_LOW_PR_COUNT_THRESHOLD).toBeGreaterThan(0);
+    expect(RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE).toBeGreaterThan(0);
+    expect(RANKING_MIN_SIGMA).toBeGreaterThan(0);
+    expect(RANKING_MAX_SIGMA).toBeGreaterThan(RANKING_MIN_SIGMA);
+  });
+
+  it("confidence bundle attaches one entry per competitive engineer with a CI for every scored row", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 6 }, (_, i) => signalRow(i + 1));
+    const { confidence, composite } = buildBundle(entries, signals);
+    expect(confidence.entries.length).toBe(entries.length);
+    const scored = composite.entries.filter((e) => e.composite !== null);
+    const ciScored = confidence.entries.filter((e) => e.ciLow !== null);
+    expect(ciScored.length).toBe(scored.length);
+    for (const ci of ciScored) {
+      expect(ci.ciLow).not.toBeNull();
+      expect(ci.ciHigh).not.toBeNull();
+      expect(ci.ciHigh!).toBeGreaterThanOrEqual(ci.ciLow!);
+      expect(ci.composite!).toBeGreaterThanOrEqual(ci.ciLow!);
+      expect(ci.composite!).toBeLessThanOrEqual(ci.ciHigh!);
+      expect(ci.ciRankLow).not.toBeNull();
+      expect(ci.ciRankHigh).not.toBeNull();
+      expect(ci.ciRankLow!).toBeLessThanOrEqual(ci.ciRankHigh!);
+    }
+  });
+
+  it("low PR count engineer has wider CI than high PR count engineer with otherwise identical signals", () => {
+    const entries = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+    ];
+    // Same SHAP, same commits, same lines — only PR count differs.
+    const signals = [
+      signalRow(1, {
+        prCount: 3,
+        commitCount: 80,
+        shapPredicted: 100,
+        shapActual: 100,
+      }),
+      signalRow(2, {
+        prCount: 60,
+        commitCount: 80,
+        shapPredicted: 100,
+        shapActual: 100,
+      }),
+    ];
+    const { confidence } = buildBundle(entries, signals);
+    const a = confidence.entries.find((e) => e.displayName === "Engineer 1")!;
+    const b = confidence.entries.find((e) => e.displayName === "Engineer 2")!;
+    expect(a.sigma!).toBeGreaterThan(b.sigma!);
+    expect(a.ciWidth!).toBeGreaterThan(b.ciWidth!);
+    expect(a.uncertaintyFactors.some((f) => /pr count/i.test(f))).toBe(true);
+    expect(b.uncertaintyFactors.some((f) => /pr count/i.test(f))).toBe(false);
+  });
+
+  it("short tenure engineer has wider CI than long tenure engineer with the same activity", () => {
+    const entries = [
+      competitiveEntry(1, { tenureDays: 100 }),
+      competitiveEntry(2, { tenureDays: 1000 }),
+    ];
+    const signals = [signalRow(1), signalRow(2)];
+    const { confidence } = buildBundle(entries, signals);
+    const young = confidence.entries.find((e) => e.displayName === "Engineer 1")!;
+    const old = confidence.entries.find((e) => e.displayName === "Engineer 2")!;
+    expect(young.sigma!).toBeGreaterThan(old.sigma!);
+    expect(young.uncertaintyFactors.some((f) => /tenure/i.test(f))).toBe(true);
+  });
+
+  it("missing GitHub mapping widens the band even if other signals are present", () => {
+    const entries = [
+      competitiveEntry(1, { githubLogin: null }),
+      competitiveEntry(2),
+    ];
+    const signals = [signalRow(1), signalRow(2)];
+    const { confidence } = buildBundle(entries, signals);
+    const unmapped = confidence.entries.find((e) => e.displayName === "Engineer 1");
+    if (unmapped && unmapped.sigma !== null) {
+      expect(unmapped.uncertaintyFactors.some((f) => /github/i.test(f))).toBe(true);
+    }
+  });
+
+  it("dominance-blocked composite widens every band globally", () => {
+    // Build a cohort so collinear with PR count that the composite trips
+    // the activity-dominance check, and verify confidence applies the
+    // global widening factor.
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) =>
+      signalRow(i + 1, {
+        prCount: (i + 1) * 100,
+        commitCount: (i + 1) * 100,
+        additions: (i + 1) * 1_000,
+        shapPredicted: (i + 1) * 100,
+        shapActual: (i + 1) * 100,
+      }),
+    );
+    const { composite, confidence } = buildBundle(entries, signals);
+    expect(composite.dominanceBlocked).toBe(true);
+    expect(confidence.globalDominanceApplied).toBe(true);
+    for (const ci of confidence.entries) {
+      if (ci.sigma === null) continue;
+      expect(ci.uncertaintyFactors.some((f) => /dominance/i.test(f))).toBe(true);
+    }
+  });
+
+  it("statistical tie groups detect rank-adjacent overlapping bands", () => {
+    // Two engineers with very similar composites (and small per-engineer
+    // sigmas) should fall into the same tie group; an engineer far enough
+    // away should not.
+    const entries = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3),
+    ];
+    const signals = [
+      signalRow(1, { prCount: 50, shapPredicted: 100, shapActual: 100 }),
+      signalRow(2, { prCount: 50, shapPredicted: 100, shapActual: 100 }),
+      signalRow(3, { prCount: 50, shapPredicted: 1, shapActual: 1 }),
+    ];
+    const { confidence, composite } = buildBundle(entries, signals);
+    // Two near-identical engineers should overlap.
+    const ranked = confidence.entries
+      .filter((e): e is EngineerConfidence & { rank: number } => e.rank !== null)
+      .sort((a, b) => a.rank - b.rank);
+    expect(ranked.length).toBeGreaterThanOrEqual(2);
+    const top = ranked[0];
+    const second = ranked[1];
+    expect(top.ciLow).not.toBeNull();
+    expect(second.ciHigh).not.toBeNull();
+    // Rank-adjacent overlap → same tie group.
+    if (top.ciLow! <= second.ciHigh!) {
+      expect(top.tieGroupId).not.toBeNull();
+      expect(top.tieGroupId).toBe(second.tieGroupId);
+      expect(top.inTieGroup).toBe(true);
+      expect(second.inTieGroup).toBe(true);
+    }
+    // The composite cohort still has a defined rank for the third engineer.
+    const third = ranked[2];
+    expect(third.composite).not.toBeNull();
+    expect(composite.entries.length).toBe(entries.length);
+  });
+
+  it("tie groups have at least 2 members and span a contiguous rank range", () => {
+    const entries = Array.from({ length: 8 }, (_, i) => competitiveEntry(i + 1));
+    // Compress everyone into a tight composite range so several pairs
+    // overlap.
+    const signals = entries.map((_, i) =>
+      signalRow(i + 1, {
+        prCount: 40,
+        commitCount: 80,
+        shapPredicted: 100 + i,
+        shapActual: 100 + i,
+        additions: 500,
+      }),
+    );
+    const { confidence } = buildBundle(entries, signals);
+    for (const group of confidence.tieGroups) {
+      expect(group.size).toBeGreaterThanOrEqual(2);
+      expect(group.size).toBe(group.members.length);
+      const ranks = group.members.map((m) => m.rank).sort((a, b) => a - b);
+      expect(group.rankStart).toBe(ranks[0]);
+      expect(group.rankEnd).toBe(ranks[ranks.length - 1]);
+      // Contiguous: rankEnd - rankStart + 1 == size when no scored
+      // engineer outside the group sits between them in rank order.
+      expect(group.rankEnd - group.rankStart + 1).toBe(group.size);
+    }
+  });
+
+  it("unscored engineers get null bands and an empty factor list", () => {
+    // Only one competitive engineer with one method present → composite
+    // is null because RANKING_COMPOSITE_MIN_METHODS = 2.
+    const entries = [competitiveEntry(1)];
+    const lenses = buildLenses({ entries });
+    const normalisation = buildNormalisation({ entries });
+    const composite = buildComposite({ entries, lenses, normalisation });
+    const confidence = buildConfidence({ entries, composite });
+    for (const ci of confidence.entries) {
+      if (ci.composite === null) {
+        expect(ci.ciLow).toBeNull();
+        expect(ci.ciHigh).toBeNull();
+        expect(ci.ciRankLow).toBeNull();
+        expect(ci.ciRankHigh).toBeNull();
+        expect(ci.sigma).toBeNull();
+        expect(ci.uncertaintyFactors).toEqual([]);
+        expect(ci.inTieGroup).toBe(false);
+        expect(ci.tieGroupId).toBeNull();
+      }
+    }
+  });
+
+  it("snapshot.engineers carries the per-engineer CI in composite-percentile space", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const headcountRows = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: e.squad,
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Core",
+      job_title: "Senior Backend Engineer",
+      manager: e.manager,
+      line_manager_email: `${e.manager?.toLowerCase()}@meetcleo.com`,
+      start_date: "2023-01-01",
+      termination_date: null,
+    }));
+    const githubMap = entries.map((e) => ({
+      githubLogin: e.githubLogin!,
+      employeeEmail: e.email,
+      isBot: false,
+    }));
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel: {
+        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+      },
+      signals,
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    expect(snapshot.confidence).toBeDefined();
+    expect(snapshot.confidence.entries.length).toBe(entries.length);
+    for (const engineer of snapshot.engineers) {
+      expect(engineer.confidence).not.toBeNull();
+      expect(engineer.confidence!.high).toBeGreaterThanOrEqual(
+        engineer.confidence!.low,
+      );
+      // Composite score sits inside its own CI.
+      expect(engineer.compositeScore!).toBeGreaterThanOrEqual(
+        engineer.confidence!.low,
+      );
+      expect(engineer.compositeScore!).toBeLessThanOrEqual(
+        engineer.confidence!.high,
+      );
+    }
+  });
+
+  it("bootstrap is deterministic — two snapshots from the same inputs have the same CIs", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const a = buildBundle(entries, signals).confidence;
+    const b = buildBundle(entries, signals).confidence;
+    const aMap = new Map(a.entries.map((e) => [e.emailHash, e.ciLow]));
+    for (const e of b.entries) {
+      expect(e.ciLow).toEqual(aMap.get(e.emailHash));
+    }
+  });
+
+  it("AI inflation does not change confidence bands — sigma is independent of AI signals", () => {
+    const entries = [competitiveEntry(1), competitiveEntry(2)];
+    const baseSignals = [
+      signalRow(1, { aiTokens: 0, aiSpend: 0 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const inflatedSignals = [
+      signalRow(1, { aiTokens: 10_000_000, aiSpend: 50_000 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const a = buildBundle(entries, baseSignals).confidence;
+    const b = buildBundle(entries, inflatedSignals).confidence;
+    const aMap = new Map(a.entries.map((e) => [e.emailHash, e.ciWidth]));
+    for (const e of b.entries) {
+      expect(e.ciWidth).toEqual(aMap.get(e.emailHash));
+    }
+  });
+
+  it("confidence contract names the bootstrap iterations and CI coverage", () => {
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 4 }, (_, i) => signalRow(i + 1));
+    const { confidence } = buildBundle(entries, signals);
+    expect(confidence.contract).toContain(`${RANKING_BOOTSTRAP_ITERATIONS}`);
+    expect(confidence.bootstrapIterations).toBe(RANKING_BOOTSTRAP_ITERATIONS);
+    expect(confidence.ciCoverage).toBe(RANKING_CI_COVERAGE);
+  });
+
+  it("methodology version names the confidence stage", () => {
+    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("confidence");
+  });
+
+  it("known-limitations narrate confidence bands as implemented (not pending) once M14 lands", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/confidence bands/);
+    // Whatever sentence mentions "confidence bands" must classify them as
+    // implemented, not as still-pending future work.
+    expect(joined).not.toMatch(
+      /confidence bands[^.]*(still pending|not yet|yet to|pending)/,
+    );
+  });
+
+  it("scaffold-stage limitations mention confidence and statistical-tie groups", () => {
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 4 }, (_, i) => signalRow(i + 1));
+    const { confidence } = buildBundle(entries, signals);
+    const joined = confidence.limitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/confidence/);
+    expect(joined).toMatch(/tie/);
+    // M15+ work must still be named so a reader knows what is outstanding.
+    expect(joined).toMatch(/attribution/);
   });
 });

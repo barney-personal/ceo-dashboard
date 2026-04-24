@@ -10,9 +10,11 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: confidence bands, per-engineer attribution,
- * ranking snapshots, movers, and stability checks are still pending until
- * `EngineeringRankingSnapshot.status === "ready"`.
+ * not a final adjudication: per-engineer attribution drilldowns, ranking
+ * snapshots, the movers view, the anti-gaming audit, and the stability
+ * check are still pending until `EngineeringRankingSnapshot.status === "ready"`.
+ * Confidence bands and statistical-tie groups (M14) are live and travel on
+ * the snapshot via `confidence`.
  */
 
 import { createHash } from "node:crypto";
@@ -31,8 +33,16 @@ import { createHash } from "node:crypto";
  *   B SHAP impact, C squad delivery, tenure/role-adjusted). Confidence,
  *   attribution, snapshots, movers, anti-gaming, and stability are still
  *   pending, so the snapshot `status` stays `methodology_pending`.
+ * - `0.6.0-confidence` — M14 confidence bands are live. Every scored
+ *   engineer carries an 80% bootstrap CI in composite-percentile and rank
+ *   space, statistical-tie groups are emitted when neighbouring bands
+ *   overlap, and dominance-blocked snapshots widen sigmas globally so the
+ *   page does not narrate precise rank certainty when the composite has
+ *   collapsed into activity volume. Snapshot `status` still stays
+ *   `methodology_pending` until attribution, snapshots, movers, anti-gaming,
+ *   and stability also land.
  */
-export const RANKING_METHODOLOGY_VERSION = "0.5.0-composite" as const;
+export const RANKING_METHODOLOGY_VERSION = "0.6.0-confidence" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -230,11 +240,20 @@ export interface EngineeringRankingSnapshot {
    * Composite ranking (median of the four methods: A output, B impact,
    * C delivery, adjusted) plus effective-weight decomposition, leave-one-
    * method-out sensitivity, final-rank correlations against raw signals, and
-   * the dominance warning state. This is the ranking the page exposes today,
-   * with confidence bands (M13), attribution drilldowns (M14), snapshots/
-   * movers (M15-M16), and stability/anti-gaming (M17-M18) still pending.
+   * the dominance warning state. Confidence bands sit on top of this
+   * composite via the `confidence` bundle below.
    */
   composite: CompositeBundle;
+  /**
+   * Bootstrap 80% confidence bands and statistical-tie groups for every
+   * scored engineer. Computed in composite-percentile and rank space so
+   * the page can render bands visually next to the composite table and
+   * label tied positions where the bands overlap. Sigmas widen with low PR
+   * count, short tenure, missing impact-model rows, missing GitHub mapping,
+   * lens disagreement, and a global dominance-blocked composite — so a
+   * thin signal cohort never reads as a precise rank.
+   */
+  confidence: ConfidenceBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -2618,7 +2637,483 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M13), per-engineer attribution drilldowns (M14), ranking snapshots (M15), movers view (M16), anti-gaming audit (M17), and stability check (M18) are still pending — the composite is an evidence rank, not a final adjudication.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15), ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
+    ],
+  };
+}
+
+/* ------------------------------------------------------------------------ */
+/* M14 confidence bands and statistical tie handling                        */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Number of bootstrap iterations used to build per-engineer confidence
+ * intervals. The plan's lower bound is 200; we keep this exact so the
+ * bootstrap is deterministic and fast enough to run on every request.
+ */
+export const RANKING_BOOTSTRAP_ITERATIONS = 200 as const;
+
+/**
+ * Coverage of the per-engineer confidence interval expressed as a
+ * proportion (0.8 = 80% CI). The matching quantiles are 0.10 and 0.90.
+ */
+export const RANKING_CI_COVERAGE = 0.8 as const;
+
+/**
+ * Multiplier applied to every per-engineer sigma when the composite is
+ * `dominanceBlocked`. The plan asks for "wider or labelled confidence"
+ * when the rank has collapsed into activity volume — widening every band
+ * by a fixed factor surfaces this on the page without inventing a separate
+ * label that the reader has to learn.
+ */
+export const RANKING_DOMINANCE_WIDENING = 1.5 as const;
+
+/**
+ * PR count below which the per-engineer sigma is widened. An engineer with
+ * fewer than 10 merged PRs in the window has a much smaller sample of
+ * activity than the cohort median, so the confidence band should reflect
+ * that.
+ */
+export const RANKING_LOW_PR_COUNT_THRESHOLD = 10 as const;
+
+/**
+ * Tenure (in days) below which the per-engineer sigma is widened. The plan
+ * uses "<12 months" — i.e. 365 days — as the cutoff for a tenure-driven
+ * uncertainty bump that sits on top of the M10 normalisation layer.
+ */
+export const RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE = 365 as const;
+
+/**
+ * Floor and ceiling for the per-engineer sigma so bootstraps never collapse
+ * to a precise point estimate (low end) or resample so wildly that the CI
+ * spans the whole cohort (high end). Both are in composite-percentile units.
+ */
+export const RANKING_MIN_SIGMA = 1.5 as const;
+export const RANKING_MAX_SIGMA = 30 as const;
+
+/**
+ * Seeded RNG constant for the M14 bootstrap. Snapshots are deterministic so
+ * the M19 stability check can compare consecutive runs without picking up
+ * methodology noise. Bumping the seed counts as a methodology change.
+ */
+export const RANKING_BOOTSTRAP_SEED = 0x9e_37_79_b1 as const;
+
+/** Per-engineer confidence row attached to the M14 confidence bundle. */
+export interface EngineerConfidence {
+  emailHash: string;
+  displayName: string;
+  rank: number | null;
+  composite: number | null;
+  /** Standard error in composite-percentile units used by the bootstrap. */
+  sigma: number | null;
+  /** Lower bound of the CI in composite-percentile space (0..100). */
+  ciLow: number | null;
+  /** Upper bound of the CI in composite-percentile space (0..100). */
+  ciHigh: number | null;
+  /** Width of the CI in composite-percentile points (`ciHigh - ciLow`). */
+  ciWidth: number | null;
+  /** Lower bound of the CI in rank space (smaller = better). */
+  ciRankLow: number | null;
+  /** Upper bound of the CI in rank space. */
+  ciRankHigh: number | null;
+  /** Plain-language reasons the band was widened, named in the order applied. */
+  uncertaintyFactors: string[];
+  /** True when this engineer shares overlapping bands with at least one rank-neighbour. */
+  inTieGroup: boolean;
+  /** 1-indexed group id when `inTieGroup`, else null. */
+  tieGroupId: number | null;
+}
+
+/** A connected run of rank-adjacent engineers with overlapping bands. */
+export interface ConfidenceTieGroup {
+  groupId: number;
+  rankStart: number;
+  rankEnd: number;
+  size: number;
+  members: Array<{
+    emailHash: string;
+    displayName: string;
+    rank: number;
+    composite: number;
+    ciLow: number;
+    ciHigh: number;
+  }>;
+}
+
+export interface ConfidenceBundle {
+  /** Plain-language description of the confidence methodology. */
+  contract: string;
+  bootstrapIterations: number;
+  /** Coverage of the CI expressed as a proportion (0.8 = 80% CI). */
+  ciCoverage: number;
+  dominanceWidening: number;
+  /** True when every sigma was widened by `dominanceWidening`. */
+  globalDominanceApplied: boolean;
+  /** All competitive engineers, scored or unscored. */
+  entries: EngineerConfidence[];
+  /** Statistical-tie groups in rank order; each group has at least 2 members. */
+  tieGroups: ConfidenceTieGroup[];
+  /** Plain-language confidence-stage limitations shown on the page. */
+  limitations: string[];
+}
+
+/**
+ * Mulberry32 — a 32-bit seeded PRNG. Deterministic, order-independent, and
+ * fast. We use it instead of `Math.random` so the bootstrap is reproducible:
+ * the same inputs always produce the same CI, which is what M19 stability
+ * comparisons rely on.
+ */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d_2b_79_f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+/**
+ * Box-Muller transform — turn two uniforms into one standard-normal draw.
+ * We discard the second draw to keep the function purely a "next sample"
+ * helper; performance is fine at 200 iterations × ~50 engineers.
+ */
+function randnFromRng(rng: () => number): number {
+  let u = rng();
+  while (u <= Number.EPSILON) u = rng();
+  const v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function quantileSorted(sorted: readonly number[], q: number): number {
+  if (sorted.length === 0) return Number.NaN;
+  if (sorted.length === 1) return sorted[0];
+  const pos = q * (sorted.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+interface SigmaInputs {
+  presentMethodCount: number;
+  methodSpread: number;
+  prCount: number | null;
+  tenureDays: number | null;
+  hasImpactModel: boolean;
+  hasGithubLogin: boolean;
+  globalDominance: boolean;
+}
+
+/**
+ * Compute the per-engineer sigma (standard error) used by the bootstrap,
+ * and the human-readable list of factors that widened it. The base sigma
+ * is `methodSpread / 4 + RANKING_MIN_SIGMA` — the more lenses disagree,
+ * the wider the prior — and individual factors multiply on top.
+ *
+ * Factor multipliers are deliberately small but non-trivial. The goal is
+ * that a low-PR / short-tenure / SHAP-absent engineer ends up with a band
+ * wide enough to overlap their rank-neighbour, so the page does not read
+ * as a precise ordering at the bottom of the cohort.
+ */
+function computeSigmaFromInputs(inputs: SigmaInputs): {
+  sigma: number;
+  factors: string[];
+} {
+  const factors: string[] = [];
+  let sigma = inputs.methodSpread / 4 + RANKING_MIN_SIGMA;
+
+  if (inputs.presentMethodCount <= 2) {
+    sigma *= 1.5;
+    factors.push("Only 2 of 4 composite methods present — minimum-method scoring widens the band by 1.5×.");
+  } else if (inputs.presentMethodCount === 3) {
+    sigma *= 1.2;
+    factors.push("3 of 4 composite methods present — one missing method widens the band by 1.2×.");
+  }
+
+  if (inputs.prCount !== null && inputs.prCount < RANKING_LOW_PR_COUNT_THRESHOLD) {
+    sigma *= 1.4;
+    factors.push(
+      `PR count ${inputs.prCount} < ${RANKING_LOW_PR_COUNT_THRESHOLD} in the window — small-sample activity widens the band by 1.4×.`,
+    );
+  }
+
+  if (
+    inputs.tenureDays !== null &&
+    inputs.tenureDays < RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE
+  ) {
+    sigma *= 1.3;
+    factors.push(
+      `Tenure ${inputs.tenureDays}d < ${RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE}d — short-tenure exposure widens the band by 1.3×.`,
+    );
+  }
+
+  if (!inputs.hasImpactModel) {
+    sigma *= 1.2;
+    factors.push("Not in the impact-model training set — missing SHAP signal widens the band by 1.2×.");
+  }
+
+  if (!inputs.hasGithubLogin) {
+    sigma *= 1.5;
+    factors.push("No GitHub mapping — every activity signal is missing, widens the band by 1.5×.");
+  }
+
+  if (inputs.globalDominance) {
+    sigma *= RANKING_DOMINANCE_WIDENING;
+    factors.push(
+      `Composite is dominance-blocked — every band is widened by ${RANKING_DOMINANCE_WIDENING}× until additional orthogonal signals dilute the activity dominance.`,
+    );
+  }
+
+  if (sigma < RANKING_MIN_SIGMA) sigma = RANKING_MIN_SIGMA;
+  if (sigma > RANKING_MAX_SIGMA) sigma = RANKING_MAX_SIGMA;
+  return { sigma, factors };
+}
+
+/**
+ * Build the M14 confidence bundle. For each scored engineer we:
+ *  1. Estimate a sigma in composite-percentile units from method spread,
+ *     PR count, tenure, impact-model presence, GitHub mapping, and the
+ *     global dominance state.
+ *  2. Resample the composite via `RANKING_BOOTSTRAP_ITERATIONS` jittered
+ *     replicates and re-rank the cohort each replicate.
+ *  3. Take the 0.10 and 0.90 quantiles of the resulting composite and rank
+ *     distributions to form the 80% CI.
+ *  4. Walk the engineers in rank order and group consecutive engineers
+ *     whose CI bands overlap into statistical-tie groups (size ≥ 2).
+ *
+ * Engineers without a composite stay in `entries` with all band fields
+ * null and an empty factor list — they are deliberately not bootstrapped
+ * because the methodology refuses to synthesise a CI for an unscored row.
+ */
+export function buildConfidence({
+  entries,
+  composite,
+  signals = [],
+  iterations = RANKING_BOOTSTRAP_ITERATIONS,
+  ciCoverage = RANKING_CI_COVERAGE,
+  seed = RANKING_BOOTSTRAP_SEED,
+}: {
+  entries: EligibilityEntry[];
+  composite: CompositeBundle;
+  signals?: PerEngineerSignalRow[];
+  iterations?: number;
+  ciCoverage?: number;
+  seed?: number;
+}): ConfidenceBundle {
+  const competitive = entries.filter((e) => e.eligibility === "competitive");
+  const competitiveByHash = new Map(competitive.map((e) => [e.emailHash, e]));
+  const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
+  const compositeByHash = new Map(
+    composite.entries.map((e) => [e.emailHash, e]),
+  );
+
+  const globalDominance = composite.dominanceBlocked;
+  const lowQ = (1 - ciCoverage) / 2;
+  const highQ = 1 - lowQ;
+
+  // Order matches `composite.entries` so the bootstrap re-ranks the same
+  // cohort the composite ranked. Unscored composite rows still take a slot
+  // (with composite=null) so the rank distribution reflects the true cohort
+  // size.
+  const baseEntries = composite.entries;
+  const baseComposites = baseEntries.map((c) => c.composite);
+  const sigmaPerEntry: Array<number | null> = baseEntries.map((c) => {
+    if (c.composite === null) return null;
+    const eligibility = competitiveByHash.get(c.emailHash);
+    const signal = signalByHash.get(c.emailHash);
+    const presentValues = [c.output, c.impact, c.delivery, c.adjusted].filter(
+      (v): v is number => v !== null && Number.isFinite(v),
+    );
+    const methodSpread =
+      presentValues.length === 0
+        ? 0
+        : Math.max(...presentValues) - Math.min(...presentValues);
+    const { sigma } = computeSigmaFromInputs({
+      presentMethodCount: c.presentMethodCount,
+      methodSpread,
+      prCount: signal?.prCount ?? null,
+      tenureDays: eligibility?.tenureDays ?? null,
+      hasImpactModel: Boolean(eligibility?.hasImpactModelRow),
+      hasGithubLogin: Boolean(eligibility?.githubLogin),
+      globalDominance,
+    });
+    return sigma;
+  });
+  const factorsPerEntry: string[][] = baseEntries.map((c) => {
+    if (c.composite === null) return [];
+    const eligibility = competitiveByHash.get(c.emailHash);
+    const signal = signalByHash.get(c.emailHash);
+    const presentValues = [c.output, c.impact, c.delivery, c.adjusted].filter(
+      (v): v is number => v !== null && Number.isFinite(v),
+    );
+    const methodSpread =
+      presentValues.length === 0
+        ? 0
+        : Math.max(...presentValues) - Math.min(...presentValues);
+    const { factors } = computeSigmaFromInputs({
+      presentMethodCount: c.presentMethodCount,
+      methodSpread,
+      prCount: signal?.prCount ?? null,
+      tenureDays: eligibility?.tenureDays ?? null,
+      hasImpactModel: Boolean(eligibility?.hasImpactModelRow),
+      hasGithubLogin: Boolean(eligibility?.githubLogin),
+      globalDominance,
+    });
+    return factors;
+  });
+
+  const compositeSamples: number[][] = baseEntries.map(() => []);
+  const rankSamples: number[][] = baseEntries.map(() => []);
+
+  if (iterations > 0) {
+    const rng = mulberry32(seed);
+    for (let b = 0; b < iterations; b += 1) {
+      const replicate: Array<number | null> = baseEntries.map((c, i) => {
+        if (c.composite === null) return null;
+        const sigma = sigmaPerEntry[i] ?? RANKING_MIN_SIGMA;
+        let sample = c.composite + randnFromRng(rng) * sigma;
+        if (sample < 0) sample = 0;
+        if (sample > 100) sample = 100;
+        return sample;
+      });
+      const replicateRanks = rankScoredEntries(replicate);
+      for (let i = 0; i < baseEntries.length; i += 1) {
+        const v = replicate[i];
+        const r = replicateRanks[i];
+        if (v !== null) compositeSamples[i].push(v);
+        if (r !== null) rankSamples[i].push(r);
+      }
+    }
+  }
+
+  const confidenceEntries: EngineerConfidence[] = baseEntries.map((c, i) => {
+    if (c.composite === null || c.rank === null) {
+      return {
+        emailHash: c.emailHash,
+        displayName: c.displayName,
+        rank: c.rank,
+        composite: c.composite,
+        sigma: null,
+        ciLow: null,
+        ciHigh: null,
+        ciWidth: null,
+        ciRankLow: null,
+        ciRankHigh: null,
+        uncertaintyFactors: [],
+        inTieGroup: false,
+        tieGroupId: null,
+      };
+    }
+    const compSorted = [...compositeSamples[i]].sort((a, b) => a - b);
+    const rankSorted = [...rankSamples[i]].sort((a, b) => a - b);
+    const ciLow = compSorted.length > 0 ? quantileSorted(compSorted, lowQ) : c.composite;
+    const ciHigh = compSorted.length > 0 ? quantileSorted(compSorted, highQ) : c.composite;
+    const ciRankLow = rankSorted.length > 0 ? Math.round(quantileSorted(rankSorted, lowQ)) : c.rank;
+    const ciRankHigh = rankSorted.length > 0 ? Math.round(quantileSorted(rankSorted, highQ)) : c.rank;
+    return {
+      emailHash: c.emailHash,
+      displayName: c.displayName,
+      rank: c.rank,
+      composite: c.composite,
+      sigma: sigmaPerEntry[i] ?? null,
+      ciLow,
+      ciHigh,
+      ciWidth: ciHigh - ciLow,
+      ciRankLow,
+      ciRankHigh,
+      uncertaintyFactors: factorsPerEntry[i],
+      inTieGroup: false,
+      tieGroupId: null,
+    };
+  });
+
+  // Tie-group assembly: walk in rank order. Two consecutive engineers (a
+  // higher rank, b next) share a statistical-tie group when a's lower
+  // bound sits at or below b's upper bound — the bands meet, so the
+  // ordering between them is not statistically distinguishable.
+  const scored = confidenceEntries
+    .filter(
+      (e): e is EngineerConfidence & {
+        rank: number;
+        composite: number;
+        ciLow: number;
+        ciHigh: number;
+      } =>
+        e.rank !== null &&
+        e.composite !== null &&
+        e.ciLow !== null &&
+        e.ciHigh !== null,
+    )
+    .sort((a, b) => a.rank - b.rank);
+
+  const tieGroups: ConfidenceTieGroup[] = [];
+  let currentGroup: typeof scored = [];
+  const flushGroup = () => {
+    if (currentGroup.length < 2) return;
+    const groupId = tieGroups.length + 1;
+    const ranks = currentGroup.map((e) => e.rank);
+    tieGroups.push({
+      groupId,
+      rankStart: Math.min(...ranks),
+      rankEnd: Math.max(...ranks),
+      size: currentGroup.length,
+      members: currentGroup.map((e) => ({
+        emailHash: e.emailHash,
+        displayName: e.displayName,
+        rank: e.rank,
+        composite: e.composite,
+        ciLow: e.ciLow,
+        ciHigh: e.ciHigh,
+      })),
+    });
+    for (const member of currentGroup) {
+      const target = confidenceEntries.find(
+        (entry) => entry.emailHash === member.emailHash,
+      );
+      if (target) {
+        target.inTieGroup = true;
+        target.tieGroupId = groupId;
+      }
+    }
+  };
+
+  for (let idx = 0; idx < scored.length; idx += 1) {
+    const e = scored[idx];
+    if (currentGroup.length === 0) {
+      currentGroup = [e];
+      continue;
+    }
+    const prev = currentGroup[currentGroup.length - 1];
+    // `prev` has the better (smaller) rank → higher composite. Bands overlap
+    // when prev.ciLow <= e.ciHigh, i.e. prev's lower bound has fallen into
+    // e's upper bound region.
+    const overlap = prev.ciLow <= e.ciHigh;
+    if (overlap) {
+      currentGroup.push(e);
+    } else {
+      flushGroup();
+      currentGroup = [e];
+    }
+  }
+  flushGroup();
+
+  const contract = `Confidence bands are an 80% bootstrap interval over ${RANKING_BOOTSTRAP_ITERATIONS} replicates. Per-engineer sigma starts from the spread between present composite methods and is widened by minimum-method scoring, low PR count (<${RANKING_LOW_PR_COUNT_THRESHOLD}), short tenure (<${RANKING_LOW_TENURE_DAYS_FOR_CONFIDENCE}d), missing impact-model rows, missing GitHub mapping, and a global dominance-blocked composite. Statistical-tie groups are runs of rank-adjacent engineers whose bands overlap; the page must not present an order between members of the same tie group as a defensible adjudication.`;
+
+  return {
+    contract,
+    bootstrapIterations: iterations,
+    ciCoverage,
+    dominanceWidening: RANKING_DOMINANCE_WIDENING,
+    globalDominanceApplied: globalDominance,
+    entries: confidenceEntries,
+    tieGroups,
+    limitations: [
+      `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
+      `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
+      `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
+      `Per-engineer attribution drilldowns (M15), ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
     ],
   };
 }
@@ -2662,7 +3157,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, and the composite score with effective-weight decomposition, leave-one-method-out sensitivity, and a PR/log-impact dominance check are implemented. Confidence bands, per-engineer attribution drilldowns, ranking snapshots, movers view, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, and 80% bootstrap confidence bands with statistical-tie groups are implemented. Per-engineer attribution drilldowns, ranking snapshots, movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -2753,6 +3248,11 @@ export function buildRankingSnapshot(
     normalisation,
     signals: inputs.signals,
   });
+  const confidence = buildConfidence({
+    entries,
+    composite,
+    signals: inputs.signals,
+  });
 
   // Only engineers with a non-null composite rank are materialised into the
   // top-level `engineers` array — unscored competitive engineers remain
@@ -2762,11 +3262,15 @@ export function buildRankingSnapshot(
   const normalisedByHash = new Map(
     normalisation.entries.map((n) => [n.emailHash, n]),
   );
+  const confidenceByHash = new Map(
+    confidence.entries.map((c) => [c.emailHash, c]),
+  );
   const engineers: EngineerRankingEntry[] = composite.entries
     .filter((c) => c.composite !== null && c.rank !== null)
     .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
     .map((c) => {
       const normalised = normalisedByHash.get(c.emailHash);
+      const ci = confidenceByHash.get(c.emailHash);
       return {
         emailHash: c.emailHash,
         displayName: c.displayName,
@@ -2775,7 +3279,10 @@ export function buildRankingSnapshot(
         adjustedPercentile: normalised?.adjustedPercentile ?? null,
         rawPercentile: normalised?.rawPercentile ?? null,
         eligibility: "competitive",
-        confidence: null,
+        confidence:
+          ci && ci.ciLow !== null && ci.ciHigh !== null
+            ? { low: ci.ciLow, high: ci.ciHigh }
+            : null,
       };
     });
 
@@ -2794,6 +3301,7 @@ export function buildRankingSnapshot(
     lenses,
     normalisation,
     composite,
+    confidence,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -2832,6 +3340,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
   const lenses = buildLenses({ entries });
   const normalisation = buildNormalisation({ entries });
   const composite = buildComposite({ entries, lenses, normalisation });
+  const confidence = buildConfidence({ entries, composite });
 
   return {
     status: "methodology_pending",
@@ -2856,6 +3365,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     lenses,
     normalisation,
     composite,
+    confidence,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

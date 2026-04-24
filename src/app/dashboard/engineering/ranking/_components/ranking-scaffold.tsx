@@ -2,9 +2,12 @@ import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
 import {
   bucketNormalisationDeltas,
   type CompositeBundle,
+  type ConfidenceBundle,
+  type ConfidenceTieGroup,
   type CorrelationPair,
   type EligibilityEntry,
   type EligibilityStatus,
+  type EngineerConfidence,
   type EngineerNormalisation,
   type EngineeringRankingSnapshot,
   type LensDisagreementRow,
@@ -901,7 +904,13 @@ function formatPct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function CompositeSection({ composite }: { composite: CompositeBundle }) {
+function CompositeSection({
+  composite,
+  confidence,
+}: {
+  composite: CompositeBundle;
+  confidence: ConfidenceBundle;
+}) {
   const scored = composite.entries.filter(
     (e) => e.composite !== null && e.rank !== null,
   ).length;
@@ -954,7 +963,7 @@ function CompositeSection({ composite }: { composite: CompositeBundle }) {
         </div>
       )}
 
-      <CompositeTopTable composite={composite} />
+      <CompositeTopTable composite={composite} confidence={confidence} />
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="rounded-md border border-border/40 bg-background/60 p-4">
@@ -1161,7 +1170,221 @@ function CompositeSection({ composite }: { composite: CompositeBundle }) {
   );
 }
 
-function CompositeTopTable({ composite }: { composite: CompositeBundle }) {
+function TieGroupCard({ group }: { group: ConfidenceTieGroup }) {
+  return (
+    <div className="rounded-md border border-warning/40 bg-warning/5 p-3">
+      <div className="flex items-baseline justify-between text-[11px] uppercase tracking-[0.12em] text-warning">
+        <span>Tie group {group.groupId}</span>
+        <span>
+          ranks {group.rankStart}–{group.rankEnd} · {group.size} engineers
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1 text-xs">
+        {group.members.map((m) => (
+          <li
+            key={m.emailHash}
+            className="flex items-center justify-between gap-3 text-foreground"
+          >
+            <span>
+              <span className="tabular-nums text-muted-foreground">#{m.rank}</span>{" "}
+              {m.displayName}
+            </span>
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              composite {m.composite.toFixed(0)} · CI {m.ciLow.toFixed(0)}–{m.ciHigh.toFixed(0)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
+  const scored = confidence.entries.filter(
+    (e) => e.composite !== null && e.ciLow !== null,
+  );
+  const widest = [...scored]
+    .filter((e) => e.ciWidth !== null)
+    .sort((a, b) => (b.ciWidth ?? 0) - (a.ciWidth ?? 0))
+    .slice(0, 5);
+  const tightest = [...scored]
+    .filter((e) => e.ciWidth !== null)
+    .sort((a, b) => (a.ciWidth ?? 0) - (b.ciWidth ?? 0))
+    .slice(0, 5);
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Confidence bands and statistical ties
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            {confidence.contract}
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>
+            {confidence.bootstrapIterations} bootstrap replicates ·{" "}
+            {(confidence.ciCoverage * 100).toFixed(0)}% CI
+          </div>
+          <div className="mt-1">
+            {confidence.globalDominanceApplied
+              ? `Global widening ×${confidence.dominanceWidening} (dominance-blocked)`
+              : "Per-engineer widening only"}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Statistical-tie groups
+          </h4>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            Rank-adjacent engineers whose 80% CIs overlap. Read these as
+            "the page must not narrate an order between them" — not "they are
+            equal in absolute terms".
+          </p>
+          {confidence.tieGroups.length === 0 ? (
+            <p className="mt-3 text-xs italic text-muted-foreground">
+              No statistical-tie groups in this snapshot — every rank-adjacent
+              pair has bands narrow enough to read as a defensible ordering.
+            </p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {confidence.tieGroups.map((g) => (
+                <TieGroupCard key={g.groupId} group={g} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Widest and tightest bands
+          </h4>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            The widest bands are where the methodology is least confident —
+            usually small-sample or short-tenure engineers. The tightest
+            bands are where the cohort signal disagreement and missingness
+            are lowest.
+          </p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-warning">
+                Widest 5
+              </div>
+              <ul className="mt-1 space-y-1 text-xs">
+                {widest.length === 0 && (
+                  <li className="italic text-muted-foreground">No scored engineers.</li>
+                )}
+                {widest.map((e) => (
+                  <li
+                    key={e.emailHash}
+                    className="flex items-baseline justify-between gap-2"
+                  >
+                    <span className="text-foreground">
+                      <span className="tabular-nums text-muted-foreground">
+                        #{e.rank}
+                      </span>{" "}
+                      {e.displayName}
+                    </span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      ±{((e.ciWidth ?? 0) / 2).toFixed(1)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">
+                Tightest 5
+              </div>
+              <ul className="mt-1 space-y-1 text-xs">
+                {tightest.length === 0 && (
+                  <li className="italic text-muted-foreground">No scored engineers.</li>
+                )}
+                {tightest.map((e) => (
+                  <li
+                    key={e.emailHash}
+                    className="flex items-baseline justify-between gap-2"
+                  >
+                    <span className="text-foreground">
+                      <span className="tabular-nums text-muted-foreground">
+                        #{e.rank}
+                      </span>{" "}
+                      {e.displayName}
+                    </span>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
+                      ±{((e.ciWidth ?? 0) / 2).toFixed(1)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Confidence-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {confidence.limitations.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function ConfidenceBand({ entry }: { entry: EngineerConfidence | undefined }) {
+  if (!entry || entry.composite === null || entry.ciLow === null || entry.ciHigh === null) {
+    return <span className="text-[10px] italic text-muted-foreground">no band</span>;
+  }
+  const low = Math.max(0, Math.min(100, entry.ciLow));
+  const high = Math.max(0, Math.min(100, entry.ciHigh));
+  const point = Math.max(0, Math.min(100, entry.composite));
+  const tone = entry.inTieGroup ? "bg-warning/30" : "bg-primary/25";
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="relative h-2 w-32 rounded-full bg-muted/50">
+        <div
+          className={`absolute top-0 h-2 rounded-full ${tone}`}
+          style={{
+            left: `${low}%`,
+            width: `${Math.max(0.5, high - low)}%`,
+          }}
+        />
+        <div
+          className="absolute top-[-2px] h-3 w-[2px] bg-foreground"
+          style={{ left: `calc(${point}% - 1px)` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>
+          {low.toFixed(0)}–{high.toFixed(0)}
+        </span>
+        {entry.inTieGroup && entry.tieGroupId !== null && (
+          <span className="rounded-sm border border-warning/40 bg-warning/10 px-1 text-warning">
+            tie {entry.tieGroupId}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CompositeTopTable({
+  composite,
+  confidence,
+}: {
+  composite: CompositeBundle;
+  confidence: ConfidenceBundle;
+}) {
+  const ciByHash = new Map(confidence.entries.map((c) => [c.emailHash, c]));
   return (
     <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
       <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -1185,42 +1408,57 @@ function CompositeTopTable({ composite }: { composite: CompositeBundle }) {
                 <th className="py-2 pr-3 text-right font-medium">C delivery</th>
                 <th className="py-2 pr-3 text-right font-medium">Adjusted</th>
                 <th className="py-2 pr-3 text-right font-medium">Composite</th>
+                <th className="py-2 pr-3 font-medium">80% CI</th>
+                <th className="py-2 pr-3 text-right font-medium">Rank CI</th>
                 <th className="py-2 pr-3 text-right font-medium">Methods</th>
               </tr>
             </thead>
             <tbody>
-              {composite.topN.map((e) => (
-                <tr
-                  key={e.emailHash || e.displayName}
-                  className="border-b border-border/30 align-top"
-                >
-                  <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
-                    {e.rank}
-                  </td>
-                  <td className="py-2 pr-3 text-foreground">{e.displayName}</td>
-                  <td className="py-2 pr-3 text-muted-foreground">
-                    {e.discipline} · {e.levelLabel}
-                  </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {formatPercentile(e.output)}
-                  </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {formatPercentile(e.impact)}
-                  </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {formatPercentile(e.delivery)}
-                  </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {formatPercentile(e.adjusted)}
-                  </td>
-                  <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
-                    {formatPercentile(e.composite)}
-                  </td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                    {e.presentMethodCount} / 4
-                  </td>
-                </tr>
-              ))}
+              {composite.topN.map((e) => {
+                const ci = ciByHash.get(e.emailHash);
+                return (
+                  <tr
+                    key={e.emailHash || e.displayName}
+                    className="border-b border-border/30 align-top"
+                  >
+                    <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                      {e.rank}
+                    </td>
+                    <td className="py-2 pr-3 text-foreground">
+                      {e.displayName}
+                    </td>
+                    <td className="py-2 pr-3 text-muted-foreground">
+                      {e.discipline} · {e.levelLabel}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {formatPercentile(e.output)}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {formatPercentile(e.impact)}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {formatPercentile(e.delivery)}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {formatPercentile(e.adjusted)}
+                    </td>
+                    <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
+                      {formatPercentile(e.composite)}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <ConfidenceBand entry={ci} />
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {ci && ci.ciRankLow !== null && ci.ciRankHigh !== null
+                        ? `${ci.ciRankLow}–${ci.ciRankHigh}`
+                        : "—"}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {e.presentMethodCount} / 4
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1369,17 +1607,23 @@ export function RankingScaffold({
               lens A (output), lens B (SHAP impact), lens C (squad-delivery
               context), and the tenure/role-adjusted percentile. Effective
               signal-weight decomposition, leave-one-method-out sensitivity,
-              and a PR/log-impact dominance check are all visible below.
-              Confidence bands, per-engineer attribution drilldowns, ranking
-              snapshots, the movers view, the anti-gaming audit, and the
-              stability check are still pending — so the rank is an evidence
-              composite, not a final adjudication.
+              a PR/log-impact dominance check, and 80% bootstrap confidence
+              bands with statistical-tie groups are all visible below.
+              Per-engineer attribution drilldowns, ranking snapshots, the
+              movers view, the anti-gaming audit, and the stability check
+              are still pending — so the rank is an evidence composite, not
+              a final adjudication.
             </p>
           </div>
         </div>
       </section>
 
-      <CompositeSection composite={snapshot.composite} />
+      <CompositeSection
+        composite={snapshot.composite}
+        confidence={snapshot.confidence}
+      />
+
+      <ConfidenceSection confidence={snapshot.confidence} />
 
       <CoverageSection snapshot={snapshot} />
 
@@ -1446,9 +1690,10 @@ export function RankingScaffold({
             competitive engineer currently has fewer than{" "}
             {snapshot.composite.minPresentMethods} present methods. Live
             GitHub, impact-model, and Swarmia data must be populating the
-            signal rows before the composite can produce a rank. Confidence
-            bands, per-engineer attribution drilldowns, ranking snapshots, the
-            movers view, and the stability check remain the outstanding work.
+            signal rows before the composite can produce a rank.
+            Per-engineer attribution drilldowns, ranking snapshots, the
+            movers view, the anti-gaming audit, and the stability check
+            remain the outstanding work.
           </p>
         </section>
       ) : null}
