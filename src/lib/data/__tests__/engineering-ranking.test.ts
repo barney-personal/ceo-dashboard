@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   DISCIPLINE_POOL_FALLBACK,
+  RANKING_COMPOSITE_METHOD_LABELS,
+  RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
+  RANKING_COMPOSITE_MIN_METHODS,
+  RANKING_COMPOSITE_TOP_N,
   RANKING_DISAGREEMENT_EPSILON,
   RANKING_DISAGREEMENT_MIN_LENSES,
+  RANKING_LEAVE_ONE_OUT_TOP_MOVERS,
   RANKING_LENS_DEFINITIONS,
   RANKING_LENS_TOP_N,
+  RANKING_MAX_ACTIVITY_CORRELATION,
+  RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
   RANKING_METHODOLOGY_VERSION,
   RANKING_MIN_COHORT_SIZE,
   RANKING_MIN_OVERLAP_SAMPLES,
@@ -13,6 +20,7 @@ import {
   RANKING_RAMP_UP_DAYS,
   RANKING_SIGNAL_WINDOW_DAYS,
   bucketNormalisationDeltas,
+  buildComposite,
   buildEligibleRoster,
   buildLenses,
   buildNormalisation,
@@ -22,6 +30,7 @@ import {
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
+  type CompositeMethod,
   type Discipline,
   type EligibilityEntry,
   type EligibilityGithubMapRow,
@@ -2233,5 +2242,606 @@ describe("M11 normalisation delta sign buckets + truthful page copy", () => {
     // closest cousins creeping back in.
     expect(joined).not.toMatch(/M10 synthesises the (final )?composite/);
     expect(joined).not.toMatch(/M11 synthesises the (final )?composite/);
+  });
+});
+
+describe("M12 composite score contract + sensitivity + dominance", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  it("exposes composite thresholds as positive constants", () => {
+    expect(RANKING_COMPOSITE_MIN_METHODS).toBe(2);
+    expect(RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT).toBeGreaterThan(0);
+    expect(RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT).toBeLessThanOrEqual(1);
+    expect(RANKING_MAX_ACTIVITY_CORRELATION).toBeGreaterThan(0);
+    expect(RANKING_MAX_ACTIVITY_CORRELATION).toBeLessThanOrEqual(1);
+    expect(RANKING_COMPOSITE_TOP_N).toBeGreaterThan(0);
+    expect(RANKING_LEAVE_ONE_OUT_TOP_MOVERS).toBeGreaterThan(0);
+    // The four composite methods are named with human-readable labels so the
+    // effective-weight decomposition and leave-one-out rows can be rendered
+    // without the scaffold re-deriving the mapping.
+    const methods: CompositeMethod[] = [
+      "output",
+      "impact",
+      "delivery",
+      "adjusted",
+    ];
+    for (const m of methods) {
+      expect(RANKING_COMPOSITE_METHOD_LABELS[m]).toBeTruthy();
+    }
+  });
+
+  it("every method's internal signal weights sum to 1.0", () => {
+    for (const method of [
+      "output",
+      "impact",
+      "delivery",
+      "adjusted",
+    ] as CompositeMethod[]) {
+      const total = RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[method].reduce(
+        (s, c) => s + c.weight,
+        0,
+      );
+      expect(total).toBeCloseTo(1, 6);
+    }
+  });
+
+  it("composite is the median of present methods and is null below the minimum", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    // With five competitive engineers and all signals present, every engineer
+    // should have at least two present methods and therefore a non-null
+    // composite.
+    for (const c of composite.entries) {
+      expect(c.presentMethodCount).toBeGreaterThanOrEqual(
+        RANKING_COMPOSITE_MIN_METHODS,
+      );
+      expect(c.composite).not.toBeNull();
+      // Composite must lie between the smallest and largest present method
+      // by the definition of the median.
+      const present = [c.output, c.impact, c.delivery, c.adjusted].filter(
+        (v): v is number => v !== null && Number.isFinite(v),
+      );
+      expect(c.composite!).toBeGreaterThanOrEqual(Math.min(...present));
+      expect(c.composite!).toBeLessThanOrEqual(Math.max(...present));
+    }
+  });
+
+  it("engineer with only one present method is unscored (composite null, rank null)", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3),
+      // Engineer 4 has no impact data, no squad delivery data, and zero
+      // GitHub activity → only the adjusted-percentile method could score
+      // them and that also collapses to null without a rawScore.
+      competitiveEntry(4, { hasImpactModelRow: false }),
+    ];
+    const signals = [
+      signalRow(1),
+      signalRow(2),
+      signalRow(3),
+      {
+        emailHash: hashEmailForRanking("eng4@meetcleo.com"),
+        prCount: null,
+        commitCount: null,
+        additions: null,
+        deletions: null,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      } as PerEngineerSignalRow,
+    ];
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const fourth = composite.entries.find((e) => e.displayName === "Engineer 4");
+    expect(fourth).toBeDefined();
+    expect(fourth!.composite).toBeNull();
+    expect(fourth!.rank).toBeNull();
+    expect(fourth!.methodsSummary.toLowerCase()).toMatch(
+      /no methods|below the \d-method|no methods present/,
+    );
+  });
+
+  it("composite rank is produced for scored engineers and skipped for unscored", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3),
+    ];
+    const signals = [signalRow(1), signalRow(2), signalRow(3)];
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const scored = composite.entries.filter((e) => e.composite !== null);
+    // All ranks must be 1..n with no duplicates and no gaps.
+    const ranks = scored.map((e) => e.rank).sort((a, b) => (a ?? 0) - (b ?? 0));
+    expect(new Set(ranks).size).toBe(ranks.length);
+    expect(ranks).toEqual([...ranks].sort((a, b) => (a ?? 0) - (b ?? 0)));
+    expect(ranks[0]).toBe(1);
+    expect(ranks[ranks.length - 1]).toBe(scored.length);
+  });
+
+  it("effective signal weights sum to 1.0 across all four methods", () => {
+    const composite = buildComposite({
+      entries: [],
+      lenses: buildLenses({ entries: [] }),
+      normalisation: buildNormalisation({ entries: [] }),
+    });
+    const total = composite.effectiveSignalWeights.reduce(
+      (s, w) => s + w.totalWeight,
+      0,
+    );
+    expect(total).toBeCloseTo(1, 6);
+    // Every signal must be strictly positive — a zero-weight signal on the
+    // dominance table is just confusion.
+    for (const w of composite.effectiveSignalWeights) {
+      expect(w.totalWeight).toBeGreaterThan(0);
+    }
+  });
+
+  it("log-impact exceeds the 30% effective-weight ceiling and is surfaced with a recorded justification", () => {
+    const composite = buildComposite({
+      entries: [],
+      lenses: buildLenses({ entries: [] }),
+      normalisation: buildNormalisation({ entries: [] }),
+    });
+    const logImpact = composite.effectiveSignalWeights.find(
+      (w) => w.signal === "Log-impact composite",
+    );
+    expect(logImpact).toBeDefined();
+    expect(logImpact!.totalWeight).toBeGreaterThan(
+      RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
+    );
+    expect(logImpact!.flagged).toBe(true);
+    expect(logImpact!.justification).toBeTruthy();
+    // The dominance warnings panel must name the log-impact overshoot as a
+    // methodology trade-off so the page cannot show a flagged signal without
+    // telling the reader why it is tolerated.
+    const mentionsLogImpact = composite.dominanceWarnings.some(
+      (w) => w.toLowerCase().includes("log-impact"),
+    );
+    expect(mentionsLogImpact).toBe(true);
+  });
+
+  it("no non-log-impact signal exceeds the 30% effective-weight ceiling", () => {
+    const composite = buildComposite({
+      entries: [],
+      lenses: buildLenses({ entries: [] }),
+      normalisation: buildNormalisation({ entries: [] }),
+    });
+    for (const w of composite.effectiveSignalWeights) {
+      if (w.signal === "Log-impact composite") continue;
+      expect(w.totalWeight).toBeLessThanOrEqual(
+        RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
+      );
+      expect(w.flagged).toBe(false);
+    }
+  });
+
+  it("AI tokens and AI spend do not appear in any effective-weight contribution", () => {
+    const composite = buildComposite({
+      entries: [],
+      lenses: buildLenses({ entries: [] }),
+      normalisation: buildNormalisation({ entries: [] }),
+    });
+    for (const w of composite.effectiveSignalWeights) {
+      expect(w.signal.toLowerCase()).not.toMatch(/ai tokens|ai spend/);
+    }
+  });
+
+  it("leave-one-method-out rows exist for every method and ranks change when a method is removed", () => {
+    // Construct signals so that one engineer is the top on output but
+    // middling on impact/delivery, and another engineer is the top on impact
+    // but middling on output/delivery. Dropping either lens must change the
+    // composite rank — otherwise the composite is insensitive to the method.
+    const entries = [
+      competitiveEntry(1, { displayName: "Top on output" }),
+      competitiveEntry(2, { displayName: "Balanced" }),
+      competitiveEntry(3, { displayName: "Top on impact" }),
+      competitiveEntry(4, { displayName: "Low everything" }),
+    ];
+    const signals = [
+      signalRow(1, {
+        prCount: 200,
+        commitCount: 500,
+        additions: 40_000,
+        deletions: 5_000,
+        shapPredicted: 20,
+        shapActual: 25,
+        shapResidual: 5,
+      }),
+      signalRow(2, {
+        prCount: 30,
+        commitCount: 60,
+        additions: 3_000,
+        deletions: 500,
+        shapPredicted: 60,
+        shapActual: 60,
+        shapResidual: 0,
+      }),
+      signalRow(3, {
+        prCount: 5,
+        commitCount: 10,
+        additions: 500,
+        deletions: 100,
+        shapPredicted: 180,
+        shapActual: 200,
+        shapResidual: 20,
+      }),
+      signalRow(4, {
+        prCount: 2,
+        commitCount: 4,
+        additions: 100,
+        deletions: 20,
+        shapPredicted: 3,
+        shapActual: 2,
+        shapResidual: -1,
+      }),
+    ];
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const methods: CompositeMethod[] = [
+      "output",
+      "impact",
+      "delivery",
+      "adjusted",
+    ];
+    for (const m of methods) {
+      const row = composite.leaveOneOut.find((r) => r.removed === m);
+      expect(row).toBeDefined();
+      expect(row!.removedLabel).toBe(RANKING_COMPOSITE_METHOD_LABELS[m]);
+    }
+    // Removing the output lens must alter at least one engineer's rank
+    // meaningfully — composite should not be invariant to a lens.
+    const outputOut = composite.leaveOneOut.find((r) => r.removed === "output");
+    expect(outputOut).toBeDefined();
+    const anyDelta = outputOut!.movers.some(
+      (m) => m.delta !== null && m.delta !== 0,
+    );
+    expect(anyDelta).toBe(true);
+  });
+
+  it("leave-one-method-out correlation-to-baseline is rho=1.0 for a cohort where that method agrees with the others", () => {
+    // If every engineer's four methods agree perfectly (e.g. identical
+    // scaled signals), dropping any method cannot change the relative order
+    // — correlation to baseline must be 1.0.
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    // Use strictly monotonic positive integers for every signal — rank order
+    // is identical across lenses because every normalised signal has the
+    // same rank-percentile ordering.
+    const signals = Array.from({ length: 6 }, (_, i) => {
+      const v = i + 1;
+      return signalRow(v, {
+        prCount: v,
+        commitCount: v,
+        additions: v * 100,
+        deletions: 0,
+        shapPredicted: v,
+        shapActual: v,
+        shapResidual: v,
+        squadCycleTimeHours: 100 - v,
+        squadReviewRatePercent: v,
+        squadTimeToFirstReviewHours: 100 - v,
+      });
+    });
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    for (const row of composite.leaveOneOut) {
+      expect(row.correlationToBaseline).not.toBeNull();
+      expect(row.correlationToBaseline!).toBeCloseTo(1, 3);
+    }
+  });
+
+  it("final-rank correlation flags PR count and log-impact as dominance risks", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 6 }, (_, i) => signalRow(i + 1));
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const prCount = composite.finalRankCorrelations.find(
+      (c) => c.signal === "PR count",
+    );
+    const logImpact = composite.finalRankCorrelations.find(
+      (c) => c.signal === "Log impact",
+    );
+    expect(prCount).toBeDefined();
+    expect(logImpact).toBeDefined();
+    expect(prCount!.dominanceRisk).toBe(true);
+    expect(logImpact!.dominanceRisk).toBe(true);
+    // Signals that are not dominance risks must be reported without flagging
+    // — we still want the row, we just do not threshold-gate it.
+    const shapActual = composite.finalRankCorrelations.find(
+      (c) => c.signal === "SHAP actual impact",
+    );
+    expect(shapActual).toBeDefined();
+    expect(shapActual!.dominanceRisk).toBe(false);
+    expect(shapActual!.exceedsThreshold).toBe(false);
+  });
+
+  it("PR-count-only cohort blocks the methodology with a dominance warning", () => {
+    // Pathological fixture: every non-PR-count / non-log-impact signal is
+    // constant, so the composite can only order by PR-count-driven signals.
+    // The final rank must end up highly correlated with PR count, tripping
+    // the dominance check.
+    const entries = Array.from({ length: 8 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => {
+      const pr = i + 1;
+      return {
+        emailHash: hashEmailForRanking(`eng${i + 1}@meetcleo.com`),
+        prCount: pr,
+        commitCount: pr,
+        additions: pr * 100,
+        deletions: 0,
+        // Constant SHAP signals → impact lens cannot differentiate.
+        shapPredicted: 50,
+        shapActual: 50,
+        shapResidual: 0,
+        aiTokens: null,
+        aiSpend: null,
+        // Constant squad delivery → delivery lens cannot differentiate.
+        squadCycleTimeHours: 30,
+        squadReviewRatePercent: 80,
+        squadTimeToFirstReviewHours: 3,
+        squadPrsInProgress: 5,
+      } as PerEngineerSignalRow;
+    });
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    expect(composite.dominanceBlocked).toBe(true);
+    const prCount = composite.finalRankCorrelations.find(
+      (c) => c.signal === "PR count",
+    );
+    expect(prCount).toBeDefined();
+    expect(prCount!.exceedsThreshold).toBe(true);
+    const activityWarning = composite.dominanceWarnings.some((w) =>
+      /(pr count|log impact)/i.test(w) &&
+      /(collapsed|activity|threshold)/i.test(w),
+    );
+    expect(activityWarning).toBe(true);
+  });
+
+  it("flat PR count across the cohort leaves the dominance check undefined, not blocked", () => {
+    // When every engineer has the same PR count (and same log-impact),
+    // Spearman has zero variance on one side and returns null — a null rho
+    // must never be read as exceeding the threshold or blocking the rank.
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) =>
+      signalRow(i + 1, {
+        // Flat GitHub activity — PR count and log-impact cannot order anyone.
+        prCount: 10,
+        commitCount: 20,
+        additions: 1_000,
+        deletions: 100,
+        // SHAP still varies so there is a composite to rank on.
+        shapPredicted: (i + 1) * 10,
+        shapActual: (i + 1) * 12,
+        shapResidual: (i + 1) * 2,
+      }),
+    );
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const prCount = composite.finalRankCorrelations.find(
+      (c) => c.signal === "PR count",
+    );
+    expect(prCount).toBeDefined();
+    expect(prCount!.rho).toBeNull();
+    expect(prCount!.exceedsThreshold).toBe(false);
+    // Zero-variance inputs must not produce a spurious dominance block —
+    // only a real Spearman > threshold can set the blocker.
+    const anyActivityBlock = composite.dominanceWarnings.some((w) =>
+      /(activity|collapsed into)/i.test(w),
+    );
+    expect(anyActivityBlock).toBe(false);
+    expect(composite.dominanceBlocked).toBe(false);
+  });
+
+  it("ramp-up and leaver rows are not composited — only competitive engineers", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2, {
+        eligibility: "ramp_up",
+        tenureDays: 30,
+        reason: "Ramp-up",
+      }),
+      competitiveEntry(3, {
+        eligibility: "inactive_or_leaver",
+        isLeaverOrInactive: true,
+        reason: "Leaver",
+      }),
+    ];
+    const signals = [signalRow(1), signalRow(2), signalRow(3)];
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    const names = composite.entries.map((e) => e.displayName);
+    expect(names).toEqual(["Engineer 1"]);
+  });
+
+  it("topN is capped at RANKING_COMPOSITE_TOP_N and sorted ascending by rank", () => {
+    const size = RANKING_COMPOSITE_TOP_N + 5;
+    const entries = Array.from({ length: size }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: size }, (_, i) => signalRow(i + 1));
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({ entries, lenses, normalisation, signals });
+    expect(composite.topN.length).toBeLessThanOrEqual(RANKING_COMPOSITE_TOP_N);
+    const ranks = composite.topN.map((e) => e.rank as number);
+    for (let i = 1; i < ranks.length; i += 1) {
+      expect(ranks[i]).toBeGreaterThan(ranks[i - 1]);
+    }
+    expect(ranks[0]).toBe(1);
+  });
+
+  it("buildRankingSnapshot attaches the composite bundle and populates top-level engineers with ranks", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const now = new Date("2026-04-24T00:00:00Z");
+    const headcountRows = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: e.squad,
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Core",
+      job_title: "Senior Backend Engineer",
+      manager: e.manager,
+      line_manager_email: `${e.manager?.toLowerCase()}@meetcleo.com`,
+      start_date: "2023-01-01",
+      termination_date: null,
+    }));
+    const githubMap = entries.map((e) => ({
+      githubLogin: e.githubLogin!,
+      employeeEmail: e.email,
+      isBot: false,
+    }));
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel: {
+        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+      },
+      signals,
+      now,
+    });
+    expect(snapshot.composite).toBeDefined();
+    expect(snapshot.composite.entries.length).toBe(entries.length);
+    // Every top-level engineer row carries a non-null rank and a compositeScore.
+    expect(snapshot.engineers.length).toBeGreaterThan(0);
+    for (const e of snapshot.engineers) {
+      expect(e.rank).not.toBeNull();
+      expect(e.compositeScore).not.toBeNull();
+    }
+    // engineers are sorted by rank ascending.
+    const ranks = snapshot.engineers.map((e) => e.rank as number);
+    for (let i = 1; i < ranks.length; i += 1) {
+      expect(ranks[i]).toBeGreaterThan(ranks[i - 1]);
+    }
+  });
+
+  it("direct AI-token inflation cannot change composite rank — identical non-AI signals produce identical composites", () => {
+    const entries = [competitiveEntry(1), competitiveEntry(2)];
+    const baseSignals = [
+      signalRow(1, { aiTokens: 0, aiSpend: 0 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const inflatedSignals = [
+      signalRow(1, { aiTokens: 10_000_000, aiSpend: 50_000 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const lensesBase = buildLenses({ entries, signals: baseSignals });
+    const lensesInflated = buildLenses({ entries, signals: inflatedSignals });
+    const normBase = buildNormalisation({ entries, signals: baseSignals });
+    const normInfl = buildNormalisation({ entries, signals: inflatedSignals });
+    const base = buildComposite({
+      entries,
+      lenses: lensesBase,
+      normalisation: normBase,
+      signals: baseSignals,
+    });
+    const infl = buildComposite({
+      entries,
+      lenses: lensesInflated,
+      normalisation: normInfl,
+      signals: inflatedSignals,
+    });
+    const baseMap = new Map(base.entries.map((e) => [e.displayName, e.composite]));
+    for (const e of infl.entries) {
+      expect(e.composite).toEqual(baseMap.get(e.displayName));
+    }
+  });
+
+  it("composite limitations narrate confidence bands and attribution as still pending", () => {
+    const composite = buildComposite({
+      entries: [],
+      lenses: buildLenses({ entries: [] }),
+      normalisation: buildNormalisation({ entries: [] }),
+    });
+    const joined = composite.limitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/confidence bands/);
+    expect(joined).toMatch(/attribution/);
+  });
+
+  it("snapshot known limitations narrate composite as implemented and confidence/attribution as pending", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    // Composite must no longer be described as pending — it is built and the
+    // page renders it. The guard asserts the page cannot drift back into
+    // "composite is still missing" wording once M12 is live.
+    expect(joined).not.toMatch(
+      /(final )?composite score[^.]*(still pending|not yet|yet to|pending)/,
+    );
+    // Confidence bands, attribution, snapshots, movers, and stability are
+    // still genuinely pending and must be named.
+    expect(joined).toMatch(/confidence bands/);
+    expect(joined).toMatch(/attribution/);
+    expect(joined).toMatch(/snapshots/);
+    expect(joined).toMatch(/movers/);
+    expect(joined).toMatch(/stability/);
   });
 });

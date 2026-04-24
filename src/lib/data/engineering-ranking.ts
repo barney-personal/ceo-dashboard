@@ -206,6 +206,15 @@ export interface EngineeringRankingSnapshot {
    * is visible, not implicit.
    */
   normalisation: NormalisationBundle;
+  /**
+   * Composite ranking (median of the four methods: A output, B impact,
+   * C delivery, adjusted) plus effective-weight decomposition, leave-one-
+   * method-out sensitivity, final-rank correlations against raw signals, and
+   * the dominance warning state. This is the ranking the page exposes today,
+   * with confidence bands (M13), attribution drilldowns (M14), snapshots/
+   * movers (M15-M16), and stability/anti-gaming (M17-M18) still pending.
+   */
+  composite: CompositeBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -1577,7 +1586,7 @@ export function buildLenses({
       "Lens C is squad-delivery context, not an individual review/cycle-time signal. Individual review turnaround and PR cycle time are not persisted in the current GitHub schema.",
       "Engineers absent from the impact-model training set score null on lens B — the methodology refuses to fabricate a neutral-looking impact reading.",
       `Disagreement table only surfaces rows where max(present lenses) − min(present lenses) exceeds ${RANKING_DISAGREEMENT_EPSILON} percentile points. Ties and near-ties are treated as agreement and omitted, so the table never presents a directional narrative for lenses that actually agree.`,
-      "These three lenses are exploratory. Tenure and role normalisation (M10) are applied on top; the final composite that turns lenses + normalisation into a single ranking is still pending — no engineer is yet ranked on the page.",
+      "These three lenses feed the composite — they are one input each to the median-of-four methods the composite takes, alongside the tenure/role-adjusted percentile. Lens A/B/C scores are never the final ranking in isolation; read them as evidence, and read disagreements as where the methodology earns its money.",
     ],
   };
 }
@@ -2063,6 +2072,537 @@ export function bucketNormalisationDeltas(
   return { lifts, drops };
 }
 
+/* --------------------------------------------------------------------------
+ * M12 — composite score contract + sensitivity and dominance checks
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Minimum number of scored methods (A output, B impact, C delivery, adjusted)
+ * an engineer must have present for the composite median to be computed.
+ * Below this threshold the composite is null — we refuse to synthesise a
+ * ranking from a single method because it would collapse into that one
+ * method's bias.
+ */
+export const RANKING_COMPOSITE_MIN_METHODS = 2 as const;
+
+/**
+ * Any single raw signal whose effective weight in the composite exceeds this
+ * threshold must be explicitly justified in the methodology panel — otherwise
+ * the composite is dominated by one signal and the page surfaces a dominance
+ * warning.
+ */
+export const RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT = 0.3 as const;
+
+/**
+ * If the final composite rank is Spearman-correlated with raw PR count (or
+ * log-impact) above this threshold the methodology has collapsed into
+ * activity volume — surface a dominance warning and block the ranking from
+ * being read as a final adjudication until the correlation falls.
+ */
+export const RANKING_MAX_ACTIVITY_CORRELATION = 0.75 as const;
+
+/** Engineers surfaced in the composite top-N on the page. */
+export const RANKING_COMPOSITE_TOP_N = 25 as const;
+
+/** Top N movers surfaced per leave-one-method-out row. */
+export const RANKING_LEAVE_ONE_OUT_TOP_MOVERS = 10 as const;
+
+/**
+ * The four methods combined into the composite. A/B/C are the M8 lenses;
+ * `adjusted` is the M10 tenure/role-adjusted percentile. Equal-method median
+ * is robust to one noisy method — a single lens producing a bad reading
+ * (e.g. SHAP disagreement on one engineer) cannot drag the composite more
+ * than the other three methods allow.
+ */
+export type CompositeMethod = "output" | "impact" | "delivery" | "adjusted";
+
+/** Human-readable label for each composite method, shown on the page. */
+export const RANKING_COMPOSITE_METHOD_LABELS: Record<CompositeMethod, string> = {
+  output: "A — Individual output",
+  impact: "B — SHAP impact",
+  delivery: "C — Squad delivery context",
+  adjusted: "Tenure/role-adjusted percentile",
+};
+
+/**
+ * The raw-signal weights each composite method carries. Used only for the
+ * effective signal-weight decomposition — the composite itself is the median
+ * of the four method scores, not a weighted sum. `adjusted` is 100%
+ * log-impact because the M10 normalisation layer's rawScore is the log-impact
+ * composite and all three sub-adjustments (discipline, level, tenure) operate
+ * on that one raw signal.
+ */
+export const RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS: Record<
+  CompositeMethod,
+  readonly { signal: string; weight: number }[]
+> = {
+  output: [
+    { signal: "Log-impact composite", weight: 0.5 },
+    { signal: "PR count (sqrt-damped)", weight: 0.2 },
+    { signal: "Commit count (sqrt-damped)", weight: 0.15 },
+    { signal: "Net lines (log-signed)", weight: 0.15 },
+  ],
+  impact: [
+    { signal: "SHAP predicted impact", weight: 0.4 },
+    { signal: "SHAP actual impact", weight: 0.4 },
+    { signal: "SHAP residual", weight: 0.2 },
+  ],
+  delivery: [
+    { signal: "Squad review rate %", weight: 0.4 },
+    { signal: "Squad cycle time (inverted)", weight: 0.3 },
+    { signal: "Squad time-to-first-review (inverted)", weight: 0.3 },
+  ],
+  adjusted: [
+    // Every sub-adjustment in the M10 normalisation layer uses log-impact as
+    // the rawScore. Surfaced as 100% log-impact so the effective-weight sum
+    // truthfully reflects this overlap with lens A.
+    { signal: "Log-impact composite", weight: 1.0 },
+  ],
+};
+
+/** Per-engineer composite entry. Carries each method's percentile + composite. */
+export interface EngineerCompositeEntry {
+  emailHash: string;
+  displayName: string;
+  discipline: Discipline;
+  levelLabel: string;
+  output: number | null;
+  impact: number | null;
+  delivery: number | null;
+  adjusted: number | null;
+  presentMethodCount: number;
+  /** Median of present methods on [0, 100]; null if fewer than the min methods. */
+  composite: number | null;
+  /** Cross-cohort rank-percentile of `composite`; null when composite is null. */
+  compositePercentile: number | null;
+  /** 1-indexed rank among engineers with a non-null composite; null otherwise. */
+  rank: number | null;
+  /** Plain-language description of how the composite was formed for this row. */
+  methodsSummary: string;
+}
+
+/** One effective signal weight broken down per contributing method. */
+export interface EffectiveSignalWeightContribution {
+  method: CompositeMethod;
+  methodWeight: number;
+  signalWeightInMethod: number;
+  effectiveWeight: number;
+}
+
+/** Aggregated effective weight for a single raw signal across the composite. */
+export interface EffectiveSignalWeight {
+  signal: string;
+  totalWeight: number;
+  contributions: EffectiveSignalWeightContribution[];
+  /** True when `totalWeight > RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT`. */
+  flagged: boolean;
+  /** Methodology justification; null unless flagged. */
+  justification: string | null;
+}
+
+/** One leave-one-method-out sensitivity row. */
+export interface LeaveOneMethodOut {
+  removed: CompositeMethod;
+  removedLabel: string;
+  scoredBefore: number;
+  scoredAfter: number;
+  /**
+   * Spearman rho between the baseline composite rank and the rank that would
+   * result from dropping this method. Computed over engineers scored in both.
+   * `null` when either side has fewer than two scored engineers.
+   */
+  correlationToBaseline: number | null;
+  /** Top engineers by absolute rank delta when the method is removed. */
+  movers: Array<{
+    emailHash: string;
+    displayName: string;
+    baselineRank: number | null;
+    newRank: number | null;
+    delta: number | null;
+  }>;
+}
+
+/** Spearman rho of the final composite rank against a specific signal. */
+export interface FinalRankCorrelation {
+  signal: string;
+  rho: number | null;
+  n: number;
+  /** Raw-activity signals we pin as dominance risks (PR count, log-impact). */
+  dominanceRisk: boolean;
+  /** `|rho| > RANKING_MAX_ACTIVITY_CORRELATION`; only meaningful when `dominanceRisk`. */
+  exceedsThreshold: boolean;
+}
+
+export interface CompositeBundle {
+  /** Plain-language description of how the composite is formed. */
+  contract: string;
+  /** The methods combined into the composite. */
+  methods: readonly CompositeMethod[];
+  /** Minimum present-method count to produce a composite (`null` below this). */
+  minPresentMethods: number;
+  /** Effective-weight threshold above which a signal must be justified. */
+  maxSingleSignalEffectiveWeight: number;
+  /** Dominance-correlation threshold against PR count / log-impact. */
+  dominanceCorrelationThreshold: number;
+  /** Every competitive engineer, scored or unscored. */
+  entries: EngineerCompositeEntry[];
+  /** Top `RANKING_COMPOSITE_TOP_N` scored engineers by composite. */
+  topN: EngineerCompositeEntry[];
+  /** Decomposition of the composite's raw-signal weights. */
+  effectiveSignalWeights: EffectiveSignalWeight[];
+  /** One row per composite method, measuring that method's leverage on the rank. */
+  leaveOneOut: LeaveOneMethodOut[];
+  /** Spearman of composite rank against each per-engineer numeric signal. */
+  finalRankCorrelations: FinalRankCorrelation[];
+  /** Plain-language dominance warnings surfaced next to the ranking. */
+  dominanceWarnings: string[];
+  /** True when any dominance-risk signal exceeds the activity correlation. */
+  dominanceBlocked: boolean;
+  /** Plain-language composite-stage limitations shown on the page. */
+  limitations: string[];
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Justifications surfaced when an effective signal weight exceeds the
+ * `RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT` threshold. Documented here
+ * rather than synthesised at render time so the page's methodology panel
+ * and the worklog stay in sync.
+ */
+const EFFECTIVE_SIGNAL_JUSTIFICATIONS: Record<string, string> = {
+  "Log-impact composite":
+    "Log-impact appears in both lens A (the largest weighted component) and the M10 normalisation layer (which is built on this single rawScore), so its effective weight across the composite exceeds 30%. Until the per-PR LLM rubric or individual review/cycle-time signals land, no higher-quality per-engineer input exists to dilute the share — this is an explicit methodology trade-off, not an oversight, and is named on the dominance panel.",
+};
+
+/**
+ * Raw numeric signals we treat as dominance risks. If the final composite
+ * rank correlates with any of these above `RANKING_MAX_ACTIVITY_CORRELATION`
+ * the ranking has collapsed into activity volume and the page must warn.
+ */
+const DOMINANCE_RISK_SIGNALS = new Set<string>([
+  "PR count",
+  "Log impact",
+]);
+
+function computeEffectiveSignalWeights(
+  methods: readonly CompositeMethod[],
+): EffectiveSignalWeight[] {
+  if (methods.length === 0) return [];
+  const methodWeight = 1 / methods.length;
+  const byName = new Map<string, EffectiveSignalWeight>();
+  for (const method of methods) {
+    for (const { signal, weight } of RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[
+      method
+    ]) {
+      const contribution: EffectiveSignalWeightContribution = {
+        method,
+        methodWeight,
+        signalWeightInMethod: weight,
+        effectiveWeight: methodWeight * weight,
+      };
+      const existing = byName.get(signal);
+      if (existing) {
+        existing.totalWeight += contribution.effectiveWeight;
+        existing.contributions.push(contribution);
+      } else {
+        byName.set(signal, {
+          signal,
+          totalWeight: contribution.effectiveWeight,
+          contributions: [contribution],
+          flagged: false,
+          justification: null,
+        });
+      }
+    }
+  }
+  const totals = [...byName.values()].sort(
+    (a, b) => b.totalWeight - a.totalWeight || a.signal.localeCompare(b.signal),
+  );
+  for (const t of totals) {
+    if (t.totalWeight > RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT) {
+      t.flagged = true;
+      t.justification = EFFECTIVE_SIGNAL_JUSTIFICATIONS[t.signal] ?? null;
+    }
+  }
+  return totals;
+}
+
+function rankScoredEntries(
+  scores: Array<number | null>,
+): Array<number | null> {
+  const present: Array<{ index: number; score: number }> = [];
+  for (let i = 0; i < scores.length; i += 1) {
+    const s = scores[i];
+    if (s === null || !Number.isFinite(s)) continue;
+    present.push({ index: i, score: s });
+  }
+  present.sort((a, b) => b.score - a.score);
+  const ranks = new Array<number | null>(scores.length).fill(null);
+  for (let i = 0; i < present.length; i += 1) {
+    ranks[present[i].index] = i + 1;
+  }
+  return ranks;
+}
+
+function methodsPresentSummary(
+  methodScores: Array<{ key: CompositeMethod; value: number | null }>,
+): string {
+  const present = methodScores
+    .filter((m) => m.value !== null)
+    .map((m) => RANKING_COMPOSITE_METHOD_LABELS[m.key]);
+  if (present.length === 0) return "No methods present — composite null.";
+  if (present.length < RANKING_COMPOSITE_MIN_METHODS) {
+    return `Only ${present.join(", ")} present — below the ${RANKING_COMPOSITE_MIN_METHODS}-method minimum for composite.`;
+  }
+  return `Median of ${present.join(", ")} (${present.length}/4 methods present).`;
+}
+
+/**
+ * Build the composite ranking bundle.
+ *
+ * Contract:
+ *   composite = median(present methods)
+ *   where the methods are A (output), B (impact), C (delivery), adjusted
+ *
+ * The median is deliberately chosen over a weighted mean so a single noisy
+ * lens cannot single-handedly drag an engineer's rank. An engineer must have
+ * at least `RANKING_COMPOSITE_MIN_METHODS` present methods to be scored —
+ * below this the composite is null, not a synthesised neutral.
+ *
+ * In addition to the per-engineer composite this function computes:
+ *  - Effective raw-signal weight decomposition across all four methods and
+ *    flags any signal that exceeds the 30% ceiling without a justification.
+ *  - Leave-one-method-out sensitivity: the Spearman correlation between the
+ *    baseline rank and the rank that results when each method is dropped,
+ *    plus the top engineers whose rank moves the most.
+ *  - Spearman correlation of the composite rank against each per-engineer
+ *    numeric signal, with a dominance flag when PR count / log-impact
+ *    correlates above `RANKING_MAX_ACTIVITY_CORRELATION`.
+ */
+export function buildComposite({
+  entries,
+  lenses,
+  normalisation,
+  signals = [],
+}: {
+  entries: EligibilityEntry[];
+  lenses: LensesBundle;
+  normalisation: NormalisationBundle;
+  signals?: PerEngineerSignalRow[];
+}): CompositeBundle {
+  const competitive = entries.filter((e) => e.eligibility === "competitive");
+  const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
+
+  const methods: readonly CompositeMethod[] = [
+    "output",
+    "impact",
+    "delivery",
+    "adjusted",
+  ];
+
+  const outputByHash = new Map(
+    lenses.lenses.output.entries.map((e) => [e.emailHash, e.score]),
+  );
+  const impactByHash = new Map(
+    lenses.lenses.impact.entries.map((e) => [e.emailHash, e.score]),
+  );
+  const deliveryByHash = new Map(
+    lenses.lenses.delivery.entries.map((e) => [e.emailHash, e.score]),
+  );
+  const adjustedByHash = new Map(
+    normalisation.entries.map((e) => [e.emailHash, e.adjustedPercentile]),
+  );
+
+  const rawEntries: EngineerCompositeEntry[] = competitive.map((entry) => {
+    const output = outputByHash.get(entry.emailHash) ?? null;
+    const impact = impactByHash.get(entry.emailHash) ?? null;
+    const delivery = deliveryByHash.get(entry.emailHash) ?? null;
+    const adjusted = adjustedByHash.get(entry.emailHash) ?? null;
+
+    const methodScores: Array<{ key: CompositeMethod; value: number | null }> =
+      [
+        { key: "output", value: output },
+        { key: "impact", value: impact },
+        { key: "delivery", value: delivery },
+        { key: "adjusted", value: adjusted },
+      ];
+    const presentValues = methodScores
+      .map((m) => m.value)
+      .filter((v): v is number => v !== null && Number.isFinite(v));
+    const composite =
+      presentValues.length < RANKING_COMPOSITE_MIN_METHODS
+        ? null
+        : median(presentValues);
+
+    return {
+      emailHash: entry.emailHash,
+      displayName: entry.displayName,
+      discipline: entry.discipline,
+      levelLabel: entry.levelLabel,
+      output,
+      impact,
+      delivery,
+      adjusted,
+      presentMethodCount: presentValues.length,
+      composite,
+      compositePercentile: null,
+      rank: null,
+      methodsSummary: methodsPresentSummary(methodScores),
+    };
+  });
+
+  const compositeScores = rawEntries.map((e) => e.composite);
+  const compositePercentiles = rankPercentiles(compositeScores);
+  const ranks = rankScoredEntries(compositeScores);
+  const entriesOut: EngineerCompositeEntry[] = rawEntries.map((entry, i) => ({
+    ...entry,
+    compositePercentile: compositePercentiles[i],
+    rank: ranks[i],
+  }));
+
+  const topN = [...entriesOut]
+    .filter(
+      (e): e is EngineerCompositeEntry & { composite: number; rank: number } =>
+        e.composite !== null && e.rank !== null,
+    )
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, RANKING_COMPOSITE_TOP_N);
+
+  const effectiveSignalWeights = computeEffectiveSignalWeights(methods);
+
+  const leaveOneOut: LeaveOneMethodOut[] = methods.map((removed) => {
+    const kept: CompositeMethod[] = methods.filter((m) => m !== removed);
+    const altScores: Array<number | null> = rawEntries.map((e) => {
+      const keep: number[] = [];
+      for (const k of kept) {
+        const v =
+          k === "output"
+            ? e.output
+            : k === "impact"
+              ? e.impact
+              : k === "delivery"
+                ? e.delivery
+                : e.adjusted;
+        if (v !== null && Number.isFinite(v)) keep.push(v);
+      }
+      if (keep.length < RANKING_COMPOSITE_MIN_METHODS) return null;
+      return median(keep);
+    });
+    const altRanks = rankScoredEntries(altScores);
+    const moverRows = entriesOut
+      .map((e, i) => ({
+        emailHash: e.emailHash,
+        displayName: e.displayName,
+        baselineRank: e.rank,
+        newRank: altRanks[i],
+        delta:
+          e.rank !== null && altRanks[i] !== null
+            ? altRanks[i]! - e.rank
+            : null,
+      }))
+      .filter((row) => row.baselineRank !== null || row.newRank !== null);
+    const sortedMovers = [...moverRows].sort((a, b) => {
+      const da = a.delta === null ? -Infinity : Math.abs(a.delta);
+      const db = b.delta === null ? -Infinity : Math.abs(b.delta);
+      if (db !== da) return db - da;
+      return a.displayName.localeCompare(b.displayName);
+    });
+    const scoredBefore = entriesOut.filter((e) => e.rank !== null).length;
+    const scoredAfter = altRanks.filter((r) => r !== null).length;
+    const { rho } = computeSpearmanRho(
+      entriesOut.map((e) => e.rank),
+      altRanks,
+    );
+    return {
+      removed,
+      removedLabel: RANKING_COMPOSITE_METHOD_LABELS[removed],
+      scoredBefore,
+      scoredAfter,
+      correlationToBaseline: rho,
+      movers: sortedMovers.slice(0, RANKING_LEAVE_ONE_OUT_TOP_MOVERS),
+    };
+  });
+
+  const compositeRanks = entriesOut.map((e) => e.rank);
+  const finalRankCorrelations: FinalRankCorrelation[] = [];
+  for (const spec of NUMERIC_SIGNAL_SPECS) {
+    const values: Array<number | null> = competitive.map((entry) =>
+      spec.getValue(entry, signalByHash.get(entry.emailHash)),
+    );
+    // Correlate composite rank (ascending = better) against the signal.
+    // Invert rank so that a larger number = better rank, which is what
+    // "positive correlation" with a better signal should produce.
+    const rankScores = compositeRanks.map((r) =>
+      r === null ? null : -r,
+    );
+    const { rho, n } = computeSpearmanRho(rankScores, values);
+    const dominanceRisk = DOMINANCE_RISK_SIGNALS.has(spec.name);
+    const exceedsThreshold =
+      dominanceRisk &&
+      rho !== null &&
+      Math.abs(rho) > RANKING_MAX_ACTIVITY_CORRELATION;
+    finalRankCorrelations.push({
+      signal: spec.name,
+      rho,
+      n,
+      dominanceRisk,
+      exceedsThreshold,
+    });
+  }
+
+  const dominanceWarnings: string[] = [];
+  for (const w of effectiveSignalWeights) {
+    if (w.flagged) {
+      const pct = (w.totalWeight * 100).toFixed(1);
+      dominanceWarnings.push(
+        `${w.signal} carries ${pct}% effective weight in the composite — above the ${(
+          RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT * 100
+        ).toFixed(0)}% ceiling. ${w.justification ?? "No methodology justification recorded."}`,
+      );
+    }
+  }
+  let dominanceBlocked = false;
+  for (const c of finalRankCorrelations) {
+    if (c.exceedsThreshold) {
+      dominanceBlocked = true;
+      dominanceWarnings.push(
+        `Final composite rank is Spearman ρ ${c.rho!.toFixed(
+          2,
+        )} against ${c.signal} (n=${c.n}) — above the ${RANKING_MAX_ACTIVITY_CORRELATION} activity-dominance threshold. The ranking has collapsed into activity volume; additional orthogonal signals are required before it is safe to read as a final adjudication.`,
+      );
+    }
+  }
+
+  return {
+    contract:
+      "Composite = median of the four methods (A output, B impact, C delivery, tenure/role-adjusted percentile). Equal-method median — a single noisy method cannot single-handedly drag the rank. Engineers with fewer than " +
+      `${RANKING_COMPOSITE_MIN_METHODS} present methods are unscored, not assigned a synthesised neutral rank.`,
+    methods,
+    minPresentMethods: RANKING_COMPOSITE_MIN_METHODS,
+    maxSingleSignalEffectiveWeight: RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
+    dominanceCorrelationThreshold: RANKING_MAX_ACTIVITY_CORRELATION,
+    entries: entriesOut,
+    topN,
+    effectiveSignalWeights,
+    leaveOneOut,
+    finalRankCorrelations,
+    dominanceWarnings,
+    dominanceBlocked,
+    limitations: [
+      "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
+      "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
+      "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
+      "Confidence bands (M13), per-engineer attribution drilldowns (M14), ranking snapshots (M15), movers view (M16), anti-gaming audit (M17), and stability check (M18) are still pending — the composite is an evidence rank, not a final adjudication.",
+    ],
+  };
+}
+
 /**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
@@ -2102,7 +2642,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, and tenure/role normalisation are implemented. The final composite score, confidence bands, per-engineer attribution drilldowns, ranking snapshots, movers view, and stability check are still pending, so no engineer is yet ranked on the page.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, and the composite score with effective-weight decomposition, leave-one-method-out sensitivity, and a PR/log-impact dominance check are implemented. Confidence bands, per-engineer attribution drilldowns, ranking snapshots, movers view, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -2183,13 +2723,44 @@ export function buildRankingSnapshot(
     windowDays,
     rampUpDays: inputs.rampUpDays,
   });
+  const composite = buildComposite({
+    entries,
+    lenses,
+    normalisation,
+    signals: inputs.signals,
+  });
+
+  // Only engineers with a non-null composite rank are materialised into the
+  // top-level `engineers` array — unscored competitive engineers remain
+  // visible in `eligibility.entries` and `composite.entries`, but `engineers`
+  // is reserved for rows the methodology has actually scored so a reader
+  // never confuses "in the roster" with "ranked".
+  const normalisedByHash = new Map(
+    normalisation.entries.map((n) => [n.emailHash, n]),
+  );
+  const engineers: EngineerRankingEntry[] = composite.entries
+    .filter((c) => c.composite !== null && c.rank !== null)
+    .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0))
+    .map((c) => {
+      const normalised = normalisedByHash.get(c.emailHash);
+      return {
+        emailHash: c.emailHash,
+        displayName: c.displayName,
+        rank: c.rank,
+        compositeScore: c.composite,
+        adjustedPercentile: normalised?.adjustedPercentile ?? null,
+        rawPercentile: normalised?.rawPercentile ?? null,
+        eligibility: "competitive",
+        confidence: null,
+      };
+    });
 
   return {
     status: "methodology_pending",
     methodologyVersion: RANKING_METHODOLOGY_VERSION,
     generatedAt: windowEnd,
     signalWindow: { start: windowStart, end: windowEnd },
-    engineers: [],
+    engineers,
     eligibility: {
       entries,
       coverage,
@@ -2198,6 +2769,7 @@ export function buildRankingSnapshot(
     audit,
     lenses,
     normalisation,
+    composite,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -2233,6 +2805,9 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     now.getTime() - RANKING_SIGNAL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
   const entries: EligibilityEntry[] = [];
+  const lenses = buildLenses({ entries });
+  const normalisation = buildNormalisation({ entries });
+  const composite = buildComposite({ entries, lenses, normalisation });
 
   return {
     status: "methodology_pending",
@@ -2254,8 +2829,9 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
       reviewSignalsPersisted: false,
     }),
-    lenses: buildLenses({ entries }),
-    normalisation: buildNormalisation({ entries }),
+    lenses,
+    normalisation,
+    composite,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

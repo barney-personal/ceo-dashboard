@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
 import {
   bucketNormalisationDeltas,
+  type CompositeBundle,
   type CorrelationPair,
   type EligibilityEntry,
   type EligibilityStatus,
@@ -500,8 +501,9 @@ function LensesSection({ lenses }: { lenses: LensesBundle }) {
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
             None of these lenses is the final ranking. They are deliberately
             built to disagree — the disagreement table below is where the
-            methodology earns its money. The M10 composite is built from the
-            adjusted lenses only once the disagreements are understood.
+            methodology earns its money. The composite above takes the median
+            of all four methods (A, B, C, adjusted) so a single noisy lens
+            cannot single-handedly drag an engineer's rank.
           </p>
         </div>
         <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -895,6 +897,338 @@ function NormalisationSection({
   );
 }
 
+function formatPct(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function CompositeSection({ composite }: { composite: CompositeBundle }) {
+  const scored = composite.entries.filter(
+    (e) => e.composite !== null && e.rank !== null,
+  ).length;
+  const unscored = composite.entries.length - scored;
+  const flagged = composite.effectiveSignalWeights.filter((w) => w.flagged);
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Composite ranking
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            {composite.contract}
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>
+            {scored} scored · {unscored} unscored
+          </div>
+          <div className="mt-1">
+            ≥{composite.minPresentMethods} methods required
+          </div>
+        </div>
+      </div>
+
+      {composite.dominanceWarnings.length > 0 && (
+        <div
+          className={`mt-4 rounded-md border p-3 ${
+            composite.dominanceBlocked
+              ? "border-destructive/40 bg-destructive/5"
+              : "border-warning/40 bg-warning/5"
+          }`}
+        >
+          <h4
+            className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+              composite.dominanceBlocked ? "text-destructive" : "text-warning"
+            }`}
+          >
+            <AlertTriangle className="h-4 w-4" />
+            {composite.dominanceBlocked
+              ? "Dominance check BLOCKING the composite"
+              : "Dominance trade-offs"}
+          </h4>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-foreground/80">
+            {composite.dominanceWarnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <CompositeTopTable composite={composite} />
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Effective signal weights
+          </h4>
+          <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+            Each composite method carries {formatPct(1 / composite.methods.length)} of
+            the composite. Signals repeated across methods (log-impact appears
+            in both lens A and the tenure/role-adjusted percentile) have their
+            contributions summed. Any signal above{" "}
+            {formatPct(composite.maxSingleSignalEffectiveWeight)} must be
+            justified on the page; {flagged.length === 0 ? "no signals currently exceed it" : `${flagged.length} signal${flagged.length === 1 ? "" : "s"} currently flagged`}.
+          </p>
+          <table className="mt-3 w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Signal</th>
+                <th className="py-2 pr-3 text-right font-medium">Weight</th>
+                <th className="py-2 pr-3 font-medium">Methods</th>
+              </tr>
+            </thead>
+            <tbody>
+              {composite.effectiveSignalWeights.map((w) => (
+                <tr key={w.signal} className="border-b border-border/30 align-top">
+                  <td
+                    className={`py-2 pr-3 ${
+                      w.flagged ? "text-warning" : "text-foreground"
+                    }`}
+                  >
+                    {w.signal}
+                    {w.flagged && w.justification && (
+                      <div className="mt-1 text-[10px] italic text-warning/90">
+                        {w.justification}
+                      </div>
+                    )}
+                  </td>
+                  <td
+                    className={`py-2 pr-3 text-right tabular-nums ${
+                      w.flagged ? "text-warning" : "text-muted-foreground"
+                    }`}
+                  >
+                    {formatPct(w.totalWeight)}
+                  </td>
+                  <td className="py-2 pr-3 text-[11px] text-muted-foreground">
+                    {w.contributions
+                      .map(
+                        (c) =>
+                          `${c.method} @ ${formatPct(c.signalWeightInMethod)}`,
+                      )
+                      .join(" · ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Leave-one-method-out sensitivity
+          </h4>
+          <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-muted-foreground">
+            Spearman ρ between the baseline rank and the rank we would get if a
+            single method were dropped. Close to 1 means the method could be
+            removed without moving the ranking much; lower values show the
+            method is pulling the composite around.
+          </p>
+          <table className="mt-3 w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Remove</th>
+                <th className="py-2 pr-3 text-right font-medium">ρ vs baseline</th>
+                <th className="py-2 pr-3 text-right font-medium">Scored</th>
+                <th className="py-2 pr-3 font-medium">Top movers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {composite.leaveOneOut.map((row) => (
+                <tr
+                  key={row.removed}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td className="py-2 pr-3 text-foreground">
+                    {row.removedLabel}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {row.correlationToBaseline === null
+                      ? "—"
+                      : row.correlationToBaseline.toFixed(2)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {row.scoredAfter} / {row.scoredBefore}
+                  </td>
+                  <td className="py-2 pr-3 text-[11px] text-muted-foreground">
+                    {row.movers.slice(0, 3).length === 0
+                      ? "—"
+                      : row.movers
+                          .slice(0, 3)
+                          .map(
+                            (m) =>
+                              `${m.displayName} (${
+                                m.delta === null
+                                  ? "new"
+                                  : m.delta > 0
+                                    ? `+${m.delta}`
+                                    : m.delta
+                              })`,
+                          )
+                          .join(" · ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Final-rank correlations
+        </h4>
+        <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground">
+          Spearman ρ of the composite rank against each per-engineer numeric
+          signal. PR count and log-impact are pinned as dominance risks — if
+          |ρ| &gt; {composite.dominanceCorrelationThreshold} on either, the
+          ranking has collapsed into activity volume and the dominance warning
+          above blocks the composite.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Signal</th>
+                <th className="py-2 pr-3 text-right font-medium">ρ vs rank</th>
+                <th className="py-2 pr-3 text-right font-medium">n</th>
+                <th className="py-2 pr-3 font-medium">Dominance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {composite.finalRankCorrelations.map((c) => (
+                <tr
+                  key={c.signal}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td
+                    className={`py-2 pr-3 ${
+                      c.exceedsThreshold
+                        ? "text-destructive"
+                        : c.dominanceRisk
+                          ? "text-warning"
+                          : "text-foreground"
+                    }`}
+                  >
+                    {c.signal}
+                  </td>
+                  <td
+                    className={`py-2 pr-3 text-right tabular-nums ${
+                      c.exceedsThreshold
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {c.rho === null ? "—" : c.rho.toFixed(2)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {c.n}
+                  </td>
+                  <td className="py-2 pr-3 text-[11px]">
+                    {c.dominanceRisk ? (
+                      <span
+                        className={
+                          c.exceedsThreshold
+                            ? "text-destructive"
+                            : "text-warning"
+                        }
+                      >
+                        {c.exceedsThreshold
+                          ? "Exceeds threshold — blocking"
+                          : "Risk — within threshold"}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">context</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Composite-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {composite.limitations.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function CompositeTopTable({ composite }: { composite: CompositeBundle }) {
+  return (
+    <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
+      <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Top {composite.topN.length} by composite
+      </h4>
+      {composite.topN.length === 0 ? (
+        <p className="mt-3 text-xs italic text-muted-foreground">
+          No engineers have a composite yet — fewer than two methods are scored
+          for any competitive engineer in this snapshot.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="w-8 py-2 pr-2 text-right font-medium">#</th>
+                <th className="py-2 pr-3 font-medium">Engineer</th>
+                <th className="py-2 pr-3 font-medium">Discipline · Level</th>
+                <th className="py-2 pr-3 text-right font-medium">A output</th>
+                <th className="py-2 pr-3 text-right font-medium">B impact</th>
+                <th className="py-2 pr-3 text-right font-medium">C delivery</th>
+                <th className="py-2 pr-3 text-right font-medium">Adjusted</th>
+                <th className="py-2 pr-3 text-right font-medium">Composite</th>
+                <th className="py-2 pr-3 text-right font-medium">Methods</th>
+              </tr>
+            </thead>
+            <tbody>
+              {composite.topN.map((e) => (
+                <tr
+                  key={e.emailHash || e.displayName}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                    {e.rank}
+                  </td>
+                  <td className="py-2 pr-3 text-foreground">{e.displayName}</td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {e.discipline} · {e.levelLabel}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(e.output)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(e.impact)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(e.delivery)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(e.adjusted)}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
+                    {formatPercentile(e.composite)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {e.presentMethodCount} / 4
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -1027,21 +1361,25 @@ export function RankingScaffold({
           <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning" />
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">
-              Why there is no ranked list yet
+              Why this ranked list should not be read as final
             </h3>
             <p className="text-sm text-muted-foreground">
-              Eligibility, the signal orthogonality audit, three independent
-              scoring lenses, and tenure/role normalisation are all implemented
-              and visible below as exploratory inputs. The final composite
-              score, confidence bands, per-engineer attribution drilldowns,
-              ranking snapshots, the movers view, and the stability check are
-              still pending — so the page deliberately does not yet present a
-              single ranked list, because any rank would be defended against a
-              composite that has not been agreed.
+              A composite rank now exists for every engineer with at least two
+              present methods. The composite is the median of four methods —
+              lens A (output), lens B (SHAP impact), lens C (squad-delivery
+              context), and the tenure/role-adjusted percentile. Effective
+              signal-weight decomposition, leave-one-method-out sensitivity,
+              and a PR/log-impact dominance check are all visible below.
+              Confidence bands, per-engineer attribution drilldowns, ranking
+              snapshots, the movers view, the anti-gaming audit, and the
+              stability check are still pending — so the rank is an evidence
+              composite, not a final adjudication.
             </p>
           </div>
         </div>
       </section>
+
+      <CompositeSection composite={snapshot.composite} />
 
       <CoverageSection snapshot={snapshot} />
 
@@ -1104,11 +1442,13 @@ export function RankingScaffold({
       {snapshot.engineers.length === 0 ? (
         <section className="rounded-xl border border-dashed border-border/60 bg-background/40 p-8 text-center">
           <p className="text-sm text-muted-foreground">
-            No engineers are ranked yet. Eligibility, the signal audit, the
-            three scoring lenses, and tenure/role normalisation above are the
-            inputs the final composite will draw on — the composite, confidence
-            bands, and per-engineer attribution are the remaining work before
-            any ranked list is shown.
+            No engineers have been scored by the composite yet — every
+            competitive engineer currently has fewer than{" "}
+            {snapshot.composite.minPresentMethods} present methods. Live
+            GitHub, impact-model, and Swarmia data must be populating the
+            signal rows before the composite can produce a rank. Confidence
+            bands, per-engineer attribution drilldowns, ranking snapshots, the
+            movers view, and the stability check remain the outstanding work.
           </p>
         </section>
       ) : null}
