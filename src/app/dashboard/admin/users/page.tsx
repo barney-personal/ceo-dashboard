@@ -7,7 +7,19 @@ export default async function UsersAdminPage() {
   await requireDashboardPermission("admin.users");
 
   const client = await clerkClient();
-  const { data: users } = await client.users.getUserList({ limit: 100 });
+
+  // Clerk caps each getUserList call at 100, so page through until exhausted.
+  const PAGE_SIZE = 100;
+  const users: Awaited<ReturnType<typeof client.users.getUserList>>["data"] = [];
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, totalCount } = await client.users.getUserList({
+      limit: PAGE_SIZE,
+      offset,
+      orderBy: "-created_at",
+    });
+    users.push(...data);
+    if (data.length < PAGE_SIZE || users.length >= totalCount) break;
+  }
 
   // Fetch session counts for all users in parallel
   const sessionCounts = await Promise.all(
