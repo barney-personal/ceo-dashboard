@@ -4,6 +4,7 @@ import {
   getSchemaCompatibilityMessage,
   isDatabaseUnavailableError,
   isSchemaCompatibilityError,
+  isUniqueViolation,
   normalizeDatabaseError,
   withDbErrorContext,
 } from "../errors";
@@ -40,6 +41,38 @@ describe("getSchemaCompatibilityMessage", () => {
         new Error('column "trigger" does not exist')
       )
     ).toContain('column "trigger" does not exist');
+  });
+});
+
+describe("isUniqueViolation", () => {
+  it("detects postgres unique_violation by code", () => {
+    expect(
+      isUniqueViolation({
+        code: "23505",
+        message:
+          'duplicate key value violates unique constraint "sync_log_active_per_source"',
+      })
+    ).toBe(true);
+  });
+
+  it("returns false for unrelated postgres error codes", () => {
+    expect(isUniqueViolation({ code: "42703", message: "boom" })).toBe(false);
+    expect(isUniqueViolation({ code: "23503", message: "fk" })).toBe(false);
+  });
+
+  it("returns false for non-string code values", () => {
+    expect(isUniqueViolation({ code: 23505 })).toBe(false);
+  });
+
+  it("returns false for plain Error without a code", () => {
+    expect(isUniqueViolation(new Error("duplicate key"))).toBe(false);
+  });
+
+  it("returns false for null and primitives", () => {
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation(undefined)).toBe(false);
+    expect(isUniqueViolation("23505")).toBe(false);
+    expect(isUniqueViolation(23505)).toBe(false);
   });
 });
 

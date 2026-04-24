@@ -10,6 +10,7 @@ import {
   lt,
   sql,
 } from "drizzle-orm";
+import { isUniqueViolation } from "@/lib/db/errors";
 import {
   evaluateQueueDecision,
   getSyncSourceConfig,
@@ -56,15 +57,6 @@ function getSyncRunScopeDescription(
   }
 
   return "all Mode reports";
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "23505"
-  );
 }
 
 export function formatSyncError(error: unknown): string {
