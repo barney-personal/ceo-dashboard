@@ -45,9 +45,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ slices });
   }
 
+  // Reject anything that doesn't look like `YYYY-MM-DD` with a 400 so a
+  // client-side typo doesn't silently get confused for "no data on that
+  // day". The read path uses parameterised queries, so this check is for
+  // message quality, not injection defence.
   if (!SNAPSHOT_DATE_RE.test(snapshotDate)) {
     return NextResponse.json(
-      { error: "Invalid snapshot date; expected YYYY-MM-DD" },
+      {
+        error: "invalid `date` query parameter — expected YYYY-MM-DD",
+        received: snapshotDate,
+      },
       { status: 400 },
     );
   }

@@ -713,20 +713,25 @@ export function aggregateQualitySignals(
 }
 
 /**
- * Hash an email for ranking.
+ * Hash an email for ranking. Unsalted SHA-256 truncated to 16 hex chars.
  *
- * NOTE: This is an **unsalted** SHA-256 truncated to 16 hex chars — it
- * matches the committed `src/data/impact-model.json` hash convention so
- * SHAP lookups align with the ranking roster in a single snapshot.
- * `src/lib/data/impact-model.server.ts` *also* hashes emails, but uses
- * `createHmac("sha256", IMPACT_MODEL_HASH_KEY)` for its live identity
- * resolution — see the comment there for why. These truncated SHA-256
- * hashes are reversible against the Cleo email directory (small keyspace)
- * and must therefore be treated as pseudonymous, not anonymous.
+ * These hashes are **pseudonymous, not anonymous** — a reader with
+ * Postgres access plus a list of `@meetcleo.com` emails can recover
+ * identity by precomputing `sha256(email)[:16]` over the ~200 plausible
+ * addresses. Acceptable under the current threat model: the ranking
+ * page is CEO-gated, Postgres is inside the Render internal network, and
+ * `impact-model.json` in the repo already carries plain emails (see
+ * CLAUDE.md "Known deliberate gaps"). The hash still does its primary
+ * job — keeping plain emails out of `engineeringRankingSnapshots` rows
+ * so any future broader DB reader (analytics tooling, audit queries)
+ * doesn't inherit identity trivially.
  *
- * Follow-up: route this through the HMAC flow before
- * `engineeringRankingSnapshots` accumulates meaningful history so snapshot
- * rows stay consistent with the ML pipeline's stronger hash.
+ * If the threat model changes — wider DB access, snapshot export to a
+ * separate system, or the repo leaving the private org — switch to HMAC
+ * keyed on a new secret and migrate existing rows. A hybrid scheme
+ * (HMAC here, plain emails in the JSON) was tried and removed because
+ * the two hash domains silently drifted; consistency outweighs partial
+ * anonymity.
  */
 export function hashEmailForRanking(email: string): string {
   return createHash("sha256")

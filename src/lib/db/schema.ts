@@ -625,14 +625,20 @@ export const userBriefings = pgTable(
 // time from Mode Headcount SSoT / `githubEmployeeMap` and are NEVER written
 // here — persistence is privacy-preserving by construction.
 //
-// IMPORTANT: `email_hash` is currently an UNSALTED SHA-256 truncated to 16
-// hex chars (see `hashEmailForRanking`). This is a deliberate short-term
-// choice so snapshot keys align with the existing `impact-model.json`
-// convention; anyone with DB read access plus the Cleo email directory
-// could recover identity by precomputing `sha256(email)[:16]` over the
-// small plausible keyspace. Tracked follow-up: wire this through the
-// `IMPACT_MODEL_HASH_KEY` HMAC before the snapshot table accumulates
-// meaningful history.
+// NOTE: `email_hash` is an unsalted SHA-256 truncated to 16 hex chars
+// (see `hashEmailForRanking`). Anyone with Postgres read access plus the
+// Cleo email directory can precompute `sha256(email)[:16]` over the ~200
+// plausible addresses and recover identity — treat these rows as
+// pseudonymous, not anonymous. This is acceptable under the current
+// threat model: the only reader / writer is the CEO-gated ranking page,
+// Postgres sits inside the Render internal network, and the HMAC layer
+// that previously shielded the adjacent impact model was removed in
+// April 2026 after it was found to be masking a prod bug
+// (see CLAUDE.md "Known deliberate gaps"). If the threat model ever
+// changes — wider DB read access, snapshot exports elsewhere, or the
+// repo leaving the private org — the hardening path is to switch
+// `hashEmailForRanking` to HMAC-with-a-new-secret and migrate existing
+// rows, not to bolt a disclaimer onto the current scheme.
 //
 // The natural key is (snapshot_date, methodology_version, email_hash) so a
 // persist call is idempotent for a given calendar day under a given

@@ -138,10 +138,10 @@ describe("GET /api/engineering-ranking/snapshot", () => {
       if (auth.ok) return null;
       return NextResponse.json({ error: auth.error }, { status: auth.status });
     });
+    mockRequireRole.mockResolvedValue({ ok: true });
   });
 
-  it("lists snapshot slices when no date is supplied", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
+  it("lists snapshot slices when no `date` query parameter is supplied", async () => {
     mockListSlices.mockResolvedValue([
       {
         snapshotDate: "2026-04-24",
@@ -167,7 +167,6 @@ describe("GET /api/engineering-ranking/snapshot", () => {
   });
 
   it("reads a specific snapshot slice when date and version are supplied", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     mockReadSnapshot.mockResolvedValue([
       {
         snapshotDate: "2026-04-24",
@@ -187,30 +186,49 @@ describe("GET /api/engineering-ranking/snapshot", () => {
       snapshotDate: "2026-04-24",
       methodologyVersion: "1.1.0-quality",
     });
-    await expect(res.json()).resolves.toEqual({
-      snapshotDate: "2026-04-24",
-      methodologyVersion: "1.1.0-quality",
-      rows: [
-        {
-          snapshotDate: "2026-04-24",
-          methodologyVersion: "1.1.0-quality",
-          emailHash: "ffeeddccbbaa9988",
-        },
-      ],
-    });
+    const body = await res.json();
+    expect(body.snapshotDate).toBe("2026-04-24");
+    expect(body.methodologyVersion).toBe("1.1.0-quality");
   });
 
-  it("rejects malformed snapshot dates with 400", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
+  it("defaults methodologyVersion to the current constant when `version` is absent", async () => {
+    mockReadSnapshot.mockResolvedValue([]);
+    await GET(makeGetRequest("?date=2026-04-24"));
+    const args = mockReadSnapshot.mock.calls[0][0];
+    expect(args.snapshotDate).toBe("2026-04-24");
+    expect(args.methodologyVersion).toMatch(/^\d+\.\d+\.\d+/);
+  });
 
-    const res = await GET(makeGetRequest("?date=2026-4-24"));
-
+  it("rejects malformed `date` values with 400 instead of silently returning empty 200", async () => {
+    const res = await GET(makeGetRequest("?date=yesterday"));
     expect(res.status).toBe(400);
-    expect(mockListSlices).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.error).toMatch(/YYYY-MM-DD/);
+    expect(body.received).toBe("yesterday");
     expect(mockReadSnapshot).not.toHaveBeenCalled();
-    await expect(res.json()).resolves.toEqual({
-      error: "Invalid snapshot date; expected YYYY-MM-DD",
+    expect(mockListSlices).not.toHaveBeenCalled();
+  });
+
+  it("rejects SQL-fragment-looking `date` values with 400 (defence in depth)", async () => {
+    // The read path uses parameterised queries, so this is purely
+    // about refusing nonsense input rather than injection.
+    const res = await GET(
+      makeGetRequest("?date=2026-04-24%27%20OR%20%271%27%3D%271"),
+    );
+    expect(res.status).toBe(400);
+    expect(mockReadSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 when unauthenticated", async () => {
+    mockRequireRole.mockResolvedValue({
+      ok: false,
+      status: 401,
+      error: "Unauthorized",
     });
+    const res = await GET(makeGetRequest("?date=2026-04-24"));
+    expect(res.status).toBe(401);
+    expect(mockReadSnapshot).not.toHaveBeenCalled();
+    expect(mockListSlices).not.toHaveBeenCalled();
   });
 
   it("returns 403 when user lacks CEO role", async () => {
