@@ -47,30 +47,41 @@ const DATA_SCHEME = /data\s*:[^\s"')<>]+/gi;
 const BLOCKED_SCHEME = "blocked:";
 
 // ---------------------------------------------------------------------------
-// URL-scheme obfuscation bypass defenses (M15 + M16).
+// URL-scheme obfuscation bypass defenses (M15 + M16 + M17).
 //
 // A literal regex like `/javascript\s*:/` does not catch browser-normalized
 // obfuscation. The WHATWG URL parser strips ASCII tab/LF/CR from the scheme,
 // and the HTML parser decodes both numeric character references (`&#x73;`,
-// `&#115;`) and a small set of named character references (`&colon;`, `&Tab;`,
+// `&#115;`, and the semicolonless forms `&#x73` / `&#115` consumed greedily)
+// and a small set of named character references (`&colon;`, `&Tab;`,
 // `&NewLine;`) inside attribute values and markdown link targets. So
 // `java\nscript:...`, `java&#x73;cript:...`, `jav&#x09;ascript:...`,
-// `data&#58;text/html,...`, and `javascript&colon;alert(1)` all render as
-// executable `javascript:` / unsafe `data:` URLs even though the literal text
-// does not contain the dangerous scheme word.
+// `data&#58;text/html,...`, `javascript&colon;alert(1)`, and the semicolonless
+// forms `javascript&#58alert(1)` / `java&#115cript:alert(1)` / unquoted
+// `<a href=javascript&#58alert(1)>` all render as executable `javascript:` /
+// unsafe `data:` URLs even though the literal text does not contain the
+// dangerous scheme word.
 //
 // We handle this by scanning URL-accepting contexts — HTML attribute values
 // (double-quoted, single-quoted, and unquoted) and markdown link targets —
 // normalizing each URL value the way a browser would (decode numeric char
-// refs + decode a narrow set of scheme-relevant named refs + strip 0x00-0x1F),
-// and if the normalized form starts with a dangerous scheme, replacing the
-// URL content wholesale with `blocked:`. Benign URLs (including ones with
-// char refs in the path or benign named entities in surrounding text) are
+// refs with or without trailing `;`, greedily consuming digits/hex digits, +
+// decode a narrow set of scheme-relevant named refs + strip 0x00-0x1F), and
+// if the normalized form starts with a dangerous scheme, replacing the URL
+// content wholesale with `blocked:`. Benign URLs (including ones with char
+// refs in the path, benign named entities in surrounding text, or malformed
+// hex forms that browsers do not normalize into a dangerous scheme) are
 // left untouched — we only rewrite when normalization would change the
 // string AND the normalized form is dangerous.
 // ---------------------------------------------------------------------------
 
-const NUMERIC_CHAR_REF = /&#(x[0-9a-f]+|[0-9]+);/gi;
+// Browsers accept numeric character references both with and without a
+// trailing `;`, consuming as many matching digits (or hex digits) as possible.
+// E.g. `&#115cript` greedily consumes `115` (decoded to `s`) and stops at `c`;
+// `&#x3Aa` greedily consumes `3Aa` (decoded to `\u03aa`, which is NOT `:`,
+// matching browser behavior). The trailing `;` is consumed when present so
+// it doesn't leak into the decoded output.
+const NUMERIC_CHAR_REF = /&#(x[0-9a-f]+|[0-9]+);?/gi;
 // C0 controls (0x00-0x1F). Browsers strip ASCII tab/LF/CR from URL schemes;
 // we strip the full C0 range because other controls inside a scheme are
 // never valid and some renderers tolerate them.

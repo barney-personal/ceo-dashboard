@@ -414,4 +414,29 @@ describe("syncAllGranolaNotes summary sanitization", () => {
     expect(inserted).toContain("# Notes");
     expect(onConflict).toBe(inserted);
   });
+
+  // M17: Semicolonless numeric char ref bypasses must not reach the DB.
+  it("neutralizes semicolonless numeric char ref obfuscations on both insert and conflict update", async () => {
+    const malicious =
+      "# Notes\n" +
+      '<a href="javascript&#58alert(1)">quoted-decimal</a>\n' +
+      '<a href="java&#115cript:alert(2)">quoted-letter</a>\n' +
+      "<a href=javascript&#58alert(3)>unquoted</a>\n" +
+      '<a href="data&#58text/html,<b>x</b>">datauri</a>\n' +
+      "[md](javascript&#58alert(4))";
+    const { inserted, onConflict } = await runWithSummary(malicious, null);
+
+    expect(inserted).not.toMatch(/javascript\s*:/i);
+    expect(inserted).not.toContain("javascript&#58");
+    expect(inserted).not.toContain("java&#115cript");
+    expect(inserted).not.toContain("data&#58text");
+    expect(inserted).not.toContain("data:text/html");
+    expect(inserted).not.toContain("alert(1)");
+    expect(inserted).not.toContain("alert(2)");
+    expect(inserted).not.toContain("alert(3)");
+    expect(inserted).not.toContain("alert(4)");
+    expect(inserted).toContain("blocked:");
+    expect(inserted).toContain("# Notes");
+    expect(onConflict).toBe(inserted);
+  });
 });

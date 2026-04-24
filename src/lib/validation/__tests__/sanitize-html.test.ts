@@ -407,6 +407,112 @@ describe("sanitizeSummaryHtml", () => {
     });
   });
 
+  describe("URL-scheme obfuscation — semicolonless numeric char refs (M17)", () => {
+    describe("decimal numeric refs without trailing semicolon", () => {
+      it("neutralizes javascript&#58alert(1) in quoted href", () => {
+        // &#58 (no semicolon) = ':' — browsers consume digits greedily until
+        // the first non-digit. The href text ends up as `javascript:alert(1)`.
+        const input = '<a href="javascript&#58alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("javascript&#58alert");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes java&#115cript:alert(1) in quoted href", () => {
+        // &#115 (no semicolon) = 's' — greedy consumption stops at `c`,
+        // so the href text decodes to `javascript:alert(1)`.
+        const input = '<a href="java&#115cript:alert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes unsafe data&#58text/html without trailing semicolon", () => {
+        const input = '<a href="data&#58text/html,<b>x</b>">y</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toMatch(/data&#58text/);
+        expect(result).not.toContain("data:text/html");
+      });
+
+      it("neutralizes semicolonless numeric ref in single-quoted href", () => {
+        const input = "<a href='javascript&#58alert(1)'>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes semicolonless numeric ref in unquoted href", () => {
+        const input = "<a href=javascript&#58alert(1)>x</a>";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+      });
+
+      it("neutralizes semicolonless numeric ref in markdown link target", () => {
+        const input = "[x](javascript&#58alert(1))";
+        const result = sanitizeSummaryHtml(input);
+        expect(result).toContain("blocked:");
+        expect(result).not.toContain("alert(1)");
+        expect(result).toContain("[x](");
+      });
+    });
+
+    describe("benign numeric refs preserved outside dangerous schemes", () => {
+      it("leaves benign decimal ref in http URL path untouched", () => {
+        // &#47 decodes to '/' but the normalized URL starts with https,
+        // not a dangerous scheme, so no rewrite.
+        const input = '<a href="https://example.com&#47path">docs</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).not.toContain("blocked:");
+        expect(result).toContain("https://");
+      });
+
+      it("leaves plain text semicolonless numeric ref untouched outside URL context", () => {
+        // Outside URL attributes and markdown link targets, char refs are
+        // never decoded by the sanitizer — attacker can't reach a dangerous
+        // scheme from here.
+        const input = "Body text with &#58 and &#115 refs that browsers would decode";
+        expect(sanitizeSummaryHtml(input)).toBe(input);
+      });
+
+      it("leaves hex ref that browsers consume into a non-dangerous code point untouched", () => {
+        // &#x3Aa is consumed greedily (3, A, a are all hex), decoding to
+        // U+03AA (Greek capital iota with dialytika), NOT ':'. Browsers
+        // therefore don't normalize this to `javascript:`; we must mirror
+        // that to avoid false positives on benign text.
+        const input = '<a href="javascript&#x3Aalert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).not.toContain("blocked:");
+      });
+
+      it("leaves unterminated-looking hex ref with letters past hex range untouched", () => {
+        // &#xg... is not a valid hex ref at all — the regex requires at
+        // least one hex digit after `&#x`, so no decoding happens.
+        const input = '<a href="javascript&#xgalert(1)">x</a>';
+        const result = sanitizeSummaryHtml(input);
+        expect(result).not.toContain("blocked:");
+      });
+    });
+
+    describe("idempotence for M17 payloads", () => {
+      it("re-sanitizing a neutralized semicolonless quoted href is a no-op", () => {
+        const dirty = '<a href="javascript&#58alert(1)">x</a>';
+        const once = sanitizeSummaryHtml(dirty);
+        const twice = sanitizeSummaryHtml(once);
+        expect(twice).toBe(once);
+      });
+
+      it("re-sanitizing a neutralized semicolonless unquoted href is a no-op", () => {
+        const dirty = "<a href=javascript&#58alert(1)>x</a>";
+        const once = sanitizeSummaryHtml(dirty);
+        const twice = sanitizeSummaryHtml(once);
+        expect(twice).toBe(once);
+      });
+    });
+  });
+
   describe("idempotence", () => {
     it("sanitizing a sanitized malicious payload is a no-op", () => {
       const dirty =
