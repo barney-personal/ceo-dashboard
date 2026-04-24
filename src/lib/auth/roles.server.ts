@@ -12,6 +12,12 @@ export interface Impersonation {
   userId: string;
   name: string;
   role: Role;
+  /** Primary email resolved live from Clerk; null if unavailable. */
+  email: string | null;
+  /** All verified emails resolved live from Clerk; primary first. */
+  emails: string[];
+  /** Avatar URL resolved live from Clerk; null if unavailable. */
+  imageUrl: string | null;
 }
 
 /**
@@ -145,9 +151,16 @@ export async function getImpersonation(): Promise<Impersonation | null> {
     );
     if (!cookieData) return null;
 
-    // Resolve live role from Clerk rather than trusting cookie snapshot
-    const role = await resolveUserRole(cookieData.userId);
-    return { ...cookieData, role };
+    // Resolve live identity from Clerk rather than trusting cookie snapshot
+    const profile = await resolveImpersonatedProfile(cookieData.userId);
+    return {
+      userId: cookieData.userId,
+      name: cookieData.name,
+      role: profile.role,
+      email: profile.email,
+      emails: profile.emails,
+      imageUrl: profile.imageUrl,
+    };
   } catch {
     return null;
   }
@@ -166,7 +179,44 @@ async function resolveUserRole(userId: string): Promise<Role> {
   }
 }
 
-function parseImpersonateCookie(value: string | undefined): Impersonation | null {
+/** Fetch the impersonated user's role, emails, and avatar from Clerk. */
+async function resolveImpersonatedProfile(userId: string): Promise<{
+  role: Role;
+  email: string | null;
+  emails: string[];
+  imageUrl: string | null;
+}> {
+  try {
+    const client = await clerkClient();
+    const user = await client.users.getUser(userId);
+    const role = getUserRole(
+      (user.publicMetadata as Record<string, unknown>) ?? {}
+    );
+    const primary = user.primaryEmailAddress?.emailAddress ?? null;
+    const all = (user.emailAddresses ?? []).map((e) => e.emailAddress);
+    const ordered = primary
+      ? [primary, ...all.filter((e) => e !== primary)]
+      : all;
+    return {
+      role,
+      email: primary,
+      emails: ordered.filter((e): e is string => !!e),
+      imageUrl: user.imageUrl ?? null,
+    };
+  } catch {
+    return { role: "everyone", email: null, emails: [], imageUrl: null };
+  }
+}
+
+interface ImpersonateCookie {
+  userId: string;
+  name: string;
+  role: Role;
+}
+
+function parseImpersonateCookie(
+  value: string | undefined,
+): ImpersonateCookie | null {
   if (!value) return null;
   try {
     const decoded = decodeURIComponent(value);
