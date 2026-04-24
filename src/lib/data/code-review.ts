@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { githubEmployeeMap, prReviewAnalyses } from "@/lib/db/schema";
+import { githubEmployeeMap, prReviewAnalyses, squads } from "@/lib/db/schema";
+import { getReportData } from "@/lib/data/mode";
 import {
   RUBRIC_VERSION,
   type AnalysisCategory,
@@ -872,4 +873,369 @@ export async function getEngineerCodeReview(
     analysedAtLatest: view.analysedAtLatest,
     engineer,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Squad rollup (piece 1 of the squad view — stack rank + click-through).
+// ---------------------------------------------------------------------------
+
+export interface SquadRollup {
+  squadName: string;
+  pillar: string | null;
+  engineerCount: number;
+  prCount: number;
+  effectivePrCount: number;
+  confidencePct: number;
+  distinctRepos: number;
+  avgTechnicalDifficulty: number;
+  avgExecutionQuality: number;
+  avgTestAdequacy: number;
+  avgRiskHandling: number;
+  avgReviewability: number;
+  avgOutcomeScore: number;
+  qualityPercentile: number;
+  difficultyPercentile: number;
+  reliabilityPercentile: number;
+  reviewHealthPercentile: number;
+  throughputPercentile: number;
+  rawScore: number;
+  finalScore: number;
+  categoryCounts: Record<AnalysisCategory, number>;
+  engineers: EngineerRollup[];
+  prs: PrReviewEntry[];
+}
+
+export interface SquadCodeReviewView {
+  windowDays: number;
+  rubricVersion: string;
+  analysedAtLatest: Date | null;
+  squads: SquadRollup[];
+  totalPrs: number;
+  /**
+   * Engineers that had merged PRs in the window but couldn't be resolved to
+   * a squad (headcount row missing, no githubEmployeeMap entry, or their
+   * `hb_squad` doesn't match the canonical registry). Surfaced so the UI
+   * can explain any PR-count gap between the engineer and squad views.
+   */
+  unassignedEngineerCount: number;
+  unassignedPrCount: number;
+}
+
+export interface SquadLookup {
+  squadName: string;
+  pillar: string | null;
+}
+
+export function rollupSquadsFromEngineers(
+  engineers: EngineerRollup[],
+  squadByLogin: Map<string, SquadLookup>,
+): { squads: SquadRollup[]; unassignedEngineerCount: number; unassignedPrCount: number } {
+  interface SquadBucket {
+    pillar: string | null;
+    engineers: EngineerRollup[];
+    prs: PrReviewEntry[];
+    repos: Set<string>;
+    categoryCounts: Record<AnalysisCategory, number>;
+  }
+
+  const squadBuckets = new Map<string, SquadBucket>();
+  let unassignedEngineerCount = 0;
+  let unassignedPrCount = 0;
+
+  for (const engineer of engineers) {
+    const match = squadByLogin.get(engineer.authorLogin.toLowerCase());
+    if (!match) {
+      unassignedEngineerCount += 1;
+      unassignedPrCount += engineer.prs.length;
+      continue;
+    }
+    let bucket = squadBuckets.get(match.squadName);
+    if (!bucket) {
+      bucket = {
+        pillar: match.pillar,
+        engineers: [],
+        prs: [],
+        repos: new Set(),
+        categoryCounts: emptyCategoryCounts(),
+      };
+      squadBuckets.set(match.squadName, bucket);
+    }
+    bucket.engineers.push(engineer);
+    for (const pr of engineer.prs) {
+      bucket.prs.push(pr);
+      bucket.repos.add(pr.repo);
+      bucket.categoryCounts[pr.category] =
+        (bucket.categoryCounts[pr.category] ?? 0) + 1;
+    }
+  }
+
+  interface SquadRaw {
+    quality: number;
+    difficulty: number;
+    reliability: number;
+    reviewHealth: number;
+    throughput: number;
+  }
+  const rawBySquad = new Map<string, SquadRaw>();
+  const provisional: SquadRollup[] = [];
+
+  for (const [squadName, bucket] of squadBuckets) {
+    const prs = [...bucket.prs].sort(
+      (a, b) => b.mergedAt.getTime() - a.mergedAt.getTime(),
+    );
+    const weights = prs.map((pr) =>
+      Math.max(0.1, pr.recencyWeight * toConfidence(pr.analysisConfidencePct)),
+    );
+    const effectivePrCount = weights.reduce((sum, w) => sum + w, 0);
+
+    const qualityRaw = weightedAverage(prs.map((pr) => pr.qualityScore), weights);
+    const difficultyRaw = weightedAverage(
+      prs.map((pr) => (pr.technicalDifficulty / 5) * 100),
+      weights,
+    );
+    const reliabilityRaw = weightedAverage(
+      prs.map((pr) => pr.outcomeScore),
+      weights,
+    );
+    const reviewHealthRaw = weightedAverage(
+      prs.map((pr) => pr.reviewHealthScore),
+      weights,
+    );
+    const throughputRaw = prs.reduce(
+      (sum, pr) => sum + pr.prScore * pr.recencyWeight,
+      0,
+    );
+
+    rawBySquad.set(squadName, {
+      quality: qualityRaw,
+      difficulty: difficultyRaw,
+      reliability: reliabilityRaw,
+      reviewHealth: reviewHealthRaw,
+      throughput: throughputRaw,
+    });
+
+    provisional.push({
+      squadName,
+      pillar: bucket.pillar,
+      engineerCount: bucket.engineers.length,
+      prCount: prs.length,
+      effectivePrCount,
+      // Squads carry more PRs than individuals; peg the 100% evidence mark
+      // at ~20 effective PRs so a squad with a typical month of activity
+      // reads as well-evidenced.
+      confidencePct: Math.min(100, Math.round((effectivePrCount / 20) * 100)),
+      distinctRepos: bucket.repos.size,
+      avgTechnicalDifficulty: weightedAverage(
+        prs.map((pr) => pr.technicalDifficulty),
+        weights,
+      ),
+      avgExecutionQuality: weightedAverage(
+        prs.map((pr) => pr.executionQuality),
+        weights,
+      ),
+      avgTestAdequacy: weightedAverage(
+        prs.map((pr) => pr.testAdequacy),
+        weights,
+      ),
+      avgRiskHandling: weightedAverage(
+        prs.map((pr) => pr.riskHandling),
+        weights,
+      ),
+      avgReviewability: weightedAverage(
+        prs.map((pr) => pr.reviewability),
+        weights,
+      ),
+      avgOutcomeScore: reliabilityRaw,
+      qualityPercentile: 50,
+      difficultyPercentile: 50,
+      reliabilityPercentile: 50,
+      reviewHealthPercentile: 50,
+      throughputPercentile: 50,
+      rawScore: 50,
+      finalScore: 50,
+      categoryCounts: bucket.categoryCounts,
+      engineers: [...bucket.engineers].sort(
+        (a, b) => b.finalScore - a.finalScore,
+      ),
+      prs,
+    });
+  }
+
+  const allValues = {
+    quality: provisional.map((s) => rawBySquad.get(s.squadName)!.quality),
+    difficulty: provisional.map(
+      (s) => rawBySquad.get(s.squadName)!.difficulty,
+    ),
+    reliability: provisional.map(
+      (s) => rawBySquad.get(s.squadName)!.reliability,
+    ),
+    reviewHealth: provisional.map(
+      (s) => rawBySquad.get(s.squadName)!.reviewHealth,
+    ),
+    throughput: provisional.map(
+      (s) => rawBySquad.get(s.squadName)!.throughput,
+    ),
+  };
+
+  for (const squad of provisional) {
+    const raw = rawBySquad.get(squad.squadName)!;
+    squad.qualityPercentile = percentileRank(raw.quality, allValues.quality);
+    squad.difficultyPercentile = percentileRank(
+      raw.difficulty,
+      allValues.difficulty,
+    );
+    squad.reliabilityPercentile = percentileRank(
+      raw.reliability,
+      allValues.reliability,
+    );
+    squad.reviewHealthPercentile = percentileRank(
+      raw.reviewHealth,
+      allValues.reviewHealth,
+    );
+    squad.throughputPercentile = percentileRank(
+      raw.throughput,
+      allValues.throughput,
+    );
+    squad.rawScore =
+      0.4 * squad.qualityPercentile +
+      0.2 * squad.difficultyPercentile +
+      0.15 * squad.reliabilityPercentile +
+      0.15 * squad.reviewHealthPercentile +
+      0.1 * squad.throughputPercentile;
+    // Shrink toward a neutral prior of 50 at 20 effective PRs. Squads with
+    // thin activity pull toward the middle the same way sparse engineer
+    // samples do on the engineer table.
+    squad.finalScore =
+      (20 * 50 + squad.effectivePrCount * squad.rawScore) /
+      (20 + squad.effectivePrCount);
+  }
+
+  provisional.sort((a, b) => b.finalScore - a.finalScore);
+  return { squads: provisional, unassignedEngineerCount, unassignedPrCount };
+}
+
+interface HeadcountRowForSquad {
+  email?: string | null;
+  hb_squad?: string | null;
+}
+
+async function fetchSquadLookupByLogin(): Promise<Map<string, SquadLookup>> {
+  const [headcountData, githubMap, squadsRegistry] = await Promise.all([
+    getReportData("people", "headcount", ["headcount"]).catch(() => []),
+    db
+      .select({
+        githubLogin: githubEmployeeMap.githubLogin,
+        employeeEmail: githubEmployeeMap.employeeEmail,
+        isBot: githubEmployeeMap.isBot,
+      })
+      .from(githubEmployeeMap)
+      .where(eq(githubEmployeeMap.isBot, false)),
+    db
+      .select({
+        name: squads.name,
+        pillar: squads.pillar,
+        isActive: squads.isActive,
+      })
+      .from(squads)
+      .where(eq(squads.isActive, true)),
+  ]);
+
+  const squadByName = new Map<string, { name: string; pillar: string }>();
+  for (const row of squadsRegistry) {
+    squadByName.set(row.name.trim().toLowerCase(), {
+      name: row.name,
+      pillar: row.pillar,
+    });
+  }
+
+  const headcountQuery = headcountData.find((d) => d.queryName === "headcount");
+  const headcountRows: HeadcountRowForSquad[] =
+    (headcountQuery?.rows as HeadcountRowForSquad[] | undefined) ?? [];
+
+  const squadByEmail = new Map<string, SquadLookup>();
+  for (const row of headcountRows) {
+    const email = (row.email ?? "").toLowerCase().trim();
+    if (!email) continue;
+    const hb = (row.hb_squad ?? "").trim();
+    if (!hb) continue;
+    const canonical = squadByName.get(hb.toLowerCase());
+    squadByEmail.set(email, {
+      squadName: canonical?.name ?? hb,
+      pillar: canonical?.pillar ?? null,
+    });
+  }
+
+  const squadByLogin = new Map<string, SquadLookup>();
+  for (const row of githubMap) {
+    const email = (row.employeeEmail ?? "").toLowerCase().trim();
+    if (!email) continue;
+    const match = squadByEmail.get(email);
+    if (!match) continue;
+    squadByLogin.set(row.githubLogin.toLowerCase(), match);
+  }
+
+  return squadByLogin;
+}
+
+export async function getSquadCodeReviewView(
+  opts: RollupOptions = {},
+): Promise<SquadCodeReviewView> {
+  const [view, squadByLogin] = await Promise.all([
+    getCodeReviewView(opts),
+    fetchSquadLookupByLogin().catch((err) => {
+      console.warn(
+        "[code-review] squad lookup fetch failed; squad view will be empty:",
+        err,
+      );
+      return new Map<string, SquadLookup>();
+    }),
+  ]);
+
+  const { squads, unassignedEngineerCount, unassignedPrCount } =
+    rollupSquadsFromEngineers(view.engineers, squadByLogin);
+
+  return {
+    windowDays: view.windowDays,
+    rubricVersion: view.rubricVersion,
+    analysedAtLatest: view.analysedAtLatest,
+    squads,
+    totalPrs: view.totalPrs,
+    unassignedEngineerCount,
+    unassignedPrCount,
+  };
+}
+
+/**
+ * Page-level loader that returns both engineer and squad views, sharing a
+ * single underlying fetch of `prReviewAnalyses` and `githubEmployeeMap` so
+ * the squad view is effectively free on top of the engineer view.
+ */
+export async function getCodeReviewPageData(
+  opts: RollupOptions = {},
+): Promise<{ view: CodeReviewView; squadView: SquadCodeReviewView }> {
+  const [view, squadByLogin] = await Promise.all([
+    getCodeReviewView(opts),
+    fetchSquadLookupByLogin().catch((err) => {
+      console.warn(
+        "[code-review] squad lookup fetch failed; squad view will be empty:",
+        err,
+      );
+      return new Map<string, SquadLookup>();
+    }),
+  ]);
+
+  const { squads, unassignedEngineerCount, unassignedPrCount } =
+    rollupSquadsFromEngineers(view.engineers, squadByLogin);
+
+  const squadView: SquadCodeReviewView = {
+    windowDays: view.windowDays,
+    rubricVersion: view.rubricVersion,
+    analysedAtLatest: view.analysedAtLatest,
+    squads,
+    totalPrs: view.totalPrs,
+    unassignedEngineerCount,
+    unassignedPrCount,
+  };
+
+  return { view, squadView };
 }
