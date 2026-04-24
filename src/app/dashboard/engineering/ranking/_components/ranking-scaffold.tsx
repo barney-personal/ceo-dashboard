@@ -26,7 +26,9 @@ import {
   type StabilityEntry,
   type StabilityFlag,
 } from "@/lib/data/engineering-ranking";
+import type { HrEvidencePack } from "@/lib/data/engineering-ranking-hr";
 import { CompositeTopTable } from "./composite-table";
+import { HrReviewSection } from "./hr-review-section";
 
 function formatDate(iso: string): string {
   // Snapshot dates are always UTC midnight (either a bare `YYYY-MM-DD` string
@@ -2375,9 +2377,13 @@ function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
 export function RankingScaffold({
   snapshot,
   profileSlugByHash,
+  canSeeHrReview = false,
+  hrPack = null,
 }: {
   snapshot: EngineeringRankingSnapshot;
   profileSlugByHash: Record<string, string>;
+  canSeeHrReview?: boolean;
+  hrPack?: HrEvidencePack | null;
 }) {
   return (
     <div className="space-y-6">
@@ -2457,6 +2463,10 @@ export function RankingScaffold({
       <AttributionSection attribution={snapshot.attribution} />
 
       <MoversSection movers={snapshot.movers} />
+
+      {canSeeHrReview && hrPack ? (
+        <HrReviewSection pack={hrPack} profileSlugByHash={profileSlugByHash} />
+      ) : null}
 
       <StabilitySection stability={snapshot.stability} />
 

@@ -43,6 +43,14 @@ import {
   type TeamSwarmiaMetrics,
 } from "@/lib/data/swarmia";
 import {
+  getLatestSlackMembersSnapshot,
+  type SlackMemberRow,
+} from "@/lib/data/slack-members";
+import {
+  getPerformanceData,
+  type PerformanceRating,
+} from "@/lib/data/performance";
+import {
   RANKING_METHODOLOGY_VERSION,
   RANKING_MOVERS_MIN_GAP_DAYS,
   RANKING_QUALITY_RUBRIC_VERSION,
@@ -607,14 +615,90 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
  * engineer's `/dashboard/people/[slug]` profile. Shares a single preflight
  * fetch with `getEngineeringRankingSnapshotWithSignals` so the page only pays
  * for one round of fetches.
+ *
+ * HR-specific auxiliary data (Slack / 30-day activity / performance history)
+ * is fetched separately via `getHrAuxiliaryData()` so viewers without the
+ * `engineering.ranking.hr` permission do not pay for DB/API calls whose
+ * result they cannot see.
  */
 export async function getEngineeringRankingPageData(): Promise<{
   snapshot: EngineeringRankingSnapshot;
   profileSlugByHash: Record<string, string>;
+  signals: PerEngineerSignalRow[];
 }> {
-  const { snapshot, profileSlugByHash } =
-    await getEngineeringRankingSnapshotWithSignals();
-  return { snapshot, profileSlugByHash };
+  const core = await getEngineeringRankingSnapshotWithSignals();
+  return {
+    snapshot: core.snapshot,
+    profileSlugByHash: core.profileSlugByHash,
+    signals: core.signals,
+  };
+}
+
+/**
+ * HR-section-only auxiliary data. Fan-out of four best-effort fetches
+ * consumed only by `buildHrEvidencePack`. Callers MUST gate this behind the
+ * `engineering.ranking.hr` permission check — invoking it otherwise wastes
+ * DB/API round-trips on a viewer who cannot see the result.
+ *
+ * Each fetch is independently best-effort; a failure degrades to an empty
+ * map/array so the HR section still renders with a "no data" state rather
+ * than throwing the whole page render.
+ */
+export async function getHrAuxiliaryData(): Promise<{
+  slackRows: SlackMemberRow[];
+  recent30dByLogin: Map<
+    string,
+    {
+      prCount: number;
+      commitCount: number;
+      additions: number;
+      deletions: number;
+    }
+  >;
+  recent30dAnalyses: PrReviewAnalysisInput[];
+  performanceByEmail: Map<string, PerformanceRating[]>;
+}> {
+  const recentWindowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [slackRows, recent30dByLogin, recent30dAnalyses, performanceByEmail] =
+    await Promise.all([
+      getLatestSlackMembersSnapshot()
+        .then((snap) => snap?.rows ?? [])
+        .catch((err) => {
+          console.warn("[engineering-ranking] slack fetch failed:", err);
+          return [] as SlackMemberRow[];
+        }),
+      fetchGithubActivityByLogin(recentWindowStart).catch((err) => {
+        console.warn("[engineering-ranking] 30d activity fetch failed:", err);
+        return new Map();
+      }),
+      fetchPrReviewAnalyses(recentWindowStart).catch((err) => {
+        console.warn(
+          "[engineering-ranking] 30d analyses fetch failed:",
+          err,
+        );
+        return [] as PrReviewAnalysisInput[];
+      }),
+      getPerformanceData()
+        .then((data) => {
+          const map = new Map<string, PerformanceRating[]>();
+          for (const p of data.people) {
+            map.set(p.email.toLowerCase(), p.ratings);
+          }
+          return map;
+        })
+        .catch((err) => {
+          console.warn("[engineering-ranking] performance fetch failed:", err);
+          return new Map<string, PerformanceRating[]>();
+        }),
+    ]);
+
+  return {
+    slackRows,
+    recent30dByLogin,
+    recent30dAnalyses,
+    performanceByEmail,
+  };
 }
 
 function numericString(value: number | null): string | null {
