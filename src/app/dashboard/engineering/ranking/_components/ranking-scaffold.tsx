@@ -1,8 +1,10 @@
 import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
 import type {
+  CorrelationPair,
   EligibilityEntry,
   EligibilityStatus,
   EngineeringRankingSnapshot,
+  SignalAudit,
 } from "@/lib/data/engineering-ranking";
 
 function formatDate(iso: string): string {
@@ -161,6 +163,244 @@ function CoverageSection({
   );
 }
 
+function formatCoveragePct(present: number, total: number): string {
+  if (total === 0) return "—";
+  return `${Math.round((present / total) * 100)}%`;
+}
+
+function formatRho(rho: number | null): string {
+  if (rho === null) return "—";
+  return rho.toFixed(2);
+}
+
+function findPair(
+  audit: SignalAudit,
+  a: string,
+  b: string,
+): CorrelationPair | null {
+  if (a === b) {
+    return { a, b, rho: 1, n: audit.competitiveCohortSize };
+  }
+  return (
+    audit.correlationMatrix.find(
+      (pair) =>
+        (pair.a === a && pair.b === b) || (pair.a === b && pair.b === a),
+    ) ?? null
+  );
+}
+
+function SignalAuditSection({
+  snapshot,
+}: {
+  snapshot: EngineeringRankingSnapshot;
+}) {
+  const { audit } = snapshot;
+  const numericMissingness = audit.missingness.filter(
+    (m) => m.kind === "numeric",
+  );
+  const nominalMissingness = audit.missingness.filter(
+    (m) => m.kind === "nominal",
+  );
+
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Signal inventory + orthogonality audit
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            Numeric and ordinal signals are checked with Spearman rank
+            correlation over paired non-null observations. Nominal dimensions
+            such as discipline, squad, PM, and Slack channel id are reported as
+            coverage distributions only — they are not ordinal-encoded.
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>{audit.windowDays}d signal window</div>
+          <div className="mt-1">
+            {audit.competitiveCohortSize} competitive engineers
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Missingness by signal
+          </h4>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full border-collapse text-left text-xs">
+              <thead>
+                <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                  <th className="py-2 pr-3 font-medium">Signal</th>
+                  <th className="py-2 pr-3 font-medium">Kind</th>
+                  <th className="py-2 pr-3 font-medium">Present</th>
+                  <th className="py-2 pr-3 font-medium">Missing</th>
+                  <th className="py-2 pr-3 font-medium">Coverage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...numericMissingness, ...nominalMissingness].map((m) => (
+                  <tr key={m.signal} className="border-b border-border/30">
+                    <td className="py-2 pr-3 text-foreground">{m.signal}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">
+                      {m.kind}
+                    </td>
+                    <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                      {m.present}
+                    </td>
+                    <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                      {m.missing}
+                    </td>
+                    <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                      {formatCoveragePct(m.present, m.totalCohort)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-md border border-border/40 bg-background/60 p-4">
+            <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Redundant / under-sampled pairs
+            </h4>
+            {audit.redundantPairs.length === 0 ? (
+              <p className="mt-3 text-xs text-muted-foreground">
+                No numeric pair with enough overlap crosses |rho| ≥ 0.85.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+                {audit.redundantPairs.slice(0, 6).map((pair) => (
+                  <li key={`${pair.a}-${pair.b}`}>
+                    <span className="text-foreground">{pair.a}</span> ↔{" "}
+                    <span className="text-foreground">{pair.b}</span>: ρ{" "}
+                    {formatRho(pair.rho)} over {pair.n} engineers
+                  </li>
+                ))}
+              </ul>
+            )}
+            {audit.underSampledPairs.length > 0 && (
+              <p className="mt-3 text-xs text-warning">
+                {audit.underSampledPairs.length} pair
+                {audit.underSampledPairs.length === 1 ? "" : "s"} have fewer
+                than 8 overlapping observations; they are not used for
+                redundancy conclusions.
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-md border border-border/40 bg-background/60 p-4">
+            <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Unavailable signals
+            </h4>
+            <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+              {audit.unavailableSignals.map((signal) => (
+                <li key={signal.name}>
+                  <span className="text-foreground">{signal.name}:</span>{" "}
+                  {signal.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Spearman correlation matrix
+        </h4>
+        <div className="mt-3 overflow-x-auto">
+          <table className="border-collapse text-left text-[11px]">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="sticky left-0 z-10 bg-background/95 py-2 pr-3 font-medium">
+                  Signal
+                </th>
+                {audit.numericSignals.map((signal) => (
+                  <th
+                    key={signal}
+                    className="min-w-24 px-2 py-2 text-center font-medium"
+                  >
+                    {signal}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {audit.numericSignals.map((rowSignal) => (
+                <tr key={rowSignal} className="border-b border-border/30">
+                  <td className="sticky left-0 z-10 max-w-44 bg-background/95 py-2 pr-3 text-foreground">
+                    {rowSignal}
+                  </td>
+                  {audit.numericSignals.map((colSignal) => {
+                    const pair = findPair(audit, rowSignal, colSignal);
+                    const sampled =
+                      pair && pair.n > 0 ? `${pair.n} obs` : "no overlap";
+                    return (
+                      <td
+                        key={`${rowSignal}-${colSignal}`}
+                        className="px-2 py-2 text-center tabular-nums text-muted-foreground"
+                        title={sampled}
+                      >
+                        {formatRho(pair?.rho ?? null)}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Nominal cohort coverage
+        </h4>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="py-2 pr-3 font-medium">Dimension</th>
+                <th className="py-2 pr-3 font-medium">Distinct</th>
+                <th className="py-2 pr-3 font-medium">Missing</th>
+                <th className="py-2 pr-3 font-medium">Largest cohorts</th>
+              </tr>
+            </thead>
+            <tbody>
+              {audit.nominalCoverage.map((coverage) => (
+                <tr key={coverage.signal} className="border-b border-border/30">
+                  <td className="py-2 pr-3 text-foreground">
+                    {coverage.signal}
+                  </td>
+                  <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                    {coverage.distinctCategories}
+                  </td>
+                  <td className="py-2 pr-3 tabular-nums text-muted-foreground">
+                    {coverage.missing}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {coverage.categories.length === 0
+                      ? "—"
+                      : coverage.categories
+                          .slice(0, 4)
+                          .map((c) => `${c.category} (${c.count})`)
+                          .join(" · ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -307,6 +547,8 @@ export function RankingScaffold({
       </section>
 
       <CoverageSection snapshot={snapshot} />
+
+      <SignalAuditSection snapshot={snapshot} />
 
       <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
         <h3 className="text-sm font-semibold text-foreground">

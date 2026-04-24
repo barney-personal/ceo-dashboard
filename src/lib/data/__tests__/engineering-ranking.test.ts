@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   RANKING_METHODOLOGY_VERSION,
+  RANKING_MIN_OVERLAP_SAMPLES,
+  RANKING_NOMINAL_SIGNAL_NAMES,
+  RANKING_NUMERIC_SIGNAL_NAMES,
   RANKING_RAMP_UP_DAYS,
   buildEligibleRoster,
   buildRankingSnapshot,
+  buildSignalAudit,
   buildSourceNotes,
+  computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
   type EligibilityGithubMapRow,
@@ -12,6 +17,7 @@ import {
   type EligibilityImpactModelView,
   type EligibilityInputs,
   type EligibilitySquadsRegistryRow,
+  type PerEngineerSignalRow,
 } from "../engineering-ranking";
 
 describe("getEngineeringRanking (M2 signal availability)", () => {
@@ -871,5 +877,209 @@ describe("M6 squads-registry channel provenance + empty-registry consistency", (
     // a generic "Slack channel" without the id qualifier risks claiming
     // channel names/webhooks/metadata that we do not actually thread.
     expect(haystack).toMatch(/channel[_\s]?id/);
+  });
+});
+
+describe("M7 signal collection + orthogonality audit", () => {
+  const NOW = new Date("2026-04-24T00:00:00Z");
+
+  function row(
+    index: number,
+    overrides: Partial<EligibilityHeadcountRow> = {},
+  ): EligibilityHeadcountRow {
+    return {
+      email: `eng${index}@meetcleo.com`,
+      preferred_name: `Engineer ${index}`,
+      hb_function: "Engineering",
+      hb_level: `L${(index % 4) + 2}`,
+      hb_squad: index % 2 === 0 ? "Platform" : "Risk",
+      rp_specialisation: index % 2 === 0 ? "Backend Engineer" : "Frontend Engineer",
+      rp_department_name: index % 2 === 0 ? "Core Pillar" : "Risk Pillar",
+      job_title: "Software Engineer",
+      manager: "Boss",
+      line_manager_email: "boss@meetcleo.com",
+      start_date: "2023-01-01",
+      termination_date: null,
+      ...overrides,
+    };
+  }
+
+  function map(index: number): EligibilityGithubMapRow {
+    return {
+      githubLogin: `eng${index}`,
+      employeeEmail: `eng${index}@meetcleo.com`,
+      isBot: false,
+    };
+  }
+
+  function squad(
+    name: string,
+    overrides: Partial<EligibilitySquadsRegistryRow> = {},
+  ): EligibilitySquadsRegistryRow {
+    return {
+      name,
+      pillar: name === "Platform" ? "Core" : "Risk",
+      pmName: name === "Platform" ? "Pat PM" : "Riley PM",
+      channelId: name === "Platform" ? "CPLATFORM" : "CRISK",
+      isActive: true,
+      ...overrides,
+    };
+  }
+
+  function signal(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    const emailHash = hashEmailForRanking(`eng${index}@meetcleo.com`);
+    return {
+      emailHash,
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  function snapshotInputs(
+    count: number = RANKING_MIN_OVERLAP_SAMPLES,
+    overrides: Partial<EligibilityInputs> = {},
+  ): EligibilityInputs {
+    return {
+      headcountRows: Array.from({ length: count }, (_, i) => row(i + 1)),
+      githubMap: Array.from({ length: count }, (_, i) => map(i + 1)),
+      impactModel: { engineers: [] } as EligibilityImpactModelView,
+      squads: [squad("Platform"), squad("Risk")],
+      signals: Array.from({ length: count }, (_, i) => signal(i + 1)),
+      now: NOW,
+      ...overrides,
+    };
+  }
+
+  it("computes Spearman rho = 1.0 for identical rank order", () => {
+    const result = computeSpearmanRho([1, 2, 3, 4], [10, 20, 30, 40]);
+    expect(result.n).toBe(4);
+    expect(result.rho).toBeCloseTo(1, 6);
+  });
+
+  it("handles ties and nulls with pairwise deletion", () => {
+    const result = computeSpearmanRho(
+      [1, 2, 2, null, 4],
+      [10, 20, 20, 999, 40],
+    );
+    expect(result.n).toBe(4);
+    expect(result.rho).toBeCloseTo(1, 6);
+  });
+
+  it("reports pairwise sample counts and separates redundant from under-sampled pairs", () => {
+    const snapshot = buildRankingSnapshot(
+      snapshotInputs(RANKING_MIN_OVERLAP_SAMPLES, {
+        signals: Array.from(
+          { length: RANKING_MIN_OVERLAP_SAMPLES },
+          (_, i) =>
+            signal(i + 1, {
+              shapPredicted: i < 3 ? (i + 1) * 100 : null,
+            }),
+        ),
+      }),
+    );
+
+    const prCommit = snapshot.audit.correlationMatrix.find(
+      (pair) => pair.a === "PR count" && pair.b === "Commit count",
+    );
+    expect(prCommit?.n).toBe(RANKING_MIN_OVERLAP_SAMPLES);
+    expect(prCommit?.rho).toBeCloseTo(1, 6);
+    expect(
+      snapshot.audit.redundantPairs.some(
+        (pair) => pair.a === "PR count" && pair.b === "Commit count",
+      ),
+    ).toBe(true);
+
+    const prShap = snapshot.audit.correlationMatrix.find(
+      (pair) => pair.a === "PR count" && pair.b === "SHAP predicted impact",
+    );
+    expect(prShap?.n).toBe(3);
+    expect(
+      snapshot.audit.underSampledPairs.some(
+        (pair) => pair.a === "PR count" && pair.b === "SHAP predicted impact",
+      ),
+    ).toBe(true);
+    expect(
+      snapshot.audit.redundantPairs.some(
+        (pair) => pair.a === "PR count" && pair.b === "SHAP predicted impact",
+      ),
+    ).toBe(false);
+  });
+
+  it("documents absent individual review fields instead of fabricating review signals", () => {
+    const audit = buildSignalAudit({
+      entries: [],
+      reviewSignalsPersisted: false,
+    });
+    const unavailable = audit.unavailableSignals
+      .map((signal) => signal.name.toLowerCase())
+      .join(" | ");
+    expect(unavailable).toContain("individual pr reviewer graph");
+    expect(unavailable).toContain("individual review turnaround");
+    expect(unavailable).toContain("individual pr cycle time");
+    expect(audit.numericSignals.join(" ").toLowerCase()).not.toContain(
+      "reviewer graph",
+    );
+  });
+
+  it("uses the squads metadata fields actually joined in M6 for nominal coverage", () => {
+    const snapshot = buildRankingSnapshot(snapshotInputs(2));
+    const nominal = new Map(
+      snapshot.audit.nominalCoverage.map((coverage) => [
+        coverage.signal,
+        coverage,
+      ]),
+    );
+    expect(nominal.get("Canonical squad")?.categories.map((c) => c.category)).toEqual([
+      "Platform",
+      "Risk",
+    ]);
+    expect(
+      nominal.get("Canonical squad pillar")?.categories.map((c) => c.category),
+    ).toEqual(["Core", "Risk"]);
+    expect(nominal.get("Squad PM")?.categories.map((c) => c.category)).toEqual([
+      "Pat PM",
+      "Riley PM",
+    ]);
+    expect(
+      nominal.get("Slack channel id")?.categories.map((c) => c.category),
+    ).toEqual(["CPLATFORM", "CRISK"]);
+  });
+
+  it("does not ordinal-encode nominal squad or channel fields into Spearman", () => {
+    const snapshot = buildRankingSnapshot(snapshotInputs(4));
+    const forbiddenNumericSignals = [
+      "Discipline",
+      "Raw headcount squad",
+      "Raw headcount pillar",
+      "Canonical squad",
+      "Canonical squad pillar",
+      "Squad PM",
+      "Slack channel id",
+    ];
+    for (const signalName of forbiddenNumericSignals) {
+      expect(RANKING_NOMINAL_SIGNAL_NAMES).toContain(signalName);
+      expect(RANKING_NUMERIC_SIGNAL_NAMES).not.toContain(signalName);
+      expect(snapshot.audit.numericSignals).not.toContain(signalName);
+      expect(
+        snapshot.audit.correlationMatrix.some(
+          (pair) => pair.a === signalName || pair.b === signalName,
+        ),
+      ).toBe(false);
+    }
   });
 });

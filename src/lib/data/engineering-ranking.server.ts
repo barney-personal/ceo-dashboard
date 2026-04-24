@@ -9,17 +9,35 @@
  */
 
 import { db } from "@/lib/db";
-import { githubEmployeeMap, squads } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import {
+  githubCommits,
+  githubEmployeeMap,
+  githubPrs,
+  squads,
+} from "@/lib/db/schema";
+import { count, eq, gte, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
+  aggregateLatestMonthByUser,
+  getAiUsageData,
+  type AiUsageUserSummary,
+} from "@/lib/data/ai-usage";
+import {
+  getSquadPillarMetrics,
+  normalizeTeamName,
+  type TeamSwarmiaMetrics,
+} from "@/lib/data/swarmia";
+import {
+  RANKING_SIGNAL_WINDOW_DAYS,
+  buildEligibleRoster,
   buildRankingSnapshot,
   getEngineeringRanking,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilitySquadsRegistryRow,
   type EngineeringRankingSnapshot,
+  type PerEngineerSignalRow,
 } from "@/lib/data/engineering-ranking";
 
 async function fetchHeadcountRows(): Promise<EligibilityHeadcountRow[]> {
@@ -69,6 +87,166 @@ async function fetchSquadsRegistry(): Promise<EligibilitySquadsRegistryRow[]> {
   }));
 }
 
+async function fetchGithubActivityByLogin(windowStart: Date): Promise<
+  Map<
+    string,
+    {
+      prCount: number;
+      commitCount: number;
+      additions: number;
+      deletions: number;
+    }
+  >
+> {
+  const [prRows, commitRows] = await Promise.all([
+    db
+      .select({
+        login: githubPrs.authorLogin,
+        prCount: count().as("pr_count"),
+        additions: sum(githubPrs.additions).mapWith(Number).as("additions"),
+        deletions: sum(githubPrs.deletions).mapWith(Number).as("deletions"),
+      })
+      .from(githubPrs)
+      .where(gte(githubPrs.mergedAt, windowStart))
+      .groupBy(githubPrs.authorLogin),
+    db
+      .select({
+        login: githubCommits.authorLogin,
+        commitCount: count().as("commit_count"),
+      })
+      .from(githubCommits)
+      .where(gte(githubCommits.committedAt, windowStart))
+      .groupBy(githubCommits.authorLogin),
+  ]);
+
+  const byLogin = new Map<
+    string,
+    {
+      prCount: number;
+      commitCount: number;
+      additions: number;
+      deletions: number;
+    }
+  >();
+
+  for (const row of prRows) {
+    byLogin.set(row.login, {
+      prCount: Number(row.prCount) || 0,
+      commitCount: 0,
+      additions: Number(row.additions) || 0,
+      deletions: Number(row.deletions) || 0,
+    });
+  }
+
+  for (const row of commitRows) {
+    const existing = byLogin.get(row.login) ?? {
+      prCount: 0,
+      commitCount: 0,
+      additions: 0,
+      deletions: 0,
+    };
+    existing.commitCount = Number(row.commitCount) || 0;
+    byLogin.set(row.login, existing);
+  }
+
+  return byLogin;
+}
+
+async function fetchAiUsageByEmail(): Promise<Map<string, AiUsageUserSummary>> {
+  try {
+    return aggregateLatestMonthByUser(await getAiUsageData());
+  } catch (err) {
+    console.warn("[engineering-ranking] AI usage fetch failed:", err);
+    return new Map();
+  }
+}
+
+async function fetchSquadDeliveryContext(): Promise<
+  Map<string, TeamSwarmiaMetrics>
+> {
+  const result = await getSquadPillarMetrics("last_180_days");
+  if (result.status !== "ok" || !result.data) return new Map();
+  return new Map(Object.entries(result.data.squads));
+}
+
+function buildSignalRows({
+  headcountRows,
+  githubMap,
+  squadsRegistry,
+  githubActivityByLogin,
+  aiUsageByEmail,
+  squadDeliveryByName,
+  now,
+}: {
+  headcountRows: EligibilityHeadcountRow[];
+  githubMap: EligibilityGithubMapRow[];
+  squadsRegistry: EligibilitySquadsRegistryRow[];
+  githubActivityByLogin: Map<
+    string,
+    {
+      prCount: number;
+      commitCount: number;
+      additions: number;
+      deletions: number;
+    }
+  >;
+  aiUsageByEmail: Map<string, AiUsageUserSummary>;
+  squadDeliveryByName: Map<string, TeamSwarmiaMetrics>;
+  now: Date;
+}): PerEngineerSignalRow[] {
+  const impactByHash = new Map(
+    getImpactModel().engineers.map((engineer) => [
+      engineer.email_hash,
+      engineer,
+    ]),
+  );
+
+  const { entries } = buildEligibleRoster({
+    headcountRows,
+    githubMap,
+    impactModel: getImpactModel(),
+    squads: squadsRegistry,
+    now,
+    windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+  });
+
+  return entries.map((entry) => {
+    const githubActivity = entry.githubLogin
+      ? (githubActivityByLogin.get(entry.githubLogin) ?? {
+          prCount: 0,
+          commitCount: 0,
+          additions: 0,
+          deletions: 0,
+        })
+      : null;
+    const modelRow = impactByHash.get(entry.emailHash);
+    const aiUsage = aiUsageByEmail.get(entry.email.toLowerCase()) ?? null;
+    const squadKey = normalizeTeamName(
+      entry.canonicalSquad?.name ?? entry.squad,
+    );
+    const squadDelivery =
+      squadKey === "" ? null : (squadDeliveryByName.get(squadKey) ?? null);
+
+    return {
+      emailHash: entry.emailHash,
+      prCount: githubActivity?.prCount ?? null,
+      commitCount: githubActivity?.commitCount ?? null,
+      additions: githubActivity?.additions ?? null,
+      deletions: githubActivity?.deletions ?? null,
+      shapPredicted: modelRow?.predicted ?? null,
+      shapActual: modelRow?.actual ?? null,
+      shapResidual: modelRow?.residual ?? null,
+      aiTokens: aiUsage?.totalTokens ?? null,
+      aiSpend: aiUsage?.totalCost ?? null,
+      squadCycleTimeHours: squadDelivery?.cycleTimeHours ?? null,
+      squadReviewRatePercent: squadDelivery?.reviewRatePercent ?? null,
+      squadTimeToFirstReviewHours:
+        squadDelivery?.timeToFirstReviewHours ?? null,
+      squadPrsInProgress: squadDelivery?.prsInProgress ?? null,
+    };
+  });
+}
+
 /**
  * Build a real ranking snapshot from live data. If any fetch fails, fall
  * back to the empty-eligibility stub — the page still renders and the
@@ -76,18 +254,44 @@ async function fetchSquadsRegistry(): Promise<EligibilitySquadsRegistryRow[]> {
  */
 export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankingSnapshot> {
   try {
-    const [headcountRows, githubMap, squadsRegistry] = await Promise.all([
+    const now = new Date();
+    const windowStart = new Date(
+      now.getTime() - RANKING_SIGNAL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const [
+      headcountRows,
+      githubMap,
+      squadsRegistry,
+      githubActivityByLogin,
+      aiUsageByEmail,
+      squadDeliveryByName,
+    ] = await Promise.all([
       fetchHeadcountRows(),
       fetchGithubMap(),
       fetchSquadsRegistry(),
+      fetchGithubActivityByLogin(windowStart),
+      fetchAiUsageByEmail(),
+      fetchSquadDeliveryContext(),
     ]);
+    const signals = buildSignalRows({
+      headcountRows,
+      githubMap,
+      squadsRegistry,
+      githubActivityByLogin,
+      aiUsageByEmail,
+      squadDeliveryByName,
+      now,
+    });
 
     return buildRankingSnapshot({
       headcountRows,
       githubMap,
       impactModel: getImpactModel(),
       squads: squadsRegistry,
-      now: new Date(),
+      signals,
+      reviewSignalsPersisted: false,
+      now,
+      windowDays: RANKING_SIGNAL_WINDOW_DAYS,
     });
   } catch (err) {
     console.warn(

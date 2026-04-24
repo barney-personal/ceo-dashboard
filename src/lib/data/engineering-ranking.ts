@@ -17,6 +17,28 @@ import { createHash } from "node:crypto";
 
 export const RANKING_METHODOLOGY_VERSION = "0.1.0-scaffold" as const;
 
+/** Signals are audited over the last six months by default. */
+export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
+
+/**
+ * Spearman |rho| at or above this threshold is treated as redundant — the
+ * two signals are moving in lock-step and using both would double-count.
+ * 0.85 is deliberately strict so near-duplicate signals don't sneak through.
+ */
+export const RANKING_REDUNDANT_RHO_THRESHOLD = 0.85 as const;
+
+/**
+ * Below this number of paired non-null observations a correlation is too
+ * weakly supported to draw a redundancy conclusion from. Pairs below this
+ * count surface on `underSampledPairs` instead of `redundantPairs`, so the
+ * page distinguishes "truly redundant" from "we just haven't seen them
+ * overlap enough times".
+ */
+export const RANKING_MIN_OVERLAP_SAMPLES = 8 as const;
+
+/** Approximate days-per-month used for tenure conversion. */
+const DAYS_PER_MONTH = 30.4375 as const;
+
 /** High-level state machine for the ranking page. */
 export type RankingStatus =
   | "methodology_pending"
@@ -165,6 +187,8 @@ export interface EngineeringRankingSnapshot {
      */
     sourceNotes: string[];
   };
+  /** Signal inventory + orthogonality audit over the competitive cohort. */
+  audit: SignalAudit;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -173,6 +197,116 @@ export interface EngineeringRankingSnapshot {
     state: "available" | "planned" | "unavailable";
     note?: string;
   }>;
+}
+
+/** Category a signal belongs to for audit purposes. */
+export type SignalKind = "numeric" | "nominal";
+
+/**
+ * Per-signal presence/missingness counts over the competitive cohort.
+ * `totalCohort` is the competitive roster size so downstream code can phrase
+ * "N of M engineers have this signal" without passing the cohort size
+ * separately.
+ */
+export interface SignalMissingness {
+  signal: string;
+  kind: SignalKind;
+  present: number;
+  missing: number;
+  totalCohort: number;
+}
+
+/**
+ * Cohort distribution for a nominal (categorical) signal. Reported instead
+ * of, never alongside, a Spearman correlation — arbitrary ordinal encoding
+ * of nominal dimensions (discipline, squad name, Slack channel id) would
+ * fabricate precision the data does not support.
+ */
+export interface NominalSignalCoverage {
+  signal: string;
+  categories: Array<{ category: string; count: number }>;
+  missing: number;
+  distinctCategories: number;
+}
+
+/** One pairwise cell in the Spearman correlation matrix. */
+export interface CorrelationPair {
+  a: string;
+  b: string;
+  /** Spearman rho on paired non-null observations; null when undefined
+   *  (fewer than 2 overlapping points or a zero-variance rank series). */
+  rho: number | null;
+  /** Count of pairs of non-null observations contributing to `rho`. */
+  n: number;
+}
+
+export interface UnavailableSignal {
+  name: string;
+  reason: string;
+}
+
+/**
+ * Signal inventory and orthogonality audit for the competitive cohort.
+ * Numeric signals are audited with Spearman rank correlations (ties handled
+ * with average ranks, nulls handled via pairwise deletion). Nominal signals
+ * report cohort distributions only.
+ */
+export interface SignalAudit {
+  competitiveCohortSize: number;
+  windowDays: number;
+  numericSignals: string[];
+  nominalSignals: string[];
+  missingness: SignalMissingness[];
+  nominalCoverage: NominalSignalCoverage[];
+  /** Upper-triangle of pairwise Spearman correlations over numeric signals. */
+  correlationMatrix: CorrelationPair[];
+  /** Pairs whose |rho| >= `RANKING_REDUNDANT_RHO_THRESHOLD`. */
+  redundantPairs: Array<CorrelationPair & { rho: number }>;
+  /** Pairs whose overlap count `n < RANKING_MIN_OVERLAP_SAMPLES`. */
+  underSampledPairs: CorrelationPair[];
+  /**
+   * Signals whose source is not persisted in the current schema. Emitted on
+   * the page so the reader sees what is not in scoring instead of inferring
+   * absence from a silent exclusion.
+   */
+  unavailableSignals: UnavailableSignal[];
+}
+
+/**
+ * Per-engineer signal row consumed by the orthogonality audit. The server
+ * loader is responsible for producing these rows by joining GitHub/impact
+ * model/AI usage to the competitive roster; tests can supply fixtures.
+ *
+ * All numeric signals are `number | null` so missingness is explicit at the
+ * call site rather than silently collapsed into zero.
+ */
+export interface PerEngineerSignalRow {
+  emailHash: string;
+  prCount: number | null;
+  commitCount: number | null;
+  additions: number | null;
+  deletions: number | null;
+  /**
+   * SHAP-predicted impact (dollars/year or equivalent) from the impact
+   * model. Null when the engineer was not in the training set.
+   */
+  shapPredicted: number | null;
+  /** Measured impact target from the impact model. */
+  shapActual: number | null;
+  /** actual - predicted; over-delivery when positive. */
+  shapResidual: number | null;
+  /** AI tooling spend for the latest month in the AI usage dashboard. */
+  aiTokens: number | null;
+  aiSpend: number | null;
+  /**
+   * Squad-level delivery-health context from Swarmia. These are contextual
+   * team signals, not individual labels; they are audited for orthogonality
+   * but later scoring must cap/down-weight them to avoid ecological fallacy.
+   */
+  squadCycleTimeHours: number | null;
+  squadReviewRatePercent: number | null;
+  squadTimeToFirstReviewHours: number | null;
+  squadPrsInProgress: number | null;
 }
 
 /**
@@ -296,10 +430,28 @@ export interface EligibilityInputs {
    * registry as a live source.
    */
   squads?: EligibilitySquadsRegistryRow[];
+  /**
+   * Optional per-engineer signal rows indexed by `emailHash`. Supplied by
+   * the server loader once GitHub PR/commit aggregates, impact-model stats,
+   * and AI usage have been joined. When absent, the audit runs in a
+   * "data-pending" state that still emits the unavailable-signal list and
+   * the nominal coverage table drawn from the roster itself.
+   */
+  signals?: PerEngineerSignalRow[];
+  /**
+   * Whether individual review-graph / review-turnaround / PR-level cycle
+   * time signals are persisted in the current GitHub schema. Defaults to
+   * `false` — a future schema/sync change that persists reviewer
+   * identities/timestamps can flip this and unblock those signals. The
+   * audit always emits them as unavailable today.
+   */
+  reviewSignalsPersisted?: boolean;
   /** Defaults to new Date() — injectable so tests can pin "today". */
   now?: Date;
   /** Defaults to RANKING_RAMP_UP_DAYS. */
   rampUpDays?: number;
+  /** Analysis window in days. Defaults to 180. */
+  windowDays?: number;
 }
 
 function isEngineerRow(row: EligibilityHeadcountRow): boolean {
@@ -542,6 +694,354 @@ function resolveCanonicalSquad(
   };
 }
 
+type NumericSignalSpec = {
+  name: string;
+  getValue: (
+    entry: EligibilityEntry,
+    signal: PerEngineerSignalRow | undefined,
+  ) => number | null;
+};
+
+type NominalSignalSpec = {
+  name: string;
+  getValue: (entry: EligibilityEntry) => string | null;
+};
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function netLines(signal: PerEngineerSignalRow | undefined): number | null {
+  const additions = finiteOrNull(signal?.additions);
+  const deletions = finiteOrNull(signal?.deletions);
+  if (additions === null || deletions === null) return null;
+  return additions - deletions;
+}
+
+function logImpact(signal: PerEngineerSignalRow | undefined): number | null {
+  const prs = finiteOrNull(signal?.prCount);
+  const additions = finiteOrNull(signal?.additions);
+  const deletions = finiteOrNull(signal?.deletions);
+  if (prs === null || additions === null || deletions === null) return null;
+  if (prs <= 0) return 0;
+  return prs * Math.log2(1 + (additions + deletions) / prs);
+}
+
+function levelNumber(levelLabel: string): number | null {
+  const match = /(\d+)/.exec(levelLabel);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function nominalValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+const NUMERIC_SIGNAL_SPECS: readonly NumericSignalSpec[] = [
+  {
+    name: "PR count",
+    getValue: (_entry, signal) => finiteOrNull(signal?.prCount),
+  },
+  {
+    name: "Commit count",
+    getValue: (_entry, signal) => finiteOrNull(signal?.commitCount),
+  },
+  {
+    name: "Net lines",
+    getValue: (_entry, signal) => netLines(signal),
+  },
+  {
+    name: "Log impact",
+    getValue: (_entry, signal) => logImpact(signal),
+  },
+  {
+    name: "SHAP predicted impact",
+    getValue: (_entry, signal) => finiteOrNull(signal?.shapPredicted),
+  },
+  {
+    name: "SHAP actual impact",
+    getValue: (_entry, signal) => finiteOrNull(signal?.shapActual),
+  },
+  {
+    name: "SHAP residual",
+    getValue: (_entry, signal) => finiteOrNull(signal?.shapResidual),
+  },
+  {
+    name: "Tenure months",
+    getValue: (entry) =>
+      entry.tenureDays === null ? null : entry.tenureDays / DAYS_PER_MONTH,
+  },
+  {
+    name: "Level number",
+    getValue: (entry) => levelNumber(entry.levelLabel),
+  },
+  {
+    name: "Squad cycle time hours",
+    getValue: (_entry, signal) => finiteOrNull(signal?.squadCycleTimeHours),
+  },
+  {
+    name: "Squad review rate %",
+    getValue: (_entry, signal) => finiteOrNull(signal?.squadReviewRatePercent),
+  },
+  {
+    name: "Squad time to first review hours",
+    getValue: (_entry, signal) =>
+      finiteOrNull(signal?.squadTimeToFirstReviewHours),
+  },
+  {
+    name: "Squad PRs in progress",
+    getValue: (_entry, signal) => finiteOrNull(signal?.squadPrsInProgress),
+  },
+  {
+    name: "AI tokens",
+    getValue: (_entry, signal) => finiteOrNull(signal?.aiTokens),
+  },
+  {
+    name: "AI spend",
+    getValue: (_entry, signal) => finiteOrNull(signal?.aiSpend),
+  },
+];
+
+const NOMINAL_SIGNAL_SPECS: readonly NominalSignalSpec[] = [
+  { name: "Discipline", getValue: (entry) => entry.discipline },
+  { name: "Raw headcount squad", getValue: (entry) => entry.squad },
+  { name: "Raw headcount pillar", getValue: (entry) => entry.pillar },
+  {
+    name: "Canonical squad",
+    getValue: (entry) => entry.canonicalSquad?.name ?? null,
+  },
+  {
+    name: "Canonical squad pillar",
+    getValue: (entry) => entry.canonicalSquad?.pillar ?? null,
+  },
+  {
+    name: "Squad PM",
+    getValue: (entry) => entry.canonicalSquad?.pmName ?? null,
+  },
+  {
+    name: "Slack channel id",
+    getValue: (entry) => entry.canonicalSquad?.channelId ?? null,
+  },
+];
+
+export const RANKING_NUMERIC_SIGNAL_NAMES = NUMERIC_SIGNAL_SPECS.map(
+  (s) => s.name,
+);
+
+export const RANKING_NOMINAL_SIGNAL_NAMES = NOMINAL_SIGNAL_SPECS.map(
+  (s) => s.name,
+);
+
+function rank(values: number[]): number[] {
+  const sorted = values
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => {
+      if (a.value !== b.value) return a.value - b.value;
+      return a.index - b.index;
+    });
+
+  const ranks = new Array<number>(values.length);
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i + 1;
+    while (j < sorted.length && sorted[j].value === sorted[i].value) j += 1;
+    // Average of 1-based ranks for the tied run.
+    const avgRank = (i + 1 + j) / 2;
+    for (let k = i; k < j; k += 1) {
+      ranks[sorted[k].index] = avgRank;
+    }
+    i = j;
+  }
+  return ranks;
+}
+
+/**
+ * Spearman rank correlation with pairwise null deletion and average ranks
+ * for ties. Returns `rho: null` when the correlation is undefined (too few
+ * paired observations or zero variance in either rank series).
+ */
+export function computeSpearmanRho(
+  left: Array<number | null | undefined>,
+  right: Array<number | null | undefined>,
+): { rho: number | null; n: number } {
+  const pairs: Array<{ left: number; right: number }> = [];
+  const n = Math.min(left.length, right.length);
+  for (let i = 0; i < n; i += 1) {
+    const a = finiteOrNull(left[i]);
+    const b = finiteOrNull(right[i]);
+    if (a === null || b === null) continue;
+    pairs.push({ left: a, right: b });
+  }
+
+  if (pairs.length < 2) return { rho: null, n: pairs.length };
+
+  const leftRanks = rank(pairs.map((p) => p.left));
+  const rightRanks = rank(pairs.map((p) => p.right));
+  const meanLeft =
+    leftRanks.reduce((sum, value) => sum + value, 0) / leftRanks.length;
+  const meanRight =
+    rightRanks.reduce((sum, value) => sum + value, 0) / rightRanks.length;
+
+  let numerator = 0;
+  let leftSquares = 0;
+  let rightSquares = 0;
+  for (let i = 0; i < leftRanks.length; i += 1) {
+    const dl = leftRanks[i] - meanLeft;
+    const dr = rightRanks[i] - meanRight;
+    numerator += dl * dr;
+    leftSquares += dl * dl;
+    rightSquares += dr * dr;
+  }
+
+  const denom = Math.sqrt(leftSquares * rightSquares);
+  if (denom === 0) return { rho: null, n: pairs.length };
+  const rho = numerator / denom;
+  return {
+    rho: Math.max(-1, Math.min(1, rho)),
+    n: pairs.length,
+  };
+}
+
+function unavailableSignalsForAudit(
+  reviewSignalsPersisted: boolean,
+): UnavailableSignal[] {
+  const unavailable: UnavailableSignal[] = [
+    {
+      name: "Per-PR LLM rubric",
+      reason:
+        "`prReviewAnalyses` / `RUBRIC_VERSION` are not present in this codebase, so no per-PR quality rubric enters the audit or scoring.",
+    },
+  ];
+
+  if (!reviewSignalsPersisted) {
+    unavailable.push(
+      {
+        name: "Individual PR reviewer graph",
+        reason:
+          "`githubPrs` and `githubPrMetrics` do not persist reviewer identities or review edges.",
+      },
+      {
+        name: "Individual review turnaround",
+        reason:
+          "No first-review / approval timestamps are persisted for individual engineers.",
+      },
+      {
+        name: "Individual PR cycle time",
+        reason:
+          "`githubPrs` stores `merged_at` but not opened-at or ready-for-review timestamps.",
+      },
+    );
+  }
+
+  return unavailable;
+}
+
+export function buildSignalAudit({
+  entries,
+  signals = [],
+  windowDays = RANKING_SIGNAL_WINDOW_DAYS,
+  reviewSignalsPersisted = false,
+}: {
+  entries: EligibilityEntry[];
+  signals?: PerEngineerSignalRow[];
+  windowDays?: number;
+  reviewSignalsPersisted?: boolean;
+}): SignalAudit {
+  const competitiveEntries = entries.filter(
+    (entry) => entry.eligibility === "competitive",
+  );
+  const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
+
+  const numericValues = new Map<string, Array<number | null>>();
+  for (const spec of NUMERIC_SIGNAL_SPECS) {
+    numericValues.set(
+      spec.name,
+      competitiveEntries.map((entry) =>
+        spec.getValue(entry, signalByHash.get(entry.emailHash)),
+      ),
+    );
+  }
+
+  const missingness: SignalMissingness[] = [];
+  for (const spec of NUMERIC_SIGNAL_SPECS) {
+    const values = numericValues.get(spec.name) ?? [];
+    const present = values.filter((value) => finiteOrNull(value) !== null).length;
+    missingness.push({
+      signal: spec.name,
+      kind: "numeric",
+      present,
+      missing: competitiveEntries.length - present,
+      totalCohort: competitiveEntries.length,
+    });
+  }
+
+  const nominalCoverage: NominalSignalCoverage[] = [];
+  for (const spec of NOMINAL_SIGNAL_SPECS) {
+    const counts = new Map<string, number>();
+    let missing = 0;
+    for (const entry of competitiveEntries) {
+      const value = nominalValue(spec.getValue(entry));
+      if (!value) {
+        missing += 1;
+        continue;
+      }
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    const present = competitiveEntries.length - missing;
+    missingness.push({
+      signal: spec.name,
+      kind: "nominal",
+      present,
+      missing,
+      totalCohort: competitiveEntries.length,
+    });
+    nominalCoverage.push({
+      signal: spec.name,
+      categories: [...counts.entries()]
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category)),
+      missing,
+      distinctCategories: counts.size,
+    });
+  }
+
+  const correlationMatrix: CorrelationPair[] = [];
+  const redundantPairs: Array<CorrelationPair & { rho: number }> = [];
+  const underSampledPairs: CorrelationPair[] = [];
+  for (let i = 0; i < NUMERIC_SIGNAL_SPECS.length; i += 1) {
+    for (let j = i + 1; j < NUMERIC_SIGNAL_SPECS.length; j += 1) {
+      const a = NUMERIC_SIGNAL_SPECS[i].name;
+      const b = NUMERIC_SIGNAL_SPECS[j].name;
+      const { rho, n } = computeSpearmanRho(
+        numericValues.get(a) ?? [],
+        numericValues.get(b) ?? [],
+      );
+      const pair: CorrelationPair = { a, b, rho, n };
+      correlationMatrix.push(pair);
+      if (n < RANKING_MIN_OVERLAP_SAMPLES) {
+        underSampledPairs.push(pair);
+      } else if (rho !== null && Math.abs(rho) >= RANKING_REDUNDANT_RHO_THRESHOLD) {
+        redundantPairs.push({ ...pair, rho });
+      }
+    }
+  }
+
+  return {
+    competitiveCohortSize: competitiveEntries.length,
+    windowDays,
+    numericSignals: [...RANKING_NUMERIC_SIGNAL_NAMES],
+    nominalSignals: [...RANKING_NOMINAL_SIGNAL_NAMES],
+    missingness,
+    nominalCoverage,
+    correlationMatrix,
+    redundantPairs,
+    underSampledPairs,
+    unavailableSignals: unavailableSignalsForAudit(reviewSignalsPersisted),
+  };
+}
+
 /**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
@@ -642,12 +1142,19 @@ export function buildRankingSnapshot(
   inputs: EligibilityInputs,
 ): EngineeringRankingSnapshot {
   const now = inputs.now ?? new Date();
+  const windowDays = inputs.windowDays ?? RANKING_SIGNAL_WINDOW_DAYS;
   const windowEnd = now.toISOString();
   const windowStart = new Date(
-    now.getTime() - 180 * 24 * 60 * 60 * 1000,
+    now.getTime() - windowDays * 24 * 60 * 60 * 1000,
   ).toISOString();
 
   const { entries, coverage } = buildEligibleRoster(inputs);
+  const audit = buildSignalAudit({
+    entries,
+    signals: inputs.signals,
+    windowDays,
+    reviewSignalsPersisted: inputs.reviewSignalsPersisted,
+  });
 
   return {
     status: "methodology_pending",
@@ -660,6 +1167,7 @@ export function buildRankingSnapshot(
       coverage,
       sourceNotes: buildSourceNotes(inputs),
     },
+    audit,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -692,8 +1200,9 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
   const now = new Date();
   const windowEnd = now.toISOString();
   const windowStart = new Date(
-    now.getTime() - 180 * 24 * 60 * 60 * 1000,
+    now.getTime() - RANKING_SIGNAL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
+  const entries: EligibilityEntry[] = [];
 
   return {
     status: "methodology_pending",
@@ -710,6 +1219,11 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
         impactModel: { engineers: [] },
       }),
     },
+    audit: buildSignalAudit({
+      entries,
+      windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+      reviewSignalsPersisted: false,
+    }),
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
