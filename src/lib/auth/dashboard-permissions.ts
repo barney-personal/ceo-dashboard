@@ -479,6 +479,16 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
+    id: "engineering.ranking.hr",
+    label: "Engineer Ranking — HR Review",
+    description:
+      "Per-engineer evidence pack for the bottom-ranked engineers. Surfaces concerns, confounders, and a conservative PIP-worthiness verdict alongside an explicit framing: decision support for a manager-calibration conversation, never a basis for dismissal on its own. Default engineering_manager — editable via the admin permissions page; raise to leadership/ceo if the evidence content is ever widened.",
+    href: "/dashboard/engineering/ranking",
+    groupLabel: "Team",
+    defaultRole: "engineering_manager",
+    redirectTo: "/dashboard/engineering/ranking",
+  },
+  {
     id: "people.profile",
     label: "Person Profile",
     description: "Individual people profile drill-downs.",

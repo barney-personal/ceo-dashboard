@@ -43,6 +43,14 @@ import {
   type TeamSwarmiaMetrics,
 } from "@/lib/data/swarmia";
 import {
+  getLatestSlackMembersSnapshot,
+  type SlackMemberRow,
+} from "@/lib/data/slack-members";
+import {
+  getPerformanceData,
+  type PerformanceRating,
+} from "@/lib/data/performance";
+import {
   RANKING_METHODOLOGY_VERSION,
   RANKING_MOVERS_MIN_GAP_DAYS,
   RANKING_QUALITY_RUBRIC_VERSION,
@@ -607,14 +615,81 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
  * engineer's `/dashboard/people/[slug]` profile. Shares a single preflight
  * fetch with `getEngineeringRankingSnapshotWithSignals` so the page only pays
  * for one round of fetches.
+ *
+ * Also returns HR-specific auxiliary data (Slack engagement rows, 30-day
+ * GitHub activity + analysed PRs, performance review history) — consumed
+ * only by the CEO-gated HR review section. Each extra fetch is best-effort;
+ * a failure degrades gracefully to empty maps so the main ranking still
+ * renders.
  */
 export async function getEngineeringRankingPageData(): Promise<{
   snapshot: EngineeringRankingSnapshot;
   profileSlugByHash: Record<string, string>;
+  signals: PerEngineerSignalRow[];
+  /** Slack engagement rows, keyed on `employeeEmail` (may be null per row). */
+  slackRows: SlackMemberRow[];
+  /** 30-day GitHub activity per author login (PR/commit counts + lines). */
+  recent30dByLogin: Map<
+    string,
+    {
+      prCount: number;
+      commitCount: number;
+      additions: number;
+      deletions: number;
+    }
+  >;
+  /** PR review analyses merged in the last 30 days, rubric-version filtered. */
+  recent30dAnalyses: PrReviewAnalysisInput[];
+  /** Per-engineer performance ratings by lowercased email. */
+  performanceByEmail: Map<string, PerformanceRating[]>;
 }> {
-  const { snapshot, profileSlugByHash } =
-    await getEngineeringRankingSnapshotWithSignals();
-  return { snapshot, profileSlugByHash };
+  const core = await getEngineeringRankingSnapshotWithSignals();
+  const recentWindowStart = new Date(
+    Date.now() - 30 * 24 * 60 * 60 * 1000,
+  );
+
+  const [slackRows, recent30dByLogin, recent30dAnalyses, performanceByEmail] =
+    await Promise.all([
+      getLatestSlackMembersSnapshot()
+        .then((snap) => snap?.rows ?? [])
+        .catch((err) => {
+          console.warn("[engineering-ranking] slack fetch failed:", err);
+          return [] as SlackMemberRow[];
+        }),
+      fetchGithubActivityByLogin(recentWindowStart).catch((err) => {
+        console.warn("[engineering-ranking] 30d activity fetch failed:", err);
+        return new Map();
+      }),
+      fetchPrReviewAnalyses(recentWindowStart).catch((err) => {
+        console.warn(
+          "[engineering-ranking] 30d analyses fetch failed:",
+          err,
+        );
+        return [] as PrReviewAnalysisInput[];
+      }),
+      getPerformanceData()
+        .then((data) => {
+          const map = new Map<string, PerformanceRating[]>();
+          for (const p of data.people) {
+            map.set(p.email.toLowerCase(), p.ratings);
+          }
+          return map;
+        })
+        .catch((err) => {
+          console.warn("[engineering-ranking] performance fetch failed:", err);
+          return new Map<string, PerformanceRating[]>();
+        }),
+    ]);
+
+  return {
+    snapshot: core.snapshot,
+    profileSlugByHash: core.profileSlugByHash,
+    signals: core.signals,
+    slackRows,
+    recent30dByLogin,
+    recent30dAnalyses,
+    performanceByEmail,
+  };
 }
 
 function numericString(value: number | null): string | null {
