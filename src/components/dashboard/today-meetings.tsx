@@ -76,7 +76,7 @@ export function TodayMeetings({ day, calendarConnected }: TodayMeetingsProps) {
           <div className="flex items-center gap-3 rounded-lg bg-amber-50/50 px-3 py-2.5">
             <Calendar className="h-4 w-4 shrink-0 text-amber-600" />
             <p className="text-xs text-amber-700">
-              Sign out and back in to connect your Google Calendar.
+              Reconnect Google Calendar from your profile menu to keep meetings in sync.
             </p>
           </div>
         ) : meetings.length === 0 ? (
