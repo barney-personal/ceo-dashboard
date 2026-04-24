@@ -55,6 +55,28 @@ describe("getUserGoogleAccessToken", () => {
     );
   });
 
+  it("falls back to oauth_google when google returns no usable tokens", async () => {
+    mockGetUserOauthAccessToken
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ token: "legacy-token", expiresAt: 200 }],
+      });
+
+    await expect(getUserGoogleAccessToken("user_123")).resolves.toBe(
+      "legacy-token"
+    );
+    expect(mockGetUserOauthAccessToken).toHaveBeenNthCalledWith(
+      1,
+      "user_123",
+      "google"
+    );
+    expect(mockGetUserOauthAccessToken).toHaveBeenNthCalledWith(
+      2,
+      "user_123",
+      "oauth_google"
+    );
+  });
+
   it("prefers a calendar-scoped token when multiple tokens exist", async () => {
     mockGetUserOauthAccessToken.mockResolvedValue({
       data: [

@@ -199,7 +199,7 @@ export async function getMeetingsForRange(
     } catch (error) {
       if (error instanceof CalendarAuthError) {
         console.error(
-          "[meetings] Google Calendar 401 — token rejected, prompting reconnect",
+          "[meetings] Google Calendar auth failure — token rejected or missing scope, prompting reconnect",
           { userId: opts.userId, message: error.message }
         );
         calendarAuthExpired = true;

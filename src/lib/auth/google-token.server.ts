@@ -54,6 +54,9 @@ export async function getUserGoogleAccessToken(
 ): Promise<string | null> {
   try {
     const client = await clerkClient();
+    // Clerk's published provider id is now `google`, but this SDK version's
+    // overloads still only type-check the legacy `oauth_google` string.
+    // Widen the call signature locally so we can probe both at runtime.
     const getUserOauthAccessToken =
       client.users.getUserOauthAccessToken as unknown as GetUserOauthAccessTokenFn;
 
