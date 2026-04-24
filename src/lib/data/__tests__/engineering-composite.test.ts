@@ -9,7 +9,6 @@ import {
   COMPOSITE_MIN_PRS_FOR_DELIVERY,
   COMPOSITE_MIN_SIGNALS_FOR_SCORE,
   COMPOSITE_MIN_TENURE_DAYS,
-  COMPOSITE_PARTIAL_WINDOW_TENURE_DAYS,
   COMPOSITE_SIGNAL_KEYS,
   COMPOSITE_SIGNAL_LABELS,
   COMPOSITE_SIGNAL_WINDOW_DAYS,
@@ -832,12 +831,150 @@ describe("assembleCompositeInputs (loader integration)", () => {
 describe("partial-window scoring regression", () => {
   it("partial-window engineer has tenureFactor > 1 and status=partial_window_scored", () => {
     const cohort = makeCohort(5, 3);
-    cohort[0].tenureDays = COMPOSITE_PARTIAL_WINDOW_TENURE_DAYS - 1;
+    cohort[0].tenureDays = COMPOSITE_SIGNAL_WINDOW_DAYS - 1;
     const bundle = buildComposite({ now: NOW, engineers: cohort });
     const entry = bundle.entries.find(
       (e) => e.emailHash === cohort[0].emailHash,
     )!;
     expect(entry.tenureFactor).toBeGreaterThan(1);
     expect(entry.status).toBe("partial_window_scored");
+  });
+
+  // Exact tenure-day boundary table for M7. Any scored entry with a
+  // pro-rated delivery denominator must be visible as `partial_window_scored`
+  // so the self-defence panel never hides rank-affecting normalisation.
+  it.each([
+    { tenureDays: 89, expectedStatus: "partial_window_scored" as const },
+    { tenureDays: 90, expectedStatus: "partial_window_scored" as const },
+    { tenureDays: 120, expectedStatus: "partial_window_scored" as const },
+    { tenureDays: 179, expectedStatus: "partial_window_scored" as const },
+    { tenureDays: 180, expectedStatus: "scored" as const },
+  ])(
+    "tenure=$tenureDays days → status=$expectedStatus with factor invariant",
+    ({ tenureDays, expectedStatus }) => {
+      const cohort = makeCohort(5, 3);
+      cohort[0].tenureDays = tenureDays;
+      const bundle = buildComposite({ now: NOW, engineers: cohort });
+      const entry = bundle.entries.find(
+        (e) => e.emailHash === cohort[0].emailHash,
+      )!;
+      expect(entry.status).toBe(expectedStatus);
+      if (expectedStatus === "partial_window_scored") {
+        expect(entry.tenureFactor).toBeGreaterThan(1);
+      } else {
+        expect(entry.tenureFactor).toBe(1);
+      }
+    },
+  );
+
+  it("invariant: every scored entry satisfies tenureFactor↔status 1:1", () => {
+    const cohort = makeCohort(6, 3).map((e, i) => ({
+      ...e,
+      tenureDays: [30, 89, 90, 120, 179, 180, 365, 720, 40][i] ?? 365,
+    }));
+    const bundle = buildComposite({ now: NOW, engineers: cohort });
+    for (const entry of bundle.entries) {
+      if (entry.status === "scored") {
+        expect(
+          entry.tenureFactor,
+          `scored ${entry.displayName} at ${entry.tenureDays}d must have tenureFactor=1`,
+        ).toBe(1);
+      } else if (entry.status === "partial_window_scored") {
+        expect(
+          entry.tenureFactor,
+          `partial_window_scored ${entry.displayName} at ${entry.tenureDays}d must have tenureFactor>1`,
+        ).toBeGreaterThan(1);
+      }
+    }
+  });
+});
+
+// ---------- scopeComposite contract defaults ------------------------------
+
+describe("scopeComposite — default excludes unscored rows", () => {
+  function buildMixedBundle(managerEmail: string): CompositeBundle {
+    // 5 BE + 3 FE = 8 scorable, then attach a leaver / unmapped / ramp-up
+    // direct report to the same manager so the default scope contract is
+    // exercised on a realistic manager stack-rank join.
+    const cohort = makeCohort(5, 3);
+    const leaver = makeEngineer({
+      email: "leaver@meetcleo.com",
+      emailHash: hashEmailForRanking("leaver@meetcleo.com"),
+      displayName: "Leaver",
+      githubLogin: "leaver",
+      managerEmail,
+      isLeaverOrInactive: true,
+    });
+    const unmapped = makeEngineer({
+      email: "unmapped@meetcleo.com",
+      emailHash: hashEmailForRanking("unmapped@meetcleo.com"),
+      displayName: "Unmapped",
+      githubLogin: null,
+      managerEmail,
+    });
+    const rampUp = makeEngineer({
+      email: "rampup@meetcleo.com",
+      emailHash: hashEmailForRanking("rampup@meetcleo.com"),
+      displayName: "Ramp-up",
+      githubLogin: "rampup",
+      managerEmail,
+      tenureDays: COMPOSITE_MIN_TENURE_DAYS - 1,
+    });
+    const scoredReport = cohort[0];
+    scoredReport.managerEmail = managerEmail;
+    return buildComposite({
+      now: NOW,
+      engineers: [...cohort, leaver, unmapped, rampUp],
+    });
+  }
+
+  it("default (no scoredOnly) excludes leaver / unmapped / ramp-up rows", () => {
+    const bundle = buildMixedBundle("mgr@meetcleo.com");
+    const directs = scopeComposite(bundle, {
+      managerEmail: "mgr@meetcleo.com",
+    });
+    // Only the single scored direct report survives the default scope.
+    expect(directs).toHaveLength(1);
+    for (const entry of directs) {
+      expect(["scored", "partial_window_scored"]).toContain(entry.status);
+    }
+  });
+
+  it("scoredOnly: false includes every unscored row", () => {
+    const bundle = buildMixedBundle("mgr@meetcleo.com");
+    const allDirects = scopeComposite(bundle, {
+      managerEmail: "mgr@meetcleo.com",
+      scoredOnly: false,
+    });
+    // 1 scored + 1 leaver + 1 unmapped + 1 ramp-up = 4 rows.
+    expect(allDirects).toHaveLength(4);
+    const statuses = new Set(allDirects.map((e) => e.status));
+    expect(statuses.has("unscored_leaver")).toBe(true);
+    expect(statuses.has("unscored_unmapped")).toBe(true);
+    expect(statuses.has("unscored_ramp_up")).toBe(true);
+  });
+
+  it("scoredOnly: true (explicit) matches the default", () => {
+    const bundle = buildMixedBundle("mgr@meetcleo.com");
+    const defaultScope = scopeComposite(bundle, {
+      managerEmail: "mgr@meetcleo.com",
+    });
+    const explicit = scopeComposite(bundle, {
+      managerEmail: "mgr@meetcleo.com",
+      scoredOnly: true,
+    });
+    expect(explicit.map((e) => e.emailHash).sort()).toEqual(
+      defaultScope.map((e) => e.emailHash).sort(),
+    );
+  });
+
+  it("org-wide default excludes unscored rows too", () => {
+    const bundle = buildMixedBundle("mgr@meetcleo.com");
+    const orgDefault = scopeComposite(bundle, {});
+    for (const entry of orgDefault) {
+      expect(["scored", "partial_window_scored"]).toContain(entry.status);
+    }
+    const orgAll = scopeComposite(bundle, { scoredOnly: false });
+    expect(orgAll.length).toBeGreaterThan(orgDefault.length);
   });
 });

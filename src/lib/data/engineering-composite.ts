@@ -24,9 +24,11 @@
  *  - cycleTime (15%)         inverse of winsorized median time-to-merge
  *
  * Normalisation: z-score within discipline cohort (BE vs FE), converted to a
- * percentile band. Tenure < 90 days is flagged `partial-window` and the
- * delivery/review-discipline denominators are pro-rated. Tenure < 30 days
- * is unscored — the window is too short for a defensible cohort compare.
+ * percentile band. Tenure below the signal window (default 180 days) is
+ * flagged `partial_window_scored` and the delivery denominator is pro-rated
+ * by `windowDays / tenureDays` so a short-tenure engineer is not punished
+ * for missing history. Tenure < 30 days is unscored — the window is too
+ * short for a defensible cohort compare.
  *
  * Role adjustment: Platform/Infra engineers (by pillar or squad substring)
  * get a `deliveryFactor > 1` so their raw PR count inflates before
@@ -43,9 +45,6 @@ export const COMPOSITE_METHODOLOGY_VERSION = "b-1.0.0" as const;
 
 /** Signal window (days). Matches A-side to keep input semantics comparable. */
 export const COMPOSITE_SIGNAL_WINDOW_DAYS = 180 as const;
-
-/** Tenure at or below this flags `partial-window`. */
-export const COMPOSITE_PARTIAL_WINDOW_TENURE_DAYS = 90 as const;
 
 /** Minimum tenure to produce a score at all. */
 export const COMPOSITE_MIN_TENURE_DAYS = 30 as const;
@@ -698,9 +697,11 @@ export function buildComposite(inputs: BuildCompositeInputs): CompositeBundle {
       signals.reviewDiscipline.adjustedRawValue;
     signals.cycleTime.processedValue = signals.cycleTime.adjustedRawValue;
 
-    const isPartialWindow =
-      input.tenureDays !== null &&
-      input.tenureDays < COMPOSITE_PARTIAL_WINDOW_TENURE_DAYS;
+    // Partial-window status tracks tenure pro-rating 1:1 so no rank-affecting
+    // normalisation stays hidden from the self-defence panel. If
+    // `tenureFactor > 1` the engineer's delivery was inflated, so their
+    // status must signal it. Otherwise they read as fully `scored`.
+    const isPartialWindow = tenureFactor > 1;
 
     intermediates.push({
       input,
@@ -1094,7 +1095,11 @@ export interface CompositeScope {
   squad?: string;
   /** Restrict to direct reports of the given manager email. */
   managerEmail?: string;
-  /** Only scored entries. Default true for manager stack rank. */
+  /**
+   * Only scored entries. Defaults to `true` so manager stack-rank callers
+   * never surface leavers/unmapped/ramp-up rows by omission. Pass `false`
+   * explicitly for coverage/drilldown views that want every row.
+   */
   scoredOnly?: boolean;
 }
 
@@ -1119,7 +1124,11 @@ export function scopeComposite(
       (e) => (e.managerEmail ?? "").trim().toLowerCase() === target,
     );
   }
-  if (scope.scoredOnly) {
+  // `scoredOnly` defaults to `true` to match the stack-rank contract. Callers
+  // must pass `scoredOnly: false` explicitly to include leavers, unmapped,
+  // ramp-up, insufficient-signal, and small-cohort rows.
+  const scoredOnly = scope.scoredOnly ?? true;
+  if (scoredOnly) {
     rows = rows.filter(
       (e) =>
         e.status === "scored" || e.status === "partial_window_scored",
