@@ -880,6 +880,16 @@ function MonthlyModelMixChart({
                             const rect =
                               chartAreaRef.current?.getBoundingClientRect();
                             if (!rect) return;
+                            const TOOLTIP_WIDTH = 200;
+                            const rawX = e.clientX - rect.left;
+                            const clampedX = Math.min(
+                              rawX + 14,
+                              Math.max(rect.width - TOOLTIP_WIDTH, 8),
+                            );
+                            const clampedY = Math.max(
+                              e.clientY - rect.top - 48,
+                              8,
+                            );
                             setHover({
                               monthStart: row.monthStart,
                               modelKey: model.key,
@@ -889,8 +899,8 @@ function MonthlyModelMixChart({
                               sharePct: pct,
                               momDeltaPct,
                               color,
-                              x: e.clientX - rect.left,
-                              y: e.clientY - rect.top,
+                              x: clampedX,
+                              y: clampedY,
                             });
                           }}
                           onMouseLeave={() => setHover(null)}
@@ -927,13 +937,7 @@ function MonthlyModelMixChart({
         {hover && (
           <div
             className="pointer-events-none absolute z-10 min-w-[180px] rounded-md border border-border/60 bg-card/95 px-3 py-2 text-xs shadow-warm backdrop-blur"
-            style={{
-              left: Math.min(
-                hover.x + 14,
-                (chartAreaRef.current?.clientWidth ?? 0) - 200,
-              ),
-              top: Math.max(hover.y - 48, 8),
-            }}
+            style={{ left: hover.x, top: hover.y }}
             role="tooltip"
           >
             <div className="flex items-center gap-1.5">
