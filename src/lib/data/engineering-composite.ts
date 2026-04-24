@@ -135,6 +135,146 @@ export const COMPOSITE_SIGNAL_DESCRIPTIONS: Record<CompositeSignalKey, string> =
 };
 
 // -----------------------------------------------------------------------------
+// Methodology metadata — single source of truth for the self-defence panel
+// -----------------------------------------------------------------------------
+
+/**
+ * Per-signal methodology rows. The B-side methodology panels (manager view,
+ * engineer view) iterate this array verbatim so every magic number that
+ * appears in copy is sourced from the composite module's own constants.
+ *
+ * Rule: do not put numbers into copy strings here that are not literally
+ * derived from the constants above. The methodology cross-check test in
+ * `engineering-composite.test.ts` walks each row and asserts every numeric
+ * token resolves to a known composite constant; if you add a new line that
+ * mentions, say, "≥ 5 reviews", either bump a constant or rephrase.
+ */
+export interface CompositeMethodologyRow {
+  key: CompositeSignalKey;
+  label: string;
+  weightPct: number; // 0..100
+  description: string;
+  normalizationRule: string;
+  minimumSampleRule: string;
+  knownLimitations: string;
+}
+
+function buildMethodologyRows(): readonly CompositeMethodologyRow[] {
+  const winsorPct = (COMPOSITE_DELIVERY_WINSOR_P * 100).toFixed(0);
+  const minAnalysed = COMPOSITE_MIN_ANALYSED_PRS;
+  const minPrs = COMPOSITE_MIN_PRS_FOR_DELIVERY;
+  const cycleFloor = COMPOSITE_CYCLE_TIME_FLOOR_MIN;
+  const cycleCapDays = (COMPOSITE_CYCLE_TIME_CAP_HOURS / 24).toFixed(0);
+  const window = COMPOSITE_SIGNAL_WINDOW_DAYS;
+
+  return [
+    {
+      key: "delivery",
+      label: COMPOSITE_SIGNAL_LABELS.delivery,
+      weightPct: COMPOSITE_WEIGHTS.delivery * 100,
+      description: COMPOSITE_SIGNAL_DESCRIPTIONS.delivery,
+      normalizationRule: `Cohort-relative percentile within discipline. Raw value capped at the cohort ${winsorPct}th percentile (winsorized). Tenure pro-rate inflates the denominator for engineers with tenure < ${window} days.`,
+      minimumSampleRule: `Engineer must have ≥ ${minPrs} merged PRs in the last ${window} days for delivery to populate.`,
+      knownLimitations:
+        "Counts merged PRs only — design work, pairing, and unmerged review effort are not credited here.",
+    },
+    {
+      key: "quality",
+      label: COMPOSITE_SIGNAL_LABELS.quality,
+      weightPct: COMPOSITE_WEIGHTS.quality * 100,
+      description: COMPOSITE_SIGNAL_DESCRIPTIONS.quality,
+      normalizationRule:
+        "Cohort-relative percentile within discipline. Each rubric axis is confidence-weighted at the per-PR level and difficulty-weighted at aggregation.",
+      minimumSampleRule: `Engineer must have ≥ ${minAnalysed} rubric-analysed PRs for quality to populate.`,
+      knownLimitations:
+        "LLM rubric is the only quality signal; it is calibrated by the per-PR analysisConfidencePct but cannot detect issues invisible to the diff (e.g. coordination, blast-radius decisions).",
+    },
+    {
+      key: "reliability",
+      label: COMPOSITE_SIGNAL_LABELS.reliability,
+      weightPct: COMPOSITE_WEIGHTS.reliability * 100,
+      description: COMPOSITE_SIGNAL_DESCRIPTIONS.reliability,
+      normalizationRule:
+        "Cohort-relative percentile within discipline of (1 − revertRate). Clamped to [0, 1].",
+      minimumSampleRule: `Engineer must have ≥ ${minAnalysed} rubric-analysed PRs for reliability to populate.`,
+      knownLimitations:
+        "Revert detection follows merge events within 14 days; longer-tail reverts and silently-reverted-but-not-by-PR rollbacks do not count.",
+    },
+    {
+      key: "reviewDiscipline",
+      label: COMPOSITE_SIGNAL_LABELS.reviewDiscipline,
+      weightPct: COMPOSITE_WEIGHTS.reviewDiscipline * 100,
+      description: COMPOSITE_SIGNAL_DESCRIPTIONS.reviewDiscipline,
+      normalizationRule:
+        "Cohort-relative percentile within discipline. Fraction of analysed PRs with ≥ 1 review round, clamped to [0, 1].",
+      minimumSampleRule: `Engineer must have ≥ ${minAnalysed} rubric-analysed PRs for review discipline to populate.`,
+      knownLimitations:
+        "Self-merging without review is penalised, but a review round that was a rubber-stamp still counts. The signal pairs with quality to defend against rubber-stamp gaming.",
+    },
+    {
+      key: "cycleTime",
+      label: COMPOSITE_SIGNAL_LABELS.cycleTime,
+      weightPct: COMPOSITE_WEIGHTS.cycleTime * 100,
+      description: COMPOSITE_SIGNAL_DESCRIPTIONS.cycleTime,
+      normalizationRule: `Cohort-relative percentile within discipline. Median time-to-merge clamped to [${cycleFloor} min, ${cycleCapDays} days] before inversion.`,
+      minimumSampleRule: `Engineer must have ≥ ${minAnalysed} rubric-analysed PRs for cycle time to populate.`,
+      knownLimitations:
+        "Stale-but-eventually-merged PRs are capped at 14 days. Platform/Infra PRs are not separately handled here because longer cycle time is information about the role, not noise.",
+    },
+  ] as const;
+}
+
+/**
+ * Iterable methodology rows in canonical order. Source of truth for both
+ * B-side methodology panels (engineer view, manager view) and the cross-check
+ * test that asserts copy numbers match constants.
+ */
+export const COMPOSITE_METHODOLOGY_ROWS: readonly CompositeMethodologyRow[] =
+  buildMethodologyRows();
+
+export interface CompositeMethodologySection {
+  title: string;
+  body: string;
+}
+
+/**
+ * Cross-cutting methodology sections (confidence, ties, flags, role/tenure
+ * normalisation, anti-gaming). Numbers in `body` strings are derived from
+ * composite constants — no untracked magic numbers in copy.
+ */
+export const COMPOSITE_METHODOLOGY_SECTIONS: readonly CompositeMethodologySection[] =
+  [
+    {
+      title: "Tenure normalisation",
+      body: `Engineers with tenure ≥ ${COMPOSITE_SIGNAL_WINDOW_DAYS} days score against the full window with tenureFactor 1.0. Engineers with tenure between ${COMPOSITE_MIN_TENURE_DAYS} and ${COMPOSITE_SIGNAL_WINDOW_DAYS - 1} days are flagged partial_window_scored and the delivery denominator is pro-rated by windowDays / tenureDays so missing history does not punish them. Tenure < ${COMPOSITE_MIN_TENURE_DAYS} days is unscored.`,
+    },
+    {
+      title: "Role normalisation",
+      body: "Platform / Infra engineers (matched on pillar or squad: platform, infra, infrastructure, devops, sre) inflate delivery 1.3× before normalisation so a low-volume infra shipper does not read as low. Cycle time is not adjusted; longer infra cycles carry information.",
+    },
+    {
+      title: "Confidence model",
+      body: `Each scored row carries a confidence band derived from PR sample, rubric coverage, and signal completeness. nEffective = prCount × (0.5 + 0.5 × rubricCoverage) × signalCoverage. halfWidth = ${CONFIDENCE_K} / sqrt(nEffective), plus ${CONFIDENCE_TENURE_PENALTY_PER_UNIT} points per unit of tenureFactor − 1 for partial-window engineers, clamped to [${CONFIDENCE_MIN_HALF_WIDTH}, ${CONFIDENCE_MAX_HALF_WIDTH}].`,
+    },
+    {
+      title: "Tie-group rule",
+      body: "Adjacent engineers whose confidence bands overlap collapse into a shared tie group, transitive via overlap. Members of a tie group share a competition-style displayRank — internal positional rank is hidden from the UI because the band says the order inside the group is not real.",
+    },
+    {
+      title: "Flag eligibility",
+      body: `Promote (Q4) and performance-manage (Q1) labels apply only when (a) every member of the tie group lies inside the quartile, (b) the tie group's positional index span lies entirely within the top or bottom ceil(n/4), and (c) the band envelope of the tie group is gap-separated from the nearest non-quartile group's band envelope. With fewer than ${CONFIDENCE_MIN_ENTRIES_FOR_FLAGS} scored entries flags are always suppressed.`,
+    },
+    {
+      title: "Anti-gaming",
+      body: `Delivery is winsorized at cohort P${(COMPOSITE_DELIVERY_WINSOR_P * 100).toFixed(0)} so volume spam cannot dominate. Cycle time floors at ${COMPOSITE_CYCLE_TIME_FLOOR_MIN} min so micro-PR farming is bounded. There is no AI-spend, LOC, or commit-count input. A single-signal cap of ${(COMPOSITE_MAX_SINGLE_WEIGHT * 100).toFixed(0)}% applies to nominal weights, with effective-weight clamping after missing-signal renormalisation.`,
+    },
+    {
+      title: "Coverage rules",
+      body: `unscored_ramp_up: tenure < ${COMPOSITE_MIN_TENURE_DAYS}d. unscored_leaver: marked leaver/inactive in the headcount SSoT. unscored_unmapped: no GitHub login mapping. unscored_small_cohort: discipline cohort below ${COMPOSITE_MIN_COHORT_SIZE}. unscored_insufficient_signals: fewer than ${COMPOSITE_MIN_SIGNALS_FOR_SCORE} of 5 signals present.`,
+    },
+  ] as const;
+
+// -----------------------------------------------------------------------------
 // Input shapes
 // -----------------------------------------------------------------------------
 

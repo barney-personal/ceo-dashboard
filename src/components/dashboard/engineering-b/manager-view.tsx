@@ -1,9 +1,7 @@
 import {
+  COMPOSITE_METHODOLOGY_ROWS,
+  COMPOSITE_METHODOLOGY_SECTIONS,
   COMPOSITE_MAX_SINGLE_WEIGHT,
-  COMPOSITE_SIGNAL_KEYS,
-  COMPOSITE_SIGNAL_LABELS,
-  COMPOSITE_SIGNAL_DESCRIPTIONS,
-  COMPOSITE_WEIGHTS,
   rankWithConfidence,
   scopeComposite,
   type CompositeBundle,
@@ -55,22 +53,67 @@ function MethodologyPanel() {
         group sits inside the quartile and the confidence gap to the next group
         is real.
       </p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {COMPOSITE_SIGNAL_KEYS.map((key) => (
+      <div
+        data-testid="engineering-b-methodology-signals"
+        className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5"
+      >
+        {COMPOSITE_METHODOLOGY_ROWS.map((row) => (
           <div
-            key={key}
+            key={row.key}
+            data-methodology-signal={row.key}
             className="rounded-md border border-border/40 bg-background/60 p-3"
           >
             <div className="flex items-baseline justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                {COMPOSITE_SIGNAL_LABELS[key]}
+                {row.label}
               </span>
               <span className="font-display text-sm italic text-foreground">
-                {(COMPOSITE_WEIGHTS[key] * 100).toFixed(0)}%
+                {row.weightPct.toFixed(0)}%
               </span>
             </div>
             <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-              {COMPOSITE_SIGNAL_DESCRIPTIONS[key]}
+              {row.description}
+            </p>
+            <dl className="mt-2 space-y-1 text-[10px] leading-snug text-muted-foreground">
+              <div>
+                <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                  Normalisation
+                </dt>
+                <dd className="text-muted-foreground">
+                  {row.normalizationRule}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                  Minimum sample
+                </dt>
+                <dd className="text-muted-foreground">{row.minimumSampleRule}</dd>
+              </div>
+              <div>
+                <dt className="font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                  Limitations
+                </dt>
+                <dd className="text-muted-foreground">{row.knownLimitations}</dd>
+              </div>
+            </dl>
+          </div>
+        ))}
+      </div>
+      <div
+        data-testid="engineering-b-methodology-sections"
+        className="mt-4 grid gap-2 sm:grid-cols-2"
+      >
+        {COMPOSITE_METHODOLOGY_SECTIONS.map((section) => (
+          <div
+            key={section.title}
+            data-methodology-section={section.title}
+            className="rounded-md border border-border/30 bg-background/40 p-3"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+              {section.title}
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              {section.body}
             </p>
           </div>
         ))}

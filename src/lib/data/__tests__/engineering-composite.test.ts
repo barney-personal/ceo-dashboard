@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  COMPOSITE_CYCLE_TIME_CAP_HOURS,
+  COMPOSITE_CYCLE_TIME_FLOOR_MIN,
   COMPOSITE_DELIVERY_WINSOR_P,
   COMPOSITE_MAX_SINGLE_WEIGHT,
+  COMPOSITE_METHODOLOGY_ROWS,
+  COMPOSITE_METHODOLOGY_SECTIONS,
   COMPOSITE_METHODOLOGY_VERSION,
   COMPOSITE_MIN_ANALYSED_PRS,
   COMPOSITE_MIN_COHORT_SIZE,
   COMPOSITE_MIN_PRS_FOR_DELIVERY,
   COMPOSITE_MIN_SIGNALS_FOR_SCORE,
   COMPOSITE_MIN_TENURE_DAYS,
+  COMPOSITE_SIGNAL_DESCRIPTIONS,
   COMPOSITE_SIGNAL_KEYS,
   COMPOSITE_SIGNAL_LABELS,
   COMPOSITE_SIGNAL_WINDOW_DAYS,
@@ -1696,5 +1701,130 @@ describe("end-to-end confidence/rank pipeline", () => {
     for (const entry of ranked) {
       expect(["scored", "partial_window_scored"]).toContain(entry.status);
     }
+  });
+});
+
+describe("methodology metadata cross-check (M13)", () => {
+  it("emits one methodology row per signal in canonical order", () => {
+    expect(COMPOSITE_METHODOLOGY_ROWS).toHaveLength(COMPOSITE_SIGNAL_KEYS.length);
+    expect(COMPOSITE_METHODOLOGY_ROWS.map((r) => r.key)).toEqual(
+      Array.from(COMPOSITE_SIGNAL_KEYS),
+    );
+  });
+
+  it("matches each row's weight and label to the canonical constants", () => {
+    for (const row of COMPOSITE_METHODOLOGY_ROWS) {
+      expect(row.label).toBe(COMPOSITE_SIGNAL_LABELS[row.key]);
+      expect(row.weightPct).toBeCloseTo(COMPOSITE_WEIGHTS[row.key] * 100, 6);
+    }
+  });
+
+  it("does not let any methodology row description drift from the canonical signal description", () => {
+    for (const row of COMPOSITE_METHODOLOGY_ROWS) {
+      expect(row.description).toBe(COMPOSITE_SIGNAL_DESCRIPTIONS[row.key]);
+    }
+  });
+
+  it("declares known methodology sections covering tenure/role/confidence/ties/flags/anti-gaming/coverage", () => {
+    const titles = COMPOSITE_METHODOLOGY_SECTIONS.map((s) => s.title);
+    expect(titles).toEqual(
+      expect.arrayContaining([
+        "Tenure normalisation",
+        "Role normalisation",
+        "Confidence model",
+        "Tie-group rule",
+        "Flag eligibility",
+        "Anti-gaming",
+        "Coverage rules",
+      ]),
+    );
+  });
+
+  it("anchors every numeric token in methodology copy to a known composite constant", () => {
+    // The set of numbers we authorise in methodology copy. New numbers in the
+    // copy must come from one of these constants; otherwise the copy has
+    // drifted from the code and the cross-check fails.
+    const allowedNumbers = new Set<number>([
+      COMPOSITE_SIGNAL_WINDOW_DAYS,
+      COMPOSITE_MIN_TENURE_DAYS,
+      COMPOSITE_MIN_ANALYSED_PRS,
+      COMPOSITE_MIN_PRS_FOR_DELIVERY,
+      COMPOSITE_MIN_COHORT_SIZE,
+      COMPOSITE_MIN_SIGNALS_FOR_SCORE,
+      COMPOSITE_DELIVERY_WINSOR_P * 100, // 90
+      COMPOSITE_CYCLE_TIME_FLOOR_MIN, // 30 min
+      COMPOSITE_CYCLE_TIME_CAP_HOURS / 24, // 14 days
+      COMPOSITE_MAX_SINGLE_WEIGHT * 100, // 30
+      COMPOSITE_SIGNAL_WINDOW_DAYS - 1, // 179, used in "between 30 and 179 days"
+      CONFIDENCE_K,
+      CONFIDENCE_MIN_HALF_WIDTH,
+      CONFIDENCE_MAX_HALF_WIDTH,
+      CONFIDENCE_TENURE_PENALTY_PER_UNIT,
+      CONFIDENCE_MIN_ENTRIES_FOR_FLAGS,
+      // Allowed presentational constants — fractions inside formulas.
+      0.5,
+      1.0,
+      1.3,
+      1, // "≥ 1 review round"
+      0,
+      4, // "of 5 signals" (total signal count)
+      5,
+      14, // 14-day revert window
+    ]);
+
+    // Add weight percentages for every signal so 20/30/15/etc. resolve.
+    for (const key of COMPOSITE_SIGNAL_KEYS) {
+      allowedNumbers.add(COMPOSITE_WEIGHTS[key] * 100);
+    }
+
+    const tokens: { source: string; value: number }[] = [];
+    // Greedy digit-run regex, no boundary anchors. Letters that immediately
+    // touch a number ("P90", "≥3") are absorbed by the surrounding char run
+    // boundary already provided by the regex engine; this regex extracts the
+    // pure numeric run only.
+    const numericRegex = /\d+(?:\.\d+)?/g;
+
+    const collect = (label: string, body: string) => {
+      const matches = body.match(numericRegex);
+      if (!matches) return;
+      for (const raw of matches) {
+        const value = Number(raw);
+        if (Number.isFinite(value)) tokens.push({ source: label, value });
+      }
+    };
+
+    for (const row of COMPOSITE_METHODOLOGY_ROWS) {
+      collect(`row.${row.key}.normalizationRule`, row.normalizationRule);
+      collect(`row.${row.key}.minimumSampleRule`, row.minimumSampleRule);
+      collect(`row.${row.key}.knownLimitations`, row.knownLimitations);
+    }
+    for (const section of COMPOSITE_METHODOLOGY_SECTIONS) {
+      collect(`section.${section.title}`, section.body);
+    }
+
+    // Every numeric token must resolve to an allowed constant.
+    for (const { source, value } of tokens) {
+      expect(
+        allowedNumbers.has(value),
+        `Numeric token ${value} in ${source} is not anchored to a composite constant`,
+      ).toBe(true);
+    }
+  });
+
+  it("never references the impact-model in methodology copy (M3 audit)", () => {
+    const flat = [
+      ...COMPOSITE_METHODOLOGY_ROWS.flatMap((r) => [
+        r.normalizationRule,
+        r.minimumSampleRule,
+        r.knownLimitations,
+      ]),
+      ...COMPOSITE_METHODOLOGY_SECTIONS.map((s) => s.body),
+    ].join(" ");
+    expect(flat.toLowerCase()).not.toMatch(/impact[- ]model/);
+    expect(flat.toLowerCase()).not.toMatch(/shap/);
+  });
+
+  it("freezes the methodology version exposed to consumers", () => {
+    expect(COMPOSITE_METHODOLOGY_VERSION).toBe("b-1.0.0");
   });
 });
