@@ -786,7 +786,10 @@ function MonthlyModelMixChart({
         >
           {mix.rows.map((row, i) => {
             const total = totals[i] ?? 0;
-            const barHeightPx = 220;
+            // Tall bars (~440px) are the point: with ~13 models in the
+            // legend, a 220px stack crushes small-share segments into
+            // unreadable slivers. A taller y-axis gives each band room.
+            const barHeightPx = 440;
             const scale = mode === "share" ? 1 : total / maxTotal;
             const isPartial = row.monthStart === currentMonthStart;
             return (
