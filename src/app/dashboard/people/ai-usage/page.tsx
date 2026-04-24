@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { AiUsageDashboard } from "@/components/dashboard/ai-usage-dashboard";
 import { AiUsageMetricCard } from "@/components/dashboard/ai-usage-metric-card";
+import { LastSyncedAt } from "@/components/dashboard/last-synced-at";
 import {
   DataStateBanner,
   UnavailablePage,
@@ -166,7 +167,12 @@ export default async function PeopleAiUsagePage() {
       <PageHeader
         title="AI Usage"
         description="Claude and Cursor spend across the company, broken down by model and engineer."
-      />
+      >
+        <LastSyncedAt
+          at={usage.syncedAt}
+          className="text-xs text-muted-foreground"
+        />
+      </PageHeader>
 
       <DataStateBanner
         pageState={pageState}
