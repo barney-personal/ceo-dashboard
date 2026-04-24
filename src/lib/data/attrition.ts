@@ -8,6 +8,7 @@ import {
   validateModeColumns,
 } from "./mode";
 import type { AttritionRow, Y1AttritionRow, Leaver, Employee, AttritionData } from "./attrition-utils";
+import { canonicalDepartment } from "./attrition-utils";
 
 // Re-export everything from the client-safe module so server consumers
 // can import from a single path.
@@ -19,6 +20,7 @@ export {
   type AttritionData,
   type AttritionMetrics,
   type Y1AttritionMetrics,
+  type DepartmentOption,
   getRollingAttritionSeries,
   getAttritionByDepartment,
   getLatestAttritionMetrics,
@@ -123,7 +125,7 @@ export async function getAttritionData(): Promise<AttritionData> {
 
   const rollingAttrition: AttritionRow[] = (attritionQuery?.rows ?? []).map((row) => ({
     reportingPeriod: rowStr(row, "reporting_period"),
-    department: rowStr(row, "department"),
+    department: canonicalDepartment(rowStr(row, "department")),
     tenure: rowStr(row, "tenure"),
     headcountAvg: rowNum(row, "headcount_avg_of_month"),
     avgHeadcountL12m: rowNum(row, "avg_headcount_l12m"),
@@ -135,7 +137,7 @@ export async function getAttritionData(): Promise<AttritionData> {
 
   const y1Attrition: Y1AttritionRow[] = (y1Query?.rows ?? []).map((row) => ({
     startMonth: rowStr(row, "start_month"),
-    department: rowStr(row, "department"),
+    department: canonicalDepartment(rowStr(row, "department")),
     cohortMaturity: rowStr(row, "cohort_maturity"),
     numStarters: rowNum(row, "num_starters"),
     numLeaversWithin1y: rowNum(row, "num_leavers_within_1y"),
@@ -154,7 +156,7 @@ export async function getAttritionData(): Promise<AttritionData> {
     const terminationDate = rowStr(row, "termination_date");
     return {
       name: rowStr(row, "display_name"),
-      department: rowStr(row, "department"),
+      department: canonicalDepartment(rowStr(row, "department")),
       squad: rowStr(row, "squad"),
       level: rowStr(row, "level"),
       startDate,
