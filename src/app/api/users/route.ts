@@ -4,7 +4,12 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { type Role } from "@/lib/auth/roles";
 
-const VALID_ROLES: Role[] = ["everyone", "leadership", "ceo"];
+const VALID_ROLES: Role[] = [
+  "everyone",
+  "engineering_manager",
+  "leadership",
+  "ceo",
+];
 
 export async function GET() {
   try {

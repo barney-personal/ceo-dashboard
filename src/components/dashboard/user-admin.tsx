@@ -21,11 +21,24 @@ interface UserAdminProps {
   initialUsers: User[];
 }
 
-const ROLES = ["everyone", "leadership", "ceo"] as const;
+const ROLES = [
+  "everyone",
+  "engineering_manager",
+  "leadership",
+  "ceo",
+] as const;
+
+const ROLE_LABELS: Record<(typeof ROLES)[number], string> = {
+  everyone: "everyone",
+  engineering_manager: "eng manager",
+  leadership: "leadership",
+  ceo: "ceo",
+};
 
 const ROLE_BADGE_STYLES: Record<string, string> = {
   ceo: "bg-primary/10 text-primary border-primary/20",
   leadership: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+  engineering_manager: "bg-sky-500/10 text-sky-700 border-sky-500/20",
   everyone: "bg-muted text-muted-foreground border-border/60",
 };
 
@@ -174,7 +187,7 @@ export function UserAdmin({ initialUsers }: UserAdminProps) {
                   >
                     {ROLES.map((r) => (
                       <option key={r} value={r}>
-                        {r}
+                        {ROLE_LABELS[r]}
                       </option>
                     ))}
                   </select>

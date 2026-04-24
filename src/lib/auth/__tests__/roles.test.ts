@@ -6,21 +6,31 @@ describe("hasAccess", () => {
     // CEO can access everything
     ["ceo", "ceo", true],
     ["ceo", "leadership", true],
+    ["ceo", "engineering_manager", true],
     ["ceo", "manager", true],
     ["ceo", "everyone", true],
     // Leadership can access leadership and below
     ["leadership", "ceo", false],
     ["leadership", "leadership", true],
+    ["leadership", "engineering_manager", true],
     ["leadership", "manager", true],
     ["leadership", "everyone", true],
-    // Manager can access manager and below (but not leadership or CEO)
+    // Engineering manager sits between manager and leadership
+    ["engineering_manager", "ceo", false],
+    ["engineering_manager", "leadership", false],
+    ["engineering_manager", "engineering_manager", true],
+    ["engineering_manager", "manager", true],
+    ["engineering_manager", "everyone", true],
+    // Manager can access manager and below (but not engineering_manager, leadership or CEO)
     ["manager", "ceo", false],
     ["manager", "leadership", false],
+    ["manager", "engineering_manager", false],
     ["manager", "manager", true],
     ["manager", "everyone", true],
     // Everyone can only access everyone
     ["everyone", "ceo", false],
     ["everyone", "leadership", false],
+    ["everyone", "engineering_manager", false],
     ["everyone", "manager", false],
     ["everyone", "everyone", true],
   ];
@@ -40,6 +50,12 @@ describe("getUserRole", () => {
 
   it("returns 'leadership' when role is set to leadership", () => {
     expect(getUserRole({ role: "leadership" })).toBe("leadership");
+  });
+
+  it("returns 'engineering_manager' when role is set to engineering_manager", () => {
+    expect(getUserRole({ role: "engineering_manager" })).toBe(
+      "engineering_manager",
+    );
   });
 
   it("defaults to 'everyone' when no role is set", () => {

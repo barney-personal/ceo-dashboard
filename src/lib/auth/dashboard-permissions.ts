@@ -76,6 +76,7 @@ export interface DashboardNavGroup {
 export const EDITABLE_PERMISSION_ROLES: Role[] = [
   "everyone",
   "manager",
+  "engineering_manager",
   "leadership",
   "ceo",
 ];
@@ -459,13 +460,14 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
-    // Locked: the page includes a manual analysis trigger with CEO-only authority.
+    // Locked: the page includes a manual analysis trigger — engineering managers
+    // and above can see the report and re-run the analysis.
     id: "engineering.codeReview",
     label: "Code Review",
     description: "LLM-reviewed PR analysis for engineering quality.",
     href: "/dashboard/engineering/code-review",
     groupLabel: "Team",
-    defaultRole: "ceo",
+    defaultRole: "engineering_manager",
     editable: false,
     redirectTo: "/dashboard/engineering",
   },

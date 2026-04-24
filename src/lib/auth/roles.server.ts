@@ -57,7 +57,12 @@ export async function getCurrentUserRole(): Promise<Role> {
 
       // Fall back to role preview
       const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as Role | undefined;
-      if (preview === "everyone" || preview === "leadership" || preview === "manager") {
+      if (
+        preview === "everyone" ||
+        preview === "manager" ||
+        preview === "engineering_manager" ||
+        preview === "leadership"
+      ) {
         return preview;
       }
     } catch {
@@ -169,7 +174,11 @@ function parseImpersonateCookie(value: string | undefined): Impersonation | null
     if (
       typeof parsed.userId === "string" &&
       typeof parsed.name === "string" &&
-      (parsed.role === "everyone" || parsed.role === "manager" || parsed.role === "leadership" || parsed.role === "ceo")
+      (parsed.role === "everyone" ||
+        parsed.role === "manager" ||
+        parsed.role === "engineering_manager" ||
+        parsed.role === "leadership" ||
+        parsed.role === "ceo")
     ) {
       return { userId: parsed.userId, name: parsed.name, role: parsed.role };
     }

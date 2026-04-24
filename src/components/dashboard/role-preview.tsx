@@ -6,11 +6,18 @@ import { cn } from "@/lib/utils";
 import { Eye, X } from "lucide-react";
 import type { Role } from "@/lib/auth/roles";
 
-const ROLES: Role[] = ["everyone", "manager", "leadership", "ceo"];
+const ROLES: Role[] = [
+  "everyone",
+  "manager",
+  "engineering_manager",
+  "leadership",
+  "ceo",
+];
 
 const ROLE_LABELS: Record<Role, string> = {
   everyone: "Employee",
   manager: "Manager",
+  engineering_manager: "Eng manager",
   leadership: "Leadership",
   ceo: "CEO",
 };
