@@ -38,12 +38,12 @@ export async function GET() {
     const result: Record<string, unknown> = { userId };
     for (const provider of ["google", "oauth_google"] as const) {
       try {
-        const res = await (
-          client.users.getUserOauthAccessToken as unknown as (
-            id: string,
-            p: string,
-          ) => Promise<{ data: Array<{ scopes?: string[]; expiresAt?: number; token?: string }> }>
-        )(userId, provider);
+        // Call on client.users to preserve the SDK's `this` binding —
+        // `getUserOauthAccessToken` calls `this.requireId(userId)` internally.
+        const res = await client.users.getUserOauthAccessToken(
+          userId,
+          provider as "oauth_google",
+        );
         const tokens = res.data ?? [];
         result[provider] = {
           count: tokens.length,

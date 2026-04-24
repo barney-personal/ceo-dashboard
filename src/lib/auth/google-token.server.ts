@@ -11,11 +11,6 @@ interface ClerkOauthAccessToken {
   expiresAt?: number | null;
 }
 
-type GetUserOauthAccessTokenFn = (
-  userId: string,
-  provider: string
-) => Promise<{ data: ClerkOauthAccessToken[] }>;
-
 function hasCalendarScope(token: ClerkOauthAccessToken): boolean {
   return Array.isArray(token.scopes)
     ? token.scopes.includes(GOOGLE_CALENDAR_READONLY_SCOPE)
@@ -54,19 +49,22 @@ export async function getUserGoogleAccessToken(
 ): Promise<string | null> {
   try {
     const client = await clerkClient();
-    // Clerk's published provider id is now `google`, but this SDK version's
-    // overloads still only type-check the legacy `oauth_google` string.
-    // Widen the call signature locally so we can probe both at runtime.
-    const getUserOauthAccessToken =
-      client.users.getUserOauthAccessToken as unknown as GetUserOauthAccessTokenFn;
-
     const probeErrors: Record<string, string> = {};
     let sawAnyToken = false;
     let sawAnyScoped = false;
 
     for (const provider of GOOGLE_OAUTH_PROVIDERS) {
       try {
-        const response = await getUserOauthAccessToken(userId, provider);
+        // Clerk's SDK method relies on its `this` binding (it calls
+        // `this.requireId(userId)` internally). We must call it on
+        // `client.users` rather than via a detached method reference.
+        // The published provider id is now "google" but the SDK overload
+        // only types "oauth_google"; the runtime accepts either, so we
+        // cast the provider string for TypeScript without rebinding.
+        const response = await client.users.getUserOauthAccessToken(
+          userId,
+          provider as "oauth_google",
+        );
         const tokens = (response.data ?? []) as ClerkOauthAccessToken[];
         if (tokens.length > 0) sawAnyToken = true;
         if (tokens.some(hasCalendarScope)) sawAnyScoped = true;
