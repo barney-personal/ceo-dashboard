@@ -3235,6 +3235,8 @@ describe("M14 confidence bands and statistical tie handling", () => {
           displayName: entries[0].displayName,
           discipline: entries[0].discipline,
           levelLabel: entries[0].levelLabel,
+          squad: null,
+          pillar: null,
           output: 90,
           impact: 50,
           delivery: 50,
@@ -4640,6 +4642,8 @@ describe("M18 movers view", () => {
     return {
       discipline: "BE",
       levelLabel: "L4",
+      squad: null,
+      pillar: null,
       output: overrides.composite,
       impact: overrides.composite,
       delivery: overrides.composite,
@@ -6204,6 +6208,8 @@ describe("M24 stability check", () => {
     return {
       discipline: "BE",
       levelLabel: "L4",
+      squad: null,
+      pillar: null,
       output: overrides.composite,
       impact: overrides.composite,
       delivery: overrides.composite,

@@ -2744,6 +2744,18 @@ export interface EngineerCompositeEntry {
   displayName: string;
   discipline: Discipline;
   levelLabel: string;
+  /**
+   * Human-readable squad name. Prefers the canonical squad from the squads
+   * registry; falls back to the raw `hb_squad` label if unmatched. `null`
+   * when the engineer has no squad at all.
+   */
+  squad: string | null;
+  /**
+   * Pillar. Prefers the canonical squad's pillar (registry); falls back to
+   * `rp_department_name` when no canonical squad joined. `null` when neither
+   * is present.
+   */
+  pillar: string | null;
   output: number | null;
   impact: number | null;
   delivery: number | null;
@@ -3030,6 +3042,8 @@ export function buildComposite({
       displayName: entry.displayName,
       discipline: entry.discipline,
       levelLabel: entry.levelLabel,
+      squad: entry.canonicalSquad?.name ?? entry.squad ?? null,
+      pillar: entry.canonicalSquad?.pillar ?? entry.pillar ?? null,
       output,
       impact,
       delivery,

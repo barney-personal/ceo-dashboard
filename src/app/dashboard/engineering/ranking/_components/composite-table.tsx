@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type {
   AttributionBundle,
@@ -9,8 +9,59 @@ import type {
   ConfidenceBundle,
   EngineerAttribution,
   EngineerAttributionMethod,
+  EngineerCompositeEntry,
   EngineerConfidence,
 } from "@/lib/data/engineering-ranking";
+
+const ANY_VALUE = "__any__" as const;
+
+function countBy(
+  entries: readonly EngineerCompositeEntry[],
+  get: (entry: EngineerCompositeEntry) => string | null,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const value = get(entry);
+    if (!value) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  counts,
+  allLabel,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  counts: Map<string, number>;
+  allLabel: string;
+}) {
+  const options = Array.from(counts.entries()).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return (
+    <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-md border border-border/60 bg-background px-2 py-1 text-xs normal-case tracking-normal text-foreground"
+      >
+        <option value={ANY_VALUE}>{allLabel}</option>
+        {options.map(([name, count]) => (
+          <option key={name} value={name}>
+            {name} ({count})
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 function formatPercentile(value: number | null): string {
   if (value === null) return "—";
@@ -424,11 +475,57 @@ export function CompositeTopTable({
   attribution: AttributionBundle;
   profileSlugByHash: Record<string, string>;
 }) {
-  const ciByHash = new Map(confidence.entries.map((c) => [c.emailHash, c]));
-  const attributionByHash = new Map(
-    attribution.entries.map((a) => [a.emailHash, a]),
+  const ciByHash = useMemo(
+    () => new Map(confidence.entries.map((c) => [c.emailHash, c])),
+    [confidence.entries],
+  );
+  const attributionByHash = useMemo(
+    () => new Map(attribution.entries.map((a) => [a.emailHash, a])),
+    [attribution.entries],
   );
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [squad, setSquad] = useState<string>(ANY_VALUE);
+  const [pillar, setPillar] = useState<string>(ANY_VALUE);
+
+  // Narrow each dropdown by the other's selection so options stay consistent
+  // (picking a pillar narrows the squad list to squads in that pillar, etc.).
+  const pillarCounts = useMemo(
+    () =>
+      countBy(
+        composite.ranked.filter(
+          (e) => squad === ANY_VALUE || e.squad === squad,
+        ),
+        (e) => e.pillar,
+      ),
+    [composite.ranked, squad],
+  );
+  const squadCounts = useMemo(
+    () =>
+      countBy(
+        composite.ranked.filter(
+          (e) => pillar === ANY_VALUE || e.pillar === pillar,
+        ),
+        (e) => e.squad,
+      ),
+    [composite.ranked, pillar],
+  );
+
+  const filteredRanked = useMemo(
+    () =>
+      composite.ranked.filter((entry) => {
+        if (squad !== ANY_VALUE && entry.squad !== squad) return false;
+        if (pillar !== ANY_VALUE && entry.pillar !== pillar) return false;
+        return true;
+      }),
+    [composite.ranked, squad, pillar],
+  );
+
+  const anySquads = squadCounts.size > 0;
+  const anyPillars = pillarCounts.size > 0;
+  const filtersActive = squad !== ANY_VALUE || pillar !== ANY_VALUE;
+  const heading = filtersActive
+    ? `${filteredRanked.length} of ${composite.ranked.length} engineers by composite`
+    : `All ${composite.ranked.length} engineers by composite`;
 
   const toggle = (hash: string) => {
     setExpanded((cur) => (cur === hash ? null : hash));
@@ -438,16 +535,58 @@ export function CompositeTopTable({
     <div className="mt-4 rounded-md border border-border/40 bg-background/60 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-          All {composite.ranked.length} engineers by composite
+          {heading}
         </h4>
         <p className="text-[11px] italic text-muted-foreground">
           Click a row for the per-method score breakdown and PR evidence.
         </p>
       </div>
+      {(anySquads || anyPillars) && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {anyPillars && (
+            <FilterSelect
+              label="Pillar"
+              value={pillar}
+              onChange={setPillar}
+              counts={pillarCounts}
+              allLabel="All pillars"
+            />
+          )}
+          {anySquads && (
+            <FilterSelect
+              label="Squad"
+              value={squad}
+              onChange={setSquad}
+              counts={squadCounts}
+              allLabel="All squads"
+            />
+          )}
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={() => {
+                setSquad(ANY_VALUE);
+                setPillar(ANY_VALUE);
+              }}
+              className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+            >
+              Clear
+            </button>
+          )}
+          <span className="text-[11px] italic text-muted-foreground">
+            Ranks stay against the full cohort — filters only narrow the rows
+            shown so reviewers can compare engineers in a similar scope.
+          </span>
+        </div>
+      )}
       {composite.ranked.length === 0 ? (
         <p className="mt-3 text-xs italic text-muted-foreground">
           No engineers have a composite yet — fewer than two methods are scored
           for any competitive engineer in this snapshot.
+        </p>
+      ) : filteredRanked.length === 0 ? (
+        <p className="mt-3 text-xs italic text-muted-foreground">
+          No engineers match the current filters.
         </p>
       ) : (
         <div className="mt-3 overflow-x-auto">
@@ -468,6 +607,10 @@ export function CompositeTopTable({
                 <HeaderCell
                   label="Discipline · Level"
                   tooltip="Self-identified discipline (BE / FE / FS / ML / DO) and HiBob level. Drives the peer-cohort adjustment on the Adjusted column."
+                />
+                <HeaderCell
+                  label="Squad · Pillar"
+                  tooltip="Canonical squad name and pillar (or raw hb_squad / rp_department_name when the squads registry did not match). Use the Squad and Pillar filters above the table to narrow the view to a team or pillar."
                 />
                 <HeaderCell
                   label="A output"
@@ -516,7 +659,7 @@ export function CompositeTopTable({
               </tr>
             </thead>
             <tbody>
-              {composite.ranked.map((e) => {
+              {filteredRanked.map((e) => {
                 const ci = ciByHash.get(e.emailHash);
                 const attr = attributionByHash.get(e.emailHash);
                 const isOpen = expanded === e.emailHash;
@@ -555,6 +698,12 @@ export function CompositeTopTable({
                       <td className="py-2 pr-3 text-muted-foreground">
                         {e.discipline} · {e.levelLabel}
                       </td>
+                      <td className="py-2 pr-3 text-muted-foreground">
+                        <div>{e.squad ?? "—"}</div>
+                        <div className="text-[10px] text-muted-foreground/80">
+                          {e.pillar ?? "—"}
+                        </div>
+                      </td>
                       <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
                         {formatPercentile(e.output)}
                       </td>
@@ -587,7 +736,7 @@ export function CompositeTopTable({
                     </tr>
                     {isOpen && (
                       <tr className="border-b border-border/30 bg-muted/10">
-                        <td colSpan={13} className="p-0">
+                        <td colSpan={14} className="p-0">
                           {attr ? (
                             <AttributionDetails
                               entry={attr}
