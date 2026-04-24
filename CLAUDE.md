@@ -349,6 +349,47 @@ web service via `fromService:` refs — also no Doppler entry needed.
 4. Run `doppler run -- make sync-render-env` to push to Render
 5. Optionally update the "Active integrations" list above if it's a new system
 
+## Pulling production data to dev
+
+To reproduce an issue against real data, mirror prod Postgres into your local
+database:
+
+```bash
+make db-pull-prod          # interactive confirm (recommended first time)
+make db-pull-prod ARGS=-y  # skip confirmation
+```
+
+The target wraps `scripts/pull-prod-db.sh`, which runs `pg_dump -Fc` against
+prod, drops the local `ceo_dashboard` DB, and `pg_restore`s the dump. The
+script refuses to run unless `DATABASE_URL` points at localhost.
+
+**One-time setup:**
+
+1. Install Postgres client tools: `brew install postgresql@16` (then add
+   `/opt/homebrew/opt/postgresql@16/bin` to PATH). The major version must
+   match or exceed the prod server.
+2. Grab the prod **External Database URL** from Render → `ceo-dashboard`
+   Postgres → Connect → External.
+3. Save it to Doppler `dev`:
+   ```bash
+   doppler secrets set PROD_DATABASE_URL="postgres://...?sslmode=require" \
+     --project ceo-dashboard --config dev
+   ```
+
+After that, `make db-pull-prod` just works every time.
+
+**Caveats:**
+
+- Prod contains real employee PII (PR authors, meeting notes, performance
+  data). The dump is written to `$TMPDIR` and deleted on exit — don't commit
+  dump files.
+- Clerk `userId`s are per-environment, so impersonation rows and other
+  Clerk-keyed tables (`userIntegrations`, `githubEmployeeMap`) reference prod
+  user IDs that don't exist in dev Clerk. Most pages still render; per-user
+  features (Google token lookup, etc.) come up empty for the dev user.
+- After pulling, you may need to run `make db-migrate` if dev code has
+  migrations that haven't been deployed to prod yet.
+
 ## Testing
 
 ```bash
