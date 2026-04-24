@@ -12,7 +12,7 @@ import {
   analysePR,
   type CodeReviewAnalysis,
 } from "@/lib/integrations/code-review-analyser";
-import { fetchPRAnalysisPayload } from "@/lib/integrations/github";
+import { fetchPRAnalysisPayload, GitHubApiError } from "@/lib/integrations/github";
 
 /**
  * How far back the page looks. 90 days gives enough evidence for a shrunk,
@@ -227,9 +227,22 @@ export async function runCodeReviewAnalysis(
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
-          Sentry.captureException(err, {
-            tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
-          });
+          // 404s mean the PR (or containing repo) has been deleted / renamed
+          // upstream — data cleanup, not a bug. Track as a handled miss so
+          // Sentry stops paging on every cron run.
+          const is404 = err instanceof GitHubApiError && err.status === 404;
+          if (is404) {
+            Sentry.captureMessage("Code review PR fetch returned 404", {
+              level: "info",
+              fingerprint: ["code-review", "pr-fetch-404"],
+              tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
+              extra: { path: err.path },
+            });
+          } else {
+            Sentry.captureException(err, {
+              tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
+            });
+          }
         }
       }
     }),

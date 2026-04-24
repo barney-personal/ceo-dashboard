@@ -17,10 +17,22 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-const { mockAnalysePR, mockFetchPayload } = vi.hoisted(() => ({
+const { mockAnalysePR, mockFetchPayload, mockCaptureException, mockCaptureMessage } = vi.hoisted(() => ({
   mockAnalysePR: vi.fn(),
   mockFetchPayload: vi.fn(),
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
 }));
+
+vi.mock("@sentry/nextjs", async () => {
+  const actual =
+    await vi.importActual<typeof import("@sentry/nextjs")>("@sentry/nextjs");
+  return {
+    ...actual,
+    captureException: mockCaptureException,
+    captureMessage: mockCaptureMessage,
+  };
+});
 
 vi.mock("@/lib/integrations/code-review-analyser", async () => {
   const actual = await vi.importActual<
@@ -32,9 +44,16 @@ vi.mock("@/lib/integrations/code-review-analyser", async () => {
   };
 });
 
-vi.mock("@/lib/integrations/github", () => ({
-  fetchPRAnalysisPayload: mockFetchPayload,
-}));
+vi.mock("@/lib/integrations/github", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/integrations/github")>(
+      "@/lib/integrations/github",
+    );
+  return {
+    ...actual,
+    fetchPRAnalysisPayload: mockFetchPayload,
+  };
+});
 
 import {
   detectRevertWithin14d,
@@ -229,6 +248,27 @@ describe("runCodeReviewAnalysis", () => {
     expect(result.analysed).toBe(1);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0].reason).toContain("LLM down");
+  });
+
+  it("treats GitHub 404 on a PR fetch as a soft miss (info, not exception)", async () => {
+    const { GitHubApiError } = await import("@/lib/integrations/github");
+    mockCaptureException.mockReset();
+    mockCaptureMessage.mockReset();
+
+    stubPrsQuery([
+      { repo: "acme/api", prNumber: 1, authorLogin: "alice", mergedAt: new Date() },
+    ]);
+    mockFetchPayload.mockRejectedValue(
+      new GitHubApiError(404, "/repos/acme/api/pulls/1", "Not Found"),
+    );
+
+    const result = await runCodeReviewAnalysis();
+    expect(result.failed).toHaveLength(1);
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      "Code review PR fetch returned 404",
+      expect.objectContaining({ level: "info" }),
+    );
   });
 
   it("re-analyses cached PRs when force=true", async () => {
