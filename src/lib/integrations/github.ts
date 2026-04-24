@@ -903,19 +903,24 @@ async function graphqlRequest<T>(
         const body = await res.text();
         const error = new Error(`GitHub GraphQL error ${res.status}: ${body}`);
 
-        // Retry on server errors and rate limits
+        const retryAfter = res.headers.get("retry-after");
+        const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
+        const isRateLimit =
+          res.status === 429 ||
+          (res.status === 403 &&
+            (retryAfter || rateLimitRemaining === "0"));
+
         if (
           attempt < GITHUB_MAX_RETRIES &&
-          (res.status >= 500 || res.status === 429)
+          (isRateLimit || res.status >= 500)
         ) {
           lastError = error;
-          const delayMs =
-            res.status === 429
-              ? getGitHubRateLimitDelay({
-                  headers: res.headers,
-                  attempt,
-                }).waitMs
-              : getRetryDelayMs(attempt);
+          const delayMs = isRateLimit
+            ? getGitHubRateLimitDelay({
+                headers: res.headers,
+                attempt,
+              }).waitMs
+            : getRetryDelayMs(attempt);
           Sentry.addBreadcrumb({
             category: "github.graphql",
             level: "warning",
