@@ -1,15 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetUserOauthAccessToken } = vi.hoisted(() => ({
-  mockGetUserOauthAccessToken: vi.fn(),
-}));
+// The real Clerk SDK method relies on `this.requireId(userId)` internally.
+// The mock mirrors that: if called without the `users` object as `this`
+// (e.g. via a detached `const fn = users.getUserOauthAccessToken`), it
+// throws the same shape Clerk throws — so any regression that strips the
+// `this` binding fails every test in this file.
+const { mockGetUserOauthAccessToken, usersObject } = vi.hoisted(() => {
+  const mock = vi.fn();
+  const users = {
+    requireId(id: unknown) {
+      if (!id) throw new Error("requireId: id is required");
+    },
+    getUserOauthAccessToken(this: { requireId: (id: unknown) => void }, userId: string, provider: string) {
+      // Same internal call Clerk makes — verifies `this` is bound.
+      this.requireId(userId);
+      return mock(userId, provider);
+    },
+  };
+  return { mockGetUserOauthAccessToken: mock, usersObject: users };
+});
 
 vi.mock("@clerk/nextjs/server", () => ({
-  clerkClient: vi.fn(async () => ({
-    users: {
-      getUserOauthAccessToken: mockGetUserOauthAccessToken,
-    },
-  })),
+  clerkClient: vi.fn(async () => ({ users: usersObject })),
 }));
 
 import { getUserGoogleAccessToken, GOOGLE_CALENDAR_READONLY_SCOPE } from "@/lib/auth/google-token.server";
