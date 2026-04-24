@@ -365,8 +365,8 @@ script refuses to run unless `DATABASE_URL` points at localhost.
 
 **One-time setup:**
 
-1. Install Postgres client tools: `brew install postgresql@16` (then add
-   `/opt/homebrew/opt/postgresql@16/bin` to PATH). The major version must
+1. Install Postgres client tools: `brew install postgresql@18` (then add
+   `/opt/homebrew/opt/postgresql@18/bin` to PATH). The major version must
    match or exceed the prod server.
 2. Grab the prod **External Database URL** from Render → `ceo-dashboard`
    Postgres → Connect → External.

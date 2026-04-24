@@ -2,7 +2,7 @@
 # Pull a fresh copy of production Postgres into the local dev database.
 #
 # Requires:
-#   - pg_dump + pg_restore on PATH (install with `brew install postgresql@16`)
+#   - pg_dump + pg_restore on PATH (install with `brew install postgresql@18`)
 #   - PROD_DATABASE_URL in Doppler `dev` (run once; see error message below)
 #   - DATABASE_URL (local) in Doppler `dev` — already there by default
 #
@@ -31,8 +31,8 @@ dim()    { printf '\033[2m%s\033[0m\n' "$*"; }
 
 if ! command -v pg_dump >/dev/null 2>&1 || ! command -v pg_restore >/dev/null 2>&1; then
   red "pg_dump / pg_restore not found on PATH."
-  echo "Install with: brew install postgresql@16"
-  echo "Then add to shell: echo 'export PATH=\"/opt/homebrew/opt/postgresql@16/bin:\$PATH\"' >> ~/.zshrc"
+  echo "Install with: brew install postgresql@18"
+  echo "Then add to shell: echo 'export PATH=\"/opt/homebrew/opt/postgresql@18/bin:\$PATH\"' >> ~/.zshrc"
   exit 1
 fi
 
