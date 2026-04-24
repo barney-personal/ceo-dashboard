@@ -13,14 +13,24 @@ import {
   COMPOSITE_SIGNAL_LABELS,
   COMPOSITE_SIGNAL_WINDOW_DAYS,
   COMPOSITE_WEIGHTS,
+  CONFIDENCE_K,
+  CONFIDENCE_MIN_HALF_WIDTH,
+  CONFIDENCE_MAX_HALF_WIDTH,
+  CONFIDENCE_TENURE_PENALTY_PER_UNIT,
+  CONFIDENCE_MIN_ENTRIES_FOR_FLAGS,
   buildComposite,
+  computeConfidenceBand,
   findEngineerInComposite,
   isPlatformOrInfraEngineer,
+  rankWithConfidence,
   roleAdjustmentFor,
   scopeComposite,
   tenureFactorFor,
   type CompositeBundle,
+  type CompositeEntry,
+  type ConfidenceBand,
   type EngineerCompositeInput,
+  type RankedCompositeEntry,
 } from "@/lib/data/engineering-composite";
 import { assembleCompositeInputs } from "@/lib/data/engineering-composite.server";
 import { hashEmailForRanking } from "@/lib/data/engineering-ranking";
@@ -976,5 +986,534 @@ describe("scopeComposite — default excludes unscored rows", () => {
     }
     const orgAll = scopeComposite(bundle, { scoredOnly: false });
     expect(orgAll.length).toBeGreaterThan(orgDefault.length);
+  });
+});
+
+// ---------- computeConfidenceBand -------------------------------------------
+
+describe("computeConfidenceBand", () => {
+  it("data-rich engineer gets narrow band", () => {
+    const { band, nEffective } = computeConfidenceBand({
+      score: 60,
+      prCount: 20,
+      analysedPrCount: 15,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    expect(band.halfWidth).toBeLessThan(8);
+    expect(band.halfWidth).toBeGreaterThanOrEqual(CONFIDENCE_MIN_HALF_WIDTH);
+    expect(band.lower).toBeCloseTo(60 - band.halfWidth, 5);
+    expect(band.upper).toBeCloseTo(60 + band.halfWidth, 5);
+    expect(nEffective).toBeGreaterThan(10);
+  });
+
+  it("sparse-data engineer gets wider band than data-rich", () => {
+    const rich = computeConfidenceBand({
+      score: 50,
+      prCount: 20,
+      analysedPrCount: 15,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    const sparse = computeConfidenceBand({
+      score: 50,
+      prCount: 3,
+      analysedPrCount: 3,
+      presentSignalCount: 3,
+      tenureFactor: 1,
+    });
+    expect(sparse.band.halfWidth).toBeGreaterThan(rich.band.halfWidth);
+    expect(sparse.nEffective).toBeLessThan(rich.nEffective);
+  });
+
+  it("partial-window engineer gets wider band due to tenure penalty", () => {
+    const full = computeConfidenceBand({
+      score: 50,
+      prCount: 10,
+      analysedPrCount: 8,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    const partial = computeConfidenceBand({
+      score: 50,
+      prCount: 10,
+      analysedPrCount: 8,
+      presentSignalCount: 5,
+      tenureFactor: 2,
+    });
+    expect(partial.band.halfWidth).toBeGreaterThan(full.band.halfWidth);
+    const expectedPenalty = (2 - 1) * CONFIDENCE_TENURE_PENALTY_PER_UNIT;
+    expect(partial.band.halfWidth - full.band.halfWidth).toBeCloseTo(
+      expectedPenalty,
+      5,
+    );
+  });
+
+  it("respects minimum half-width even for extreme data richness", () => {
+    const result = computeConfidenceBand({
+      score: 50,
+      prCount: 500,
+      analysedPrCount: 500,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    expect(result.band.halfWidth).toBeGreaterThanOrEqual(
+      CONFIDENCE_MIN_HALF_WIDTH,
+    );
+  });
+
+  it("respects maximum half-width even for extreme sparsity", () => {
+    const result = computeConfidenceBand({
+      score: 50,
+      prCount: 0,
+      analysedPrCount: 0,
+      presentSignalCount: 1,
+      tenureFactor: 3,
+    });
+    expect(result.band.halfWidth).toBeLessThanOrEqual(
+      CONFIDENCE_MAX_HALF_WIDTH,
+    );
+  });
+
+  it("clamps lower bound to 0 and upper bound to 100", () => {
+    const low = computeConfidenceBand({
+      score: 1,
+      prCount: 3,
+      analysedPrCount: 3,
+      presentSignalCount: 3,
+      tenureFactor: 1,
+    });
+    expect(low.band.lower).toBe(0);
+    expect(low.band.upper).toBeGreaterThan(1);
+
+    const high = computeConfidenceBand({
+      score: 99,
+      prCount: 3,
+      analysedPrCount: 3,
+      presentSignalCount: 3,
+      tenureFactor: 1,
+    });
+    expect(high.band.upper).toBe(100);
+    expect(high.band.lower).toBeLessThan(99);
+  });
+
+  it("fewer present signals widen the band", () => {
+    const five = computeConfidenceBand({
+      score: 50,
+      prCount: 10,
+      analysedPrCount: 8,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    const three = computeConfidenceBand({
+      score: 50,
+      prCount: 10,
+      analysedPrCount: 8,
+      presentSignalCount: 3,
+      tenureFactor: 1,
+    });
+    expect(three.band.halfWidth).toBeGreaterThan(five.band.halfWidth);
+  });
+
+  it("low rubric coverage widens the band", () => {
+    const highCov = computeConfidenceBand({
+      score: 50,
+      prCount: 20,
+      analysedPrCount: 18,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    const lowCov = computeConfidenceBand({
+      score: 50,
+      prCount: 20,
+      analysedPrCount: 3,
+      presentSignalCount: 5,
+      tenureFactor: 1,
+    });
+    expect(lowCov.band.halfWidth).toBeGreaterThan(highCov.band.halfWidth);
+  });
+});
+
+// ---------- confidence bands in buildComposite ------------------------------
+
+describe("buildComposite confidence bands", () => {
+  it("scored entries have non-null confidenceBand and nEffective", () => {
+    const bundle = buildComposite({
+      now: NOW,
+      engineers: makeCohort(5, 0),
+    });
+    for (const entry of bundle.scored) {
+      expect(entry.confidenceBand).not.toBeNull();
+      expect(entry.confidenceBand!.halfWidth).toBeGreaterThanOrEqual(
+        CONFIDENCE_MIN_HALF_WIDTH,
+      );
+      expect(entry.confidenceBand!.lower).toBeLessThanOrEqual(entry.score!);
+      expect(entry.confidenceBand!.upper).toBeGreaterThanOrEqual(entry.score!);
+      expect(entry.nEffective).not.toBeNull();
+      expect(entry.nEffective).toBeGreaterThan(0);
+    }
+  });
+
+  it("unscored entries have null confidenceBand and nEffective", () => {
+    const bundle = buildComposite({
+      now: NOW,
+      engineers: [
+        ...makeCohort(4, 0),
+        makeEngineer({
+          email: "leaver@meetcleo.com",
+          emailHash: hashEmailForRanking("leaver@meetcleo.com"),
+          isLeaverOrInactive: true,
+        }),
+        makeEngineer({
+          email: "ramp@meetcleo.com",
+          emailHash: hashEmailForRanking("ramp@meetcleo.com"),
+          githubLogin: "ramp",
+          tenureDays: 10,
+        }),
+      ],
+    });
+    const unscoredEntries = bundle.entries.filter(
+      (e) => e.status.startsWith("unscored"),
+    );
+    expect(unscoredEntries.length).toBeGreaterThan(0);
+    for (const entry of unscoredEntries) {
+      expect(entry.confidenceBand).toBeNull();
+      expect(entry.nEffective).toBeNull();
+    }
+  });
+
+  it("engineers with fewer PRs get wider bands", () => {
+    const engineers = makeCohort(5, 0, (i, base) => ({
+      ...base,
+      prCount: i === 0 ? 3 : 20 + i * 5,
+      analysedPrCount: i === 0 ? 3 : 15 + i * 3,
+    }));
+    const bundle = buildComposite({ now: NOW, engineers });
+    const sparse = bundle.scored.find((e) => e.githubLogin === "be0");
+    const rich = bundle.scored.find((e) => e.githubLogin === "be4");
+    expect(sparse).toBeDefined();
+    expect(rich).toBeDefined();
+    expect(sparse!.confidenceBand!.halfWidth).toBeGreaterThan(
+      rich!.confidenceBand!.halfWidth,
+    );
+  });
+});
+
+// ---------- rankWithConfidence — tie groups ----------------------------------
+
+describe("rankWithConfidence", () => {
+  function buildBundleFromSpread(
+    scores: number[],
+    halfWidths?: number[],
+  ): CompositeEntry[] {
+    const entries: CompositeEntry[] = scores.map((score, i) => {
+      const hw = halfWidths?.[i] ?? 5;
+      return {
+        emailHash: `hash-${i}`,
+        displayName: `Eng ${i}`,
+        email: `eng${i}@meetcleo.com`,
+        githubLogin: `eng${i}`,
+        discipline: "BE" as const,
+        pillar: "Growth",
+        squad: null,
+        managerEmail: null,
+        tenureDays: 365,
+        status: "scored" as const,
+        score,
+        orgPercentile: null,
+        disciplinePercentile: null,
+        signals: {} as CompositeEntry["signals"],
+        tenureFactor: 1,
+        roleFactor: {
+          isPlatformOrInfra: false,
+          deliveryFactor: 1,
+          cycleTimeFactor: 1,
+          description: null,
+        },
+        evidence: [],
+        unscoredReason: null,
+        confidenceBand: {
+          lower: Math.max(0, score - hw),
+          upper: Math.min(100, score + hw),
+          halfWidth: hw,
+        },
+        nEffective: 10,
+      };
+    });
+    return entries;
+  }
+
+  it("non-overlapping bands produce distinct tie groups", () => {
+    // Scores spread far apart with narrow bands
+    const entries = buildBundleFromSpread([90, 70, 50, 30], [3, 3, 3, 3]);
+    const ranked = rankWithConfidence(entries);
+    expect(ranked).toHaveLength(4);
+    const tieGroupIds = ranked.map((r) => r.tieGroupId);
+    const uniqueGroups = new Set(tieGroupIds);
+    expect(uniqueGroups.size).toBe(4);
+  });
+
+  it("overlapping bands collapse into a shared tie group", () => {
+    // Three engineers with overlapping bands
+    const entries = buildBundleFromSpread([52, 50, 48], [5, 5, 5]);
+    const ranked = rankWithConfidence(entries);
+    expect(ranked).toHaveLength(3);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    expect(tieGroupIds.size).toBe(1);
+  });
+
+  it("mixed overlaps: A-B overlap, B-C overlap → all in one group (transitive)", () => {
+    // A=60±5=[55,65], B=56±5=[51,61], C=52±5=[47,57]
+    // A-B overlap (55 < 61 and 51 < 65) ✓
+    // B-C overlap (51 < 57 and 47 < 61) ✓
+    // A-C don't directly overlap but B bridges them
+    const entries = buildBundleFromSpread([60, 56, 52], [5, 5, 5]);
+    const ranked = rankWithConfidence(entries);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    expect(tieGroupIds.size).toBe(1);
+  });
+
+  it("two separate clusters form two tie groups", () => {
+    // High cluster: 80, 78 (±5 → overlap)
+    // Low cluster: 30, 28 (±5 → overlap)
+    // No overlap between clusters
+    const entries = buildBundleFromSpread([80, 78, 30, 28], [5, 5, 5, 5]);
+    const ranked = rankWithConfidence(entries);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    expect(tieGroupIds.size).toBe(2);
+    // Top two should share a group
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    // Bottom two should share a group
+    expect(ranked[2].tieGroupId).toBe(ranked[3].tieGroupId);
+    // Top and bottom groups are distinct
+    expect(ranked[0].tieGroupId).not.toBe(ranked[2].tieGroupId);
+  });
+
+  it("assigns rank by score descending", () => {
+    const entries = buildBundleFromSpread([90, 70, 50, 30], [2, 2, 2, 2]);
+    const ranked = rankWithConfidence(entries);
+    expect(ranked.map((r) => r.rank)).toEqual([1, 2, 3, 4]);
+    expect(ranked.map((r) => r.score)).toEqual([90, 70, 50, 30]);
+  });
+
+  it("assigns quartiles correctly", () => {
+    const entries = buildBundleFromSpread(
+      [95, 85, 75, 65, 55, 45, 35, 25],
+      [2, 2, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    // Top 2 should be Q4, next 2 Q3, next 2 Q2, bottom 2 Q1
+    expect(ranked[0].quartile).toBe(4);
+    expect(ranked[1].quartile).toBe(4);
+    expect(ranked[6].quartile).toBe(1);
+    expect(ranked[7].quartile).toBe(1);
+  });
+
+  // --- Quartile flag tests ---
+
+  it("clear Q4 group with real gap gets promote_candidate flag", () => {
+    // Well-separated scores with narrow bands
+    const entries = buildBundleFromSpread(
+      [95, 85, 75, 65, 55, 45, 35, 25],
+      [2, 2, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    const q4 = ranked.filter((r) => r.quartile === 4);
+    expect(q4.length).toBeGreaterThan(0);
+    for (const entry of q4) {
+      expect(entry.quartileFlag).toBe("promote_candidate");
+      expect(entry.flagEligible).toBe(true);
+    }
+  });
+
+  it("clear Q1 group with real gap gets performance_manage flag", () => {
+    const entries = buildBundleFromSpread(
+      [95, 85, 75, 65, 55, 45, 35, 25],
+      [2, 2, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    const q1 = ranked.filter((r) => r.quartile === 1);
+    expect(q1.length).toBeGreaterThan(0);
+    for (const entry of q1) {
+      expect(entry.quartileFlag).toBe("performance_manage");
+      expect(entry.flagEligible).toBe(true);
+    }
+  });
+
+  it("tie group straddling Q4/Q3 boundary gets no promote flag", () => {
+    // Engineer at the Q4/Q3 boundary with wide bands that overlap into Q3
+    // Score around p75 with wide bands so the tie group straddles the boundary
+    const entries = buildBundleFromSpread(
+      [90, 78, 76, 60, 50, 40, 30, 20],
+      [2, 5, 5, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    // 78 and 76 likely form a tie group (bands overlap). If one is Q4 and one
+    // is Q3, neither should get a promote flag.
+    const straddleGroup = ranked.filter(
+      (r) => r.score === 78 || r.score === 76,
+    );
+    if (straddleGroup.length === 2) {
+      const quartiles = new Set(straddleGroup.map((r) => r.quartile));
+      if (quartiles.size > 1) {
+        for (const entry of straddleGroup) {
+          expect(entry.quartileFlag).toBeNull();
+        }
+      }
+    }
+  });
+
+  it("bottom-quartile gap smaller than confidence width → no PM flag", () => {
+    // Bottom group has wide bands that reach into the Q2 zone
+    const entries = buildBundleFromSpread(
+      [90, 80, 70, 60, 50, 40, 30, 28],
+      [2, 2, 2, 2, 2, 2, 15, 15],
+    );
+    const ranked = rankWithConfidence(entries);
+    // The bottom entries (30, 28) have wide bands (±15). Their upper envelope
+    // reaches into the 40s, overlapping with the non-Q1 group. Gap is not real.
+    const bottomTwo = ranked.filter((r) => r.score !== null && r.score <= 30);
+    for (const entry of bottomTwo) {
+      if (entry.quartile === 1) {
+        expect(entry.quartileFlag).toBeNull();
+        expect(entry.flagEligible).toBe(false);
+      }
+    }
+  });
+
+  it("fewer than CONFIDENCE_MIN_ENTRIES_FOR_FLAGS entries → no flags", () => {
+    const entries = buildBundleFromSpread([90, 50, 10], [2, 2, 2]);
+    const ranked = rankWithConfidence(entries);
+    expect(ranked).toHaveLength(3);
+    for (const entry of ranked) {
+      expect(entry.quartileFlag).toBeNull();
+      expect(entry.flagEligible).toBe(false);
+    }
+  });
+
+  it("unscored entries are silently excluded from ranking", () => {
+    const scored = buildBundleFromSpread([90, 70, 50, 30], [2, 2, 2, 2]);
+    const unscored: CompositeEntry = {
+      ...scored[0],
+      emailHash: "unscored-hash",
+      displayName: "Unscored",
+      status: "unscored_leaver",
+      score: null,
+      confidenceBand: null,
+      nEffective: null,
+    };
+    const ranked = rankWithConfidence([...scored, unscored]);
+    expect(ranked).toHaveLength(4);
+    expect(ranked.find((r) => r.emailHash === "unscored-hash")).toBeUndefined();
+  });
+
+  it("all Q2/Q3 entries get null flags (mid-range, no promote or PM)", () => {
+    const entries = buildBundleFromSpread(
+      [95, 85, 75, 65, 55, 45, 35, 25],
+      [2, 2, 2, 2, 2, 2, 2, 2],
+    );
+    const ranked = rankWithConfidence(entries);
+    const midRange = ranked.filter(
+      (r) => r.quartile === 2 || r.quartile === 3,
+    );
+    for (const entry of midRange) {
+      expect(entry.quartileFlag).toBeNull();
+    }
+  });
+
+  it("single large tie group spanning all quartiles → no flags", () => {
+    // Everyone within overlapping distance
+    const entries = buildBundleFromSpread(
+      [55, 53, 51, 49, 47, 45, 43, 41],
+      [10, 10, 10, 10, 10, 10, 10, 10],
+    );
+    const ranked = rankWithConfidence(entries);
+    const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
+    // Should collapse into one or very few groups
+    expect(tieGroupIds.size).toBeLessThanOrEqual(2);
+    // Because the group straddles multiple quartiles, no flags
+    for (const entry of ranked) {
+      if (tieGroupIds.size === 1) {
+        expect(entry.quartileFlag).toBeNull();
+      }
+    }
+  });
+
+  it("empty input returns empty output", () => {
+    expect(rankWithConfidence([])).toEqual([]);
+  });
+
+  it("partial_window_scored entries are included in ranking", () => {
+    const entries = buildBundleFromSpread([80, 60, 40, 20], [3, 3, 3, 3]);
+    entries[0].status = "partial_window_scored";
+    const ranked = rankWithConfidence(entries);
+    expect(ranked).toHaveLength(4);
+    expect(ranked[0].status).toBe("partial_window_scored");
+    expect(ranked[0].rank).toBe(1);
+  });
+});
+
+// ---------- end-to-end: buildComposite + rankWithConfidence -----------------
+
+describe("end-to-end confidence/rank pipeline", () => {
+  it("builds composite and ranks with tie groups from real inputs", () => {
+    const engineers = makeCohort(8, 0, (i, base) => ({
+      ...base,
+      prCount: 5 + i * 5,
+      analysedPrCount: 4 + i * 3,
+      executionQualityMean: 2 + i * 0.3,
+      testAdequacyMean: 2 + i * 0.3,
+      riskHandlingMean: 2 + i * 0.3,
+      reviewabilityMean: 2 + i * 0.3,
+      revertRate: Math.max(0, 0.3 - i * 0.04),
+      reviewParticipationRate: 0.5 + i * 0.06,
+      medianTimeToMergeMinutes: 600 - i * 50,
+    }));
+    const bundle = buildComposite({ now: NOW, engineers });
+    const scored = scopeComposite(bundle, {});
+    expect(scored.length).toBeGreaterThanOrEqual(4);
+
+    const ranked = rankWithConfidence(scored);
+    expect(ranked.length).toBe(scored.length);
+
+    // Rank is monotonically increasing
+    for (let i = 1; i < ranked.length; i++) {
+      expect(ranked[i].rank).toBe(ranked[i - 1].rank + 1);
+    }
+
+    // Scores are monotonically non-increasing
+    for (let i = 1; i < ranked.length; i++) {
+      expect(ranked[i].score!).toBeLessThanOrEqual(ranked[i - 1].score!);
+    }
+
+    // Every entry has a valid quartile
+    for (const entry of ranked) {
+      expect([1, 2, 3, 4]).toContain(entry.quartile);
+    }
+  });
+
+  it("scoped ranking excludes unscored rows from quartile thresholds", () => {
+    const cohort = makeCohort(6, 0);
+    const leaver = makeEngineer({
+      email: "leaver@meetcleo.com",
+      emailHash: hashEmailForRanking("leaver@meetcleo.com"),
+      displayName: "Leaver",
+      githubLogin: "leaver",
+      isLeaverOrInactive: true,
+    });
+    const bundle = buildComposite({
+      now: NOW,
+      engineers: [...cohort, leaver],
+    });
+
+    const scored = scopeComposite(bundle, {});
+    const ranked = rankWithConfidence(scored);
+
+    // Leaver should not appear in ranked output
+    expect(ranked.find((r) => r.emailHash === leaver.emailHash)).toBeUndefined();
+    // Only scored entries
+    for (const entry of ranked) {
+      expect(["scored", "partial_window_scored"]).toContain(entry.status);
+    }
   });
 });

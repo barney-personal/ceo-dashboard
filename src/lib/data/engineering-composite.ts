@@ -69,6 +69,21 @@ export const COMPOSITE_CYCLE_TIME_CAP_HOURS = (14 * 24) as number; // 14 day cap
 /** Required present signals for a composite score to be emitted. */
 export const COMPOSITE_MIN_SIGNALS_FOR_SCORE = 3 as const;
 
+/**
+ * Confidence band calibration. K controls the base half-width scaling via
+ * `K / sqrt(nEffective)`. Calibrated so a 20-PR / 15-analysed / 5-signal
+ * engineer gets ~5pt half-width and a 3-PR / 3-analysed / 3-signal engineer
+ * gets ~15pt half-width.
+ */
+export const CONFIDENCE_K = 20 as const;
+export const CONFIDENCE_MIN_HALF_WIDTH = 2 as const;
+export const CONFIDENCE_MAX_HALF_WIDTH = 25 as const;
+export const CONFIDENCE_TENURE_PENALTY_PER_UNIT = 3 as const;
+
+/** Minimum scored entries to assign quartile flags. Below this, flags are
+ *  suppressed because quartile boundaries are not meaningful. */
+export const CONFIDENCE_MIN_ENTRIES_FOR_FLAGS = 4 as const;
+
 export type CompositeSignalKey =
   | "delivery"
   | "quality"
@@ -176,6 +191,14 @@ export interface BuildCompositeInputs {
 // Output shapes
 // -----------------------------------------------------------------------------
 
+export interface ConfidenceBand {
+  lower: number;
+  upper: number;
+  halfWidth: number;
+}
+
+export type QuartileFlag = "promote_candidate" | "performance_manage" | null;
+
 export type CompositeStatus =
   | "scored"
   | "partial_window_scored"
@@ -239,6 +262,11 @@ export interface CompositeEntry {
 
   /** Human-readable reason when status is any `unscored_*`. Null when scored. */
   unscoredReason: string | null;
+
+  /** Confidence band around the composite score. Null when unscored. */
+  confidenceBand: ConfidenceBand | null;
+  /** Effective sample size driving the confidence band width. Null when unscored. */
+  nEffective: number | null;
 }
 
 export interface CompositeCohortSummary {
@@ -476,6 +504,63 @@ function winsorizeAtPercentile(
 }
 
 // -----------------------------------------------------------------------------
+// Confidence band — pure computation
+// -----------------------------------------------------------------------------
+
+/**
+ * Compute the confidence band around a composite score. The band width is
+ * driven by `nEffective` which combines PR sample size, rubric coverage, and
+ * signal completeness. Partial-window engineers (tenureFactor > 1) receive an
+ * additive penalty because the delivery pro-rate adds estimation uncertainty.
+ *
+ * Exported so the methodology panel and tests can exercise the formula
+ * independently of the full buildComposite pipeline.
+ */
+export function computeConfidenceBand(params: {
+  score: number;
+  prCount: number;
+  analysedPrCount: number;
+  presentSignalCount: number;
+  tenureFactor: number;
+}): { band: ConfidenceBand; nEffective: number } {
+  const { score, prCount, analysedPrCount, presentSignalCount, tenureFactor } =
+    params;
+
+  const rubricCoverage =
+    prCount > 0 ? Math.min(analysedPrCount / prCount, 1) : 0;
+  const signalCoverage =
+    COMPOSITE_SIGNAL_KEYS.length > 0
+      ? presentSignalCount / COMPOSITE_SIGNAL_KEYS.length
+      : 0;
+
+  const nEffective = Math.max(
+    prCount * (0.5 + 0.5 * rubricCoverage) * signalCoverage,
+    0.5,
+  );
+
+  let halfWidth = CONFIDENCE_K / Math.sqrt(nEffective);
+
+  if (tenureFactor > 1) {
+    halfWidth += (tenureFactor - 1) * CONFIDENCE_TENURE_PENALTY_PER_UNIT;
+  }
+
+  halfWidth = clamp(
+    halfWidth,
+    CONFIDENCE_MIN_HALF_WIDTH,
+    CONFIDENCE_MAX_HALF_WIDTH,
+  );
+
+  return {
+    band: {
+      lower: Math.max(0, score - halfWidth),
+      upper: Math.min(100, score + halfWidth),
+      halfWidth,
+    },
+    nEffective,
+  };
+}
+
+// -----------------------------------------------------------------------------
 // Main builder
 // -----------------------------------------------------------------------------
 
@@ -550,6 +635,8 @@ function makeEntryFromIntermediate(
     roleFactor: inter.roleFactor,
     evidence,
     unscoredReason: inter.unscoredReason,
+    confidenceBand: null,
+    nEffective: null,
   };
 }
 
@@ -880,6 +967,14 @@ export function buildComposite(inputs: BuildCompositeInputs): CompositeBundle {
       { inter, score: finalScore },
     ]);
 
+    const { band: confidenceBand, nEffective } = computeConfidenceBand({
+      score: finalScore,
+      prCount: inter.input.prCount ?? 0,
+      analysedPrCount: inter.input.analysedPrCount ?? 0,
+      presentSignalCount: presentKeys.length,
+      tenureFactor: inter.tenureFactor,
+    });
+
     allEntries.push({
       emailHash: inter.input.emailHash,
       displayName: inter.input.displayName,
@@ -899,6 +994,8 @@ export function buildComposite(inputs: BuildCompositeInputs): CompositeBundle {
       roleFactor: inter.roleFactor,
       evidence: buildEvidenceStrings(inter.input, signalContribs, cohort),
       unscoredReason: null,
+      confidenceBand,
+      nEffective,
     });
   }
 
@@ -1146,4 +1243,200 @@ export function findEngineerInComposite(
   emailHash: string,
 ): CompositeEntry | null {
   return bundle.entries.find((e) => e.emailHash === emailHash) ?? null;
+}
+
+// -----------------------------------------------------------------------------
+// Ranking with confidence — tie groups + quartile flags
+// -----------------------------------------------------------------------------
+
+export interface RankedCompositeEntry extends CompositeEntry {
+  rank: number;
+  tieGroupId: number;
+  quartile: 1 | 2 | 3 | 4;
+  quartileFlag: QuartileFlag;
+  flagEligible: boolean;
+}
+
+function bandsOverlap(a: ConfidenceBand, b: ConfidenceBand): boolean {
+  return a.lower <= b.upper && b.lower <= a.upper;
+}
+
+/**
+ * Rank a set of composite entries (expected to be pre-scoped via
+ * `scopeComposite`) and assign tie groups + quartile flags.
+ *
+ * Only scored entries with valid confidence bands are ranked. Unscored entries
+ * are silently dropped — callers must pre-filter via `scopeComposite()`'s
+ * default `scoredOnly: true` or pass scored entries explicitly.
+ *
+ * Tie groups: adjacent entries (sorted by score desc) whose confidence bands
+ * overlap are collapsed into a shared tie group (transitive).
+ *
+ * Quartile flags: promote_candidate (Q4) and performance_manage (Q1) are
+ * assigned ONLY when (a) every member of the tie group falls inside the
+ * quartile, AND (b) the confidence gap between the group's band envelope and
+ * the nearest non-quartile group's band envelope is real (non-overlapping).
+ * When either condition fails the flag is null.
+ */
+export function rankWithConfidence(
+  entries: readonly CompositeEntry[],
+): RankedCompositeEntry[] {
+  const scorable = entries.filter(
+    (
+      e,
+    ): e is CompositeEntry & {
+      score: number;
+      confidenceBand: ConfidenceBand;
+    } =>
+      e.score !== null &&
+      e.confidenceBand !== null &&
+      (e.status === "scored" || e.status === "partial_window_scored"),
+  );
+
+  if (scorable.length === 0) return [];
+
+  const sorted = [...scorable].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  // --- Tie groups (adjacent overlapping bands) ---
+  const tieGroupIds: number[] = [0];
+  let currentGroupId = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    if (bandsOverlap(sorted[i - 1].confidenceBand, sorted[i].confidenceBand)) {
+      tieGroupIds.push(currentGroupId);
+    } else {
+      currentGroupId++;
+      tieGroupIds.push(currentGroupId);
+    }
+  }
+
+  // --- Quartile thresholds ---
+  const sortedScoresAsc = sorted
+    .map((e) => e.score)
+    .sort((a, b) => a - b);
+  const p25 = quantile(sortedScoresAsc, 0.25) ?? 0;
+  const p50 = quantile(sortedScoresAsc, 0.5) ?? 50;
+  const p75 = quantile(sortedScoresAsc, 0.75) ?? 100;
+
+  function assignQuartile(score: number): 1 | 2 | 3 | 4 {
+    if (score <= p25) return 1;
+    if (score <= p50) return 2;
+    if (score <= p75) return 3;
+    return 4;
+  }
+
+  // --- Group metadata ---
+  interface TieGroup {
+    indices: number[];
+    lowerEnvelope: number;
+    upperEnvelope: number;
+    quartiles: Set<1 | 2 | 3 | 4>;
+  }
+  const groups = new Map<number, TieGroup>();
+  for (let i = 0; i < sorted.length; i++) {
+    const gid = tieGroupIds[i];
+    const entry = sorted[i];
+    const existing = groups.get(gid);
+    if (existing) {
+      existing.indices.push(i);
+      existing.lowerEnvelope = Math.min(
+        existing.lowerEnvelope,
+        entry.confidenceBand.lower,
+      );
+      existing.upperEnvelope = Math.max(
+        existing.upperEnvelope,
+        entry.confidenceBand.upper,
+      );
+      existing.quartiles.add(assignQuartile(entry.score));
+    } else {
+      groups.set(gid, {
+        indices: [i],
+        lowerEnvelope: entry.confidenceBand.lower,
+        upperEnvelope: entry.confidenceBand.upper,
+        quartiles: new Set([assignQuartile(entry.score)]),
+      });
+    }
+  }
+
+  // --- Flag eligibility per group ---
+  const groupFlags = new Map<
+    number,
+    { flag: QuartileFlag; eligible: boolean }
+  >();
+
+  const tooFewForFlags = sorted.length < CONFIDENCE_MIN_ENTRIES_FOR_FLAGS;
+
+  for (const [gid, group] of groups.entries()) {
+    if (tooFewForFlags) {
+      groupFlags.set(gid, { flag: null, eligible: false });
+      continue;
+    }
+
+    const allQ4 = group.quartiles.size === 1 && group.quartiles.has(4);
+    const allQ1 = group.quartiles.size === 1 && group.quartiles.has(1);
+
+    if (!allQ4 && !allQ1) {
+      groupFlags.set(gid, { flag: null, eligible: false });
+      continue;
+    }
+
+    if (allQ4) {
+      let nearestNonQ4Upper = -Infinity;
+      for (const [otherGid, otherGroup] of groups.entries()) {
+        if (otherGid === gid) continue;
+        const hasNonQ4 = [...otherGroup.quartiles].some((q) => q !== 4);
+        if (hasNonQ4) {
+          nearestNonQ4Upper = Math.max(
+            nearestNonQ4Upper,
+            otherGroup.upperEnvelope,
+          );
+        }
+      }
+      const gapReal =
+        nearestNonQ4Upper === -Infinity ||
+        group.lowerEnvelope > nearestNonQ4Upper;
+      groupFlags.set(gid, {
+        flag: gapReal ? "promote_candidate" : null,
+        eligible: gapReal,
+      });
+    } else {
+      let nearestNonQ1Lower = Infinity;
+      for (const [otherGid, otherGroup] of groups.entries()) {
+        if (otherGid === gid) continue;
+        const hasNonQ1 = [...otherGroup.quartiles].some((q) => q !== 1);
+        if (hasNonQ1) {
+          nearestNonQ1Lower = Math.min(
+            nearestNonQ1Lower,
+            otherGroup.lowerEnvelope,
+          );
+        }
+      }
+      const gapReal =
+        nearestNonQ1Lower === Infinity ||
+        group.upperEnvelope < nearestNonQ1Lower;
+      groupFlags.set(gid, {
+        flag: gapReal ? "performance_manage" : null,
+        eligible: gapReal,
+      });
+    }
+  }
+
+  // --- Assemble output ---
+  return sorted.map((entry, i) => {
+    const gid = tieGroupIds[i];
+    const { flag, eligible } = groupFlags.get(gid) ?? {
+      flag: null,
+      eligible: false,
+    };
+    return {
+      ...entry,
+      rank: i + 1,
+      tieGroupId: gid,
+      quartile: assignQuartile(entry.score),
+      quartileFlag: flag,
+      flagEligible: eligible,
+    };
+  });
 }
