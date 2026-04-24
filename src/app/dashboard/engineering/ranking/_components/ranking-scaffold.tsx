@@ -2167,12 +2167,14 @@ function MoversSection({ movers }: { movers: MoversBundle }) {
 const DOWNWEIGHT_LABEL: Record<AntiGamingRow["downweightStatus"], string> = {
   full_weight: "Full weight",
   down_weighted: "Down-weighted",
+  scored_flagged: "Scored · above ceiling",
   contextual_only: "Contextual only",
 };
 
 const DOWNWEIGHT_TONE: Record<AntiGamingRow["downweightStatus"], string> = {
   full_weight: "border-primary/40 bg-primary/10 text-primary",
   down_weighted: "border-warning/40 bg-warning/10 text-warning",
+  scored_flagged: "border-destructive/40 bg-destructive/10 text-destructive",
   contextual_only:
     "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
 };

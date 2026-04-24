@@ -4459,13 +4459,24 @@ export const RANKING_RUBRIC_VERSION: string | null = null;
 
 /**
  * Down-weight posture for a signal in the ranking. `full_weight` means the
- * signal carries its declared lens weight; `down_weighted` means the signal
- * is intentionally suppressed (e.g. sqrt/log damping); `contextual_only`
- * means the signal is read but never scored — it lives in the audit only.
+ * signal carries its declared lens weight (no damping beyond the composite
+ * median's cross-method dilution); `down_weighted` means the signal is
+ * scored but intentionally suppressed (e.g. sqrt/log damping, inversion, or
+ * a composite-median cap) so the effective weight stays inside the
+ * documented ceiling; `scored_flagged` means the signal is scored AND its
+ * effective weight exceeds `RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT` —
+ * the methodology panel flags it as a visible trade-off rather than
+ * silently weighting it; `contextual_only` means the signal is read but
+ * never scored — it appears in the audit only and is NEVER a member of
+ * `RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS`. The M22 invariant asserted in
+ * `engineering-ranking.test.ts` is: every signal that appears in the
+ * composite's method weights carries a scored posture (`full_weight`,
+ * `down_weighted`, or `scored_flagged`), never `contextual_only`.
  */
 export type AntiGamingDownweight =
   | "full_weight"
   | "down_weighted"
+  | "scored_flagged"
   | "contextual_only";
 
 /**
@@ -4597,10 +4608,10 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "The SHAP impact model is trained on upstream behaviour; someone who games PR/commit counts upstream will see their impact score move too, so activity-gaming flows through to this composite.",
     mitigation:
-      "Log-damping inside the composite, dominance check on final-rank correlation against PR count and log-impact at 0.75, and a methodology panel that marks the signal flagged above the 30% effective-weight ceiling.",
+      "Scored with log-damping inside the composite plus a dominance check on final-rank correlation against PR count and log-impact at 0.75. The signal is flagged on the effective-weight panel because its share exceeds the 30% ceiling.",
     residualWeakness:
-      "Because log-impact appears in both lens A and the M10 normalisation layer, its effective share is 37.5% — above the 30% ceiling. Until the per-PR LLM rubric or individual review signals land to dilute its share, this is an explicit, visible trade-off on the dominance panel.",
-    downweightStatus: "contextual_only",
+      "Log-impact is scored in the composite: 50% of lens A plus 100% of the adjusted normalisation layer drive an effective share of 37.5% — above the 30% ceiling. Until the per-PR LLM rubric or individual review signals land to dilute its share, the methodology panel surfaces this as an explicit, visible trade-off on the dominance panel rather than silently weighting it.",
+    downweightStatus: "scored_flagged",
   },
   {
     signal: "SHAP predicted impact",
@@ -4637,30 +4648,30 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Team-level signal; cannot be gamed by a single engineer. An engineer could choose a high-review-rate squad to inflate their delivery lens.",
     mitigation:
-      "Lens C is contextual: capped at 25% of the composite (one of four methods) and narrated as squad-delivery context on the page. Squad-delivery context is the only team-level input to the individual rank.",
+      "Scored via lens C (40% of delivery method) but damped by the composite-median cap: delivery is one of four methods, so the effective share sits at ~10% — well inside the 30% ceiling. Narrated as squad-delivery context on the page so readers know it is team-level evidence.",
     residualWeakness:
       "Ecological fallacy — the ranking cannot distinguish a strong engineer on a strong squad from a weak engineer coasting on the squad's delivery performance. Future per-engineer review data would replace this.",
-    downweightStatus: "contextual_only",
+    downweightStatus: "down_weighted",
   },
   {
     signal: "Squad cycle time (inverted)",
     gamingPath:
       "Team-level; inherits the squad review-rate gaming posture.",
     mitigation:
-      "Inverted rank percentile (lower cycle time = higher score); weight 30% in lens C, ~7.5% effective share.",
+      "Scored but inverted (lower cycle time = higher score) and damped: lens C weight 30%, composite-median cap produces ~7.5% effective share, well inside the 30% ceiling.",
     residualWeakness:
       "Squads with different PR-size norms will read differently here without reflecting individual behaviour.",
-    downweightStatus: "contextual_only",
+    downweightStatus: "down_weighted",
   },
   {
     signal: "Squad time-to-first-review (inverted)",
     gamingPath:
       "Team-level; inherits the squad review-rate gaming posture.",
     mitigation:
-      "Inverted rank percentile; weight 30% in lens C, ~7.5% effective share. Narrated as contextual.",
+      "Scored but inverted and damped: lens C weight 30%, composite-median cap produces ~7.5% effective share, well inside the 30% ceiling. Narrated as squad-delivery context.",
     residualWeakness:
       "Team-wide review discipline; no individual accountability visible.",
-    downweightStatus: "contextual_only",
+    downweightStatus: "down_weighted",
   },
   {
     signal: "AI tokens / AI spend",

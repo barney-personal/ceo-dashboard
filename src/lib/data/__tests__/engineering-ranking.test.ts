@@ -5388,9 +5388,12 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
       expect(row.gamingPath.length).toBeGreaterThan(10);
       expect(row.mitigation.length).toBeGreaterThan(10);
       expect(row.residualWeakness.length).toBeGreaterThan(5);
-      expect(["full_weight", "down_weighted", "contextual_only"]).toContain(
-        row.downweightStatus,
-      );
+      expect([
+        "full_weight",
+        "down_weighted",
+        "scored_flagged",
+        "contextual_only",
+      ]).toContain(row.downweightStatus);
     }
   });
 
@@ -5403,6 +5406,147 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
     );
     expect(aiRow?.downweightStatus).toBe("contextual_only");
     expect(reviewRow?.downweightStatus).toBe("contextual_only");
+  });
+
+  it("M22: no scored signal in the composite is labelled contextual_only", () => {
+    // Derive the scored signal set from the source of truth: any signal that
+    // appears in any method's weight list is scored and must carry a scored
+    // posture (full_weight / down_weighted / scored_flagged). Labelling such
+    // a signal contextual_only contradicts the enum's own definition and the
+    // page's "Contextual only — read but never scored" copy.
+    const scoredSignals = new Set<string>();
+    for (const method of Object.keys(
+      RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
+    ) as Array<keyof typeof RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS>) {
+      for (const { signal } of RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[
+        method
+      ]) {
+        scoredSignals.add(signal);
+      }
+    }
+    expect(scoredSignals.size).toBeGreaterThan(0);
+    const misLabelled: string[] = [];
+    for (const row of RANKING_ANTI_GAMING_ROWS) {
+      if (
+        scoredSignals.has(row.signal) &&
+        row.downweightStatus === "contextual_only"
+      ) {
+        misLabelled.push(row.signal);
+      }
+    }
+    expect(
+      misLabelled,
+      `Scored signals labelled contextual_only: ${misLabelled.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("M22: every scored composite signal has an anti-gaming row with a scored posture", () => {
+    // Complementary invariant: every scored signal must have a row AND that
+    // row must carry a scored posture (not full_weight-by-default-only; the
+    // posture enum itself is the assertion, but this verifies coverage).
+    const scoredPostures = new Set<AntiGamingRow["downweightStatus"]>([
+      "full_weight",
+      "down_weighted",
+      "scored_flagged",
+    ]);
+    for (const method of Object.keys(
+      RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS,
+    ) as Array<keyof typeof RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS>) {
+      for (const { signal } of RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[
+        method
+      ]) {
+        const row = RANKING_ANTI_GAMING_ROWS.find((r) => r.signal === signal);
+        expect(
+          row,
+          `Scored signal "${signal}" has no anti-gaming row`,
+        ).toBeDefined();
+        expect(
+          scoredPostures.has(row!.downweightStatus),
+          `Scored signal "${signal}" carries non-scored posture "${row!.downweightStatus}"`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("M22: Log-impact composite is labelled scored_flagged and its text acknowledges scoring + ceiling", () => {
+    const row = RANKING_ANTI_GAMING_ROWS.find(
+      (r) => r.signal === "Log-impact composite",
+    );
+    expect(row).toBeDefined();
+    expect(row?.downweightStatus).toBe("scored_flagged");
+    // The copy must name that the signal is scored and above the ceiling so
+    // the page does not contradict the posture badge.
+    const blob = `${row?.mitigation ?? ""} ${row?.residualWeakness ?? ""}`.toLowerCase();
+    expect(blob).toMatch(/\bscored\b/);
+    expect(blob).toMatch(/ceiling|above[- ]?ceiling|37\.?5/);
+  });
+
+  it("M22: every flagged effectiveSignalWeights signal has an anti-gaming row naming scoring + ceiling", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const flagged = snapshot.methodology.effectiveWeights.filter(
+      (w) => w.flagged,
+    );
+    // At least Log-impact is expected to flag under the current composite
+    // structure. If a future methodology change eliminates the flag, this
+    // test will pass vacuously — that is intentional; the invariant is only
+    // "flagged signals must explain themselves", not "something must flag".
+    for (const w of flagged) {
+      const row = RANKING_ANTI_GAMING_ROWS.find((r) => r.signal === w.signal);
+      expect(
+        row,
+        `Flagged signal "${w.signal}" has no anti-gaming row`,
+      ).toBeDefined();
+      expect(
+        row?.downweightStatus,
+        `Flagged signal "${w.signal}" must not be contextual_only (it is scored)`,
+      ).not.toBe("contextual_only");
+      // A scored_flagged posture is the natural home for above-ceiling
+      // signals. full_weight / down_weighted are valid in principle but we
+      // pin the current methodology's choice: log-impact is scored_flagged.
+      expect(row?.downweightStatus).toBe("scored_flagged");
+      const blob =
+        `${row?.mitigation ?? ""} ${row?.residualWeakness ?? ""}`.toLowerCase();
+      expect(
+        blob,
+        `Flagged signal "${w.signal}" mitigation/residual text must name scoring`,
+      ).toMatch(/\bscored\b/);
+      expect(
+        blob,
+        `Flagged signal "${w.signal}" mitigation/residual text must name the ceiling or its effective share`,
+      ).toMatch(/ceiling|above[- ]?ceiling|37\.?5|30%/);
+    }
+  });
+
+  it("M22: the methodology panel contract defines each posture so 'Contextual only' is never attached to a scored signal", () => {
+    // Page-truthfulness guard. The page UI renders the posture label directly
+    // from AntiGamingRow.downweightStatus. If an engineer reads "Contextual
+    // only" on a row that contributes >0% effective weight, the page is
+    // lying. We assert this by computing effective weights from the composite
+    // bundle and cross-checking every row marked contextual_only has a zero
+    // effective weight (or no entry at all).
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const effective = new Map<string, number>();
+    for (const w of snapshot.methodology.effectiveWeights) {
+      effective.set(w.signal, w.totalWeight);
+    }
+    for (const row of RANKING_ANTI_GAMING_ROWS) {
+      if (row.downweightStatus !== "contextual_only") continue;
+      const weight = effective.get(row.signal) ?? 0;
+      expect(
+        weight,
+        `Anti-gaming row "${row.signal}" is marked contextual_only but has effective weight ${weight}`,
+      ).toBe(0);
+    }
   });
 
   it("buildMethodology surfaces methodology version, contract, lenses, and anti-gaming rows", () => {
