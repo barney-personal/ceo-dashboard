@@ -6,6 +6,10 @@
  * helper. Fetch failures degrade to the stub `getEngineeringRanking()`
  * snapshot so the page still renders with an explicit coverage-unavailable
  * state instead of crashing.
+ *
+ * Important: this loader stays inside the repo's synced-data contract.
+ * It deliberately does NOT call Swarmia live; lens C only scores squad-
+ * delivery context when a persisted source is wired into the snapshot build.
  */
 
 import { db } from "@/lib/db";
@@ -36,11 +40,7 @@ import {
   getAiUsageData,
   type AiUsageUserSummary,
 } from "@/lib/data/ai-usage";
-import {
-  getSquadPillarMetrics,
-  normalizeTeamName,
-  type TeamSwarmiaMetrics,
-} from "@/lib/data/swarmia";
+import { normalizeTeamName, type TeamSwarmiaMetrics } from "@/lib/data/swarmia";
 import {
   RANKING_METHODOLOGY_VERSION,
   RANKING_MOVERS_MIN_GAP_DAYS,
@@ -181,14 +181,6 @@ async function fetchAiUsageByEmail(): Promise<Map<string, AiUsageUserSummary>> {
     console.warn("[engineering-ranking] AI usage fetch failed:", err);
     return new Map();
   }
-}
-
-async function fetchSquadDeliveryContext(): Promise<
-  Map<string, TeamSwarmiaMetrics>
-> {
-  const result = await getSquadPillarMetrics("last_180_days");
-  if (result.status !== "ok" || !result.data) return new Map();
-  return new Map(Object.entries(result.data.squads));
 }
 
 /**
@@ -459,7 +451,6 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       squadsRegistry,
       githubActivityByLogin,
       aiUsageByEmail,
-      squadDeliveryByName,
       qualityAnalyses,
       priorSnapshotRows,
     ] = await Promise.all([
@@ -468,7 +459,6 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       fetchSquadsRegistry(),
       fetchGithubActivityByLogin(windowStart),
       fetchAiUsageByEmail(),
-      fetchSquadDeliveryContext(),
       fetchPrReviewAnalyses(windowStart).catch((err) => {
         console.warn(
           "[engineering-ranking] pr-review analyses fetch failed, code-quality lens will render as unavailable:",
@@ -488,6 +478,10 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
         return [] as RankingSnapshotRow[];
       }),
     ]);
+    // The ranking path intentionally does not call Swarmia live. Until a
+    // persisted squad-delivery source exists, lens C stays unavailable and
+    // the snapshot surfaces that explicitly via audit/planned-signals/freshness.
+    const squadDeliveryByName = new Map<string, TeamSwarmiaMetrics>();
     const signals = buildSignalRows({
       headcountRows,
       githubMap,

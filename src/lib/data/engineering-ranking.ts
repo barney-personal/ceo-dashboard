@@ -36,8 +36,8 @@ import { createHash } from "node:crypto";
  * - `0.1.0-scaffold` — M1-M6 scaffold and eligibility preflight only; no
  *   engineers ever materialised into `snapshot.engineers`.
  * - `0.5.0-composite` — M12 composite is live. `buildRankingSnapshot()`
- *   populates ranked engineers as the median of four methods (A output,
- *   B SHAP impact, C squad delivery, tenure/role-adjusted). Confidence,
+ *   populates ranked engineers as the median of five methods (A output,
+ *   B SHAP impact, C squad delivery, D code quality, tenure/role-adjusted). Confidence,
  *   attribution, snapshots, movers, anti-gaming, and stability are still
  *   pending, so the snapshot `status` stays `methodology_pending`.
  * - `0.6.0-confidence` — M14 confidence bands are live. Every scored
@@ -347,8 +347,8 @@ export interface EngineeringRankingSnapshot {
    */
   normalisation: NormalisationBundle;
   /**
-   * Composite ranking (median of the four methods: A output, B impact,
-   * C delivery, adjusted) plus effective-weight decomposition, leave-one-
+   * Composite ranking (median of the five methods: A output, B impact,
+   * C delivery, D quality, adjusted) plus effective-weight decomposition, leave-one-
    * method-out sensitivity, final-rank correlations against raw signals, and
    * the dominance warning state. Confidence bands sit on top of this
    * composite via the `confidence` bundle below.
@@ -519,7 +519,7 @@ export interface PerEngineerSignalRow {
    * Squad-level delivery-health context from Swarmia. These are scored via
    * lens C but down-weighted — they are team signals, not individual labels,
    * and the composite-median cap holds each squad-delivery signal at a
-   * ~7.5-10% effective share to avoid ecological fallacy.
+   * ~6-8% effective share to avoid ecological fallacy.
    */
   squadCycleTimeHours: number | null;
   squadReviewRatePercent: number | null;
@@ -1387,6 +1387,7 @@ export function computeSpearmanRho(
 function unavailableSignalsForAudit(
   reviewSignalsPersisted: boolean,
   qualityAnalysesPresent: boolean = false,
+  squadDeliverySignalsPresent: boolean = false,
 ): UnavailableSignal[] {
   const unavailable: UnavailableSignal[] = [];
 
@@ -1420,6 +1421,14 @@ function unavailableSignalsForAudit(
     );
   }
 
+  if (!squadDeliverySignalsPresent) {
+    unavailable.push({
+      name: "Squad delivery context",
+      reason:
+        "No persisted squad-delivery source was supplied to this snapshot build. The ranking path does not call Swarmia live, so lens C falls back to all-null scores until a synced source is wired.",
+    });
+  }
+
   return unavailable;
 }
 
@@ -1429,12 +1438,14 @@ export function buildSignalAudit({
   windowDays = RANKING_SIGNAL_WINDOW_DAYS,
   reviewSignalsPersisted = false,
   qualityAnalysesPresent = false,
+  squadDeliverySignalsPresent = false,
 }: {
   entries: EligibilityEntry[];
   signals?: PerEngineerSignalRow[];
   windowDays?: number;
   reviewSignalsPersisted?: boolean;
   qualityAnalysesPresent?: boolean;
+  squadDeliverySignalsPresent?: boolean;
 }): SignalAudit {
   const competitiveEntries = entries.filter(
     (entry) => entry.eligibility === "competitive",
@@ -1528,6 +1539,7 @@ export function buildSignalAudit({
     unavailableSignals: unavailableSignalsForAudit(
       reviewSignalsPersisted,
       qualityAnalysesPresent,
+      squadDeliverySignalsPresent,
     ),
   };
 }
@@ -1813,13 +1825,13 @@ function likelyDisagreementCause(row: {
     case "impact>output":
       return "SHAP impact above activity volume — impact model scores highly but merged-PR throughput is low; look for low-count, high-impact work (infra, ML, review-heavy, pairing).";
     case "output>delivery":
-      return "Individual output above squad-delivery context — engineer ships more than the squad's aggregate delivery health; C is scored squad-delivery context (team-level, down-weighted to a ~7.5–10% effective share per signal) and may mask individual signal.";
+      return "Individual output above squad-delivery context — engineer ships more than the squad's aggregate delivery health; C is scored squad-delivery context (team-level, down-weighted to a ~6–8% effective share per signal) and may mask individual signal.";
     case "delivery>output":
       return "Squad delivery health above individual output — team-level signals may be carrying this row; individual output is the lens to trust for an individual ranking.";
     case "impact>delivery":
       return "SHAP impact above squad-delivery context — impact is model-driven individual, delivery is team-level; favours the individual reading.";
     case "delivery>impact":
-      return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is scored squad-delivery context (team-level, down-weighted to a ~7.5–10% effective share per signal via the composite-median cap) and should not be read as individual impact.";
+      return "Squad delivery above SHAP impact — squad-level context is more favourable than individual impact; C is scored squad-delivery context (team-level, down-weighted to a ~6–8% effective share per signal via the composite-median cap) and should not be read as individual impact.";
     case "output>quality":
       return "Output volume above per-PR code-quality — ships frequently but rubric scores lag; look for small-diff, low-complexity PRs inflating volume without a matching quality per review.";
     case "quality>output":
@@ -1937,14 +1949,14 @@ const LENS_DEFINITIONS: readonly LensDefinition[] = [
     key: "delivery",
     name: "C — Squad delivery context",
     description:
-      "Squad-level delivery-health signals from Swarmia (review rate, cycle time, time-to-first-review). Individual review/cycle-time signals are not persisted in `githubPrs` or `githubPrMetrics`, so this lens is intentionally team-level — scored, but down-weighted so no squad-delivery signal exceeds a ~7.5–10% effective share of the composite. Every engineer on the same squad shares the same C score.",
+      "Squad-level delivery-health signals from Swarmia (review rate, cycle time, time-to-first-review). Individual review/cycle-time signals are not persisted in `githubPrs` or `githubPrMetrics`, so this lens is intentionally team-level — scored, but down-weighted so no squad-delivery signal exceeds a ~6–8% effective share of the composite. Every engineer on the same squad shares the same C score.",
     components: [
       { name: "Squad review rate %", weight: 0.4 },
       { name: "Squad cycle time (inverted)", weight: 0.3 },
       { name: "Squad time-to-first-review (inverted)", weight: 0.3 },
     ],
     limitation:
-      "Scored squad-delivery context — team-level, down-weighted by the composite-median cap so each squad signal sits at a ~7.5–10% effective share (well inside the 30% ceiling). Cannot differentiate engineers within the same squad — every squad-mate shares the same C score — so readers must not treat C as an individual delivery-health label.",
+      "Scored squad-delivery context — team-level, down-weighted by the composite-median cap so each squad signal sits at a ~6–8% effective share (well inside the 30% ceiling). Cannot differentiate engineers within the same squad — every squad-mate shares the same C score — so readers must not treat C as an individual delivery-health label.",
   },
   {
     key: "quality",
@@ -2141,7 +2153,7 @@ export function buildLenses({
       "Lens C is squad-delivery context, not an individual review/cycle-time signal. Individual review turnaround and PR cycle time are not persisted in the current GitHub schema.",
       "Engineers absent from the impact-model training set score null on lens B — the methodology refuses to fabricate a neutral-looking impact reading.",
       `Disagreement table only surfaces rows where max(present lenses) − min(present lenses) exceeds ${RANKING_DISAGREEMENT_EPSILON} percentile points. Ties and near-ties are treated as agreement and omitted, so the table never presents a directional narrative for lenses that actually agree.`,
-      "These three lenses feed the composite — they are one input each to the median-of-four methods the composite takes, alongside the tenure/role-adjusted percentile. Lens A/B/C scores are never the final ranking in isolation; read them as evidence, and read disagreements as where the methodology earns its money.",
+      "These four lenses feed the composite — they are one input each to the median-of-five methods the composite takes, alongside the tenure/role-adjusted percentile. Lens A/B/C/D scores are never the final ranking in isolation; read them as evidence, and read disagreements as where the methodology earns its money.",
     ],
   };
 }
@@ -2632,7 +2644,8 @@ export function bucketNormalisationDeltas(
  * ------------------------------------------------------------------------ */
 
 /**
- * Minimum number of scored methods (A output, B impact, C delivery, adjusted)
+ * Minimum number of scored methods (A output, B impact, C delivery, D quality,
+ * adjusted)
  * an engineer must have present for the composite median to be computed.
  * Below this threshold the composite is null — we refuse to synthesise a
  * ranking from a single method because it would collapse into that one
@@ -2663,11 +2676,11 @@ export const RANKING_COMPOSITE_TOP_N = 25 as const;
 export const RANKING_LEAVE_ONE_OUT_TOP_MOVERS = 10 as const;
 
 /**
- * The four methods combined into the composite. A/B/C are the M8 lenses;
- * `adjusted` is the M10 tenure/role-adjusted percentile. Equal-method median
- * is robust to one noisy method — a single lens producing a bad reading
+ * The five methods combined into the composite. A/B/C/D are the M8/M-quality
+ * lenses; `adjusted` is the M10 tenure/role-adjusted percentile. Equal-method
+ * median is robust to one noisy method — a single lens producing a bad reading
  * (e.g. SHAP disagreement on one engineer) cannot drag the composite more
- * than the other three methods allow.
+ * than the other four methods allow.
  */
 export type CompositeMethod =
   | "output"
@@ -2846,7 +2859,7 @@ function median(values: readonly number[]): number {
  */
 const EFFECTIVE_SIGNAL_JUSTIFICATIONS: Record<string, string> = {
   "Log-impact composite":
-    "Log-impact appears in both lens A (the largest weighted component) and the M10 normalisation layer (which is built on this single rawScore), so its effective weight across the composite exceeds 30%. Until the per-PR LLM rubric or individual review/cycle-time signals land, no higher-quality per-engineer input exists to dilute the share — this is an explicit methodology trade-off, not an oversight, and is named on the dominance panel.",
+    "Log-impact appears in both lens A (the largest weighted component) and the M10 normalisation layer (which is built on this single rawScore), so its effective weight across the composite sits at the 30% ceiling. Even with lens D live, additional orthogonal individual signals would be needed to dilute that share further — this is an explicit methodology trade-off, not an oversight, and is named on the dominance panel.",
 };
 
 /**
@@ -2945,7 +2958,7 @@ function methodsPresentSummary(
  * below this the composite is null, not a synthesised neutral.
  *
  * In addition to the per-engineer composite this function computes:
- *  - Effective raw-signal weight decomposition across all four methods and
+ *  - Effective raw-signal weight decomposition across all five methods and
  *    flags any signal that exceeds the 30% ceiling without a justification.
  *  - Leave-one-method-out sensitivity: the Spearman correlation between the
  *    baseline rank and the rank that results when each method is dropped,
@@ -3159,7 +3172,7 @@ export function buildComposite({
 
   return {
     contract:
-      "Composite = median of the four methods (A output, B impact, C delivery, tenure/role-adjusted percentile). Equal-method median — a single noisy method cannot single-handedly drag the rank. Engineers with fewer than " +
+      "Composite = median of the five methods (A output, B impact, C delivery, D code quality, tenure/role-adjusted percentile). Equal-method median — a single noisy method cannot single-handedly drag the rank. Engineers with fewer than " +
       `${RANKING_COMPOSITE_MIN_METHODS} present methods are unscored, not assigned a synthesised neutral rank.`,
     methods,
     minPresentMethods: RANKING_COMPOSITE_MIN_METHODS,
@@ -3174,7 +3187,7 @@ export function buildComposite({
     dominanceBlocked,
     limitations: [
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
-      "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
+      "Log-impact appears in both lens A and the M10 normalisation layer, which leaves it sitting at the 30% effective-weight ceiling even with lens D live. The dominance panel names this trade-off; the rank should not be read as final until more orthogonal individual signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
       "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check (M24) is live and surfaces an ambiguous-cohort fraction and `withinTolerance` boolean; workflow termination additionally requires two consecutive cycles within tolerance at the same methodology version. The composite is an evidence rank and should be read alongside stability and movers.",
     ],
@@ -3462,7 +3475,13 @@ export function buildConfidence({
     if (c.composite === null) return null;
     const eligibility = competitiveByHash.get(c.emailHash);
     const signal = signalByHash.get(c.emailHash);
-    const presentValues = [c.output, c.impact, c.delivery, c.adjusted].filter(
+    const presentValues = [
+      c.output,
+      c.impact,
+      c.delivery,
+      c.quality,
+      c.adjusted,
+    ].filter(
       (v): v is number => v !== null && Number.isFinite(v),
     );
     const methodSpread =
@@ -3484,7 +3503,13 @@ export function buildConfidence({
     if (c.composite === null) return [];
     const eligibility = competitiveByHash.get(c.emailHash);
     const signal = signalByHash.get(c.emailHash);
-    const presentValues = [c.output, c.impact, c.delivery, c.adjusted].filter(
+    const presentValues = [
+      c.output,
+      c.impact,
+      c.delivery,
+      c.quality,
+      c.adjusted,
+    ].filter(
       (v): v is number => v !== null && Number.isFinite(v),
     );
     const methodSpread =
@@ -3849,7 +3874,7 @@ export interface AttributionBundle {
   contract: string;
   /** Tolerance used for the reconciliation check. */
   tolerance: number;
-  /** Total methods combined into the composite (today: 4). */
+  /** Total methods combined into the composite (today: 5). */
   totalMethods: number;
   /** All competitive engineers, scored or unscored. Sorted by rank asc with unscored last. */
   entries: EngineerAttribution[];
@@ -4260,7 +4285,7 @@ export function buildAttribution({
     return a.displayName.localeCompare(b.displayName);
   });
 
-  const contract = `Attribution reveals, for every competitive engineer, which signals pushed their composite above or below the neutral 50 and by how much. Each composite method (A output, B impact, C delivery, tenure/role-adjusted) surfaces its component weights and per-engineer percentiles; the top ${RANKING_ATTRIBUTION_TOP_DRIVERS} positive and negative drivers are listed with their approximate lift. The per-method scores are reconciled against the stored composite via the median contract within ${RANKING_ATTRIBUTION_TOLERANCE} percentile points of tolerance. Absent signals are labelled with a reason; the page never implies a signal by silent omission.`;
+  const contract = `Attribution reveals, for every competitive engineer, which signals pushed their composite above or below the neutral 50 and by how much. Each composite method (A output, B impact, C delivery, D code quality, tenure/role-adjusted) surfaces its component weights and per-engineer percentiles; the top ${RANKING_ATTRIBUTION_TOP_DRIVERS} positive and negative drivers are listed with their approximate lift. The per-method scores are reconciled against the stored composite via the median contract within ${RANKING_ATTRIBUTION_TOLERANCE} percentile points of tolerance. Absent signals are labelled with a reason; the page never implies a signal by silent omission.`;
 
   return {
     contract,
@@ -5398,60 +5423,76 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 }
 
 const KNOWN_LIMITATIONS: readonly string[] = [
-  "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
+  "Per-PR LLM rubric signal (`prReviewAnalyses` / RUBRIC_VERSION) only enters the ranking when rows for the live rubric version are supplied to the snapshot build. Snapshots without those rows surface the rubric as unavailable rather than pretending lens D is present.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
   "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub, and the stability check are all implemented. The composite remains an evidence rank: workflow termination additionally requires two consecutive cycles with stability within tolerance at the same methodology version.",
-  "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers GitHub activity, SHAP impact, and squad delivery context — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
+  "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers the scoring signal rows supplied to the snapshot build (GitHub activity, SHAP impact, and squad delivery context when present) — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
   "Stability check cannot compute a like-for-like result across a methodology-version change. A single cycle within tolerance is necessary but not sufficient for workflow termination — two consecutive cycles at the same methodology version below the ambiguous-cohort tolerance are required.",
-  "Swarmia DORA is scored squad-delivery context — team-level signals (review rate, cycle time, time-to-first-review) enter lens C but are down-weighted via the composite-median cap to a ~7.5–10% effective share per signal. They describe teams, not individuals, and must not be read as individual review evidence.",
+  "Persisted squad-delivery signals enter lens C only when a synced source is supplied to the snapshot build. The ranking path does not call Swarmia live; when those rows are wired, the team-level signals remain down-weighted and must not be read as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
 ];
 
-const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
-  { name: "GitHub PRs + commits (author, merged_at, lines)", state: "available" },
-  { name: "SHAP impact model", state: "available" },
-  {
-    name: "Mode Headcount SSoT (tenure, discipline, manager chain)",
-    state: "available",
-    note: "Manager and manager-email fields originate here (via `src/lib/data/people.ts`), not the squads registry.",
-  },
-  {
-    name: "Squads registry (squad name, pillar, PM, Slack channel id)",
-    state: "available",
-    note: "`squads` table supplies squad name, pillar, PM name, and Slack `channel_id`. All four are threaded through the eligibility snapshot when the registry is fetched. Does not contain manager or manager-email fields.",
-  },
-  {
-    name: "Swarmia DORA — scored squad-delivery context, not an individual signal",
-    state: "available",
-    note: "Team-level review rate, cycle time, time-to-first-review (plus deploy frequency, CFR, MTTR for the audit view). Scored via lens C but down-weighted — the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share. Team-level context; must not be read as individual review evidence.",
-  },
-  {
-    name: "AI usage (contextual, audit only)",
-    state: "available",
-    note: "Claude + Cursor spend/tokens per engineer. Contextual, not a direct ranking reward — easily gameable.",
-  },
-  {
-    name: "Per-PR LLM rubric (prReviewAnalyses)",
-    state: "unavailable",
-    note: "Not present in schema today. Listed in plan risks as highest-priority future signal.",
-  },
-  {
-    name: "Individual PR reviewer graph (who reviews whom)",
-    state: "unavailable",
-    note: "`githubPrs` persists author/stats only. Reviewer identities and review edges are not stored.",
-  },
-  {
-    name: "Individual review turnaround (time-to-first-review, time-to-approve)",
-    state: "unavailable",
-    note: "No reviewer timestamps in `githubPrs` or `githubPrMetrics`. Cannot be derived from current persisted fields.",
-  },
-  {
-    name: "Individual PR cycle time (open → merged at engineer level)",
-    state: "unavailable",
-    note: "`githubPrs` stores `merged_at` only. Opened-at / ready-for-review timestamps are not persisted, so per-engineer cycle time cannot be computed.",
-  },
-];
+function buildPlannedSignals(params?: {
+  qualitySignalsPresent?: boolean;
+  squadDeliverySignalsPresent?: boolean;
+}): EngineeringRankingSnapshot["plannedSignals"] {
+  const qualitySignalsPresent = params?.qualitySignalsPresent ?? false;
+  const squadDeliverySignalsPresent =
+    params?.squadDeliverySignalsPresent ?? false;
+
+  return [
+    {
+      name: "GitHub PRs + commits (author, merged_at, lines)",
+      state: "available",
+    },
+    { name: "SHAP impact model", state: "available" },
+    {
+      name: "Mode Headcount SSoT (tenure, discipline, manager chain)",
+      state: "available",
+      note: "Manager and manager-email fields originate here (via `src/lib/data/people.ts`), not the squads registry.",
+    },
+    {
+      name: "Squads registry (squad name, pillar, PM, Slack channel id)",
+      state: "available",
+      note: "`squads` table supplies squad name, pillar, PM name, and Slack `channel_id`. All four are threaded through the eligibility snapshot when the registry is fetched. Does not contain manager or manager-email fields.",
+    },
+    {
+      name: "Squad delivery context (persisted source required; no live Swarmia call)",
+      state: squadDeliverySignalsPresent ? "available" : "unavailable",
+      note: squadDeliverySignalsPresent
+        ? "Team-level review rate, cycle time, and time-to-first-review are present on this snapshot and feed lens C. They remain down-weighted and must not be read as individual review evidence."
+        : "This snapshot was built without a persisted squad-delivery source. The ranking path does not call Swarmia live, so lens C is unavailable here until synced squad-delivery rows are wired.",
+    },
+    {
+      name: "AI usage (contextual, audit only)",
+      state: "available",
+      note: "Claude + Cursor spend/tokens per engineer. Contextual, not a direct ranking reward — easily gameable.",
+    },
+    {
+      name: "Per-PR LLM rubric (prReviewAnalyses)",
+      state: qualitySignalsPresent ? "available" : "unavailable",
+      note: qualitySignalsPresent
+        ? "Live rubric rows were supplied to this snapshot build and feed lens D when an engineer has enough analysed PRs."
+        : "No `prReviewAnalyses` rows for the live rubric version were supplied to this snapshot build, so lens D falls back to null.",
+    },
+    {
+      name: "Individual PR reviewer graph (who reviews whom)",
+      state: "unavailable",
+      note: "`githubPrs` persists author/stats only. Reviewer identities and review edges are not stored.",
+    },
+    {
+      name: "Individual review turnaround (time-to-first-review, time-to-approve)",
+      state: "unavailable",
+      note: "No reviewer timestamps in `githubPrs` or `githubPrMetrics`. Cannot be derived from current persisted fields.",
+    },
+    {
+      name: "Individual PR cycle time (open → merged at engineer level)",
+      state: "unavailable",
+      note: "`githubPrs` stores `merged_at` only. Opened-at / ready-for-review timestamps are not persisted, so per-engineer cycle time cannot be computed.",
+    },
+  ];
+}
 
 /* --------------------------------------------------------------------------
  * M21 methodology panel, anti-gaming audit, freshness badges, and manager
@@ -5462,10 +5503,10 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
  * Canonical rubric-version marker. The per-PR LLM rubric source
  * (`prReviewAnalyses` / `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts`)
  * is the live rubric version consumed by the code-quality lens (D). The
- * methodology panel renders this as "available" alongside the impact-model
- * generated-at badge so readers can see the freshness of the per-PR
- * signal. Previously null (rubric not wired); flipped to the live version
- * when the quality lens landed.
+ * methodology panel can surface the live rubric version when the snapshot
+ * actually includes `prReviewAnalyses` rows. Callers that do not supply
+ * quality rows must pass `null` so freshness and unavailable-signal copy
+ * stay consistent.
  */
 export const RANKING_RUBRIC_VERSION: string | null = RANKING_QUALITY_RUBRIC_VERSION;
 
@@ -5590,9 +5631,9 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Open many tiny PRs to inflate output count without shipping meaningful work.",
     mitigation:
-      "sqrt-damping in lens A, which caps the marginal return from each additional PR. PR count is only 20% of lens A, and lens A is 25% of the composite (median of four methods), so the effective ceiling is ~5%.",
+      "sqrt-damping in lens A, which caps the marginal return from each additional PR. PR count is only 20% of lens A, and lens A is one of five composite methods, so the effective ceiling is ~4%.",
     residualWeakness:
-      "A persistent high-volume spammer can still rank ahead of a low-volume shipper of comparable impact until the per-PR LLM rubric signal lands to weight PR quality.",
+      "A persistent high-volume spammer can still rank ahead of a low-volume shipper of comparable impact; lens D helps, but more orthogonal individual signals would reduce this weakness further.",
     downweightStatus: "down_weighted",
   },
   {
@@ -5600,7 +5641,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Split work into many tiny commits to inflate commit count.",
     mitigation:
-      "sqrt-damping and a lens-A weight of 15%, then median over four methods caps the effective share at ~3.75%.",
+      "sqrt-damping and a lens-A weight of 15%, then the five-method composite cap holds the effective share at ~3%.",
     residualWeakness:
       "Not every codebase uses atomic commits; repo convention affects this signal more than individual behaviour.",
     downweightStatus: "down_weighted",
@@ -5610,7 +5651,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Include vendored code / large generated diffs / whitespace reflows to inflate net lines added.",
     mitigation:
-      "log-signed transform dampens the marginal line contribution aggressively; lens-A weight is 15% and the composite is a median, capping effective share at ~3.75%.",
+      "log-signed transform dampens the marginal line contribution aggressively; lens-A weight is 15% and the five-method composite cap holds the effective share at ~3%.",
     residualWeakness:
       "Generated code and formatter-driven reflows can still move the signal; the ranking cannot detect semantic-vs-syntactic churn without a rubric.",
     downweightStatus: "down_weighted",
@@ -5622,7 +5663,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     mitigation:
       "Scored with log-damping inside the composite plus a dominance check on final-rank correlation against PR count and log-impact at 0.75. The signal is flagged on the effective-weight panel because its share exceeds the 30% ceiling.",
     residualWeakness:
-      "Log-impact is scored in the composite: 50% of lens A plus 100% of the adjusted normalisation layer drive an effective share of 37.5% — above the 30% ceiling. Until the per-PR LLM rubric or individual review signals land to dilute its share, the methodology panel surfaces this as an explicit, visible trade-off on the dominance panel rather than silently weighting it.",
+      "Log-impact is scored in the composite: 50% of lens A plus 100% of the adjusted normalisation layer drive an effective share right at the 30% ceiling. Even with lens D live, the methodology panel surfaces this as an explicit, visible trade-off on the dominance panel rather than silently weighting it.",
     downweightStatus: "scored_flagged",
   },
   {
@@ -5630,7 +5671,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Predicted impact is a function of tenure/discipline/level/pillar — not directly user-controllable.",
     mitigation:
-      "Training pipeline lives upstream in `ml-impact/`; the ranking consumes the frozen JSON. Lens B weight is 40%, but lens B is 25% of the composite, capping the effective share at ~10%.",
+      "Training pipeline lives upstream in `ml-impact/`; the ranking consumes the frozen JSON. Lens B weight is 40%, and lens B is one of five composite methods, capping the effective share at ~8%.",
     residualWeakness:
       "If the upstream training signals become gameable (e.g. self-reported tenure), this signal inherits that weakness.",
     downweightStatus: "full_weight",
@@ -5640,7 +5681,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "If the target impact metric (`impact_360d`) can be inflated via upstream behaviour, actual impact inherits that.",
     mitigation:
-      "The target definition is fixed in `ml-impact/train.py`; the ranking does not override it. Lens B weight is 40%; effective share ~10%.",
+      "The target definition is fixed in `ml-impact/train.py`; the ranking does not override it. Lens B weight is 40%; effective share ~8%.",
     residualWeakness:
       "The target is a constructed metric; changes to its formula count as methodology changes and must bump `RANKING_METHODOLOGY_VERSION`.",
     downweightStatus: "full_weight",
@@ -5650,7 +5691,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Residual is actual − predicted, so both upstream weaknesses apply.",
     mitigation:
-      "Lens B weight is 20%, composite median caps effective share at ~5%.",
+      "Lens B weight is 20%, and the five-method composite cap holds the effective share at ~4%.",
     residualWeakness:
       "A small residual differential can swing a single engineer's lens B score without reflecting any real behaviour change.",
     downweightStatus: "full_weight",
@@ -5660,7 +5701,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Team-level signal; cannot be gamed by a single engineer. An engineer could choose a high-review-rate squad to inflate their delivery lens.",
     mitigation:
-      "Scored via lens C (40% of delivery method) but damped by the composite-median cap: delivery is one of four methods, so the effective share sits at ~10% — well inside the 30% ceiling. Narrated as squad-delivery context on the page so readers know it is team-level evidence.",
+      "Scored via lens C (40% of delivery method) but damped by the composite-median cap: delivery is one of five methods, so the effective share sits at ~8% — well inside the 30% ceiling. Narrated as squad-delivery context on the page so readers know it is team-level evidence.",
     residualWeakness:
       "Ecological fallacy — the ranking cannot distinguish a strong engineer on a strong squad from a weak engineer coasting on the squad's delivery performance. Future per-engineer review data would replace this.",
     downweightStatus: "down_weighted",
@@ -5670,7 +5711,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Team-level; inherits the squad review-rate gaming posture.",
     mitigation:
-      "Scored but inverted (lower cycle time = higher score) and damped: lens C weight 30%, composite-median cap produces ~7.5% effective share, well inside the 30% ceiling.",
+      "Scored but inverted (lower cycle time = higher score) and damped: lens C weight 30%, composite-median cap produces ~6% effective share, well inside the 30% ceiling.",
     residualWeakness:
       "Squads with different PR-size norms will read differently here without reflecting individual behaviour.",
     downweightStatus: "down_weighted",
@@ -5680,7 +5721,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Team-level; inherits the squad review-rate gaming posture.",
     mitigation:
-      "Scored but inverted and damped: lens C weight 30%, composite-median cap produces ~7.5% effective share, well inside the 30% ceiling. Narrated as squad-delivery context.",
+      "Scored but inverted and damped: lens C weight 30%, composite-median cap produces ~6% effective share, well inside the 30% ceiling. Narrated as squad-delivery context.",
     residualWeakness:
       "Team-wide review discipline; no individual accountability visible.",
     downweightStatus: "down_weighted",
@@ -5770,7 +5811,7 @@ const METHODOLOGY_LENS_DESCRIPTIONS: Record<CompositeMethod, string> = {
   impact:
     "ML-predicted and measured impact from the SHAP model in `src/data/impact-model.json`, plus the residual between them.",
   delivery:
-    "Squad-level delivery health from Swarmia — scored squad-delivery context (team-level, not an individual signal). Lens C is one of five composite methods, and the composite-median cap holds each squad-delivery signal at a ~7.5–10% effective share per signal.",
+    "Squad-level delivery health from Swarmia — scored squad-delivery context (team-level, not an individual signal). Lens C is one of five composite methods, and the composite-median cap holds each squad-delivery signal at a ~6–8% effective share per signal.",
   quality:
     "Per-PR LLM-rubric signal from `prReviewAnalyses` (rubric version `" +
     RANKING_QUALITY_RUBRIC_VERSION +
@@ -5806,6 +5847,7 @@ function buildFreshnessBadges(params: {
   snapshotDate: string;
   impactModelGeneratedAt: string | null;
   rubricVersion: string | null;
+  squadDeliverySignalsPresent: boolean;
   aiUsageLatestMonth: string | null;
   headcountGeneratedAt: string | null;
 }): RankingFreshnessBadge[] {
@@ -5827,7 +5869,7 @@ function buildFreshnessBadges(params: {
       timestamp: params.signalWindowEnd,
       window,
       availability: "available",
-      note: `Default ${RANKING_SIGNAL_WINDOW_DAYS}-day lookback. GitHub PRs/commits and Swarmia DORA share this window.`,
+      note: `Default ${RANKING_SIGNAL_WINDOW_DAYS}-day lookback. GitHub PRs/commits and any persisted squad-delivery source share this window.`,
     },
     {
       label: "Impact model",
@@ -5850,12 +5892,16 @@ function buildFreshnessBadges(params: {
       note: "Aggregated from the 180-day signal window at request time.",
     },
     {
-      label: "Swarmia DORA",
-      source: "src/lib/data/swarmia.ts",
-      timestamp: params.signalWindowEnd,
-      window,
-      availability: "available",
-      note: "Squad/pillar-level DORA over `last_180_days`. Scored squad-delivery context — team-level, down-weighted via lens C so each squad-delivery signal sits at a ~7.5–10% effective share per signal.",
+      label: "Squad delivery signals",
+      source: "Persisted squad-delivery source (lens C)",
+      timestamp: params.squadDeliverySignalsPresent ? params.signalWindowEnd : null,
+      window: params.squadDeliverySignalsPresent ? window : null,
+      availability: params.squadDeliverySignalsPresent
+        ? "available"
+        : "unavailable",
+      note: params.squadDeliverySignalsPresent
+        ? "Persisted squad-delivery signals are present on this snapshot and feed lens C. Team-level, down-weighted evidence only — not an individual review signal."
+        : "No persisted squad-delivery source was supplied to this snapshot build. The ranking path does not call Swarmia live, so lens C is unavailable here.",
     },
     {
       label: "AI usage",
@@ -5888,7 +5934,7 @@ function buildFreshnessBadges(params: {
       availability: params.rubricVersion ? "available" : "unavailable",
       note: params.rubricVersion
         ? `Rubric version ${params.rubricVersion}.`
-        : "Rubric source is not present in this codebase. No per-PR quality signal enters the ranking today.",
+        : "No `prReviewAnalyses` rows for the live rubric version were supplied to this snapshot build, so the per-PR quality signal is unavailable here.",
     },
   ];
 }
@@ -5956,7 +6002,11 @@ export function buildMethodology(params: {
     aiUsageLatestMonth,
     headcountGeneratedAt,
   } = params;
-  const rubricVersion = params.rubricVersion ?? RANKING_RUBRIC_VERSION;
+  const rubricVersion =
+    params.rubricVersion === undefined ? null : params.rubricVersion;
+  const squadDeliverySignalsPresent = !audit.unavailableSignals.some((signal) =>
+    /squad delivery context/i.test(signal.name),
+  );
 
   const lenses = buildMethodologyLenses();
   const compositeRule = composite.contract;
@@ -5967,6 +6017,7 @@ export function buildMethodology(params: {
     snapshotDate,
     impactModelGeneratedAt,
     rubricVersion,
+    squadDeliverySignalsPresent,
     aiUsageLatestMonth,
     headcountGeneratedAt,
   });
@@ -6029,7 +6080,7 @@ export interface RankingSnapshotRow {
  * fields that can be correlated with the email hash to recover identity.
  */
 export interface RankingSnapshotRowMetadata {
-  /** Number of composite methods present for this engineer (0..4). */
+  /** Number of composite methods present for this engineer (0..5). */
   presentMethodCount: number;
   /** True when the composite was globally dominance-blocked this run. */
   dominanceBlocked: boolean;
@@ -6198,12 +6249,24 @@ export function buildRankingSnapshot(
     inputs.qualityAnalyses && inputs.qualityAnalyses.length > 0
       ? aggregateQualitySignals(inputs.qualityAnalyses)
       : undefined;
+  const qualitySignalsPresent = Boolean(
+    qualityAggregates && qualityAggregates.size > 0,
+  );
+  const squadDeliverySignalsPresent = (inputs.signals ?? []).some((signal) =>
+    [
+      signal.squadCycleTimeHours,
+      signal.squadReviewRatePercent,
+      signal.squadTimeToFirstReviewHours,
+      signal.squadPrsInProgress,
+    ].some((value) => value !== null && value !== undefined),
+  );
   const audit = buildSignalAudit({
     entries,
     signals: inputs.signals,
     windowDays,
     reviewSignalsPersisted: inputs.reviewSignalsPersisted,
-    qualityAnalysesPresent: !!qualityAggregates,
+    qualityAnalysesPresent: qualitySignalsPresent,
+    squadDeliverySignalsPresent,
   });
   const lenses = buildLenses({
     entries,
@@ -6268,6 +6331,7 @@ export function buildRankingSnapshot(
     impactModelGeneratedAt: inputs.impactModel.generated_at ?? null,
     aiUsageLatestMonth: inputs.aiUsageLatestMonth ?? null,
     headcountGeneratedAt: inputs.headcountGeneratedAt ?? null,
+    rubricVersion: qualitySignalsPresent ? RANKING_RUBRIC_VERSION : null,
   });
 
   // Only engineers with a non-null composite rank are materialised into the
@@ -6323,7 +6387,10 @@ export function buildRankingSnapshot(
     stability,
     methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
-    plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
+    plannedSignals: buildPlannedSignals({
+      qualitySignalsPresent,
+      squadDeliverySignalsPresent,
+    }),
   };
 }
 
@@ -6387,6 +6454,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     entries,
     windowDays: RANKING_SIGNAL_WINDOW_DAYS,
     reviewSignalsPersisted: false,
+    squadDeliverySignalsPresent: false,
   });
   const methodology = buildMethodology({
     composite,
@@ -6427,6 +6495,9 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     stability,
     methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
-    plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
+    plannedSignals: buildPlannedSignals({
+      qualitySignalsPresent: false,
+      squadDeliverySignalsPresent: false,
+    }),
   };
 }

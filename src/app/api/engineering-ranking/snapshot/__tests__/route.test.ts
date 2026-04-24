@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineeringRankingSnapshot, PerEngineerSignalRow } from "@/lib/data/engineering-ranking";
 
@@ -18,19 +18,32 @@ vi.mock("@/lib/data/engineering-ranking.server", () => ({
 import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
 import {
   getEngineeringRankingSnapshotWithSignals,
+  listRankingSnapshotSlices,
   persistRankingSnapshot,
+  readRankingSnapshot,
 } from "@/lib/data/engineering-ranking.server";
-import { POST } from "../route";
+import { GET, POST } from "../route";
 
 const mockRequireRole = vi.mocked(requireRole);
 const mockAuthErrorResponse = vi.mocked(authErrorResponse);
 const mockLoadWithSignals = vi.mocked(getEngineeringRankingSnapshotWithSignals);
+const mockListSlices = vi.mocked(listRankingSnapshotSlices);
 const mockPersist = vi.mocked(persistRankingSnapshot);
+const mockReadSnapshot = vi.mocked(readRankingSnapshot);
 
 function makeRequest() {
-  return new Request("http://localhost/api/engineering-ranking/snapshot", {
+  return new NextRequest("http://localhost/api/engineering-ranking/snapshot", {
     method: "POST",
-  }) as unknown as import("next/server").NextRequest;
+  });
+}
+
+function makeGetRequest(query = "") {
+  return new NextRequest(
+    `http://localhost/api/engineering-ranking/snapshot${query}`,
+    {
+      method: "GET",
+    },
+  );
 }
 
 function fakeSnapshot(): EngineeringRankingSnapshot {
@@ -115,5 +128,102 @@ describe("POST /api/engineering-ranking/snapshot (M17 signal passthrough)", () =
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
     expect(mockPersist).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/engineering-ranking/snapshot", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockAuthErrorResponse.mockImplementation((auth) => {
+      if (auth.ok) return null;
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    });
+  });
+
+  it("lists snapshot slices when no date is supplied", async () => {
+    mockRequireRole.mockResolvedValue({ ok: true });
+    mockListSlices.mockResolvedValue([
+      {
+        snapshotDate: "2026-04-24",
+        methodologyVersion: "1.1.0-quality",
+        rowCount: 12,
+      },
+    ] as Awaited<ReturnType<typeof listRankingSnapshotSlices>>);
+
+    const res = await GET(makeGetRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockListSlices).toHaveBeenCalledTimes(1);
+    expect(mockReadSnapshot).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual({
+      slices: [
+        {
+          snapshotDate: "2026-04-24",
+          methodologyVersion: "1.1.0-quality",
+          rowCount: 12,
+        },
+      ],
+    });
+  });
+
+  it("reads a specific snapshot slice when date and version are supplied", async () => {
+    mockRequireRole.mockResolvedValue({ ok: true });
+    mockReadSnapshot.mockResolvedValue([
+      {
+        snapshotDate: "2026-04-24",
+        methodologyVersion: "1.1.0-quality",
+        emailHash: "ffeeddccbbaa9988",
+      },
+    ] as Awaited<ReturnType<typeof readRankingSnapshot>>);
+
+    const res = await GET(
+      makeGetRequest("?date=2026-04-24&version=1.1.0-quality"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockListSlices).not.toHaveBeenCalled();
+    expect(mockReadSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockReadSnapshot).toHaveBeenCalledWith({
+      snapshotDate: "2026-04-24",
+      methodologyVersion: "1.1.0-quality",
+    });
+    await expect(res.json()).resolves.toEqual({
+      snapshotDate: "2026-04-24",
+      methodologyVersion: "1.1.0-quality",
+      rows: [
+        {
+          snapshotDate: "2026-04-24",
+          methodologyVersion: "1.1.0-quality",
+          emailHash: "ffeeddccbbaa9988",
+        },
+      ],
+    });
+  });
+
+  it("rejects malformed snapshot dates with 400", async () => {
+    mockRequireRole.mockResolvedValue({ ok: true });
+
+    const res = await GET(makeGetRequest("?date=2026-4-24"));
+
+    expect(res.status).toBe(400);
+    expect(mockListSlices).not.toHaveBeenCalled();
+    expect(mockReadSnapshot).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual({
+      error: "Invalid snapshot date; expected YYYY-MM-DD",
+    });
+  });
+
+  it("returns 403 when user lacks CEO role", async () => {
+    mockRequireRole.mockResolvedValue({
+      ok: false,
+      status: 403,
+      error: "Forbidden",
+    });
+
+    const res = await GET(makeGetRequest());
+
+    expect(res.status).toBe(403);
+    expect(mockListSlices).not.toHaveBeenCalled();
+    expect(mockReadSnapshot).not.toHaveBeenCalled();
   });
 });

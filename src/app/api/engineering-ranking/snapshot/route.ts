@@ -8,6 +8,8 @@ import {
 } from "@/lib/data/engineering-ranking.server";
 import { RANKING_METHODOLOGY_VERSION } from "@/lib/data/engineering-ranking";
 
+const SNAPSHOT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export async function POST(_request: NextRequest) {
   const auth = await requireRole("ceo");
   const authError = authErrorResponse(auth);
@@ -41,6 +43,13 @@ export async function GET(request: NextRequest) {
   if (!snapshotDate) {
     const slices = await listRankingSnapshotSlices();
     return NextResponse.json({ slices });
+  }
+
+  if (!SNAPSHOT_DATE_RE.test(snapshotDate)) {
+    return NextResponse.json(
+      { error: "Invalid snapshot date; expected YYYY-MM-DD" },
+      { status: 400 },
+    );
   }
 
   const rows = await readRankingSnapshot({ snapshotDate, methodologyVersion });

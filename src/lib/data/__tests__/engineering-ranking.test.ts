@@ -129,14 +129,24 @@ describe("getEngineeringRanking (M2 signal availability)", () => {
     expect(rubric?.state).toBe("unavailable");
   });
 
-  it("labels Swarmia DORA as squad context, not an individual signal", async () => {
+  it("marks squad-delivery context unavailable when no persisted source is supplied", async () => {
     const { plannedSignals } = await getEngineeringRanking();
-    const swarmia = plannedSignals.find((s) =>
-      s.name.toLowerCase().includes("swarmia")
+    const delivery = plannedSignals.find((s) =>
+      s.name.toLowerCase().includes("squad delivery")
     );
-    expect(swarmia).toBeDefined();
-    expect(swarmia?.name.toLowerCase()).toContain("squad");
-    expect(swarmia?.note).toBeTruthy();
+    expect(delivery).toBeDefined();
+    expect(delivery?.state).toBe("unavailable");
+    expect(`${delivery?.note ?? ""}`.toLowerCase()).toMatch(/does not call swarmia live/);
+  });
+
+  it("labels squad-delivery as squad context, not an individual signal", async () => {
+    const { plannedSignals } = await getEngineeringRanking();
+    const delivery = plannedSignals.find((s) =>
+      s.name.toLowerCase().includes("squad delivery")
+    );
+    expect(delivery).toBeDefined();
+    expect(delivery?.name.toLowerCase()).toContain("squad");
+    expect(delivery?.note).toBeTruthy();
   });
 
   it("surfaces the missing-review-signal limitation on the page", async () => {
@@ -2391,7 +2401,13 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
       expect(c.composite).not.toBeNull();
       // Composite must lie between the smallest and largest present method
       // by the definition of the median.
-      const present = [c.output, c.impact, c.delivery, c.adjusted].filter(
+      const present = [
+        c.output,
+        c.impact,
+        c.delivery,
+        c.quality,
+        c.adjusted,
+      ].filter(
         (v): v is number => v !== null && Number.isFinite(v),
       );
       expect(c.composite!).toBeGreaterThanOrEqual(Math.min(...present));
@@ -2461,7 +2477,7 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(ranks[ranks.length - 1]).toBe(scored.length);
   });
 
-  it("effective signal weights sum to 1.0 across all four methods", () => {
+  it("effective signal weights sum to 1.0 across all five methods", () => {
     const composite = buildComposite({
       entries: [],
       lenses: buildLenses({ entries: [] }),
@@ -3201,6 +3217,63 @@ describe("M14 confidence bands and statistical tie handling", () => {
     expect(a.ciWidth!).toBeGreaterThan(b.ciWidth!);
     expect(a.uncertaintyFactors.some((f) => /pr count/i.test(f))).toBe(true);
     expect(b.uncertaintyFactors.some((f) => /pr count/i.test(f))).toBe(false);
+  });
+
+  it("quality method contributes to confidence spread once lens D is part of the composite", () => {
+    const entries = [competitiveEntry(1)];
+    const signals = [signalRow(1)];
+    const baseComposite: CompositeBundle = {
+      contract: "",
+      methods: ["output", "impact", "delivery", "quality", "adjusted"],
+      minPresentMethods: RANKING_COMPOSITE_MIN_METHODS,
+      maxSingleSignalEffectiveWeight: RANKING_MAX_SINGLE_SIGNAL_EFFECTIVE_WEIGHT,
+      dominanceCorrelationThreshold: RANKING_MAX_ACTIVITY_CORRELATION,
+      entries: [
+        {
+          emailHash: entries[0].emailHash,
+          displayName: entries[0].displayName,
+          discipline: entries[0].discipline,
+          levelLabel: entries[0].levelLabel,
+          output: 90,
+          impact: 50,
+          delivery: 50,
+          quality: 10,
+          adjusted: 50,
+          presentMethodCount: 5,
+          composite: 50,
+          compositePercentile: 50,
+          rank: 1,
+          methodsSummary: "",
+        },
+      ],
+      topN: [],
+      effectiveSignalWeights: [],
+      leaveOneOut: [],
+      finalRankCorrelations: [],
+      dominanceWarnings: [],
+      dominanceBlocked: false,
+      limitations: [],
+    };
+
+    const lowQualitySpread = buildConfidence({
+      entries,
+      composite: baseComposite,
+      signals,
+      iterations: 0,
+    });
+    const highQualitySpread = buildConfidence({
+      entries,
+      composite: {
+        ...baseComposite,
+        entries: [{ ...baseComposite.entries[0], quality: 90 }],
+      },
+      signals,
+      iterations: 0,
+    });
+
+    expect(lowQualitySpread.entries[0].sigma).toBeGreaterThan(
+      highQualitySpread.entries[0].sigma!,
+    );
   });
 
   it("short tenure engineer has wider CI than long tenure engineer with the same activity", () => {
@@ -5593,12 +5666,42 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
     expect(m.compositeRule.toLowerCase()).toMatch(/median/);
   });
 
-  it("freshness badges include impact-model training date, signal window, and the live rubric version", () => {
+  it("user-facing contracts narrate the five-method composite", () => {
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
       impactModel: { engineers: [], generated_at: "2026-04-20T12:00:00Z" },
       now: new Date("2026-04-24T00:00:00Z"),
+    });
+    expect(snapshot.composite.contract.toLowerCase()).toMatch(/five methods/);
+    expect(snapshot.attribution.contract.toLowerCase()).toMatch(
+      /d code quality|d per-pr code quality/,
+    );
+    expect(snapshot.methodology.contract.toLowerCase()).toMatch(/five methods/);
+  });
+
+  it("freshness badges include impact-model training date, signal window, and the live rubric version when rubric rows are supplied", () => {
+    const rubricRows: PrReviewAnalysisInput[] = Array.from(
+      { length: RANKING_QUALITY_MIN_ANALYSED_PRS },
+      (_, i) => ({
+        emailHash: hashEmailForRanking(`eng${i + 1}@meetcleo.com`),
+        mergedAt: "2026-04-20T12:00:00Z",
+        rubricVersion: RANKING_QUALITY_RUBRIC_VERSION,
+        technicalDifficulty: 4,
+        executionQuality: 4,
+        testAdequacy: 4,
+        riskHandling: 4,
+        reviewability: 4,
+        analysisConfidencePct: 80,
+        revertWithin14d: false,
+      }),
+    );
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [], generated_at: "2026-04-20T12:00:00Z" },
+      now: new Date("2026-04-24T00:00:00Z"),
+      qualityAnalyses: rubricRows,
     });
     const freshness = snapshot.methodology.freshness;
     const impactBadge = freshness.find((b) => /impact model/i.test(b.label));
@@ -5622,6 +5725,34 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
 
     const aiBadge = freshness.find((b) => /ai usage/i.test(b.label));
     expect(aiBadge?.note?.toLowerCase()).toMatch(/latest[- ]month/);
+  });
+
+  it("freshness badge marks the rubric unavailable when no rubric rows are supplied", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const rubricBadge = snapshot.methodology.freshness.find((b) =>
+      /rubric/i.test(`${b.source} ${b.label}`),
+    );
+    expect(rubricBadge?.availability).toBe("unavailable");
+    expect(rubricBadge?.note).toMatch(/were supplied to this snapshot build/i);
+  });
+
+  it("freshness badge marks squad-delivery unavailable when no persisted source is supplied", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const deliveryBadge = snapshot.methodology.freshness.find((b) =>
+      /swarmia|squad-delivery/i.test(`${b.source} ${b.label}`),
+    );
+    expect(deliveryBadge?.availability).toBe("unavailable");
+    expect(deliveryBadge?.note).toMatch(/does not call swarmia live/i);
   });
 
   it("freshness badge for impact model flips to pending_source when no training date is supplied", () => {
@@ -5831,6 +5962,11 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
       methodology.freshness.find((b) => /ranking snapshot/i.test(b.label))
         ?.timestamp,
     ).toBe("2026-04-24");
+    expect(methodology.rubricVersion).toBeNull();
+    expect(
+      methodology.freshness.find((b) => /rubric/i.test(`${b.label} ${b.source}`))
+        ?.availability,
+    ).toBe("unavailable");
   });
 });
 
@@ -5941,22 +6077,16 @@ describe("M23 scored squad-delivery copy truthfulness", () => {
     }
   });
 
-  it("M23: Swarmia DORA planned signal is described as scored and team-level (not context-only)", () => {
+  it("M23: squad-delivery planned signal is marked unavailable without a persisted source and explains the no-live-call rule", () => {
     const snapshot = buildDefaultSnapshot();
-    const swarmia = snapshot.plannedSignals.find((s) =>
-      /swarmia/i.test(s.name),
+    const delivery = snapshot.plannedSignals.find((s) =>
+      /squad delivery/i.test(s.name),
     );
-    expect(swarmia).toBeDefined();
-    const haystack = `${swarmia?.name ?? ""} ${swarmia?.note ?? ""}`;
+    expect(delivery).toBeDefined();
+    const haystack = `${delivery?.name ?? ""} ${delivery?.note ?? ""}`;
     expect(ZERO_WEIGHT_PHRASE.test(haystack)).toBe(false);
-    // Positively describes itself as scored so the reader does not read it
-    // as audit-only.
-    expect(haystack.toLowerCase()).toMatch(/scored|lens c|down[- ]weighted/);
-    // Still calls out that it is team-level and must not be read as an
-    // individual signal.
-    expect(haystack.toLowerCase()).toMatch(
-      /team[- ]level|not an individual|not be read as individual|individual review evidence/,
-    );
+    expect(delivery?.state).toBe("unavailable");
+    expect(haystack.toLowerCase()).toMatch(/does not call swarmia live|persisted source/);
   });
 
   it("M23: Lens C description and limitation say scored + down-weighted, not context-only", () => {

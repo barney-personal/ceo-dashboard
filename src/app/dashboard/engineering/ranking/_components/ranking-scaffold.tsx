@@ -2873,12 +2873,13 @@ export function RankingScaffold({
             </h3>
             <p className="text-sm text-muted-foreground">
               A composite rank now exists for every engineer with at least two
-              present methods. The composite is the median of four methods —
+              present methods. The composite is the median of five methods —
               lens A (output), lens B (SHAP impact), lens C (squad-delivery
-              context), and the tenure/role-adjusted percentile. Effective
-              signal-weight decomposition, leave-one-method-out sensitivity,
-              a PR/log-impact dominance check, 80% bootstrap confidence
-              bands with statistical-tie groups, per-engineer attribution
+              context), lens D (per-PR code quality), and the
+              tenure/role-adjusted percentile. Effective signal-weight
+              decomposition, leave-one-method-out sensitivity, a
+              PR/log-impact dominance check, 80% bootstrap confidence bands
+              with statistical-tie groups, per-engineer attribution
               drilldowns, privacy-preserving snapshot persistence (keyed on
               snapshot date + methodology version + email hash, with no
               display name, email, manager, or resolved GitHub login
