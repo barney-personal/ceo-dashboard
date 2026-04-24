@@ -60,10 +60,7 @@ export function EngineeringTabs({
   /** Separate gate from `showImpact` — the Impact model is open to
    * managers (team-scoped view) even when the Impact analysis page isn't. */
   showImpactModel?: boolean;
-  /** CEO-only. The code-review ranking uses LLM judgement of individual
-   * engineers' PRs — sensitive, not for broader distribution. */
   showCodeReview?: boolean;
-  /** CEO-only. Unified methodology-first engineer ranking. */
   showRanking?: boolean;
 }) {
   const pathname = usePathname();

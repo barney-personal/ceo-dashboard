@@ -190,7 +190,8 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/managers` | manager | Team performance + alerts for the viewer's direct reports (leadership+ can inspect any manager via `?manager=`) |
 | `/dashboard/engineering` | everyone | GitHub PRs / commits / Mode engineering |
 | `/dashboard/engineering/impact-model` | manager | SHAP impact model + manager team coaching (team-scoped for plain managers; leadership+ gets a manager picker) |
-| `/dashboard/engineering/code-review` | ceo | LLM-reviewed merged PRs with multi-axis rubric scoring, GitHub review-process signals, and a confidence-aware cohort-relative ranking. CEO-only — model judgements of individual engineers' code. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). |
+| `/dashboard/engineering/code-review` | engineering_manager | LLM-reviewed merged PRs with multi-axis rubric scoring, GitHub review-process signals, and a confidence-aware cohort-relative ranking. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). |
+| `/dashboard/engineering/ranking` | engineering_manager | Methodology-first cohort-relative engineer ranking. Snapshot persistence remains CEO-only via `POST /api/engineering-ranking/snapshot`. |
 | `/dashboard/slack` | leadership | Workspace engagement, tenure-normalised |
 | `/dashboard/settings` | everyone | Per-user integrations |
 | `/dashboard/admin/users` | ceo | Clerk user admin |

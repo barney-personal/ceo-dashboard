@@ -1,6 +1,4 @@
-import { redirect } from "next/navigation";
-import { getCurrentUserRole } from "@/lib/auth/roles.server";
-import { hasAccess } from "@/lib/auth/roles";
+import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { getEngineeringRankingSnapshot } from "@/lib/data/engineering-ranking.server";
 import { RankingScaffold } from "./_components/ranking-scaffold";
 
@@ -9,10 +7,7 @@ export const metadata = {
 };
 
 export default async function EngineeringRankingPage() {
-  const role = await getCurrentUserRole();
-  if (!hasAccess(role, "ceo")) {
-    redirect("/dashboard/engineering");
-  }
+  await requireDashboardPermission("engineering.ranking");
 
   const snapshot = await getEngineeringRankingSnapshot();
 
