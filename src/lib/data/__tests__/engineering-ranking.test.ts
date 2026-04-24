@@ -1,22 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  DISCIPLINE_POOL_FALLBACK,
   RANKING_DISAGREEMENT_EPSILON,
   RANKING_DISAGREEMENT_MIN_LENSES,
   RANKING_LENS_DEFINITIONS,
   RANKING_LENS_TOP_N,
   RANKING_METHODOLOGY_VERSION,
+  RANKING_MIN_COHORT_SIZE,
   RANKING_MIN_OVERLAP_SAMPLES,
   RANKING_NOMINAL_SIGNAL_NAMES,
   RANKING_NUMERIC_SIGNAL_NAMES,
   RANKING_RAMP_UP_DAYS,
+  RANKING_SIGNAL_WINDOW_DAYS,
   buildEligibleRoster,
   buildLenses,
+  buildNormalisation,
   buildRankingSnapshot,
   buildSignalAudit,
   buildSourceNotes,
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
+  type Discipline,
   type EligibilityEntry,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
@@ -1697,5 +1702,380 @@ describe("M9 suppress non-disagreements in lens disagreement table", () => {
         "no material lens disagreement",
       );
     }
+  });
+});
+
+describe("M10 tenure and role normalisation", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: "Platform",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signal(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: 10,
+      commitCount: 20,
+      additions: 1_000,
+      deletions: 200,
+      shapPredicted: null,
+      shapActual: null,
+      shapResidual: null,
+      aiTokens: null,
+      aiSpend: null,
+      squadCycleTimeHours: null,
+      squadReviewRatePercent: null,
+      squadTimeToFirstReviewHours: null,
+      squadPrsInProgress: null,
+      ...overrides,
+    };
+  }
+
+  it("exposes RANKING_MIN_COHORT_SIZE and a documented fallback chain", () => {
+    expect(RANKING_MIN_COHORT_SIZE).toBeGreaterThanOrEqual(2);
+    // Every non-BE discipline must start its fallback with BE per the design
+    // note on the constant. BE itself has no fallback because it is the
+    // largest IC cohort.
+    for (const [d, chain] of Object.entries(DISCIPLINE_POOL_FALLBACK) as [
+      Discipline,
+      readonly Discipline[],
+    ][]) {
+      if (d === "BE") {
+        expect(chain).toEqual([]);
+        continue;
+      }
+      expect(chain.length).toBeGreaterThan(0);
+      expect(chain[0]).toBe("BE");
+      // A discipline must never pool with itself.
+      expect(chain).not.toContain(d);
+    }
+  });
+
+  it("ramp-up and leaver entries are held out of normalisation even when supplied", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2, {
+        eligibility: "ramp_up",
+        tenureDays: 30,
+        reason: "Ramp-up",
+      }),
+      competitiveEntry(3, {
+        eligibility: "inactive_or_leaver",
+        isLeaverOrInactive: true,
+        reason: "Leaver",
+      }),
+    ];
+    const signals = [signal(1), signal(2), signal(3)];
+    const bundle = buildNormalisation({ entries, signals });
+    expect(bundle.entries.map((e) => e.displayName)).toEqual(["Engineer 1"]);
+  });
+
+  it("a competitive engineer with tenure in the 90–180d band receives a tenure-exposure rate lift", () => {
+    // Fixture is designed so the new-joiner engineer has MORE rawScore
+    // than their peers — the test's job is to confirm (a) tenure-adjusted
+    // rate is strictly larger than rawScore for short-tenure engineers and
+    // (b) their tenure-adjusted percentile is not bottom-of-cohort.
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { tenureDays: 800 }),
+      competitiveEntry(2, { tenureDays: 600 }),
+      competitiveEntry(3, { tenureDays: 400 }),
+      competitiveEntry(4, {
+        tenureDays: 100,
+        displayName: "Recent joiner",
+      }),
+    ];
+    const signals = [
+      signal(1, { prCount: 20, additions: 2_000, deletions: 400 }),
+      signal(2, { prCount: 20, additions: 2_000, deletions: 400 }),
+      signal(3, { prCount: 20, additions: 2_000, deletions: 400 }),
+      signal(4, { prCount: 20, additions: 2_000, deletions: 400 }),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    const newJoiner = bundle.entries.find(
+      (e) => e.displayName === "Recent joiner",
+    );
+    const longTenured = bundle.entries.find(
+      (e) => e.displayName === "Engineer 1",
+    );
+    expect(newJoiner).toBeDefined();
+    expect(longTenured).toBeDefined();
+    // Tenure window is clamped to tenureDays for the new joiner (100d) and
+    // to windowDays for the long-tenured engineer (180d cap).
+    expect(newJoiner!.tenureWindowDays).toBe(100);
+    expect(longTenured!.tenureWindowDays).toBe(RANKING_SIGNAL_WINDOW_DAYS);
+    // Same raw score, but the short-tenure engineer's adjusted rate is
+    // strictly larger because exposure is a smaller denominator.
+    expect(newJoiner!.tenureAdjustedRate!).toBeGreaterThan(
+      longTenured!.tenureAdjustedRate!,
+    );
+    // Recent joiner is not bottom-ranked on the tenure-adjusted percentile.
+    expect(newJoiner!.tenureAdjustedPercentile!).toBeGreaterThan(
+      longTenured!.tenureAdjustedPercentile ?? 0,
+    );
+  });
+
+  it("a lower-level engineer with the same raw output receives an adjusted lift from the level residual", () => {
+    // Construct a cohort with a clear positive slope of rawScore on level:
+    // L3 engineers low, L4 middle, L5 high. Then add two engineers who
+    // share an identical rawScore in the middle, one at L3 (below their
+    // level baseline should be higher residual → NO wait, below expected is
+    // negative; SAME score as expected gives zero; ABOVE expected gives
+    // positive). For L3 with a moderate score, the predicted rawScore at
+    // L3 is lower than the predicted rawScore at L5, so residual(L3) >
+    // residual(L5).
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { levelLabel: "L3", displayName: "L3 anchor A" }),
+      competitiveEntry(2, { levelLabel: "L3", displayName: "L3 anchor B" }),
+      competitiveEntry(3, { levelLabel: "L4", displayName: "L4 anchor A" }),
+      competitiveEntry(4, { levelLabel: "L4", displayName: "L4 anchor B" }),
+      competitiveEntry(5, { levelLabel: "L5", displayName: "L5 anchor A" }),
+      competitiveEntry(6, { levelLabel: "L5", displayName: "L5 anchor B" }),
+      competitiveEntry(7, { levelLabel: "L3", displayName: "L3 test" }),
+      competitiveEntry(8, { levelLabel: "L5", displayName: "L5 test" }),
+    ];
+    // Anchors establish the level baseline: L3 ≈ 2 PRs, L4 ≈ 20 PRs, L5 ≈ 80 PRs.
+    // Test engineers share raw output of 20 PRs.
+    const signals = [
+      signal(1, { prCount: 2, additions: 50, deletions: 10 }),
+      signal(2, { prCount: 3, additions: 60, deletions: 10 }),
+      signal(3, { prCount: 20, additions: 1_000, deletions: 200 }),
+      signal(4, { prCount: 22, additions: 1_100, deletions: 200 }),
+      signal(5, { prCount: 80, additions: 10_000, deletions: 2_000 }),
+      signal(6, { prCount: 75, additions: 9_500, deletions: 1_800 }),
+      signal(7, { prCount: 20, additions: 1_000, deletions: 200 }),
+      signal(8, { prCount: 20, additions: 1_000, deletions: 200 }),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    const l3Test = bundle.entries.find((e) => e.displayName === "L3 test")!;
+    const l5Test = bundle.entries.find((e) => e.displayName === "L5 test")!;
+    expect(l3Test.rawScore).toBeCloseTo(l5Test.rawScore ?? NaN, 6);
+    // rawPercentile is identical because raw scores are identical.
+    expect(l3Test.rawPercentile).toBeCloseTo(l5Test.rawPercentile ?? NaN, 6);
+    // Level baselines reflect the level number: L5 baseline > L3 baseline
+    // because the OLS slope is positive.
+    expect(l5Test.levelBaseline).toBeGreaterThan(l3Test.levelBaseline ?? 0);
+    // L3 engineer exceeds their level baseline; L5 engineer underperforms theirs.
+    expect(l3Test.levelAdjustedResidual!).toBeGreaterThan(
+      l5Test.levelAdjustedResidual!,
+    );
+    expect(l3Test.levelAdjustedPercentile!).toBeGreaterThan(
+      l5Test.levelAdjustedPercentile!,
+    );
+    expect(bundle.levelFit?.slope).toBeGreaterThan(0);
+  });
+
+  it("a tiny ML cohort pools with BE via the documented fallback", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { discipline: "BE", levelLabel: "L4" }),
+      competitiveEntry(2, { discipline: "BE", levelLabel: "L4" }),
+      competitiveEntry(3, { discipline: "BE", levelLabel: "L4" }),
+      competitiveEntry(4, { discipline: "BE", levelLabel: "L4" }),
+      competitiveEntry(5, {
+        discipline: "ML",
+        levelLabel: "L4",
+        displayName: "Solo ML",
+      }),
+    ];
+    const signals = [
+      signal(1),
+      signal(2),
+      signal(3),
+      signal(4),
+      signal(5, { prCount: 50, additions: 5_000, deletions: 1_000 }),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    const mlEntry = bundle.entries.find((e) => e.displayName === "Solo ML")!;
+    expect(mlEntry.disciplineCohort.pooled).toBe(true);
+    expect(mlEntry.disciplineCohort.pooledWith).toEqual(["BE"]);
+    expect(mlEntry.disciplineCohort.effectiveSize).toBe(5);
+    expect(mlEntry.disciplineCohort.pooledToAll).toBe(false);
+    // Discipline percentile was computed on the pooled cohort (ML + BE =
+    // 5 engineers). Its ML+BE cohort percentile is finite and on [0, 100].
+    expect(mlEntry.disciplinePercentile).not.toBeNull();
+    expect(mlEntry.disciplinePercentile!).toBeGreaterThanOrEqual(0);
+    expect(mlEntry.disciplinePercentile!).toBeLessThanOrEqual(100);
+    // Cohort summary reports the discipline sizes pre-pooling.
+    const mlSummary = bundle.disciplineCohorts.find(
+      (c) => c.discipline === "ML",
+    );
+    expect(mlSummary?.size).toBe(1);
+    expect(mlSummary?.pooled).toBe(true);
+    expect(mlSummary?.pooledWith).toEqual(["BE"]);
+  });
+
+  it("falls through to the full cohort when own+fallback pooling is still below the minimum", () => {
+    // Only two engineers exist in the competitive cohort total — one ML,
+    // one Ops. Neither alone nor paired with BE reaches MIN_COHORT_SIZE=3.
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { discipline: "ML", displayName: "Solo ML" }),
+      competitiveEntry(2, { discipline: "Ops", displayName: "Solo Ops" }),
+    ];
+    const signals = [signal(1), signal(2)];
+    const bundle = buildNormalisation({ entries, signals });
+    const ml = bundle.entries.find((e) => e.displayName === "Solo ML")!;
+    expect(ml.disciplineCohort.pooled).toBe(true);
+    expect(ml.disciplineCohort.pooledToAll).toBe(true);
+    // Effective size equals the total competitive cohort when falling through.
+    expect(ml.disciplineCohort.effectiveSize).toBe(2);
+  });
+
+  it("surfaces both rawPercentile and adjustedPercentile; adjustedPercentile is the mean of present adjustments", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { levelLabel: "L3" }),
+      competitiveEntry(2, { levelLabel: "L4" }),
+      competitiveEntry(3, { levelLabel: "L5" }),
+      competitiveEntry(4, { levelLabel: "L4" }),
+    ];
+    const signals = [
+      signal(1, { prCount: 5, additions: 200, deletions: 50 }),
+      signal(2, { prCount: 15, additions: 1_500, deletions: 300 }),
+      signal(3, { prCount: 30, additions: 4_000, deletions: 800 }),
+      signal(4, { prCount: 10, additions: 800, deletions: 100 }),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    for (const entry of bundle.entries) {
+      expect(entry.rawPercentile).not.toBeNull();
+      expect(entry.adjustedPercentile).not.toBeNull();
+      const presentAdjusted = [
+        entry.disciplinePercentile,
+        entry.levelAdjustedPercentile,
+        entry.tenureAdjustedPercentile,
+      ].filter((v): v is number => v !== null);
+      if (presentAdjusted.length > 0) {
+        const expected =
+          presentAdjusted.reduce((s, v) => s + v, 0) / presentAdjusted.length;
+        expect(entry.adjustedPercentile!).toBeCloseTo(expected, 6);
+        expect(entry.adjustmentDelta!).toBeCloseTo(
+          expected - entry.rawPercentile!,
+          6,
+        );
+      } else {
+        expect(entry.adjustedPercentile).toBe(entry.rawPercentile);
+        expect(entry.adjustmentDelta).toBeNull();
+      }
+    }
+  });
+
+  it("engineers with no persisted activity land on null rawScore and null adjustments (no fake precision)", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2, { displayName: "No activity" }),
+    ];
+    const signals = [
+      signal(1),
+      // All activity fields null — no rawScore can be derived.
+      signal(2, { prCount: null, additions: null, deletions: null }),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    const noActivity = bundle.entries.find(
+      (e) => e.displayName === "No activity",
+    )!;
+    expect(noActivity.rawScore).toBeNull();
+    expect(noActivity.rawPercentile).toBeNull();
+    expect(noActivity.disciplinePercentile).toBeNull();
+    expect(noActivity.levelAdjustedPercentile).toBeNull();
+    expect(noActivity.tenureAdjustedPercentile).toBeNull();
+    expect(noActivity.adjustedPercentile).toBeNull();
+    expect(noActivity.adjustmentDelta).toBeNull();
+  });
+
+  it("AI tokens and AI spend do not influence any normalisation percentile", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { displayName: "Low AI" }),
+      competitiveEntry(2, { displayName: "High AI" }),
+    ];
+    const base = { prCount: 20, additions: 2_000, deletions: 400 };
+    const signals = [
+      { ...signal(1, base), aiTokens: 50, aiSpend: 1 },
+      { ...signal(2, base), aiTokens: 10_000_000, aiSpend: 10_000 },
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    const lo = bundle.entries.find((e) => e.displayName === "Low AI")!;
+    const hi = bundle.entries.find((e) => e.displayName === "High AI")!;
+    expect(lo.rawPercentile).toBeCloseTo(hi.rawPercentile ?? NaN, 6);
+    expect(lo.adjustedPercentile).toBeCloseTo(hi.adjustedPercentile ?? NaN, 6);
+  });
+
+  it("buildRankingSnapshot attaches the normalisation bundle to the snapshot", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [
+        {
+          email: "eng1@meetcleo.com",
+          preferred_name: "Engineer 1",
+          hb_function: "Engineering",
+          hb_level: "L4",
+          hb_squad: "Platform",
+          rp_specialisation: "Backend Engineer",
+          rp_department_name: "Core Pillar",
+          job_title: "Software Engineer",
+          manager: "Boss",
+          line_manager_email: "boss@meetcleo.com",
+          start_date: "2023-01-01",
+        },
+      ],
+      githubMap: [
+        {
+          githubLogin: "eng1",
+          employeeEmail: "eng1@meetcleo.com",
+          isBot: false,
+        },
+      ],
+      impactModel: { engineers: [] } as EligibilityImpactModelView,
+      signals: [signal(1)],
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    expect(snapshot.normalisation).toBeDefined();
+    expect(snapshot.normalisation.entries.length).toBe(1);
+    expect(snapshot.normalisation.minCohortSize).toBe(RANKING_MIN_COHORT_SIZE);
+    expect(snapshot.normalisation.windowDays).toBe(RANKING_SIGNAL_WINDOW_DAYS);
+    expect(snapshot.normalisation.rampUpDays).toBe(RANKING_RAMP_UP_DAYS);
+    expect(snapshot.normalisation.adjustmentNotes.length).toBeGreaterThan(0);
+  });
+
+  it("level fit is null when fewer than two competitive engineers have both level and rawScore", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { levelLabel: "unknown" }),
+      // Only one engineer has a parseable level + non-null rawScore.
+      competitiveEntry(2, { levelLabel: "L4" }),
+    ];
+    const signals = [
+      signal(1),
+      signal(2),
+    ];
+    const bundle = buildNormalisation({ entries, signals });
+    // Both engineers have rawScore, but only the L4 engineer has a
+    // parseable levelNumber → levelFit needs at least two points.
+    const l4 = bundle.entries.find((e) => e.displayName === "Engineer 2")!;
+    expect(l4.levelNumber).toBe(4);
+    expect(bundle.levelFit).toBeNull();
+    expect(l4.levelBaseline).toBeNull();
+    expect(l4.levelAdjustedResidual).toBeNull();
+    expect(l4.levelAdjustedPercentile).toBeNull();
+    // Other adjustments still work.
+    expect(l4.adjustedPercentile).not.toBeNull();
   });
 });

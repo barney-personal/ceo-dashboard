@@ -193,9 +193,19 @@ export interface EngineeringRankingSnapshot {
    * Three independent scoring lenses (A output / B SHAP impact /
    * C squad-delivery context) plus the disagreement table that surfaces
    * engineers whose lenses most disagree with each other. Not a final
-   * composite — M10 synthesises the composite once the lenses are trusted.
+   * composite — M11 synthesises the composite once the lenses are trusted
+   * and the M10 adjustments are applied on top.
    */
   lenses: LensesBundle;
+  /**
+   * Tenure and role normalisation layer over the competitive cohort:
+   * discipline-partitioned percentiles (with documented pooling), level
+   * residual percentiles (OLS fit of rawScore on level number), and
+   * tenure/exposure-adjusted rates. Surfaces both `rawPercentile` and
+   * `adjustedPercentile` for every engineer so the lift from normalisation
+   * is visible, not implicit.
+   */
+  normalisation: NormalisationBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -1572,6 +1582,460 @@ export function buildLenses({
   };
 }
 
+/* --------------------------------------------------------------------------
+ * M10 — tenure and role normalisation
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Minimum number of engineers required before a discipline cohort is treated
+ * as its own cohort for percentile calculations. Cohorts below this size
+ * pool with a documented fallback (e.g. ML → BE) instead of producing fake
+ * precision from a sample of one or two engineers.
+ */
+export const RANKING_MIN_COHORT_SIZE = 3 as const;
+
+/**
+ * Fallback order for pooling a small discipline cohort into a larger one
+ * before falling all the way through to "(all)". Order matters — the first
+ * discipline in the list is tried first, then the second is added, etc.,
+ * until `RANKING_MIN_COHORT_SIZE` is reached. Each entry must be a real
+ * `Discipline` so the pooling note on the page names the engineers the
+ * cohort was actually merged with.
+ *
+ * BE is not included in its own fallback because it is the largest IC
+ * cohort at Cleo and should never need pooling. Each smaller cohort pools
+ * with BE as the first fallback — backend is the nearest engineering
+ * neighbour for most disciplines (ML writes backend code, Ops and QA
+ * both work closely with backend, FE at least speaks the same language).
+ * EM pools with BE and FE because engineering managers typically come
+ * from an IC background and share workflow characteristics with ICs.
+ * Other catches miscellaneous-specialisation rows and pools generously.
+ */
+export const DISCIPLINE_POOL_FALLBACK: Readonly<Record<Discipline, readonly Discipline[]>> = {
+  BE: [],
+  FE: ["BE"],
+  EM: ["BE", "FE"],
+  QA: ["BE"],
+  ML: ["BE"],
+  Ops: ["BE"],
+  Other: ["BE", "FE"],
+};
+
+/**
+ * Description of the discipline cohort used to percentile a given engineer.
+ * `effectiveMembers` is the set of disciplines whose engineers participated
+ * in the percentile calculation — the engineer's own discipline is always
+ * first. `pooledWith` is the list of other disciplines added by pooling.
+ * `pooledToAll` signals that own + fallback chain still did not reach
+ * `RANKING_MIN_COHORT_SIZE`, and every competitive engineer was pooled in.
+ */
+export interface DisciplineCohortInfo {
+  discipline: Discipline;
+  effectiveMembers: readonly Discipline[];
+  effectiveSize: number;
+  pooled: boolean;
+  pooledWith: readonly Discipline[];
+  pooledToAll: boolean;
+  note: string;
+}
+
+/** Aggregate view of a discipline cohort for the page summary. */
+export interface DisciplineCohortSummary {
+  discipline: Discipline;
+  size: number;
+  pooled: boolean;
+  pooledWith: Discipline[];
+  pooledToAll: boolean;
+  effectiveSize: number;
+}
+
+/** OLS fit of rawScore against level number for the level-adjustment residual. */
+export interface LevelFit {
+  slope: number;
+  intercept: number;
+  sampleSize: number;
+}
+
+/**
+ * Normalised view of one engineer. `rawPercentile` preserves the
+ * un-adjusted view on the cohort so readers can see the lift (or drop) the
+ * adjustments produce. `adjustedPercentile` is the mean of the three
+ * present adjusted components (discipline / level / tenure), falling back
+ * to `rawPercentile` only when no adjustment is computable.
+ */
+export interface EngineerNormalisation {
+  emailHash: string;
+  displayName: string;
+  discipline: Discipline;
+  levelLabel: string;
+  levelNumber: number | null;
+  tenureDays: number | null;
+  /** `min(tenureDays, windowDays)` — the number of signal-window days the
+   *  engineer was actually on the team. Engineers with tenure < windowDays
+   *  get proportional lift from the tenure-exposure adjustment so a recent
+   *  joiner is not penalised for partial window exposure. */
+  tenureWindowDays: number;
+
+  /** Log-impact composite — same formula as lens A's largest weight. */
+  rawScore: number | null;
+  /** Cross-cohort rank-percentile of `rawScore` on [0, 100]. */
+  rawPercentile: number | null;
+
+  disciplineCohort: DisciplineCohortInfo;
+  /** Rank-percentile of `rawScore` within the effective discipline cohort. */
+  disciplinePercentile: number | null;
+
+  /** `intercept + slope * levelNumber` from the OLS fit; null when no fit. */
+  levelBaseline: number | null;
+  /** `rawScore - levelBaseline`. Higher residual = better than level expectation. */
+  levelAdjustedResidual: number | null;
+  /** Cross-cohort percentile of level residuals. */
+  levelAdjustedPercentile: number | null;
+
+  /** `rawScore * (windowDays / tenureWindowDays)`. Null when exposure is zero. */
+  tenureAdjustedRate: number | null;
+  /** Cross-cohort percentile of `tenureAdjustedRate`. */
+  tenureAdjustedPercentile: number | null;
+
+  /** Mean of the three present adjusted percentiles; falls back to raw. */
+  adjustedPercentile: number | null;
+  /** `adjustedPercentile - rawPercentile` — positive means adjustments lifted. */
+  adjustmentDelta: number | null;
+
+  /** Plain-language adjustment trail per engineer. */
+  adjustmentsApplied: string[];
+}
+
+export interface NormalisationBundle {
+  /** Human-readable description of the raw signal fed into normalisation. */
+  sourceSignal: string;
+  /** The minimum-cohort threshold used for discipline pooling. */
+  minCohortSize: number;
+  /** Signal window in days — also the ceiling on tenure-exposure boost. */
+  windowDays: number;
+  /** Ramp-up threshold in days (below this, engineers are non-competitive). */
+  rampUpDays: number;
+  /** All competitive engineers with their normalisation values. */
+  entries: EngineerNormalisation[];
+  /** Discipline cohort summary table, sorted by cohort size descending. */
+  disciplineCohorts: DisciplineCohortSummary[];
+  /** OLS fit details for the level-residual adjustment. */
+  levelFit: LevelFit | null;
+  /** Plain-language summary of the adjustments applied, shown on the page. */
+  adjustmentNotes: string[];
+}
+
+function linearFit(
+  points: Array<{ x: number; y: number }>,
+): LevelFit | null {
+  const n = points.length;
+  if (n < 2) return null;
+  const meanX = points.reduce((s, p) => s + p.x, 0) / n;
+  const meanY = points.reduce((s, p) => s + p.y, 0) / n;
+  let num = 0;
+  let denom = 0;
+  for (const p of points) {
+    num += (p.x - meanX) * (p.y - meanY);
+    denom += (p.x - meanX) ** 2;
+  }
+  if (denom === 0) return null;
+  const slope = num / denom;
+  return { slope, intercept: meanY - slope * meanX, sampleSize: n };
+}
+
+function resolveDisciplineCohort(
+  discipline: Discipline,
+  sizesByDiscipline: Map<Discipline, number>,
+  minSize: number,
+  totalCompetitive: number,
+): DisciplineCohortInfo {
+  const own = sizesByDiscipline.get(discipline) ?? 0;
+  if (own >= minSize) {
+    return {
+      discipline,
+      effectiveMembers: [discipline],
+      effectiveSize: own,
+      pooled: false,
+      pooledWith: [],
+      pooledToAll: false,
+      note: `Own cohort (${own} engineers)`,
+    };
+  }
+  const fallback = DISCIPLINE_POOL_FALLBACK[discipline] ?? [];
+  const members: Discipline[] = [discipline];
+  const pooledWith: Discipline[] = [];
+  let size = own;
+  for (const other of fallback) {
+    if (other === discipline) continue;
+    const otherSize = sizesByDiscipline.get(other) ?? 0;
+    members.push(other);
+    pooledWith.push(other);
+    size += otherSize;
+    if (size >= minSize) {
+      return {
+        discipline,
+        effectiveMembers: members,
+        effectiveSize: size,
+        pooled: true,
+        pooledWith,
+        pooledToAll: false,
+        note: `Pooled with ${pooledWith.join("+")} (${size} engineers)`,
+      };
+    }
+  }
+  // Own + fallback chain still too small → fall through to every competitive
+  // engineer. Members become every discipline observed in the cohort.
+  const allDisciplines = [...sizesByDiscipline.keys()];
+  const extraPooled = allDisciplines.filter(
+    (d) => d !== discipline && !pooledWith.includes(d),
+  );
+  return {
+    discipline,
+    effectiveMembers: allDisciplines,
+    effectiveSize: totalCompetitive,
+    pooled: true,
+    pooledWith: [...pooledWith, ...extraPooled],
+    pooledToAll: true,
+    note: `Pooled to all competitive engineers (${totalCompetitive} engineers) — own discipline plus fallback chain still below ${minSize}`,
+  };
+}
+
+/**
+ * Build the tenure/role normalisation layer.
+ *
+ * Pipeline:
+ * 1. Filter to competitive entries and compute the log-impact rawScore from
+ *    persisted GitHub signals.
+ * 2. Compute the cross-cohort rank-percentile (`rawPercentile`).
+ * 3. For each distinct discipline, resolve the effective cohort via the
+ *    pooling fallback and compute the rank-percentile of `rawScore` within
+ *    that cohort. Documented on the page so the reader sees what pool each
+ *    engineer was ranked against.
+ * 4. OLS fit of rawScore on level number gives a level baseline. Residual
+ *    percentiles reward engineers scoring above their level's expectation.
+ * 5. Tenure-exposure adjusts rawScore by `windowDays / min(tenureDays, windowDays)`
+ *    so engineers with `rampUpDays <= tenure < windowDays` get proportional
+ *    lift, not a penalty for partial-window exposure.
+ * 6. `adjustedPercentile` = mean of present adjusted components; falls back
+ *    to `rawPercentile` when no adjustment is computable.
+ */
+export function buildNormalisation({
+  entries,
+  signals = [],
+  windowDays = RANKING_SIGNAL_WINDOW_DAYS,
+  rampUpDays = RANKING_RAMP_UP_DAYS,
+  minCohortSize = RANKING_MIN_COHORT_SIZE,
+}: {
+  entries: EligibilityEntry[];
+  signals?: PerEngineerSignalRow[];
+  windowDays?: number;
+  rampUpDays?: number;
+  minCohortSize?: number;
+}): NormalisationBundle {
+  const competitive = entries.filter((e) => e.eligibility === "competitive");
+  const signalByHash = new Map(signals.map((s) => [s.emailHash, s]));
+
+  const rawScores: Array<number | null> = competitive.map((entry) =>
+    logImpact(signalByHash.get(entry.emailHash)),
+  );
+  const rawPercentiles = rankPercentiles(rawScores);
+
+  const disciplineSizes = new Map<Discipline, number>();
+  for (const entry of competitive) {
+    disciplineSizes.set(
+      entry.discipline,
+      (disciplineSizes.get(entry.discipline) ?? 0) + 1,
+    );
+  }
+
+  const cohortByDiscipline = new Map<Discipline, DisciplineCohortInfo>();
+  for (const d of disciplineSizes.keys()) {
+    cohortByDiscipline.set(
+      d,
+      resolveDisciplineCohort(d, disciplineSizes, minCohortSize, competitive.length),
+    );
+  }
+
+  const disciplinePercentiles: Array<number | null> = new Array(
+    competitive.length,
+  ).fill(null);
+  for (let i = 0; i < competitive.length; i += 1) {
+    const engineer = competitive[i];
+    const cohort = cohortByDiscipline.get(engineer.discipline);
+    if (!cohort) continue;
+    const memberSet = new Set<Discipline>(cohort.effectiveMembers);
+    const indicesInCohort: number[] = [];
+    const valuesInCohort: Array<number | null> = [];
+    for (let j = 0; j < competitive.length; j += 1) {
+      if (!memberSet.has(competitive[j].discipline)) continue;
+      indicesInCohort.push(j);
+      valuesInCohort.push(rawScores[j]);
+    }
+    const cohortPcts = rankPercentiles(valuesInCohort);
+    const localIdx = indicesInCohort.indexOf(i);
+    if (localIdx >= 0) {
+      disciplinePercentiles[i] = cohortPcts[localIdx];
+    }
+  }
+
+  const levelPoints: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < competitive.length; i += 1) {
+    const lvl = levelNumber(competitive[i].levelLabel);
+    const raw = rawScores[i];
+    if (lvl === null || raw === null) continue;
+    levelPoints.push({ x: lvl, y: raw });
+  }
+  const levelFit = linearFit(levelPoints);
+
+  const levelResiduals: Array<number | null> = competitive.map((entry, i) => {
+    const lvl = levelNumber(entry.levelLabel);
+    const raw = rawScores[i];
+    if (lvl === null || raw === null || !levelFit) return null;
+    const predicted = levelFit.intercept + levelFit.slope * lvl;
+    return raw - predicted;
+  });
+  const levelAdjustedPercentiles = rankPercentiles(levelResiduals);
+
+  const tenureRates: Array<number | null> = competitive.map((entry, i) => {
+    const raw = rawScores[i];
+    if (raw === null) return null;
+    const td = entry.tenureDays;
+    if (td === null || td <= 0) return null;
+    const exposure = Math.min(td, windowDays);
+    if (exposure <= 0) return null;
+    return raw * (windowDays / exposure);
+  });
+  const tenureAdjustedPercentiles = rankPercentiles(tenureRates);
+
+  const normalisedEntries: EngineerNormalisation[] = competitive.map(
+    (entry, i) => {
+      const cohort =
+        cohortByDiscipline.get(entry.discipline) ??
+        resolveDisciplineCohort(
+          entry.discipline,
+          disciplineSizes,
+          minCohortSize,
+          competitive.length,
+        );
+      const lvl = levelNumber(entry.levelLabel);
+      const raw = rawScores[i];
+      const td = entry.tenureDays;
+      const exposure = td !== null && td > 0 ? Math.min(td, windowDays) : 0;
+      const levelBaseline =
+        lvl !== null && levelFit
+          ? levelFit.intercept + levelFit.slope * lvl
+          : null;
+
+      const present: number[] = [];
+      const disciplinePct = disciplinePercentiles[i];
+      const levelPct = levelAdjustedPercentiles[i];
+      const tenurePct = tenureAdjustedPercentiles[i];
+      if (disciplinePct !== null) present.push(disciplinePct);
+      if (levelPct !== null) present.push(levelPct);
+      if (tenurePct !== null) present.push(tenurePct);
+
+      const rawPct = rawPercentiles[i];
+      const adjusted =
+        present.length === 0
+          ? rawPct
+          : present.reduce((s, v) => s + v, 0) / present.length;
+      const adjustmentDelta =
+        adjusted !== null && rawPct !== null ? adjusted - rawPct : null;
+
+      const adjustmentsApplied: string[] = [];
+      if (disciplinePct !== null) {
+        adjustmentsApplied.push(
+          cohort.pooled
+            ? `Discipline: pooled to ${cohort.effectiveMembers.join("+")} (${cohort.effectiveSize} engineers)`
+            : `Discipline: ${entry.discipline} cohort (${cohort.effectiveSize} engineers)`,
+        );
+      }
+      if (levelPct !== null && levelFit) {
+        adjustmentsApplied.push(
+          `Level residual: L${lvl} baseline ${levelBaseline!.toFixed(2)}, slope ${levelFit.slope.toFixed(2)} on ${levelFit.sampleSize} engineers`,
+        );
+      }
+      if (tenurePct !== null && td !== null) {
+        const boost = exposure > 0 ? windowDays / exposure : 1;
+        adjustmentsApplied.push(
+          `Tenure exposure: ${exposure}/${windowDays}d${
+            boost > 1 ? ` (×${boost.toFixed(2)} rate lift)` : ""
+          }`,
+        );
+      }
+
+      return {
+        emailHash: entry.emailHash,
+        displayName: entry.displayName,
+        discipline: entry.discipline,
+        levelLabel: entry.levelLabel,
+        levelNumber: lvl,
+        tenureDays: td,
+        tenureWindowDays: exposure,
+        rawScore: raw,
+        rawPercentile: rawPct,
+        disciplineCohort: cohort,
+        disciplinePercentile: disciplinePct,
+        levelBaseline,
+        levelAdjustedResidual: levelResiduals[i],
+        levelAdjustedPercentile: levelPct,
+        tenureAdjustedRate: tenureRates[i],
+        tenureAdjustedPercentile: tenurePct,
+        adjustedPercentile: adjusted,
+        adjustmentDelta,
+        adjustmentsApplied,
+      };
+    },
+  );
+
+  const disciplineCohorts: DisciplineCohortSummary[] = [
+    ...disciplineSizes.entries(),
+  ]
+    .map(([discipline, size]) => {
+      const info =
+        cohortByDiscipline.get(discipline) ??
+        resolveDisciplineCohort(
+          discipline,
+          disciplineSizes,
+          minCohortSize,
+          competitive.length,
+        );
+      return {
+        discipline,
+        size,
+        pooled: info.pooled,
+        pooledWith: [...info.pooledWith],
+        pooledToAll: info.pooledToAll,
+        effectiveSize: info.effectiveSize,
+      };
+    })
+    .sort((a, b) => b.size - a.size || a.discipline.localeCompare(b.discipline));
+
+  const adjustmentNotes: string[] = [
+    `Raw score is the log-impact composite from persisted GitHub PR data (same formula as lens A's dominant component). AI tokens, AI spend, and per-PR LLM rubric are deliberately excluded so adjustments cannot be inflated by gameable inputs.`,
+    `Discipline percentile: rank-percentile within the engineer's discipline cohort. Cohorts with fewer than ${minCohortSize} competitive engineers pool via the documented fallback (e.g. ML → BE; EM → BE+FE) and fall through to the full competitive cohort only if the pool is still too small. Pooling is named in the per-engineer adjustment trail.`,
+    `Level-adjusted residual: OLS fit of rawScore on level number across ${levelFit?.sampleSize ?? 0} competitive engineers${
+      levelFit
+        ? ` (slope ${levelFit.slope.toFixed(2)}, intercept ${levelFit.intercept.toFixed(2)})`
+        : " (fit unavailable — <2 engineers with both level and rawScore)"
+    }. Residual percentiles reward scoring above the engineer's level baseline; two engineers with the same rawScore but different levels receive different adjusted percentiles.`,
+    `Tenure-exposure adjusted rate: rawScore × (${windowDays} / min(tenureDays, ${windowDays})). Engineers in the ${rampUpDays}–${windowDays}d tenure band receive proportional rate lift so partial-window exposure is not read as low output. Engineers with tenure ≥ ${windowDays}d receive no lift; the adjustment never penalises long-tenured engineers.`,
+    `Ramp-up cohort (< ${rampUpDays}d tenure) is excluded from competitive normalisation and kept in the eligibility roster only, so a new joiner is never competitively ranked at the bottom for being new.`,
+    `adjustedPercentile = mean of the three present adjusted components (discipline / level / tenure). Engineers with all three adjustments null (e.g. no rawScore because they have no persisted PR activity in the window) fall back to rawPercentile, and their adjustmentDelta is null.`,
+  ];
+
+  return {
+    sourceSignal: "Log-impact composite (PR count × log2(1 + churn/PR))",
+    minCohortSize,
+    windowDays,
+    rampUpDays,
+    entries: normalisedEntries,
+    disciplineCohorts,
+    levelFit,
+    adjustmentNotes,
+  };
+}
+
 /**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
@@ -1686,6 +2150,12 @@ export function buildRankingSnapshot(
     reviewSignalsPersisted: inputs.reviewSignalsPersisted,
   });
   const lenses = buildLenses({ entries, signals: inputs.signals });
+  const normalisation = buildNormalisation({
+    entries,
+    signals: inputs.signals,
+    windowDays,
+    rampUpDays: inputs.rampUpDays,
+  });
 
   return {
     status: "methodology_pending",
@@ -1700,6 +2170,7 @@ export function buildRankingSnapshot(
     },
     audit,
     lenses,
+    normalisation,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -1757,6 +2228,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
       reviewSignalsPersisted: false,
     }),
     lenses: buildLenses({ entries }),
+    normalisation: buildNormalisation({ entries }),
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

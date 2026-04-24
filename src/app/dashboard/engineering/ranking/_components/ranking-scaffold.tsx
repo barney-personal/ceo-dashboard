@@ -3,10 +3,12 @@ import type {
   CorrelationPair,
   EligibilityEntry,
   EligibilityStatus,
+  EngineerNormalisation,
   EngineeringRankingSnapshot,
   LensDisagreementRow,
   LensScoreSummary,
   LensesBundle,
+  NormalisationBundle,
   SignalAudit,
 } from "@/lib/data/engineering-ranking";
 
@@ -597,6 +599,305 @@ function DisagreementTable({ rows }: { rows: LensDisagreementRow[] }) {
   );
 }
 
+const NORMALISATION_TOP_N = 15 as const;
+const NORMALISATION_DELTA_N = 8 as const;
+
+function formatDelta(value: number | null): string {
+  if (value === null) return "—";
+  const rounded = value.toFixed(1);
+  if (value > 0) return `+${rounded}`;
+  return rounded;
+}
+
+function NormalisationTopTable({ entries }: { entries: EngineerNormalisation[] }) {
+  const ranked = [...entries]
+    .filter((e) => e.adjustedPercentile !== null)
+    .sort((a, b) => (b.adjustedPercentile ?? 0) - (a.adjustedPercentile ?? 0))
+    .slice(0, NORMALISATION_TOP_N);
+  return (
+    <div className="rounded-md border border-border/40 bg-background/60 p-4">
+      <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Top by adjusted percentile
+      </h4>
+      <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-muted-foreground">
+        Ordered by the adjusted percentile. Raw column shows the un-adjusted
+        cross-cohort percentile; Δ shows the lift (or drop) from applying
+        discipline, level, and tenure normalisations.
+      </p>
+      {ranked.length === 0 ? (
+        <p className="mt-3 text-xs italic text-muted-foreground">
+          No engineers have an adjusted percentile yet — persisted GitHub
+          activity has not produced a rawScore for the competitive cohort.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="w-8 py-2 pr-2 text-right font-medium">#</th>
+                <th className="py-2 pr-3 font-medium">Engineer</th>
+                <th className="py-2 pr-3 font-medium">Discipline · Level</th>
+                <th className="py-2 pr-3 text-right font-medium">Raw</th>
+                <th className="py-2 pr-3 text-right font-medium">Discipline</th>
+                <th className="py-2 pr-3 text-right font-medium">Level</th>
+                <th className="py-2 pr-3 text-right font-medium">Tenure</th>
+                <th className="py-2 pr-3 text-right font-medium">Adjusted</th>
+                <th className="py-2 pr-3 text-right font-medium">Δ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ranked.map((entry, idx) => (
+                <tr
+                  key={entry.emailHash || entry.displayName}
+                  className="border-b border-border/30 align-top"
+                >
+                  <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                    {idx + 1}
+                  </td>
+                  <td className="py-2 pr-3 text-foreground">
+                    {entry.displayName}
+                  </td>
+                  <td className="py-2 pr-3 text-muted-foreground">
+                    {entry.discipline} · {entry.levelLabel}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(entry.rawPercentile)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(entry.disciplinePercentile)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(entry.levelAdjustedPercentile)}
+                  </td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                    {formatPercentile(entry.tenureAdjustedPercentile)}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
+                    {formatPercentile(entry.adjustedPercentile)}
+                  </td>
+                  <td
+                    className={`py-2 pr-3 text-right tabular-nums ${
+                      entry.adjustmentDelta === null
+                        ? "text-muted-foreground"
+                        : entry.adjustmentDelta > 0
+                          ? "text-primary"
+                          : entry.adjustmentDelta < 0
+                            ? "text-warning"
+                            : "text-muted-foreground"
+                    }`}
+                  >
+                    {formatDelta(entry.adjustmentDelta)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NormalisationDeltas({
+  entries,
+}: {
+  entries: EngineerNormalisation[];
+}) {
+  const deltas = entries.filter(
+    (e) => e.adjustmentDelta !== null && Number.isFinite(e.adjustmentDelta),
+  );
+  const lifters = [...deltas]
+    .sort((a, b) => (b.adjustmentDelta ?? 0) - (a.adjustmentDelta ?? 0))
+    .slice(0, NORMALISATION_DELTA_N);
+  const fallers = [...deltas]
+    .sort((a, b) => (a.adjustmentDelta ?? 0) - (b.adjustmentDelta ?? 0))
+    .slice(0, NORMALISATION_DELTA_N);
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Biggest adjustment lifts
+        </h4>
+        {lifters.length === 0 ? (
+          <p className="mt-3 text-xs italic text-muted-foreground">
+            No adjustment deltas computable yet.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+            {lifters.map((entry) => (
+              <li key={`lift-${entry.emailHash || entry.displayName}`}>
+                <span className="text-foreground">{entry.displayName}</span>{" "}
+                <span className="tabular-nums text-primary">
+                  {formatDelta(entry.adjustmentDelta)}
+                </span>
+                <span className="block text-[11px] normal-case tracking-normal text-muted-foreground/80">
+                  {entry.adjustmentsApplied.join(" · ") || "No adjustments applied"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Biggest adjustment drops
+        </h4>
+        {fallers.length === 0 ? (
+          <p className="mt-3 text-xs italic text-muted-foreground">
+            No adjustment drops — every engineer is at or above their raw
+            percentile.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+            {fallers.map((entry) => (
+              <li key={`drop-${entry.emailHash || entry.displayName}`}>
+                <span className="text-foreground">{entry.displayName}</span>{" "}
+                <span className="tabular-nums text-warning">
+                  {formatDelta(entry.adjustmentDelta)}
+                </span>
+                <span className="block text-[11px] normal-case tracking-normal text-muted-foreground/80">
+                  {entry.adjustmentsApplied.join(" · ") || "No adjustments applied"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NormalisationSection({
+  normalisation,
+  rampUpCount,
+}: {
+  normalisation: NormalisationBundle;
+  rampUpCount: number;
+}) {
+  const { entries, disciplineCohorts, levelFit } = normalisation;
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Tenure and role normalisation
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            Raw percentiles would bottom-rank new joiners and junior levels for
+            being new and junior. This layer adjusts for discipline (pooled
+            when a cohort is below {normalisation.minCohortSize}), level (OLS
+            residuals) and tenure exposure, and surfaces both raw and adjusted
+            percentiles so the lift is visible, not implicit.
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>{entries.length} competitive engineers</div>
+          <div className="mt-1">
+            {rampUpCount} ramp-up engineer
+            {rampUpCount === 1 ? "" : "s"} held out
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        <NormalisationTopTable entries={entries} />
+
+        <NormalisationDeltas entries={entries} />
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="rounded-md border border-border/40 bg-background/60 p-4">
+            <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Discipline cohorts
+            </h4>
+            {disciplineCohorts.length === 0 ? (
+              <p className="mt-3 text-xs italic text-muted-foreground">
+                No competitive engineers yet.
+              </p>
+            ) : (
+              <table className="mt-3 w-full border-collapse text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border/50 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">Discipline</th>
+                    <th className="py-2 pr-3 text-right font-medium">Size</th>
+                    <th className="py-2 pr-3 font-medium">Pooled with</th>
+                    <th className="py-2 pr-3 text-right font-medium">
+                      Effective size
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {disciplineCohorts.map((cohort) => (
+                    <tr
+                      key={cohort.discipline}
+                      className="border-b border-border/30"
+                    >
+                      <td className="py-2 pr-3 text-foreground">
+                        {cohort.discipline}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                        {cohort.size}
+                      </td>
+                      <td className="py-2 pr-3 text-muted-foreground">
+                        {cohort.pooledToAll
+                          ? "(all competitive)"
+                          : cohort.pooledWith.length > 0
+                            ? cohort.pooledWith.join(", ")
+                            : "—"}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                        {cohort.effectiveSize}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="rounded-md border border-border/40 bg-background/60 p-4">
+            <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Level OLS fit
+            </h4>
+            {levelFit ? (
+              <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+                <p>
+                  rawScore ≈ {levelFit.intercept.toFixed(2)} +{" "}
+                  {levelFit.slope.toFixed(2)} × level over{" "}
+                  <span className="text-foreground tabular-nums">
+                    {levelFit.sampleSize}
+                  </span>{" "}
+                  engineers.
+                </p>
+                <p>
+                  Positive slope means higher levels have higher expected
+                  output; the residual percentile rewards engineers scoring
+                  above their level baseline.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs italic text-muted-foreground">
+                Fewer than two competitive engineers have both a parsable level
+                and a rawScore — level residuals are null for every engineer.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Adjustment logic
+          </h4>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+            {normalisation.adjustmentNotes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -747,6 +1048,11 @@ export function RankingScaffold({
       <SignalAuditSection snapshot={snapshot} />
 
       <LensesSection lenses={snapshot.lenses} />
+
+      <NormalisationSection
+        normalisation={snapshot.normalisation}
+        rampUpCount={snapshot.eligibility.coverage.rampUp}
+      />
 
       <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
         <h3 className="text-sm font-semibold text-foreground">
