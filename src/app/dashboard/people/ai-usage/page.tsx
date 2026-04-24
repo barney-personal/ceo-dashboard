@@ -2,6 +2,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { ModeEmbed } from "@/components/dashboard/mode-embed";
 import { AiUsageDashboard } from "@/components/dashboard/ai-usage-dashboard";
 import { AiUsageMetricCard } from "@/components/dashboard/ai-usage-metric-card";
+import { AiUsageSyncButton } from "@/components/dashboard/ai-usage-sync-button";
 import { LastSyncedAt } from "@/components/dashboard/last-synced-at";
 import {
   DataStateBanner,
@@ -9,6 +10,7 @@ import {
 } from "@/components/dashboard/page-data-boundary";
 import { resolveDataState, safeLoad } from "@/lib/data/data-state";
 import {
+  buildMonthlyModelMix,
   buildTopModelTrends,
   buildUserMonthlyTrends,
   getAiUsageData,
@@ -26,6 +28,7 @@ import { hasAccess } from "@/lib/auth/roles";
 import { getRequiredRoleForDashboardPermission, requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 
 const CLAUDE_DATA_START_ISO = "2026-03-23";
+const AI_USAGE_REPORT_TOKEN = "ac8032a3cc89";
 
 export default async function PeopleAiUsagePage() {
   await requireDashboardPermission("dashboard.people.aiUsage");
@@ -34,12 +37,14 @@ export default async function PeopleAiUsagePage() {
   // render those links when the viewer can actually reach the profile page.
   // Everyone else still sees the same data, just without dead-end links.
   let canViewProfiles = false;
+  let canTriggerSync = false;
   try {
     const [role, requiredRole] = await Promise.all([
       getCurrentUserRole(),
       getRequiredRoleForDashboardPermission("people.profile"),
     ]);
     canViewProfiles = hasAccess(role, requiredRole);
+    canTriggerSync = role === "ceo";
   } catch {
     // Clerk hiccup → degrade to non-linking names rather than breaking.
   }
@@ -105,6 +110,7 @@ export default async function PeopleAiUsagePage() {
   const userTrendsMap = buildUserMonthlyTrends(usage, 6);
   const userTrendsRecord = Object.fromEntries(userTrendsMap);
   const modelTrends = buildTopModelTrends(usage, 9);
+  const monthlyModelMix = buildMonthlyModelMix(usage, 9);
   const weeklyTotals = getTrailingWeeklyTotals(usage, 12);
   const weeklySparkValues = weeklyTotals.map((w) => w.cost);
 
@@ -168,10 +174,15 @@ export default async function PeopleAiUsagePage() {
         title="AI Usage"
         description="Claude and Cursor spend across the company, broken down by model and engineer."
       >
-        <LastSyncedAt
-          at={usage.syncedAt}
-          className="text-xs text-muted-foreground"
-        />
+        <div className="flex items-center gap-3">
+          <LastSyncedAt
+            at={usage.syncedAt}
+            className="text-xs text-muted-foreground"
+          />
+          {canTriggerSync && (
+            <AiUsageSyncButton reportToken={AI_USAGE_REPORT_TOKEN} />
+          )}
+        </div>
       </PageHeader>
 
       <DataStateBanner
@@ -234,6 +245,7 @@ export default async function PeopleAiUsagePage() {
           monthlyByUser={usage.monthlyByUser}
           userTrends={userTrendsRecord}
           modelTrends={modelTrends}
+          monthlyModelMix={monthlyModelMix}
           people={peopleList}
           claudeDataStart={CLAUDE_DATA_START_ISO}
           canViewProfiles={canViewProfiles}

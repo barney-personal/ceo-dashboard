@@ -48,6 +48,12 @@ interface ModelTrendPanel {
   priorCost: number;
 }
 
+interface MonthlyModelMix {
+  months: string[];
+  models: Array<{ modelName: string; category: string; totalCost: number }>;
+  rows: Array<{ monthStart: string; [modelName: string]: string | number }>;
+}
+
 interface PersonLookup {
   email: string;
   name: string;
@@ -125,6 +131,7 @@ export function AiUsageDashboard({
   monthlyByUser,
   userTrends,
   modelTrends,
+  monthlyModelMix,
   people,
   claudeDataStart,
   canViewProfiles = false,
@@ -134,6 +141,7 @@ export function AiUsageDashboard({
   monthlyByUser: MonthlyUserRow[];
   userTrends: Record<string, UserMonthlyTrendEntry[]>;
   modelTrends: ModelTrendPanel[];
+  monthlyModelMix?: MonthlyModelMix;
   people: PersonLookup[];
   /** ISO date for the vertical annotation on the weekly area chart. */
   claudeDataStart?: string;
@@ -142,13 +150,15 @@ export function AiUsageDashboard({
    *  dead-end link. */
   canViewProfiles?: boolean;
 }) {
+  const [weeklyMetric, setWeeklyMetric] = useState<"cost" | "tokens">("cost");
   const peopleByEmail = useMemo(
     () => new Map(people.map((p) => [p.email, p])),
     [people],
   );
 
   // Build the stacked-area data shape: one row per week with one column
-  // per category. Weeks with no data for a category get 0.
+  // per category. Weeks with no data for a category get 0. The `metric`
+  // toggle swaps the measured field — cost ($) or tokens (count).
   const stackedWeekly = useMemo(() => {
     const weeks = [
       ...new Set(weeklyByCategory.map((r) => r.weekStart)),
@@ -168,7 +178,8 @@ export function AiUsageDashboard({
     for (const row of weeklyByCategory) {
       const target = rowByWeek.get(row.weekStart);
       if (!target) continue;
-      target[row.category] = row.totalCost;
+      target[row.category] =
+        weeklyMetric === "cost" ? row.totalCost : row.totalTokens;
     }
     return {
       rows,
@@ -178,7 +189,7 @@ export function AiUsageDashboard({
         color: CATEGORY_COLORS[c] ?? "#6b7280",
       })),
     };
-  }, [weeklyByCategory]);
+  }, [weeklyByCategory, weeklyMetric]);
 
   // Latest month model breakdown with MoM delta + top-10 cap + "other" row.
   const modelBreakdown = useMemo(() => {
@@ -362,18 +373,51 @@ export function AiUsageDashboard({
   return (
     <div className="space-y-8">
       {stackedWeekly.rows.length > 1 && (
-        <StackedAreaChart
-          title="Weekly AI spend"
-          subtitle="Claude + Cursor, stacked so the top line is the company total"
-          data={stackedWeekly.rows}
-          series={stackedWeekly.series}
-          yFormatType="currency"
-          annotations={
-            claudeDataStart
-              ? [{ date: claudeDataStart, label: "Claude data begins" }]
-              : []
-          }
-        />
+        <div className="relative">
+          <StackedAreaChart
+            title={
+              weeklyMetric === "cost" ? "Weekly AI spend" : "Weekly AI tokens"
+            }
+            subtitle={
+              weeklyMetric === "cost"
+                ? "Claude + Cursor, stacked so the top line is the company total"
+                : "Total tokens consumed per week, stacked by tool"
+            }
+            data={stackedWeekly.rows}
+            series={stackedWeekly.series}
+            yFormatType={weeklyMetric === "cost" ? "currency" : "tokens"}
+            annotations={
+              claudeDataStart
+                ? [{ date: claudeDataStart, label: "Claude data begins" }]
+                : []
+            }
+          />
+          <div
+            className="absolute right-5 top-3 inline-flex rounded-md border border-border/60 bg-background p-0.5 text-[11px]"
+            role="tablist"
+            aria-label="Weekly chart metric"
+          >
+            {(["cost", "tokens"] as const).map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={weeklyMetric === m}
+                onClick={() => setWeeklyMetric(m)}
+                className={`rounded px-2 py-0.5 capitalize transition-colors ${
+                  weeklyMetric === m
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {m === "cost" ? "$ cost" : "Tokens"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {monthlyModelMix && monthlyModelMix.rows.length > 1 && (
+        <MonthlyModelMixChart mix={monthlyModelMix} />
       )}
 
       {modelBreakdown.rows.length > 0 && (
@@ -653,5 +697,144 @@ export function AiUsageDashboard({
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * Monthly model mix — one stacked column per month, segments sized by model
+ * spend. Lets you see which models are taking share over time AND the total
+ * growing, in one figure (vs. the `SmallMultiplesTimeSeries` which shows
+ * each model in isolation).
+ */
+function MonthlyModelMixChart({ mix }: { mix: MonthlyModelMix }) {
+  const [mode, setMode] = useState<"absolute" | "share">("absolute");
+
+  const totals = useMemo(() => {
+    return mix.rows.map((row) => {
+      let total = 0;
+      for (const m of mix.models) {
+        total += Number(row[m.modelName] ?? 0);
+      }
+      return total;
+    });
+  }, [mix]);
+
+  const maxTotal = Math.max(1, ...totals);
+
+  return (
+    <section className="rounded-xl border border-border/60 bg-card shadow-warm">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border/60 px-5 py-4">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            Monthly model mix
+          </p>
+          <h3 className="font-display text-lg italic text-foreground">
+            How spend is split by model, over time
+          </h3>
+        </div>
+        <div
+          className="inline-flex rounded-md border border-border/60 bg-background p-0.5 text-[11px]"
+          role="tablist"
+          aria-label="Model mix scale"
+        >
+          {(["absolute", "share"] as const).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              className={`rounded px-2 py-0.5 capitalize transition-colors ${
+                mode === m
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m === "absolute" ? "Absolute $" : "Share %"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto px-5 py-4">
+        <div
+          className="flex items-end gap-2"
+          style={{ minWidth: `${Math.max(mix.rows.length * 48, 320)}px` }}
+        >
+          {mix.rows.map((row, i) => {
+            const total = totals[i] ?? 0;
+            const barHeightPx = 220;
+            const scale = mode === "share" ? 1 : total / maxTotal;
+            return (
+              <div
+                key={row.monthStart}
+                className="flex flex-1 min-w-[32px] flex-col items-center gap-1"
+              >
+                <div className="text-[10px] tabular-nums text-muted-foreground/80">
+                  {formatCurrencyCompact(total)}
+                </div>
+                <div
+                  className="relative flex w-full flex-col overflow-hidden rounded-sm border border-border/40 bg-muted/10"
+                  style={{ height: `${barHeightPx}px` }}
+                  title={`${formatMonth(row.monthStart)} · ${formatCurrency(total)}`}
+                >
+                  <div
+                    className="absolute bottom-0 left-0 right-0 flex flex-col-reverse"
+                    style={{
+                      height: `${Math.max(scale * 100, 1)}%`,
+                    }}
+                  >
+                    {mix.models.map((model, mi) => {
+                      const value = Number(row[model.modelName] ?? 0);
+                      if (value <= 0) return null;
+                      const pct = total > 0 ? (value / total) * 100 : 0;
+                      const color =
+                        model.modelName === "Other"
+                          ? "#9ca3af"
+                          : MODEL_PALETTE[mi % MODEL_PALETTE.length];
+                      return (
+                        <div
+                          key={model.modelName}
+                          style={{
+                            height: `${pct}%`,
+                            backgroundColor: color,
+                            opacity: 0.9,
+                          }}
+                          title={`${model.modelName}: ${formatCurrency(value)} (${pct.toFixed(1)}%)`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                  {formatMonth(row.monthStart)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 px-5 py-3 text-[11px]">
+        {mix.models.map((m, i) => (
+          <li key={m.modelName} className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2 w-2 rounded-sm"
+              style={{
+                backgroundColor:
+                  m.modelName === "Other"
+                    ? "#9ca3af"
+                    : MODEL_PALETTE[i % MODEL_PALETTE.length],
+              }}
+            />
+            <span className="text-foreground">{m.modelName}</span>
+            {m.category !== "other" && (
+              <span className="text-muted-foreground/70">
+                · {m.category}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

@@ -15,6 +15,7 @@ vi.mock("../mode", async (importOriginal) => {
 
 import {
   aggregateLatestMonthByUser,
+  buildMonthlyModelMix,
   buildTopModelTrends,
   buildUserMonthlyTrends,
   getAiUsageData,
@@ -386,5 +387,83 @@ describe("getTrailingWeeklyTotals", () => {
       "2026-04-13",
     ]);
     expect(weekly.map((w) => w.cost)).toEqual([1200, 5200]);
+  });
+});
+
+describe("buildMonthlyModelMix", () => {
+  it("excludes ALL MODELS rollup rows and produces one row per month", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 9);
+
+    // Only one real (non-ALL MODELS) row in MoM Usage: Claude Sonnet 4.6 in April.
+    expect(mix.models.map((m) => m.modelName)).toEqual(["Claude Sonnet 4.6"]);
+    expect(mix.months).toEqual(["2026-04-01"]);
+    expect(mix.rows).toHaveLength(1);
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "Claude Sonnet 4.6": 2000,
+    });
+  });
+
+  it("rolls overflow models beyond topN into an Other bucket", async () => {
+    // Synthesise extra monthlyByModel rows so topN=1 pushes the rest to Other.
+    getReportDataMock.mockResolvedValueOnce([
+      ...makeReportData().filter((r) => r.queryName !== "MoM Usage"),
+      {
+        reportName: "AI Model Usage Dashboard",
+        section: "people",
+        category: "ai-usage",
+        queryName: "MoM Usage",
+        columns: [],
+        rows: [
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 5000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Opus 4.5",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 3000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "cursor",
+            model_name: "gpt-5",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 1000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+        ],
+        rowCount: 3,
+        syncedAt: new Date("2026-04-22T06:00:00Z"),
+      },
+    ]);
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 1);
+
+    expect(mix.models.map((m) => m.modelName)).toEqual([
+      "Claude Sonnet 4.6",
+      "Other",
+    ]);
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "Claude Sonnet 4.6": 5000,
+      // 3000 (Opus) + 1000 (gpt-5)
+      Other: 4000,
+    });
   });
 });

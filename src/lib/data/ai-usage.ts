@@ -477,6 +477,96 @@ export function getTrailingWeeklyTotals(
     .slice(-weeks);
 }
 
+/**
+ * Build the "Monthly model mix" data — one row per month, one column per
+ * model, with `cost` values that sum to that month's grand total. Excludes
+ * Mode's `ALL MODELS` rollup rows. Caller renders this as a stacked bar so
+ * readers can see (a) how the mix shifts (new models taking share) and
+ * (b) the total growing over time, in one figure.
+ *
+ * `topN` bounds the distinct columns to the biggest models by all-time
+ * cost; everything else gets rolled into an "Other" bucket so the legend
+ * doesn't explode as new models are added.
+ */
+export function buildMonthlyModelMix(
+  data: AiUsageData,
+  topN = 9,
+): {
+  months: string[];
+  models: Array<{ modelName: string; category: string; totalCost: number }>;
+  rows: Array<{ monthStart: string; [modelName: string]: string | number }>;
+} {
+  const byMonthModel = new Map<string, Map<string, number>>();
+  const totalByModel = new Map<
+    string,
+    { cost: number; category: string }
+  >();
+  const months = new Set<string>();
+
+  for (const row of data.monthlyByModel) {
+    if (row.category === "ALL MODELS" || row.modelName === "ALL MODELS") {
+      continue;
+    }
+    months.add(row.monthStart);
+    const perMonth =
+      byMonthModel.get(row.monthStart) ?? new Map<string, number>();
+    perMonth.set(
+      row.modelName,
+      (perMonth.get(row.modelName) ?? 0) + row.totalCost,
+    );
+    byMonthModel.set(row.monthStart, perMonth);
+
+    const existing = totalByModel.get(row.modelName);
+    totalByModel.set(row.modelName, {
+      cost: (existing?.cost ?? 0) + row.totalCost,
+      category: row.category,
+    });
+  }
+
+  const sortedModels = [...totalByModel.entries()]
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([modelName, { cost, category }]) => ({
+      modelName,
+      category,
+      totalCost: cost,
+    }));
+  const topModels = sortedModels.slice(0, topN);
+  const restNames = new Set(sortedModels.slice(topN).map((m) => m.modelName));
+
+  const sortedMonths = [...months].sort();
+  const rows = sortedMonths.map((monthStart) => {
+    const perMonth = byMonthModel.get(monthStart) ?? new Map();
+    const row: { monthStart: string; [modelName: string]: string | number } = {
+      monthStart,
+    };
+    for (const model of topModels) {
+      row[model.modelName] = perMonth.get(model.modelName) ?? 0;
+    }
+    let otherCost = 0;
+    for (const name of restNames) {
+      otherCost += perMonth.get(name) ?? 0;
+    }
+    if (restNames.size > 0) {
+      row.Other = otherCost;
+    }
+    return row;
+  });
+
+  const models = [...topModels];
+  if (restNames.size > 0) {
+    models.push({
+      modelName: "Other",
+      category: "other",
+      totalCost: [...sortedModels.slice(topN)].reduce(
+        (s, m) => s + m.totalCost,
+        0,
+      ),
+    });
+  }
+
+  return { months: sortedMonths, models, rows };
+}
+
 export function getUserTrend(
   data: AiUsageData,
   email: string,
