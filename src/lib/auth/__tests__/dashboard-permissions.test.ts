@@ -33,6 +33,36 @@ describe("buildDashboardPermissionSummaries", () => {
     expect(financial?.requiredRole).toBe("manager");
     expect(financial?.isOverride).toBe(true);
   });
+
+  it("ignores stored overrides for locked permissions", () => {
+    const summaries = buildDashboardPermissionSummaries({
+      "admin.users": "everyone",
+      "admin.status": "everyone",
+      "engineering.codeReview": "everyone",
+    });
+
+    expect(
+      summaries.find((summary) => summary.id === "admin.users"),
+    ).toMatchObject({
+      requiredRole: "ceo",
+      editable: false,
+      isOverride: false,
+    });
+    expect(
+      summaries.find((summary) => summary.id === "admin.status"),
+    ).toMatchObject({
+      requiredRole: "ceo",
+      editable: false,
+      isOverride: false,
+    });
+    expect(
+      summaries.find((summary) => summary.id === "engineering.codeReview"),
+    ).toMatchObject({
+      requiredRole: "ceo",
+      editable: false,
+      isOverride: false,
+    });
+  });
 });
 
 describe("buildDashboardNavGroups", () => {
@@ -53,5 +83,17 @@ describe("buildDashboardNavGroups", () => {
     );
 
     expect(peopleItem?.exactMatch).toBe(true);
+  });
+
+  it("does not lower locked nav items from stored overrides", () => {
+    const navGroups = buildDashboardNavGroups({
+      "admin.status": "everyone",
+    });
+    const adminGroup = navGroups.find((group) => group.label === "Admin");
+    const statusItem = adminGroup?.items.find(
+      (item) => item.permissionId === "admin.status",
+    );
+
+    expect(statusItem?.requiredRole).toBe("ceo");
   });
 });

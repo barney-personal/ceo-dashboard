@@ -36,6 +36,14 @@ describe("ProbesPage permission guard", () => {
 
     expect(mockRequireDashboardPermission).toHaveBeenCalledWith("admin.probes");
   });
+
+  it("does not load probe data when permission gating rejects", async () => {
+    mockRequireDashboardPermission.mockRejectedValue(new Error("redirected"));
+
+    await expect(ProbesPage()).rejects.toThrow("redirected");
+    expect(mockGetProbeStatusSummary).not.toHaveBeenCalled();
+    expect(mockGetProbeTimeline).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

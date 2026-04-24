@@ -342,12 +342,14 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     },
   },
   {
+    // Locked: this page exposes role mutation and impersonation controls.
     id: "admin.users",
     label: "Users",
     description: "Clerk user admin, role assignment, and impersonation.",
     href: "/dashboard/admin/users",
     groupLabel: "Admin",
     defaultRole: "ceo",
+    editable: false,
     nav: {
       groupLabel: "Admin",
       label: "Users",
@@ -382,12 +384,14 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     },
   },
   {
+    // Locked: this page also controls manual sync trigger authority.
     id: "admin.status",
     label: "Data Status",
     description: "Sync health, recent runs, and data source status.",
     href: "/dashboard/admin/status",
     groupLabel: "Admin",
     defaultRole: "ceo",
+    editable: false,
     nav: {
       groupLabel: "Admin",
       label: "Data Status",
@@ -452,12 +456,14 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
+    // Locked: the page includes a manual analysis trigger with CEO-only authority.
     id: "engineering.codeReview",
     label: "Code Review",
     description: "LLM-reviewed PR analysis for engineering quality.",
     href: "/dashboard/engineering/code-review",
     groupLabel: "Team",
     defaultRole: "ceo",
+    editable: false,
     redirectTo: "/dashboard/engineering",
   },
   {
@@ -474,6 +480,17 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
 export const DASHBOARD_PERMISSION_IDS = DASHBOARD_PERMISSION_DEFINITIONS.map(
   (definition) => definition.id,
 );
+
+function getEffectiveRequiredRole(
+  definition: DashboardPermissionDefinition,
+  overrides: DashboardPermissionRoleMap,
+): Role {
+  if (definition.editable === false) {
+    return definition.defaultRole;
+  }
+
+  return overrides[definition.id] ?? definition.defaultRole;
+}
 
 export function getDashboardPermissionDefinition(
   permissionId: DashboardPermissionId,
@@ -494,8 +511,11 @@ export function buildDashboardPermissionSummaries(
 ): DashboardPermissionSummary[] {
   return DASHBOARD_PERMISSION_DEFINITIONS.map((definition) => {
     const normalizedDefinition = definition as DashboardPermissionDefinition;
-    const requiredRole =
-      overrides[normalizedDefinition.id] ?? normalizedDefinition.defaultRole;
+    const requiredRole = getEffectiveRequiredRole(
+      normalizedDefinition,
+      overrides,
+    );
+    const editable = normalizedDefinition.editable ?? true;
 
     return {
       id: normalizedDefinition.id,
@@ -505,8 +525,8 @@ export function buildDashboardPermissionSummaries(
       groupLabel: normalizedDefinition.groupLabel,
       defaultRole: normalizedDefinition.defaultRole,
       requiredRole,
-      isOverride: requiredRole !== normalizedDefinition.defaultRole,
-      editable: normalizedDefinition.editable ?? true,
+      isOverride: editable && requiredRole !== normalizedDefinition.defaultRole,
+      editable,
       isNavItem: normalizedDefinition.nav != null,
       navLabel: normalizedDefinition.nav?.label ?? null,
     };
@@ -522,8 +542,10 @@ export function buildDashboardNavGroups(
     const normalizedDefinition = definition as DashboardPermissionDefinition;
     if (!normalizedDefinition.nav) continue;
 
-    const requiredRole =
-      overrides[normalizedDefinition.id] ?? normalizedDefinition.defaultRole;
+    const requiredRole = getEffectiveRequiredRole(
+      normalizedDefinition,
+      overrides,
+    );
     const items = groups.get(normalizedDefinition.nav.groupLabel) ?? [];
     items.push({
       permissionId: normalizedDefinition.id,
