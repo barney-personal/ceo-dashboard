@@ -11,6 +11,17 @@ import {
 } from "@/lib/integrations/code-review-analyser";
 import { CODE_REVIEW_WINDOW_DAYS } from "@/lib/sync/code-review";
 
+export const SECOND_LOOK_REASONS = [
+  "model_flagged_concerning",
+  "model_flagged_low_quality",
+  "reverted_within_14d",
+  "heavy_change_requests",
+  "heavy_post_review_commits",
+  "low_landing_high_churn",
+] as const;
+
+export type SecondLookReason = (typeof SECOND_LOOK_REASONS)[number];
+
 export interface PrReviewEntry {
   repo: string;
   prNumber: number;
@@ -47,6 +58,7 @@ export interface PrReviewEntry {
   prScore: number;
   recencyWeight: number;
   githubUrl: string;
+  secondLookReasons: SecondLookReason[];
 }
 
 export type DiagnosticFlag =
@@ -85,6 +97,7 @@ export interface EngineerRollup {
   prs: PrReviewEntry[];
   prevFinalScore: number | null;
   weeklyScore: number[];
+  reviewChurnResidual: number;
 }
 
 export interface CodeReviewView {
@@ -264,7 +277,92 @@ function emptyCategoryCounts(): Record<AnalysisCategory, number> {
   };
 }
 
-function computeFlags(prs: PrReviewEntry[], effectivePrCount: number): DiagnosticFlag[] {
+// A per-PR "churn unit": one round beyond the first counts as 1, each
+// post-review commit as 0.5, each change-request as 0.3. A smooth PR lands
+// at 0. Tuned so typical churn residuals (vs bucket baseline) sit in the
+// [-2, +2] range, making the >= 1.0 threshold readable.
+function churnUnit(pr: {
+  reviewRounds: number;
+  commitsAfterFirstReview: number;
+  changeRequestCount: number;
+}): number {
+  return (
+    Math.max(0, pr.reviewRounds - 1) +
+    0.5 * pr.commitsAfterFirstReview +
+    0.3 * pr.changeRequestCount
+  );
+}
+
+function churnBucketKey(pr: {
+  category: AnalysisCategory;
+  technicalDifficulty: number;
+}): string {
+  return `${pr.category}:${pr.technicalDifficulty}`;
+}
+
+interface ChurnBaselines {
+  overall: number;
+  byBucket: Map<string, { mean: number; count: number }>;
+  shrinkageK: number;
+}
+
+function computeChurnBaselines(prs: PrReviewEntry[]): ChurnBaselines {
+  const bucketSums = new Map<string, { sum: number; count: number }>();
+  let overallSum = 0;
+  let overallCount = 0;
+  for (const pr of prs) {
+    const unit = churnUnit(pr);
+    overallSum += unit;
+    overallCount += 1;
+    const key = churnBucketKey(pr);
+    const entry = bucketSums.get(key) ?? { sum: 0, count: 0 };
+    entry.sum += unit;
+    entry.count += 1;
+    bucketSums.set(key, entry);
+  }
+  const overall = overallCount > 0 ? overallSum / overallCount : 0;
+  const byBucket = new Map<string, { mean: number; count: number }>();
+  for (const [key, entry] of bucketSums) {
+    byBucket.set(key, { mean: entry.sum / entry.count, count: entry.count });
+  }
+  return { overall, byBucket, shrinkageK: 5 };
+}
+
+function expectedChurn(
+  pr: { category: AnalysisCategory; technicalDifficulty: number },
+  baselines: ChurnBaselines,
+): number {
+  const entry = baselines.byBucket.get(churnBucketKey(pr));
+  if (!entry) return baselines.overall;
+  const k = baselines.shrinkageK;
+  return (k * baselines.overall + entry.count * entry.mean) / (k + entry.count);
+}
+
+function computeSecondLookReasons(pr: {
+  standout: AnalysisStandout | null;
+  revertWithin14d: boolean;
+  changeRequestCount: number;
+  commitsAfterFirstReview: number;
+  reviewRounds: number;
+  outcomeScore: number;
+}): SecondLookReason[] {
+  const reasons: SecondLookReason[] = [];
+  if (pr.standout === "concerning") reasons.push("model_flagged_concerning");
+  if (pr.standout === "notably_low_quality") reasons.push("model_flagged_low_quality");
+  if (pr.revertWithin14d) reasons.push("reverted_within_14d");
+  if (pr.changeRequestCount >= 3) reasons.push("heavy_change_requests");
+  if (pr.commitsAfterFirstReview >= 5) reasons.push("heavy_post_review_commits");
+  if (pr.outcomeScore <= 40 && pr.reviewRounds >= 3) {
+    reasons.push("low_landing_high_churn");
+  }
+  return reasons;
+}
+
+function computeFlags(
+  prs: PrReviewEntry[],
+  effectivePrCount: number,
+  churnResidual: number,
+): DiagnosticFlag[] {
   const flags: DiagnosticFlag[] = [];
   if (effectivePrCount < 2.5) flags.push("low_evidence");
   if (weightedAverage(
@@ -273,16 +371,13 @@ function computeFlags(prs: PrReviewEntry[], effectivePrCount: number): Diagnosti
   ) < 65) {
     flags.push("low_confidence");
   }
-  if (prs.some((pr) => pr.standout === "concerning")) {
+  if (prs.some((pr) => pr.secondLookReasons.length > 0)) {
     flags.push("has_concerning_pr");
   }
   if (prs.some((pr) => pr.revertWithin14d)) {
     flags.push("reverted_pr");
   }
-  if (
-    average(prs.map((pr) => pr.reviewRounds)) >= 2.5 ||
-    average(prs.map((pr) => pr.commitsAfterFirstReview)) >= 2
-  ) {
+  if (effectivePrCount >= 2.5 && churnResidual >= 1.0) {
     flags.push("review_churn_high");
   }
   if (prs.length >= 5 && stdev(prs.map((pr) => pr.executionQuality)) >= 1.1) {
@@ -393,12 +488,14 @@ function normaliseRow(row: AnalysisRow): Omit<PrReviewEntry, "githubUrl"> {
     outcomeScore: base.outcomeScore,
   });
   const prScore = computePrScore(base);
+  const secondLookReasons = computeSecondLookReasons(base);
 
   return {
     ...base,
     qualityScore,
     reviewHealthScore,
     prScore,
+    secondLookReasons,
   };
 }
 
@@ -483,6 +580,14 @@ function buildRollupSet(
     }
   >();
 
+  const allPrsForBaseline: PrReviewEntry[] = [];
+  for (const [key, bucket] of rollupByAuthor) {
+    const employee = employeeByLogin.get(key);
+    if (employee?.isBot) continue;
+    allPrsForBaseline.push(...bucket.prs);
+  }
+  const churnBaselines = computeChurnBaselines(allPrsForBaseline);
+
   for (const [key, bucket] of rollupByAuthor) {
     const employee = employeeByLogin.get(key);
     if (employee?.isBot) continue;
@@ -522,6 +627,11 @@ function buildRollupSet(
     const throughputRaw = prs.reduce(
       (sum, pr) => sum + pr.prScore * pr.recencyWeight,
       0,
+    );
+
+    const churnResidual = weightedAverage(
+      prs.map((pr) => churnUnit(pr) - expectedChurn(pr, churnBaselines)),
+      weights,
     );
 
     cohortRawByAuthor.set(key, {
@@ -572,10 +682,11 @@ function buildRollupSet(
       rawScore: 50,
       finalScore: 50,
       categoryCounts: bucket.categoryCounts,
-      flags: computeFlags(prs, effectivePrCount),
+      flags: computeFlags(prs, effectivePrCount, churnResidual),
       prs,
       prevFinalScore: null,
       weeklyScore: bucketWeekly(prs, windowDays),
+      reviewChurnResidual: churnResidual,
     });
   }
 

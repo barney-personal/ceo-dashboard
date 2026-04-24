@@ -230,6 +230,121 @@ describe("getCodeReviewView", () => {
     ]);
   });
 
+  it("fires has_concerning_pr on rule-based signals even without the LLM standout", async () => {
+    mockChain(
+      [
+        row({ authorLogin: "gary", prNumber: 701 }),
+        row({
+          authorLogin: "gary",
+          prNumber: 702,
+          standout: null,
+          revertWithin14d: false,
+          changeRequestCount: 4,
+          commitsAfterFirstReview: 1,
+        }),
+        row({ authorLogin: "gary", prNumber: 703 }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    const gary = view.engineers[0];
+    expect(gary.flags).toContain("has_concerning_pr");
+    const flagged = gary.prs.find((pr) => pr.prNumber === 702);
+    expect(flagged?.secondLookReasons).toContain("heavy_change_requests");
+  });
+
+  it("does not flag review_churn_high when churn matches similar-work peers", async () => {
+    // All engineers doing difficulty-5 refactors with the same churn pattern.
+    // Nobody stands out against the bucket baseline.
+    mockChain(
+      [
+        ...["p1", "p2", "p3", "p4", "p5"].flatMap((login, i) =>
+          [801, 802].map((n) =>
+            row({
+              authorLogin: login,
+              prNumber: n + i * 10,
+              category: "refactor",
+              technicalDifficulty: 5,
+              reviewRounds: 4,
+              commitsAfterFirstReview: 2,
+            }),
+          ),
+        ),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    for (const engineer of view.engineers) {
+      expect(engineer.flags).not.toContain("review_churn_high");
+      expect(Math.abs(engineer.reviewChurnResidual)).toBeLessThan(1);
+    }
+  });
+
+  it("flags review_churn_high when churn exceeds peers on similar work", async () => {
+    // 6 smooth chore PRs set the chore:1 baseline near 0 churn.
+    // Alice has 3 chore:1 PRs with very high churn — she stands out.
+    // Bob does 3 refactor:5 PRs matching the refactor:5 baseline — no flag.
+    const calm = ["c1", "c2", "c3", "c4", "c5", "c6"].map((login, i) =>
+      row({
+        authorLogin: login,
+        prNumber: 900 + i,
+        category: "chore",
+        technicalDifficulty: 1,
+        reviewRounds: 1,
+        commitsAfterFirstReview: 0,
+        changeRequestCount: 0,
+      }),
+    );
+    const refactorPeers = ["r1", "r2", "r3", "r4", "r5", "r6"].map((login, i) =>
+      row({
+        authorLogin: login,
+        prNumber: 920 + i,
+        category: "refactor",
+        technicalDifficulty: 5,
+        reviewRounds: 4,
+        commitsAfterFirstReview: 2,
+        changeRequestCount: 1,
+      }),
+    );
+    const alicePrs = [0, 1, 2, 3].map((n) =>
+      row({
+        authorLogin: "alice_churny",
+        prNumber: 940 + n,
+        category: "chore",
+        technicalDifficulty: 1,
+        reviewRounds: 4,
+        commitsAfterFirstReview: 3,
+        changeRequestCount: 2,
+      }),
+    );
+    const bobPrs = [0, 1, 2, 3].map((n) =>
+      row({
+        authorLogin: "bob_refactor",
+        prNumber: 960 + n,
+        category: "refactor",
+        technicalDifficulty: 5,
+        reviewRounds: 4,
+        commitsAfterFirstReview: 2,
+        changeRequestCount: 1,
+      }),
+    );
+    mockChain([...calm, ...refactorPeers, ...alicePrs, ...bobPrs], []);
+
+    const view = await getCodeReviewView();
+    const alice = view.engineers.find(
+      (engineer) => engineer.authorLogin === "alice_churny",
+    );
+    const bob = view.engineers.find(
+      (engineer) => engineer.authorLogin === "bob_refactor",
+    );
+    expect(alice?.flags).toContain("review_churn_high");
+    expect(alice?.reviewChurnResidual).toBeGreaterThan(1);
+    expect(bob?.flags).not.toContain("review_churn_high");
+    expect(Math.abs(bob?.reviewChurnResidual ?? 0)).toBeLessThan(1);
+  });
+
   it("uses the general percentile path for two-engineer cohorts", async () => {
     mockChain(
       [

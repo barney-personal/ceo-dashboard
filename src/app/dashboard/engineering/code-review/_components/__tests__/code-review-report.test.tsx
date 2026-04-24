@@ -79,10 +79,12 @@ function makeRollup(overrides: Partial<EngineerRollup> = {}): EngineerRollup {
         prScore: 76,
         recencyWeight: 0.9,
         githubUrl: "https://github.com/acme/api/pull/42",
+        secondLookReasons: [],
       },
     ],
     prevFinalScore: 48,
     weeklyScore: [10, 20, 42],
+    reviewChurnResidual: 0,
     ...overrides,
   };
 }

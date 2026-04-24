@@ -7,6 +7,7 @@ import type {
   DiagnosticFlag,
   EngineerRollup,
   PrReviewEntry,
+  SecondLookReason,
 } from "@/lib/data/code-review";
 import type {
   AnalysisCategory,
@@ -41,11 +42,20 @@ const FLAG_HELP: Record<DiagnosticFlag, string> = {
   quality_variance_high:
     "Some PRs read very differently from others. Often just a function of varied work.",
   review_churn_high:
-    "Several rounds of review or post-review commits. Could be a tricky change, could be a process tweak worth a chat.",
+    "More review back-and-forth than similar-type, similar-difficulty PRs in this window. Refactors and features naturally churn more than chores — this adjusts for that.",
   has_concerning_pr:
-    "One PR in the window is worth opening together — not necessarily a problem.",
+    "At least one PR is worth opening together — either the model flagged it, or review signals did (heavy change requests, post-review churn, a revert). Not necessarily a problem.",
   reverted_pr:
     "A merged PR was reverted within 14 days. Reverts happen — context usually explains it.",
+};
+
+const SECOND_LOOK_LABEL: Record<SecondLookReason, string> = {
+  model_flagged_concerning: "Model raised a concern",
+  model_flagged_low_quality: "Model read it as low quality",
+  reverted_within_14d: "Reverted within 14 days",
+  heavy_change_requests: "Lots of change requests",
+  heavy_post_review_commits: "Many post-review commits",
+  low_landing_high_churn: "Rough landing with heavy review",
 };
 
 const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
@@ -589,6 +599,19 @@ function Drawer({
           <Stat label="Throughput (peer)" value={Math.round(engineer.throughputPercentile).toString()} />
         </div>
 
+        <div className="mb-4 rounded-md border border-border/40 bg-muted/5 px-3 py-2">
+          <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/80">
+            Review back-and-forth vs similar work
+          </p>
+          <p className="mt-1 font-mono text-[12px] text-foreground">
+            {formatChurnResidual(engineer.reviewChurnResidual)}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Zero means in line with peers on similar category + difficulty.
+            Positive means more churn than comparable work; negative, less.
+          </p>
+        </div>
+
         {engineer.weeklyScore.length > 1 && (
           <div className="mb-4 rounded-lg border border-border/40 bg-muted/5 p-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
@@ -694,6 +717,19 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
         )}
       </div>
 
+      {pr.secondLookReasons.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            Worth a second look:
+          </span>
+          {pr.secondLookReasons.map((reason) => (
+            <span key={reason} className={pillClass(false, "warn")}>
+              {SECOND_LOOK_LABEL[reason]}
+            </span>
+          ))}
+        </div>
+      )}
+
       {pr.secondOpinionUsed && pr.secondOpinionReasons.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {pr.secondOpinionReasons.map((reason) => (
@@ -722,6 +758,19 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
       </p>
     </li>
   );
+}
+
+function formatChurnResidual(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  if (Math.abs(rounded) < 0.05) return "In line with similar work (0.0)";
+  const sign = rounded > 0 ? "+" : "";
+  const tone =
+    rounded >= 1 ? "Noticeably more"
+    : rounded >= 0.5 ? "Slightly more"
+    : rounded <= -1 ? "Noticeably less"
+    : rounded <= -0.5 ? "Slightly less"
+    : "Close to";
+  return `${tone} than similar work (${sign}${rounded.toFixed(1)})`;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
