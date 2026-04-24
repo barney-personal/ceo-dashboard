@@ -10,11 +10,12 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: per-engineer attribution drilldowns, ranking
- * snapshots, the movers view, the anti-gaming audit, and the stability
- * check are still pending until `EngineeringRankingSnapshot.status === "ready"`.
- * Confidence bands and statistical-tie groups (M14) are live and travel on
- * the snapshot via `confidence`.
+ * not a final adjudication: ranking snapshots, the movers view, the
+ * anti-gaming audit, and the stability check are still pending until
+ * `EngineeringRankingSnapshot.status === "ready"`. Confidence bands and
+ * statistical-tie groups (M14) are live and travel on the snapshot via
+ * `confidence`. Per-engineer attribution drilldowns (M15) are live and
+ * travel on the snapshot via `attribution`.
  */
 
 import { createHash } from "node:crypto";
@@ -41,8 +42,18 @@ import { createHash } from "node:crypto";
  *   collapsed into activity volume. Snapshot `status` still stays
  *   `methodology_pending` until attribution, snapshots, movers, anti-gaming,
  *   and stability also land.
+ * - `0.7.0-attribution` — M15 per-engineer attribution is live. Every
+ *   competitive engineer carries a visible per-method component breakdown,
+ *   top positive/negative drivers, a composite reconciliation check, a
+ *   discipline-cohort peer comparison, an evidence block (GitHub login,
+ *   PR-search URL for the window, impact-model presence), and
+ *   manager/squad/pillar context. Absent signals are labelled with a reason
+ *   rather than implied by omission, so every ranked position can be
+ *   defended from visible contributions. Snapshot `status` still stays
+ *   `methodology_pending` until snapshots, movers, anti-gaming, and
+ *   stability also land.
  */
-export const RANKING_METHODOLOGY_VERSION = "0.6.0-confidence" as const;
+export const RANKING_METHODOLOGY_VERSION = "0.7.0-attribution" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -254,6 +265,17 @@ export interface EngineeringRankingSnapshot {
    * thin signal cohort never reads as a precise rank.
    */
   confidence: ConfidenceBundle;
+  /**
+   * Per-engineer attribution drilldown for every competitive engineer. Each
+   * entry carries per-method component breakdowns, top positive/negative
+   * drivers, a composite reconciliation check (so "the rank is median of
+   * methods" is visible, not just a sort order), a discipline-cohort peer
+   * comparison, an evidence block (GitHub login + PR-search URL, impact-model
+   * presence, squad context), and manager/squad/pillar context. Absent
+   * signals are labelled with a reason — the methodology never implies
+   * availability by silent omission.
+   */
+  attribution: AttributionBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -517,6 +539,13 @@ export interface EligibilityInputs {
   rampUpDays?: number;
   /** Analysis window in days. Defaults to 180. */
   windowDays?: number;
+  /**
+   * Optional GitHub org (e.g. `meetcleo`) used to build stable PR-search
+   * evidence URLs in the attribution drilldown. Null/undefined means no
+   * PR-search URL is emitted — the attribution then surfaces the missing
+   * login or org as an absent-evidence note rather than fabricating a link.
+   */
+  githubOrg?: string | null;
 }
 
 function isEngineerRow(row: EligibilityHeadcountRow): boolean {
@@ -2637,7 +2666,7 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15), ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
     ],
   };
 }
@@ -3113,7 +3142,526 @@ export function buildConfidence({
       `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
       `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
       `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
-      `Per-engineer attribution drilldowns (M15), ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
+      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
+    ],
+  };
+}
+
+/* ------------------------------------------------------------------------ */
+/* M15 per-engineer attribution drilldown                                   */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Number of top positive/negative drivers surfaced per engineer in the
+ * attribution drilldown. Small enough to keep the drilldown readable;
+ * large enough that a CEO defending a rank can see more than one signal.
+ */
+export const RANKING_ATTRIBUTION_TOP_DRIVERS = 5 as const;
+
+/**
+ * Acceptable absolute error between the recomputed composite (median of the
+ * per-engineer method scores) and the stored composite score. The composite
+ * is exact arithmetic on the methods, so we keep this extremely tight —
+ * anything above 0.05 percentile points indicates the per-engineer method
+ * breakdown disagrees with the composite, which is a methodology defect, not
+ * rounding noise.
+ */
+export const RANKING_ATTRIBUTION_TOLERANCE = 0.05 as const;
+
+/** Whether a contribution is actually scored or surfaced as an absent signal. */
+export type AttributionContributionKind = "present" | "absent";
+
+/**
+ * One component's view on an engineer's score — the building block of the
+ * per-method breakdown. `percentile` is the engineer's rank-percentile on
+ * [0, 100] for this component, with lower-is-better signals already inverted
+ * so a higher percentile always reads as "better" on the drilldown. The
+ * `approxCompositeLift` is a linear approximation of how far this one signal
+ * pushed the composite above (or below) the neutral 50 — it is a useful
+ * directional label, not the actual composite formula (which is median).
+ */
+export interface AttributionContribution {
+  signal: string;
+  method: CompositeMethod;
+  methodLabel: string;
+  kind: AttributionContributionKind;
+  rawValue: number | null;
+  percentile: number | null;
+  /**
+   * Weight of this component inside its method. Method components sum to 1
+   * (weighted-mean contract) so this is directly comparable across
+   * components within the same method.
+   */
+  weightInMethod: number;
+  /**
+   * Linear approximation of the signal's lift on the composite percentile
+   * above the neutral point of 50. Defined as
+   *   (1 / totalMethods) × weightInMethod × (percentile − 50)
+   * when the method is present, null otherwise. Used only to tag positive vs
+   * negative drivers — the composite itself is the median of the four method
+   * scores, not a weighted sum, so this number is illustrative.
+   */
+  approxCompositeLift: number | null;
+  /** Reason a signal is absent. Empty string when `kind === "present"`. */
+  absenceReason: string;
+}
+
+/** Evidence references and availability badges surfaced per engineer. */
+export interface EngineerAttributionEvidence {
+  githubLogin: string | null;
+  /**
+   * Stable GitHub search URL scoped to this engineer's merged PRs within the
+   * signal window. Null when no GitHub login is mapped or no org was supplied.
+   * Per-PR rubric / review turnaround / cycle-time are not persisted today
+   * (see the unavailable-signals audit), so this URL is the only per-PR
+   * evidence link we can emit without fabricating a signal.
+   */
+  githubPrSearchUrl: string | null;
+  impactModelPresent: boolean;
+  squadContextPresent: boolean;
+  /** Plain-language evidence-availability notes, including absent evidence. */
+  notes: string[];
+}
+
+/** Manager-chain / squad / pillar context pulled from the eligibility row. */
+export interface EngineerAttributionContext {
+  manager: string | null;
+  rawSquad: string | null;
+  pillar: string | null;
+  canonicalSquad: CanonicalSquadMetadata | null;
+}
+
+/** Discipline peer comparison — inherited from the M10 normalisation layer. */
+export interface EngineerAttributionPeerComparison {
+  discipline: Discipline;
+  disciplineCohort: DisciplineCohortInfo | null;
+  rawPercentile: number | null;
+  adjustedPercentile: number | null;
+  /** `adjustedPercentile − rawPercentile` — lift from tenure/role adjustment. */
+  adjustmentLift: number | null;
+}
+
+/** Reconciliation check — per-method scores must form the composite via median. */
+export interface EngineerAttributionReconciliation {
+  methodScores: Array<{ method: CompositeMethod; score: number }>;
+  /** Median of present method scores. Null when compositeScore is null. */
+  recomputedComposite: number | null;
+  /** `recomputedComposite − compositeScore`. Null when compositeScore is null. */
+  delta: number | null;
+  /** `|delta| ≤ tolerance`. Always true for a well-formed composite. */
+  matches: boolean;
+}
+
+/** Per-method entry in the attribution drilldown. */
+export interface EngineerAttributionMethod {
+  method: CompositeMethod;
+  label: string;
+  score: number | null;
+  present: boolean;
+  presentReason: string;
+  components: AttributionContribution[];
+}
+
+/** Full attribution entry for one engineer. Attached to the snapshot bundle. */
+export interface EngineerAttribution {
+  emailHash: string;
+  displayName: string;
+  discipline: Discipline;
+  levelLabel: string;
+  eligibility: EligibilityStatus;
+  rank: number | null;
+  compositeScore: number | null;
+  compositePercentile: number | null;
+  presentMethodCount: number;
+  methods: EngineerAttributionMethod[];
+  topPositiveDrivers: AttributionContribution[];
+  topNegativeDrivers: AttributionContribution[];
+  /** Signals labelled absent so the reader never infers availability from silence. */
+  absentSignals: string[];
+  reconciliation: EngineerAttributionReconciliation;
+  peerComparison: EngineerAttributionPeerComparison;
+  evidence: EngineerAttributionEvidence;
+  context: EngineerAttributionContext;
+}
+
+export interface AttributionBundle {
+  /** Plain-language description of the attribution methodology. */
+  contract: string;
+  /** Tolerance used for the reconciliation check. */
+  tolerance: number;
+  /** Total methods combined into the composite (today: 4). */
+  totalMethods: number;
+  /** All competitive engineers, scored or unscored. Sorted by rank asc with unscored last. */
+  entries: EngineerAttribution[];
+  /** Plain-language attribution-stage limitations shown on the page. */
+  limitations: string[];
+}
+
+/**
+ * Build the GitHub PR-search URL for an engineer scoped to merged PRs in the
+ * signal window. Returns null if the login or org is missing. The URL is
+ * constructed locally; no API call is made.
+ */
+function buildGithubPrSearchUrl(
+  githubLogin: string | null,
+  githubOrg: string | null,
+  windowStartIso: string,
+  windowEndIso: string,
+): string | null {
+  if (!githubLogin || !githubOrg) return null;
+  const trimmedOrg = githubOrg.trim();
+  if (!trimmedOrg) return null;
+  const start = windowStartIso.slice(0, 10);
+  const end = windowEndIso.slice(0, 10);
+  const query = [
+    `org:${trimmedOrg}`,
+    `author:${githubLogin}`,
+    "is:pr",
+    "is:merged",
+    `merged:${start}..${end}`,
+  ].join(" ");
+  return `https://github.com/search?type=pullrequests&q=${encodeURIComponent(query)}`;
+}
+
+function describeMethodPresence(
+  method: CompositeMethod,
+  score: number | null,
+  entry: EligibilityEntry,
+): string {
+  if (score !== null) return "Scored — contributes to the median.";
+  switch (method) {
+    case "output":
+      return "No scored components — no persisted PR/commit activity in the window.";
+    case "impact":
+      return entry.hasImpactModelRow
+        ? "Impact model present but SHAP fields missing — treated as absent."
+        : "Not in the impact-model training set — absent for this engineer.";
+    case "delivery":
+      return "No squad-delivery context joined — Swarmia squad fields are squad-level and may be missing for this engineer's squad.";
+    case "adjusted":
+      return "No normalisation lift — the adjusted percentile could not be computed (e.g. no rawScore from persisted PR data).";
+  }
+}
+
+function buildMethodComponents(
+  method: CompositeMethod,
+  lenses: LensesBundle,
+  normalisation: EngineerNormalisation | undefined,
+  emailHash: string,
+  totalMethods: number,
+  methodPresent: boolean,
+): AttributionContribution[] {
+  const methodLabel = RANKING_COMPOSITE_METHOD_LABELS[method];
+  const lensSummary =
+    method === "output"
+      ? lenses.lenses.output
+      : method === "impact"
+        ? lenses.lenses.impact
+        : method === "delivery"
+          ? lenses.lenses.delivery
+          : null;
+
+  if (lensSummary) {
+    const lensEntry = lensSummary.entries.find((e) => e.emailHash === emailHash);
+    if (!lensEntry) return [];
+    return lensEntry.components.map((component): AttributionContribution => {
+      const percentile = component.percentile;
+      const kind: AttributionContributionKind =
+        percentile === null ? "absent" : "present";
+      const approxCompositeLift =
+        kind === "present" && methodPresent
+          ? (1 / totalMethods) * component.weight * (percentile! - 50)
+          : null;
+      return {
+        signal: component.name,
+        method,
+        methodLabel,
+        kind,
+        rawValue: component.rawValue,
+        percentile,
+        weightInMethod: component.weight,
+        approxCompositeLift,
+        absenceReason:
+          kind === "absent"
+            ? `${component.name} is missing for this engineer — the component does not contribute to ${methodLabel}.`
+            : "",
+      };
+    });
+  }
+
+  // Adjusted method — surface the three normalisation sub-adjustments. Each
+  // sub-adjustment contributes 1/3 of the adjusted method because
+  // `adjustedPercentile = mean(discipline, level, tenure)` with equal weights.
+  if (!normalisation) return [];
+  const subWeight = 1 / 3;
+  const subComponents: Array<{
+    signal: string;
+    rawValue: number | null;
+    percentile: number | null;
+    absenceReason: string;
+  }> = [
+    {
+      signal: "Discipline percentile",
+      rawValue: normalisation.rawScore,
+      percentile: normalisation.disciplinePercentile,
+      absenceReason:
+        "Discipline cohort percentile unavailable — either no rawScore for this engineer or no eligible discipline cohort.",
+    },
+    {
+      signal: "Level-adjusted residual percentile",
+      rawValue: normalisation.levelAdjustedResidual,
+      percentile: normalisation.levelAdjustedPercentile,
+      absenceReason:
+        "Level residual unavailable — no OLS fit (e.g. fewer than two engineers with both a parsable level and a rawScore).",
+    },
+    {
+      signal: "Tenure-adjusted rate percentile",
+      rawValue: normalisation.tenureAdjustedRate,
+      percentile: normalisation.tenureAdjustedPercentile,
+      absenceReason:
+        "Tenure-adjusted rate unavailable — engineer has no rawScore or zero window exposure.",
+    },
+  ];
+
+  return subComponents.map((sub): AttributionContribution => {
+    const kind: AttributionContributionKind =
+      sub.percentile === null ? "absent" : "present";
+    const approxCompositeLift =
+      kind === "present" && methodPresent
+        ? (1 / totalMethods) * subWeight * (sub.percentile! - 50)
+        : null;
+    return {
+      signal: sub.signal,
+      method,
+      methodLabel,
+      kind,
+      rawValue: sub.rawValue,
+      percentile: sub.percentile,
+      weightInMethod: subWeight,
+      approxCompositeLift,
+      absenceReason: kind === "absent" ? sub.absenceReason : "",
+    };
+  });
+}
+
+/**
+ * Build the per-engineer attribution bundle.
+ *
+ * Contract:
+ *   For every competitive engineer, emit a drilldown carrying
+ *   - each composite method's score and per-component breakdown (signal,
+ *     weight within the method, raw value, percentile, and an approximate
+ *     contribution to the composite percentile above neutral),
+ *   - the top positive and top negative drivers (sorted by
+ *     `|approxCompositeLift|` desc),
+ *   - a reconciliation check proving the stored composite equals the median
+ *     of the per-method scores within `RANKING_ATTRIBUTION_TOLERANCE`,
+ *   - a discipline-cohort peer comparison inherited from the M10
+ *     normalisation layer (raw percentile, adjusted percentile, adjustment
+ *     lift, and the pooling note),
+ *   - an evidence block with the engineer's GitHub login, a stable
+ *     PR-search URL scoped to merged PRs in the window, impact-model
+ *     presence, and whether squad-delivery context is joined,
+ *   - manager/squad/pillar context from the eligibility row so a reader can
+ *     defend a rank without leaving the drilldown.
+ *
+ * Absent signals are labelled verbatim — we never imply availability by
+ * silent omission. AI tokens/spend are never contributions; they stay in the
+ * audit and never enter a ranked path.
+ */
+export function buildAttribution({
+  entries,
+  lenses,
+  normalisation,
+  composite,
+  windowStartIso,
+  windowEndIso,
+  githubOrg = null,
+}: {
+  entries: EligibilityEntry[];
+  lenses: LensesBundle;
+  normalisation: NormalisationBundle;
+  composite: CompositeBundle;
+  windowStartIso: string;
+  windowEndIso: string;
+  githubOrg?: string | null;
+}): AttributionBundle {
+  const competitiveByHash = new Map(
+    entries
+      .filter((e) => e.eligibility === "competitive")
+      .map((e) => [e.emailHash, e]),
+  );
+  const compositeByHash = new Map(
+    composite.entries.map((c) => [c.emailHash, c]),
+  );
+  const normalisationByHash = new Map(
+    normalisation.entries.map((n) => [n.emailHash, n]),
+  );
+  const totalMethods = composite.methods.length;
+
+  const attributionEntries: EngineerAttribution[] = [];
+  for (const [, entry] of competitiveByHash) {
+    const comp = compositeByHash.get(entry.emailHash);
+    if (!comp) continue;
+    const norm = normalisationByHash.get(entry.emailHash);
+
+    const methods: EngineerAttributionMethod[] = composite.methods.map(
+      (method) => {
+        const score =
+          method === "output"
+            ? comp.output
+            : method === "impact"
+              ? comp.impact
+              : method === "delivery"
+                ? comp.delivery
+                : comp.adjusted;
+        const present = score !== null;
+        const components = buildMethodComponents(
+          method,
+          lenses,
+          norm,
+          entry.emailHash,
+          totalMethods,
+          present,
+        );
+        return {
+          method,
+          label: RANKING_COMPOSITE_METHOD_LABELS[method],
+          score,
+          present,
+          presentReason: describeMethodPresence(method, score, entry),
+          components,
+        };
+      },
+    );
+
+    const allContributions: AttributionContribution[] = methods.flatMap(
+      (m) => m.components,
+    );
+    const present = allContributions.filter(
+      (c): c is AttributionContribution & { approxCompositeLift: number } =>
+        c.approxCompositeLift !== null && Number.isFinite(c.approxCompositeLift),
+    );
+    const topPositiveDrivers = [...present]
+      .filter((c) => c.approxCompositeLift > 0)
+      .sort((a, b) => b.approxCompositeLift - a.approxCompositeLift)
+      .slice(0, RANKING_ATTRIBUTION_TOP_DRIVERS);
+    const topNegativeDrivers = [...present]
+      .filter((c) => c.approxCompositeLift < 0)
+      .sort((a, b) => a.approxCompositeLift - b.approxCompositeLift)
+      .slice(0, RANKING_ATTRIBUTION_TOP_DRIVERS);
+
+    const absentSignals = Array.from(
+      new Set(
+        allContributions
+          .filter((c) => c.kind === "absent")
+          .map((c) => c.signal),
+      ),
+    );
+
+    const presentMethodScores = methods
+      .filter((m): m is EngineerAttributionMethod & { score: number } =>
+        m.score !== null && Number.isFinite(m.score),
+      )
+      .map((m) => ({ method: m.method, score: m.score }));
+    const recomputedComposite =
+      presentMethodScores.length >= composite.minPresentMethods
+        ? median(presentMethodScores.map((m) => m.score))
+        : null;
+    const delta =
+      recomputedComposite !== null && comp.composite !== null
+        ? recomputedComposite - comp.composite
+        : null;
+    const matches =
+      delta === null
+        ? comp.composite === null && recomputedComposite === null
+        : Math.abs(delta) <= RANKING_ATTRIBUTION_TOLERANCE;
+
+    const evidenceNotes: string[] = [];
+    if (!entry.githubLogin) {
+      evidenceNotes.push(
+        "No GitHub login mapped — PR evidence links are unavailable until `githubEmployeeMap` is updated in admin.",
+      );
+    }
+    if (!entry.hasImpactModelRow) {
+      evidenceNotes.push(
+        "Not in the impact-model training set — SHAP contributions unavailable.",
+      );
+    }
+    evidenceNotes.push(
+      "Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and are labelled absent rather than fabricated.",
+    );
+
+    const adjustmentLift =
+      norm?.adjustmentDelta ?? null;
+
+    attributionEntries.push({
+      emailHash: entry.emailHash,
+      displayName: entry.displayName,
+      discipline: entry.discipline,
+      levelLabel: entry.levelLabel,
+      eligibility: entry.eligibility,
+      rank: comp.rank,
+      compositeScore: comp.composite,
+      compositePercentile: comp.compositePercentile,
+      presentMethodCount: comp.presentMethodCount,
+      methods,
+      topPositiveDrivers,
+      topNegativeDrivers,
+      absentSignals,
+      reconciliation: {
+        methodScores: presentMethodScores,
+        recomputedComposite,
+        delta,
+        matches,
+      },
+      peerComparison: {
+        discipline: entry.discipline,
+        disciplineCohort: norm?.disciplineCohort ?? null,
+        rawPercentile: norm?.rawPercentile ?? null,
+        adjustedPercentile: norm?.adjustedPercentile ?? null,
+        adjustmentLift,
+      },
+      evidence: {
+        githubLogin: entry.githubLogin,
+        githubPrSearchUrl: buildGithubPrSearchUrl(
+          entry.githubLogin,
+          githubOrg,
+          windowStartIso,
+          windowEndIso,
+        ),
+        impactModelPresent: entry.hasImpactModelRow,
+        squadContextPresent: Boolean(comp.delivery !== null),
+        notes: evidenceNotes,
+      },
+      context: {
+        manager: entry.manager,
+        rawSquad: entry.squad,
+        pillar: entry.pillar,
+        canonicalSquad: entry.canonicalSquad,
+      },
+    });
+  }
+
+  attributionEntries.sort((a, b) => {
+    const ra = a.rank ?? Number.POSITIVE_INFINITY;
+    const rb = b.rank ?? Number.POSITIVE_INFINITY;
+    if (ra !== rb) return ra - rb;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  const contract = `Attribution reveals, for every competitive engineer, which signals pushed their composite above or below the neutral 50 and by how much. Each composite method (A output, B impact, C delivery, tenure/role-adjusted) surfaces its component weights and per-engineer percentiles; the top ${RANKING_ATTRIBUTION_TOP_DRIVERS} positive and negative drivers are listed with their approximate lift. The per-method scores are reconciled against the stored composite via the median contract within ${RANKING_ATTRIBUTION_TOLERANCE} percentile points of tolerance. Absent signals are labelled with a reason; the page never implies a signal by silent omission.`;
+
+  return {
+    contract,
+    tolerance: RANKING_ATTRIBUTION_TOLERANCE,
+    totalMethods,
+    entries: attributionEntries,
+    limitations: [
+      `Attribution's positive/negative driver tag uses a linear approximation of each component's lift on the composite percentile: (1 / ${totalMethods}) × componentWeight × (percentile − 50). The composite itself is the median of the four method scores, not a weighted sum, so the driver magnitudes are directional labels rather than exact rank contributions.`,
+      `Evidence links are limited to a GitHub PR-search URL filtered to merged PRs in the window. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and appear in the absent-signals list rather than the evidence block.`,
+      `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). The drilldown structure accepts a future manager-calibration flag without widening the attribution contract; calibration itself is outstanding work for M18.`,
+      `Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending. The per-engineer attribution lands first so the later snapshots can carry a defensible rank from cycle one.`,
     ],
   };
 }
@@ -3157,7 +3705,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, and 80% bootstrap confidence bands with statistical-tie groups are implemented. Per-engineer attribution drilldowns, ranking snapshots, movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, and per-engineer attribution drilldowns are implemented. Ranking snapshots, movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -3253,6 +3801,15 @@ export function buildRankingSnapshot(
     composite,
     signals: inputs.signals,
   });
+  const attribution = buildAttribution({
+    entries,
+    lenses,
+    normalisation,
+    composite,
+    windowStartIso: windowStart,
+    windowEndIso: windowEnd,
+    githubOrg: inputs.githubOrg ?? null,
+  });
 
   // Only engineers with a non-null composite rank are materialised into the
   // top-level `engineers` array — unscored competitive engineers remain
@@ -3302,6 +3859,7 @@ export function buildRankingSnapshot(
     normalisation,
     composite,
     confidence,
+    attribution,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -3341,6 +3899,14 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
   const normalisation = buildNormalisation({ entries });
   const composite = buildComposite({ entries, lenses, normalisation });
   const confidence = buildConfidence({ entries, composite });
+  const attribution = buildAttribution({
+    entries,
+    lenses,
+    normalisation,
+    composite,
+    windowStartIso: windowStart,
+    windowEndIso: windowEnd,
+  });
 
   return {
     status: "methodology_pending",
@@ -3366,6 +3932,7 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     normalisation,
     composite,
     confidence,
+    attribution,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

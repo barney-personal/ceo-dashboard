@@ -292,6 +292,7 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
       reviewSignalsPersisted: false,
       now,
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+      githubOrg: process.env.GITHUB_ORG ?? null,
     });
   } catch (err) {
     console.warn(

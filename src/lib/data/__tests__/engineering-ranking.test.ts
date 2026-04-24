@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DISCIPLINE_POOL_FALLBACK,
+  RANKING_ATTRIBUTION_TOLERANCE,
+  RANKING_ATTRIBUTION_TOP_DRIVERS,
   RANKING_BOOTSTRAP_ITERATIONS,
   RANKING_CI_COVERAGE,
   RANKING_COMPOSITE_METHOD_LABELS,
@@ -27,6 +29,7 @@ import {
   RANKING_RAMP_UP_DAYS,
   RANKING_SIGNAL_WINDOW_DAYS,
   bucketNormalisationDeltas,
+  buildAttribution,
   buildComposite,
   buildConfidence,
   buildEligibleRoster,
@@ -38,6 +41,7 @@ import {
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
+  type AttributionContribution,
   type CompositeMethod,
   type Discipline,
   type EligibilityEntry,
@@ -46,6 +50,7 @@ import {
   type EligibilityImpactModelView,
   type EligibilityInputs,
   type EligibilitySquadsRegistryRow,
+  type EngineerAttribution,
   type EngineerConfidence,
   type EngineerNormalisation,
   type PerEngineerSignalRow,
@@ -2821,23 +2826,28 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     }
   });
 
-  it("composite limitations name attribution as still pending and confidence bands as implemented", () => {
+  it("composite limitations name confidence and attribution as implemented, and snapshots/movers as pending", () => {
     const composite = buildComposite({
       entries: [],
       lenses: buildLenses({ entries: [] }),
       normalisation: buildNormalisation({ entries: [] }),
     });
     const joined = composite.limitations.join(" ").toLowerCase();
-    // Per-engineer attribution is still pending.
-    expect(joined).toMatch(/attribution/);
-    // Confidence bands are now live (M14) — they must not be narrated
+    // Snapshots and movers must still be named as outstanding work.
+    expect(joined).toMatch(/snapshots/);
+    expect(joined).toMatch(/movers/);
+    // Confidence bands are live (M14) — they must not be narrated
     // as still-pending future work in the composite limitations.
     expect(joined).not.toMatch(
       /confidence bands[^.]*(still pending|not yet|yet to|pending|future|outstanding)/,
     );
+    // Attribution is live (M15) — any mention must not mark it as pending.
+    expect(joined).not.toMatch(
+      /attribution[^.]*(still pending|not yet|yet to|pending)/,
+    );
   });
 
-  it("snapshot known limitations narrate composite + confidence as implemented, and attribution/snapshots/movers/stability as pending", () => {
+  it("snapshot known limitations narrate composite + confidence + attribution as implemented, and snapshots/movers/stability as pending", () => {
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -2855,9 +2865,13 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(joined).not.toMatch(
       /confidence bands[^.]*(still pending|not yet|yet to|pending)/,
     );
-    // Attribution, snapshots, movers, and stability are still genuinely
-    // pending and must be named so a reader sees what is still missing.
-    expect(joined).toMatch(/attribution/);
+    // Attribution is live (M15) — the known-limitations list must not
+    // describe it as pending, though it can still name it as implemented.
+    expect(joined).not.toMatch(
+      /attribution[^.]*(still pending|not yet|yet to|pending)/,
+    );
+    // Snapshots, movers, and stability are still genuinely pending and
+    // must be named so a reader sees what is still missing.
     expect(joined).toMatch(/snapshots/);
     expect(joined).toMatch(/movers/);
     expect(joined).toMatch(/stability/);
@@ -2990,10 +3004,10 @@ describe("M13 methodology version and readiness provenance", () => {
     }
   });
 
-  it("known-limitations still describe composite + confidence as implemented but not final", () => {
+  it("known-limitations still describe composite + confidence + attribution as implemented but not final", () => {
     // Regression guard: the version bump must not accidentally demote the
-    // page's honesty about what is and isn't finished. Composite and
-    // confidence bands are live; attribution / snapshots / movers /
+    // page's honesty about what is and isn't finished. Composite, confidence
+    // bands, and attribution drilldowns are live; snapshots / movers /
     // stability are not.
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
@@ -3006,6 +3020,9 @@ describe("M13 methodology version and readiness provenance", () => {
     );
     expect(joined).not.toMatch(
       /confidence bands[^.]*(still pending|not yet|yet to|pending)/,
+    );
+    expect(joined).not.toMatch(
+      /attribution[^.]*(still pending|not yet|yet to|pending)/,
     );
     expect(joined).toMatch(/attribution/);
     expect(joined).toMatch(/snapshots/);
@@ -3367,8 +3384,14 @@ describe("M14 confidence bands and statistical tie handling", () => {
     expect(confidence.ciCoverage).toBe(RANKING_CI_COVERAGE);
   });
 
-  it("methodology version names the confidence stage", () => {
-    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("confidence");
+  it("methodology version names a post-confidence stage (confidence or attribution era)", () => {
+    // At M14 the version label was `0.6.0-confidence`. Later milestones (M15
+    // attribution, M16 snapshots, etc.) bump the label to name their stage,
+    // so the guard accepts any post-scaffold label that matches the live
+    // methodology chain.
+    const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
+    expect(v).not.toBe("0.1.0-scaffold");
+    expect(v).toMatch(/confidence|attribution|snapshot|movers|stability/);
   });
 
   it("known-limitations narrate confidence bands as implemented (not pending) once M14 lands", () => {
@@ -3393,7 +3416,600 @@ describe("M14 confidence bands and statistical tie handling", () => {
     const joined = confidence.limitations.join(" ").toLowerCase();
     expect(joined).toMatch(/confidence/);
     expect(joined).toMatch(/tie/);
-    // M15+ work must still be named so a reader knows what is outstanding.
+  });
+});
+
+describe("M15 per-engineer attribution drilldown", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: 30 + index,
+      commitCount: 60 + index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  function buildAttributionBundle(
+    entries: EligibilityEntry[],
+    signals: PerEngineerSignalRow[],
+    opts: {
+      windowStartIso?: string;
+      windowEndIso?: string;
+      githubOrg?: string | null;
+    } = {},
+  ) {
+    const lenses = buildLenses({ entries, signals });
+    const normalisation = buildNormalisation({ entries, signals });
+    const composite = buildComposite({
+      entries,
+      lenses,
+      normalisation,
+      signals,
+    });
+    const attribution = buildAttribution({
+      entries,
+      lenses,
+      normalisation,
+      composite,
+      windowStartIso:
+        opts.windowStartIso ?? "2025-10-26T00:00:00Z",
+      windowEndIso: opts.windowEndIso ?? "2026-04-24T00:00:00Z",
+      githubOrg: opts.githubOrg ?? null,
+    });
+    return { lenses, normalisation, composite, attribution };
+  }
+
+  it("attribution constants are sane", () => {
+    expect(RANKING_ATTRIBUTION_TOP_DRIVERS).toBeGreaterThanOrEqual(3);
+    expect(RANKING_ATTRIBUTION_TOLERANCE).toBeGreaterThan(0);
+    expect(RANKING_ATTRIBUTION_TOLERANCE).toBeLessThan(1);
+  });
+
+  it("emits one attribution entry per competitive engineer", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    expect(attribution.entries.length).toBe(entries.length);
+    for (const row of attribution.entries) {
+      expect(row.eligibility).toBe("competitive");
+      expect(row.methods.length).toBe(4);
+    }
+  });
+
+  it("ramp-up and leaver entries are excluded from the attribution drilldown", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3, { tenureDays: 45, eligibility: "ramp_up" }),
+      competitiveEntry(4, {
+        isLeaverOrInactive: true,
+        eligibility: "inactive_or_leaver",
+      }),
+    ];
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const hashes = new Set(attribution.entries.map((e) => e.emailHash));
+    expect(hashes.has(entries[0].emailHash)).toBe(true);
+    expect(hashes.has(entries[1].emailHash)).toBe(true);
+    expect(hashes.has(entries[2].emailHash)).toBe(false);
+    expect(hashes.has(entries[3].emailHash)).toBe(false);
+  });
+
+  it("reconciles the recomputed composite to the stored composite within tolerance", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 6 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const scored = attribution.entries.filter((e) => e.compositeScore !== null);
+    expect(scored.length).toBeGreaterThan(0);
+    for (const entry of scored) {
+      expect(entry.reconciliation.matches).toBe(true);
+      expect(entry.reconciliation.recomputedComposite).not.toBeNull();
+      expect(Math.abs(entry.reconciliation.delta!)).toBeLessThanOrEqual(
+        RANKING_ATTRIBUTION_TOLERANCE,
+      );
+    }
+  });
+
+  it("per-method component weights sum to 1 across present methods", () => {
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 4 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    for (const engineer of attribution.entries) {
+      for (const method of engineer.methods) {
+        if (method.components.length === 0) continue;
+        const total = method.components.reduce(
+          (s, c) => s + c.weightInMethod,
+          0,
+        );
+        expect(total).toBeCloseTo(1, 6);
+      }
+    }
+  });
+
+  it("absent signals are labelled rather than silently dropped", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { hasImpactModelRow: false }),
+      competitiveEntry(2),
+    ];
+    // Engineer 1: missing SHAP fields + no squad delivery data.
+    const signals: PerEngineerSignalRow[] = [
+      {
+        emailHash: hashEmailForRanking("eng1@meetcleo.com"),
+        prCount: 40,
+        commitCount: 80,
+        additions: 600,
+        deletions: 80,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      },
+      signalRow(2),
+    ];
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const first = attribution.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    // At least the SHAP components should be labelled absent.
+    const absentContributions = first.methods
+      .flatMap((m) => m.components)
+      .filter((c) => c.kind === "absent");
+    expect(absentContributions.length).toBeGreaterThan(0);
+    for (const absent of absentContributions) {
+      expect(absent.absenceReason.length).toBeGreaterThan(0);
+      expect(absent.percentile).toBeNull();
+      expect(absent.approxCompositeLift).toBeNull();
+    }
+    // Absent signals also surface on the engineer-level absent list.
+    expect(first.absentSignals.length).toBeGreaterThan(0);
+  });
+
+  it("approxCompositeLift is null for components whose method is absent", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, { hasImpactModelRow: false }),
+      competitiveEntry(2),
+      competitiveEntry(3),
+    ];
+    const signals: PerEngineerSignalRow[] = [
+      {
+        emailHash: hashEmailForRanking("eng1@meetcleo.com"),
+        prCount: 40,
+        commitCount: 80,
+        additions: 600,
+        deletions: 80,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: 24,
+        squadReviewRatePercent: 80,
+        squadTimeToFirstReviewHours: 2,
+        squadPrsInProgress: 4,
+      },
+      signalRow(2),
+      signalRow(3),
+    ];
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const first = attribution.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    const impactMethod = first.methods.find((m) => m.method === "impact")!;
+    expect(impactMethod.present).toBe(false);
+    for (const component of impactMethod.components) {
+      // Method-absent components must not claim a lift — the composite does
+      // not receive any lift from a method that wasn't present.
+      expect(component.approxCompositeLift).toBeNull();
+    }
+  });
+
+  it("direct AI-token inflation leaves the attribution drilldown unchanged", () => {
+    const entries = [competitiveEntry(1), competitiveEntry(2)];
+    const base = [
+      signalRow(1, { aiTokens: 0, aiSpend: 0 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const inflated = [
+      signalRow(1, { aiTokens: 50_000_000, aiSpend: 250_000 }),
+      signalRow(2, { aiTokens: 0, aiSpend: 0 }),
+    ];
+    const a = buildAttributionBundle(entries, base).attribution;
+    const b = buildAttributionBundle(entries, inflated).attribution;
+    const byHashA = new Map(a.entries.map((e) => [e.emailHash, e]));
+    for (const entry of b.entries) {
+      const match = byHashA.get(entry.emailHash)!;
+      expect(entry.compositeScore).toEqual(match.compositeScore);
+      expect(entry.rank).toEqual(match.rank);
+      // Each driver list is identical.
+      expect(entry.topPositiveDrivers.map((d) => d.signal).sort()).toEqual(
+        match.topPositiveDrivers.map((d) => d.signal).sort(),
+      );
+      expect(entry.topNegativeDrivers.map((d) => d.signal).sort()).toEqual(
+        match.topNegativeDrivers.map((d) => d.signal).sort(),
+      );
+    }
+    // And AI signals themselves never become contributions.
+    for (const entry of b.entries) {
+      const signals = entry.methods.flatMap((m) =>
+        m.components.map((c) => c.signal.toLowerCase()),
+      );
+      for (const s of signals) {
+        expect(s).not.toContain("ai tokens");
+        expect(s).not.toContain("ai spend");
+      }
+    }
+  });
+
+  it("positive drivers have positive lift and are sorted by magnitude desc", () => {
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 6 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    for (const engineer of attribution.entries) {
+      for (const driver of engineer.topPositiveDrivers) {
+        expect(driver.approxCompositeLift).not.toBeNull();
+        expect(driver.approxCompositeLift!).toBeGreaterThan(0);
+      }
+      for (let i = 1; i < engineer.topPositiveDrivers.length; i += 1) {
+        expect(engineer.topPositiveDrivers[i].approxCompositeLift!).toBeLessThanOrEqual(
+          engineer.topPositiveDrivers[i - 1].approxCompositeLift!,
+        );
+      }
+      for (const driver of engineer.topNegativeDrivers) {
+        expect(driver.approxCompositeLift).not.toBeNull();
+        expect(driver.approxCompositeLift!).toBeLessThan(0);
+      }
+      for (let i = 1; i < engineer.topNegativeDrivers.length; i += 1) {
+        // Ascending order (most negative first) means each subsequent delta
+        // is at least as large (less negative) as the prior.
+        expect(engineer.topNegativeDrivers[i].approxCompositeLift!).toBeGreaterThanOrEqual(
+          engineer.topNegativeDrivers[i - 1].approxCompositeLift!,
+        );
+      }
+    }
+  });
+
+  it("driver lists are capped at RANKING_ATTRIBUTION_TOP_DRIVERS", () => {
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 4 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    for (const engineer of attribution.entries) {
+      expect(engineer.topPositiveDrivers.length).toBeLessThanOrEqual(
+        RANKING_ATTRIBUTION_TOP_DRIVERS,
+      );
+      expect(engineer.topNegativeDrivers.length).toBeLessThanOrEqual(
+        RANKING_ATTRIBUTION_TOP_DRIVERS,
+      );
+    }
+  });
+
+  it("peer comparison inherits the discipline cohort and adjusted lift from normalisation", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const { attribution, normalisation } = buildAttributionBundle(entries, signals);
+    const normByHash = new Map(normalisation.entries.map((n) => [n.emailHash, n]));
+    for (const entry of attribution.entries) {
+      const norm = normByHash.get(entry.emailHash);
+      if (!norm) continue;
+      expect(entry.peerComparison.rawPercentile).toEqual(norm.rawPercentile);
+      expect(entry.peerComparison.adjustedPercentile).toEqual(
+        norm.adjustedPercentile,
+      );
+      expect(entry.peerComparison.disciplineCohort).toEqual(norm.disciplineCohort);
+      expect(entry.peerComparison.adjustmentLift).toEqual(norm.adjustmentDelta);
+    }
+  });
+
+  it("builds a stable GitHub PR-search URL only when both login and org are present", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2, { githubLogin: null }),
+    ];
+    const signals = [signalRow(1), signalRow(2)];
+    const { attribution: withOrg } = buildAttributionBundle(entries, signals, {
+      githubOrg: "meetcleo",
+      windowStartIso: "2025-10-26T00:00:00Z",
+      windowEndIso: "2026-04-24T00:00:00Z",
+    });
+    const { attribution: noOrg } = buildAttributionBundle(entries, signals, {
+      githubOrg: null,
+    });
+    const mappedWithOrg = withOrg.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    const mappedWithoutOrg = noOrg.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    const unmapped = withOrg.entries.find(
+      (e) => e.emailHash === entries[1].emailHash,
+    )!;
+    expect(mappedWithOrg.evidence.githubPrSearchUrl).not.toBeNull();
+    expect(mappedWithOrg.evidence.githubPrSearchUrl).toContain("github.com/search");
+    expect(mappedWithOrg.evidence.githubPrSearchUrl).toContain("author%3Aeng1");
+    expect(mappedWithOrg.evidence.githubPrSearchUrl).toContain("org%3Ameetcleo");
+    expect(mappedWithoutOrg.evidence.githubPrSearchUrl).toBeNull();
+    expect(unmapped.evidence.githubPrSearchUrl).toBeNull();
+    expect(unmapped.evidence.githubLogin).toBeNull();
+    // An unmapped engineer surfaces an explicit evidence note so the page
+    // never claims availability.
+    expect(unmapped.evidence.notes.some((n) => /github/i.test(n))).toBe(true);
+  });
+
+  it("manager, squad, and pillar context come from the eligibility row, not the squads registry manager chain", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1, {
+        manager: "Alex Manager",
+        squad: "Risk",
+        pillar: "Lending",
+        canonicalSquad: {
+          name: "Risk",
+          pillar: "Lending Pillar",
+          pmName: "Pat PM",
+          channelId: "C123",
+        },
+      }),
+      competitiveEntry(2),
+    ];
+    const signals = [signalRow(1), signalRow(2)];
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const engineer = attribution.entries.find(
+      (e) => e.emailHash === entries[0].emailHash,
+    )!;
+    expect(engineer.context.manager).toBe("Alex Manager");
+    expect(engineer.context.rawSquad).toBe("Risk");
+    expect(engineer.context.canonicalSquad?.pmName).toBe("Pat PM");
+    expect(engineer.context.canonicalSquad?.channelId).toBe("C123");
+    expect(engineer.context.pillar).toBe("Lending");
+  });
+
+  it("unscored competitive engineers still carry eligibility, evidence, and context but null composite", () => {
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3, { hasImpactModelRow: false }),
+    ];
+    const signals: PerEngineerSignalRow[] = [
+      signalRow(1),
+      signalRow(2),
+      // Engineer 3: no activity, no impact row, no squad delivery — composite
+      // should be null.
+      {
+        emailHash: hashEmailForRanking("eng3@meetcleo.com"),
+        prCount: null,
+        commitCount: null,
+        additions: null,
+        deletions: null,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      },
+    ];
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const unscored = attribution.entries.find(
+      (e) => e.emailHash === entries[2].emailHash,
+    )!;
+    expect(unscored.compositeScore).toBeNull();
+    expect(unscored.rank).toBeNull();
+    expect(unscored.reconciliation.matches).toBe(true);
+    expect(unscored.reconciliation.recomputedComposite).toBeNull();
+    // Still carries manager/squad/evidence context.
+    expect(unscored.context.manager).toBe("Boss");
+    expect(unscored.evidence.impactModelPresent).toBe(false);
+  });
+
+  it("entries are sorted by rank ascending with unscored engineers last", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    // Engineer 5 has no signals → should be unscored and appear last.
+    const signals: PerEngineerSignalRow[] = [
+      signalRow(1),
+      signalRow(2),
+      signalRow(3),
+      signalRow(4),
+      {
+        emailHash: hashEmailForRanking("eng5@meetcleo.com"),
+        prCount: null,
+        commitCount: null,
+        additions: null,
+        deletions: null,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      },
+    ];
+    const { attribution } = buildAttributionBundle(
+      entries,
+      signals,
+    );
+    const ranks = attribution.entries.map((e) => e.rank);
+    // All non-null ranks come first in ascending order.
+    const nonNull = ranks.filter((r): r is number => r !== null);
+    for (let i = 1; i < nonNull.length; i += 1) {
+      expect(nonNull[i]).toBeGreaterThanOrEqual(nonNull[i - 1]);
+    }
+    // Any null rank lives at the tail.
+    const firstNullIndex = ranks.indexOf(null);
+    if (firstNullIndex !== -1) {
+      for (let i = firstNullIndex; i < ranks.length; i += 1) {
+        expect(ranks[i]).toBeNull();
+      }
+    }
+  });
+
+  it("buildRankingSnapshot attaches the attribution bundle to the snapshot", () => {
+    const entries = Array.from({ length: 5 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 5 }, (_, i) => signalRow(i + 1));
+    const headcountRows = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      hb_function: "Engineering",
+      hb_level: "EG3",
+      hb_squad: e.squad,
+      rp_specialisation: "Backend Engineer",
+      rp_department_name: "Core",
+      job_title: "Senior Backend Engineer",
+      manager: e.manager,
+      line_manager_email: `${e.manager?.toLowerCase()}@meetcleo.com`,
+      start_date: "2023-01-01",
+      termination_date: null,
+    }));
+    const githubMap = entries.map((e) => ({
+      githubLogin: e.githubLogin!,
+      employeeEmail: e.email,
+      isBot: false,
+    }));
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel: {
+        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+      },
+      signals,
+      now: new Date("2026-04-24T00:00:00Z"),
+      githubOrg: "meetcleo",
+    });
+    expect(snapshot.attribution).toBeDefined();
+    expect(snapshot.attribution.entries.length).toBe(entries.length);
+    // Every ranked engineer has an attribution entry with a reconciled
+    // composite and a visible method breakdown.
+    for (const engineer of snapshot.engineers) {
+      const attrib = snapshot.attribution.entries.find(
+        (a) => a.emailHash === engineer.emailHash,
+      );
+      expect(attrib).toBeDefined();
+      expect(attrib!.reconciliation.matches).toBe(true);
+      expect(attrib!.methods.length).toBe(4);
+    }
+    // GitHub URLs are only emitted when a login + org exist.
+    for (const attrib of snapshot.attribution.entries) {
+      if (attrib.evidence.githubLogin && attrib.evidence.githubPrSearchUrl) {
+        expect(attrib.evidence.githubPrSearchUrl).toContain("github.com/search");
+        expect(attrib.evidence.githubPrSearchUrl).toContain(
+          encodeURIComponent(`author:${attrib.evidence.githubLogin}`),
+        );
+      }
+    }
+  });
+
+  it("methodology version names the attribution stage", () => {
+    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("attribution");
+  });
+
+  it("known limitations narrate attribution as implemented, not pending", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    // Attribution no longer belongs on the pending list.
+    expect(joined).not.toMatch(
+      /per-engineer attribution (drilldowns )?(is|are) (still )?pending/,
+    );
+    expect(joined).not.toMatch(
+      /attribution (drilldowns )?(is|are) still pending/,
+    );
+    // Attribution should be named as part of the implemented stack.
     expect(joined).toMatch(/attribution/);
+    // Remaining work (snapshots, movers, anti-gaming, stability) must still
+    // be named so the reader sees what is outstanding.
+    expect(joined).toMatch(/snapshots/);
+    expect(joined).toMatch(/movers/);
+    expect(joined).toMatch(/stability/);
+  });
+
+  it("attribution-stage limitations name snapshots/movers/anti-gaming/stability as pending and do not claim attribution is pending", () => {
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 3 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    const joined = attribution.limitations.join(" ").toLowerCase();
+    expect(joined).toMatch(/snapshots/);
+    expect(joined).toMatch(/movers/);
+    expect(joined).toMatch(/stability/);
+    expect(joined).not.toMatch(/attribution is (still )?pending/);
+    expect(joined).not.toMatch(/attribution drilldowns pending/);
+  });
+
+  it("attribution contract names the reconciliation tolerance and driver cap", () => {
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = Array.from({ length: 3 }, (_, i) => signalRow(i + 1));
+    const { attribution } = buildAttributionBundle(entries, signals);
+    expect(attribution.contract).toContain(`${RANKING_ATTRIBUTION_TOP_DRIVERS}`);
+    expect(attribution.contract).toContain(`${RANKING_ATTRIBUTION_TOLERANCE}`);
+    expect(attribution.tolerance).toBe(RANKING_ATTRIBUTION_TOLERANCE);
+    expect(attribution.totalMethods).toBe(4);
+  });
+
+  it("stub getEngineeringRanking() returns an empty attribution bundle but preserves the contract surface", async () => {
+    const snapshot = await getEngineeringRanking();
+    expect(snapshot.attribution).toBeDefined();
+    expect(snapshot.attribution.entries).toEqual([]);
+    expect(snapshot.attribution.tolerance).toBe(RANKING_ATTRIBUTION_TOLERANCE);
+    expect(snapshot.attribution.totalMethods).toBe(4);
+    expect(snapshot.attribution.limitations.length).toBeGreaterThan(0);
+  });
+
+  it("unused AttributionContribution/EngineerAttribution types are exported (for consumers)", () => {
+    // Compile-time import smoke test: the types are exported from the
+    // module. This is evaluated as TypeScript; we just reference them.
+    const _contribution: AttributionContribution | null = null;
+    const _engineer: EngineerAttribution | null = null;
+    expect(_contribution).toBeNull();
+    expect(_engineer).toBeNull();
   });
 });

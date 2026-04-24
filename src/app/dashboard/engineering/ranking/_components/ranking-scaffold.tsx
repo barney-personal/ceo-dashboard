@@ -1,12 +1,16 @@
 import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
 import {
   bucketNormalisationDeltas,
+  type AttributionBundle,
+  type AttributionContribution,
   type CompositeBundle,
   type ConfidenceBundle,
   type ConfidenceTieGroup,
   type CorrelationPair,
   type EligibilityEntry,
   type EligibilityStatus,
+  type EngineerAttribution,
+  type EngineerAttributionMethod,
   type EngineerConfidence,
   type EngineerNormalisation,
   type EngineeringRankingSnapshot,
@@ -1467,6 +1471,425 @@ function CompositeTopTable({
   );
 }
 
+const ATTRIBUTION_TOP_N = 25 as const;
+
+function formatRawValue(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const abs = Math.abs(value);
+  if (abs >= 1_000 || abs < 0.01) {
+    return value.toLocaleString(undefined, {
+      maximumFractionDigits: 0,
+    });
+  }
+  return value.toFixed(2);
+}
+
+function formatLift(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}`;
+}
+
+function MethodBreakdown({
+  method,
+}: {
+  method: EngineerAttributionMethod;
+}) {
+  return (
+    <div className="rounded-md border border-border/40 bg-background/60 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            {method.label}
+          </div>
+          <div className="text-[11px] italic text-muted-foreground/80">
+            {method.presentReason}
+          </div>
+        </div>
+        <div
+          className={`font-display text-lg italic tabular-nums ${
+            method.present ? "text-foreground" : "text-muted-foreground"
+          }`}
+        >
+          {method.present ? formatPercentile(method.score) : "absent"}
+        </div>
+      </div>
+      {method.components.length === 0 ? (
+        <p className="mt-2 text-[11px] italic text-muted-foreground">
+          No components surfaced for this method.
+        </p>
+      ) : (
+        <table className="mt-2 w-full border-collapse text-left text-[11px]">
+          <thead>
+            <tr className="border-b border-border/40 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <th className="py-1 pr-2 font-medium">Signal</th>
+              <th className="py-1 pr-2 text-right font-medium">Weight</th>
+              <th className="py-1 pr-2 text-right font-medium">Raw</th>
+              <th className="py-1 pr-2 text-right font-medium">Percentile</th>
+              <th className="py-1 pr-2 text-right font-medium">Lift</th>
+            </tr>
+          </thead>
+          <tbody>
+            {method.components.map((component) => (
+              <tr
+                key={`${method.method}-${component.signal}`}
+                className="border-b border-border/20 align-top"
+              >
+                <td
+                  className={`py-1 pr-2 ${
+                    component.kind === "absent"
+                      ? "italic text-muted-foreground"
+                      : "text-foreground"
+                  }`}
+                >
+                  {component.signal}
+                  {component.kind === "absent" && component.absenceReason && (
+                    <div className="text-[10px] italic text-muted-foreground/80">
+                      {component.absenceReason}
+                    </div>
+                  )}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
+                  {(component.weightInMethod * 100).toFixed(0)}%
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
+                  {formatRawValue(component.rawValue)}
+                </td>
+                <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
+                  {formatPercentile(component.percentile)}
+                </td>
+                <td
+                  className={`py-1 pr-2 text-right tabular-nums ${
+                    component.approxCompositeLift === null
+                      ? "text-muted-foreground"
+                      : component.approxCompositeLift > 0
+                        ? "text-primary"
+                        : "text-destructive"
+                  }`}
+                >
+                  {formatLift(component.approxCompositeLift)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function DriverList({
+  drivers,
+  tone,
+  emptyText,
+}: {
+  drivers: AttributionContribution[];
+  tone: "positive" | "negative";
+  emptyText: string;
+}) {
+  if (drivers.length === 0) {
+    return (
+      <p className="text-[11px] italic text-muted-foreground">{emptyText}</p>
+    );
+  }
+  const color = tone === "positive" ? "text-primary" : "text-destructive";
+  return (
+    <ul className="space-y-1 text-[11px]">
+      {drivers.map((driver) => (
+        <li
+          key={`${driver.method}-${driver.signal}`}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span className="text-foreground">
+            <span className="text-muted-foreground">[{driver.method}]</span>{" "}
+            {driver.signal}
+          </span>
+          <span className={`tabular-nums ${color}`}>
+            {formatLift(driver.approxCompositeLift)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EngineerAttributionPanel({
+  entry,
+}: {
+  entry: EngineerAttribution;
+}) {
+  const rankLabel =
+    entry.rank === null ? "Unranked" : `#${entry.rank}`;
+  const composite = formatPercentile(entry.compositeScore);
+  const reconciliationTone = entry.reconciliation.matches
+    ? "text-primary"
+    : "text-destructive";
+  return (
+    <details className="rounded-md border border-border/40 bg-background/60 open:border-border/70 open:bg-background/80">
+      <summary className="flex cursor-pointer flex-wrap items-baseline gap-3 px-3 py-2 text-xs">
+        <span className="w-10 font-mono text-muted-foreground">
+          {rankLabel}
+        </span>
+        <span className="flex-1 font-semibold text-foreground">
+          {entry.displayName}
+        </span>
+        <span className="text-muted-foreground">
+          {entry.discipline} · {entry.levelLabel}
+        </span>
+        <span className="font-display italic text-foreground">
+          {composite}
+        </span>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+          {entry.presentMethodCount} / 4 methods
+        </span>
+      </summary>
+      <div className="space-y-4 border-t border-border/30 p-3">
+        <div className="grid gap-3 lg:grid-cols-2">
+          {entry.methods.map((method) => (
+            <MethodBreakdown key={method.method} method={method} />
+          ))}
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="rounded-md border border-border/40 bg-background/60 p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
+              Top lifts (what pushed them up)
+            </div>
+            <div className="mt-2">
+              <DriverList
+                drivers={entry.topPositiveDrivers}
+                tone="positive"
+                emptyText="No present signal lifted this engineer above the neutral 50."
+              />
+            </div>
+          </div>
+          <div className="rounded-md border border-border/40 bg-background/60 p-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-destructive">
+              Top drags (what held them down)
+            </div>
+            <div className="mt-2">
+              <DriverList
+                drivers={entry.topNegativeDrivers}
+                tone="negative"
+                emptyText="No present signal dragged this engineer below the neutral 50."
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-3">
+          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
+            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Reconciliation
+            </div>
+            <p className={`mt-1 italic ${reconciliationTone}`}>
+              {entry.reconciliation.matches
+                ? "median(methods) = composite"
+                : "median(methods) ≠ composite — methodology defect"}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              recomputed {formatPercentile(entry.reconciliation.recomputedComposite)}
+              {" "}·{" "}stored {composite}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              delta{" "}
+              {entry.reconciliation.delta === null
+                ? "—"
+                : entry.reconciliation.delta.toFixed(3)}
+            </p>
+          </div>
+          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
+            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Discipline peer comparison
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              {entry.peerComparison.disciplineCohort?.note ??
+                "No discipline cohort attached (engineer unscored)."}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              raw{" "}
+              {formatPercentile(entry.peerComparison.rawPercentile)}
+              {" "}→ adjusted{" "}
+              {formatPercentile(entry.peerComparison.adjustedPercentile)}{" "}
+              ({formatLift(entry.peerComparison.adjustmentLift)})
+            </p>
+          </div>
+          <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
+            <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Evidence
+            </div>
+            <p className="mt-1 text-muted-foreground">
+              GitHub:{" "}
+              {entry.evidence.githubLogin ? (
+                entry.evidence.githubPrSearchUrl ? (
+                  <a
+                    href={entry.evidence.githubPrSearchUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline"
+                  >
+                    {entry.evidence.githubLogin}
+                  </a>
+                ) : (
+                  <span>{entry.evidence.githubLogin}</span>
+                )
+              ) : (
+                <span className="italic">unmapped</span>
+              )}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Impact model:{" "}
+              {entry.evidence.impactModelPresent ? "in training set" : "absent"}
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Squad context:{" "}
+              {entry.evidence.squadContextPresent ? "joined" : "not joined"}
+            </p>
+            {entry.evidence.notes.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-4 italic">
+                {entry.evidence.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border/40 bg-background/60 p-3 text-[11px]">
+          <div className="font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Manager · squad · pillar
+          </div>
+          <p className="mt-1 text-muted-foreground">
+            Manager: {entry.context.manager ?? "—"}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Squad:{" "}
+            {entry.context.canonicalSquad?.name ??
+              entry.context.rawSquad ??
+              "—"}
+            {entry.context.canonicalSquad?.pmName
+              ? ` · PM ${entry.context.canonicalSquad.pmName}`
+              : ""}
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Pillar: {entry.context.canonicalSquad?.pillar ?? entry.context.pillar}
+          </p>
+        </div>
+
+        {entry.absentSignals.length > 0 && (
+          <p className="text-[11px] italic text-muted-foreground">
+            Labelled absent for this engineer:{" "}
+            {entry.absentSignals.join(", ")}.
+          </p>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function AttributionSection({
+  attribution,
+}: {
+  attribution: AttributionBundle;
+}) {
+  const scored = attribution.entries.filter(
+    (e) => e.rank !== null && e.compositeScore !== null,
+  );
+  const unscored = attribution.entries.filter(
+    (e) => e.rank === null || e.compositeScore === null,
+  );
+  const surfaced = scored.slice(0, ATTRIBUTION_TOP_N);
+  const reconciliationFailures = attribution.entries.filter(
+    (e) => !e.reconciliation.matches,
+  );
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Per-engineer attribution
+          </h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+            {attribution.contract}
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>
+            {scored.length} scored · {unscored.length} unscored
+          </div>
+          <div className="mt-1">
+            reconciliation tolerance ±{attribution.tolerance}
+          </div>
+        </div>
+      </div>
+
+      {reconciliationFailures.length > 0 && (
+        <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-[11px] text-destructive">
+          {reconciliationFailures.length} engineer
+          {reconciliationFailures.length === 1 ? "" : "s"} failed the
+          reconciliation check — methodology bug, not display noise. Rows are
+          tagged below.
+        </div>
+      )}
+
+      <div className="mt-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Top {surfaced.length} ranked engineers — click to expand
+        </div>
+        {surfaced.length === 0 ? (
+          <p className="mt-3 text-xs italic text-muted-foreground">
+            No scored engineers yet. Live GitHub, impact-model, and Swarmia
+            data must be populating the signal rows before the composite can
+            produce a ranked drilldown.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {surfaced.map((entry) => (
+              <EngineerAttributionPanel
+                key={entry.emailHash || entry.displayName}
+                entry={entry}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {unscored.length > 0 && (
+        <details className="mt-4 rounded-md border border-border/40 bg-background/60 p-3 text-xs">
+          <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Unscored competitive engineers ({unscored.length})
+          </summary>
+          <p className="mt-2 text-[11px] italic text-muted-foreground">
+            These engineers are in the competitive cohort but fewer than{" "}
+            {attribution.totalMethods} / 2 methods returned a score. They are
+            deliberately left off the ranked list rather than being given a
+            synthesised neutral rank.
+          </p>
+          <ul className="mt-2 grid gap-1 text-[11px] text-muted-foreground md:grid-cols-2">
+            {unscored.map((e) => (
+              <li key={e.emailHash || e.displayName}>
+                {e.displayName} — {e.discipline} · {e.presentMethodCount} / 4
+                methods present
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Attribution-stage limitations
+        </h4>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+          {attribution.limitations.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -1607,9 +2030,9 @@ export function RankingScaffold({
               lens A (output), lens B (SHAP impact), lens C (squad-delivery
               context), and the tenure/role-adjusted percentile. Effective
               signal-weight decomposition, leave-one-method-out sensitivity,
-              a PR/log-impact dominance check, and 80% bootstrap confidence
-              bands with statistical-tie groups are all visible below.
-              Per-engineer attribution drilldowns, ranking snapshots, the
+              a PR/log-impact dominance check, 80% bootstrap confidence
+              bands with statistical-tie groups, and per-engineer attribution
+              drilldowns are all visible below. Ranking snapshots, the
               movers view, the anti-gaming audit, and the stability check
               are still pending — so the rank is an evidence composite, not
               a final adjudication.
@@ -1624,6 +2047,8 @@ export function RankingScaffold({
       />
 
       <ConfidenceSection confidence={snapshot.confidence} />
+
+      <AttributionSection attribution={snapshot.attribution} />
 
       <CoverageSection snapshot={snapshot} />
 
@@ -1691,9 +2116,8 @@ export function RankingScaffold({
             {snapshot.composite.minPresentMethods} present methods. Live
             GitHub, impact-model, and Swarmia data must be populating the
             signal rows before the composite can produce a rank.
-            Per-engineer attribution drilldowns, ranking snapshots, the
-            movers view, the anti-gaming audit, and the stability check
-            remain the outstanding work.
+            Ranking snapshots, the movers view, the anti-gaming audit, and
+            the stability check remain the outstanding work.
           </p>
         </section>
       ) : null}
