@@ -193,8 +193,8 @@ export interface EngineeringRankingSnapshot {
    * Three independent scoring lenses (A output / B SHAP impact /
    * C squad-delivery context) plus the disagreement table that surfaces
    * engineers whose lenses most disagree with each other. Not a final
-   * composite — M11 synthesises the composite once the lenses are trusted
-   * and the M10 adjustments are applied on top.
+   * composite — the composite is synthesised in a later milestone once the
+   * lenses are trusted and the M10 adjustments are applied on top.
    */
   lenses: LensesBundle;
   /**
@@ -1065,8 +1065,8 @@ export function buildSignalAudit({
 
 /**
  * Identifier for each of the three independent scoring lenses. These are
- * NOT the final composite — M10 synthesises the composite once the lenses
- * are trusted and their disagreements are understood.
+ * NOT the final composite — the composite lands in a later milestone once
+ * the lenses are trusted and their disagreements are understood.
  */
 export type LensKey = "output" | "impact" | "delivery";
 
@@ -1577,7 +1577,7 @@ export function buildLenses({
       "Lens C is squad-delivery context, not an individual review/cycle-time signal. Individual review turnaround and PR cycle time are not persisted in the current GitHub schema.",
       "Engineers absent from the impact-model training set score null on lens B — the methodology refuses to fabricate a neutral-looking impact reading.",
       `Disagreement table only surfaces rows where max(present lenses) − min(present lenses) exceeds ${RANKING_DISAGREEMENT_EPSILON} percentile points. Ties and near-ties are treated as agreement and omitted, so the table never presents a directional narrative for lenses that actually agree.`,
-      "These three lenses are exploratory; M10 synthesises the final composite once the disagreements are understood and the weights justified.",
+      "These three lenses are exploratory. Tenure and role normalisation (M10) are applied on top; the final composite that turns lenses + normalisation into a single ranking is still pending — no engineer is yet ranked on the page.",
     ],
   };
 }
@@ -2037,6 +2037,33 @@ export function buildNormalisation({
 }
 
 /**
+ * Split normalisation entries into strictly-positive "lifts" and strictly-
+ * negative "drops" by `adjustmentDelta`, each sorted by magnitude and capped
+ * at `limit`. Null or non-finite deltas are excluded from both buckets; zero
+ * deltas are excluded too — a zero delta is neither a lift nor a drop and
+ * must never appear under either heading.
+ */
+export function bucketNormalisationDeltas(
+  entries: readonly EngineerNormalisation[],
+  limit: number,
+): { lifts: EngineerNormalisation[]; drops: EngineerNormalisation[] } {
+  const finite = entries.filter(
+    (e) => e.adjustmentDelta !== null && Number.isFinite(e.adjustmentDelta),
+  );
+  const lifts = finite
+    .filter((e) => (e.adjustmentDelta as number) > 0)
+    .slice()
+    .sort((a, b) => (b.adjustmentDelta as number) - (a.adjustmentDelta as number))
+    .slice(0, limit);
+  const drops = finite
+    .filter((e) => (e.adjustmentDelta as number) < 0)
+    .slice()
+    .sort((a, b) => (a.adjustmentDelta as number) - (b.adjustmentDelta as number))
+    .slice(0, limit);
+  return { lifts, drops };
+}
+
+/**
  * Base provenance notes that are true for every preflight regardless of
  * which optional inputs were supplied. Exported for tests that want to
  * assert on the constant surface.
@@ -2075,7 +2102,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Ranking math, tenure/role normalisation, and confidence bands are implemented in later milestones. Until then no engineer is ranked.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, and tenure/role normalisation are implemented. The final composite score, confidence bands, per-engineer attribution drilldowns, ranking snapshots, movers view, and stability check are still pending, so no engineer is yet ranked on the page.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",

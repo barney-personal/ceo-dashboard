@@ -12,6 +12,7 @@ import {
   RANKING_NUMERIC_SIGNAL_NAMES,
   RANKING_RAMP_UP_DAYS,
   RANKING_SIGNAL_WINDOW_DAYS,
+  bucketNormalisationDeltas,
   buildEligibleRoster,
   buildLenses,
   buildNormalisation,
@@ -28,6 +29,7 @@ import {
   type EligibilityImpactModelView,
   type EligibilityInputs,
   type EligibilitySquadsRegistryRow,
+  type EngineerNormalisation,
   type PerEngineerSignalRow,
 } from "../engineering-ranking";
 
@@ -2077,5 +2079,159 @@ describe("M10 tenure and role normalisation", () => {
     expect(l4.levelAdjustedPercentile).toBeNull();
     // Other adjustments still work.
     expect(l4.adjustedPercentile).not.toBeNull();
+  });
+});
+
+describe("M11 normalisation delta sign buckets + truthful page copy", () => {
+  function makeEntry(
+    name: string,
+    adjustmentDelta: number | null,
+  ): EngineerNormalisation {
+    return {
+      emailHash: `hash-${name}`,
+      displayName: name,
+      discipline: "BE",
+      levelLabel: "L4",
+      levelNumber: 4,
+      tenureDays: 800,
+      tenureWindowDays: 180,
+      rawScore: 10,
+      rawPercentile: 50,
+      disciplineCohort: {
+        discipline: "BE",
+        effectiveMembers: ["BE"],
+        effectiveSize: 5,
+        pooled: false,
+        pooledWith: [],
+        pooledToAll: false,
+        note: "",
+      },
+      disciplinePercentile: 50,
+      levelBaseline: 10,
+      levelAdjustedResidual: 0,
+      levelAdjustedPercentile: 50,
+      tenureAdjustedRate: 10,
+      tenureAdjustedPercentile: 50,
+      adjustedPercentile: adjustmentDelta === null ? null : 50 + adjustmentDelta,
+      adjustmentDelta,
+      adjustmentsApplied: [],
+    };
+  }
+
+  it("lifts bucket only contains strictly positive adjustmentDelta, sorted descending", () => {
+    const entries = [
+      makeEntry("bigLift", 8),
+      makeEntry("smallLift", 1),
+      makeEntry("drop", -5),
+      makeEntry("zero", 0),
+      makeEntry("null", null),
+    ];
+    const { lifts } = bucketNormalisationDeltas(entries, 5);
+    expect(lifts.map((e) => e.displayName)).toEqual(["bigLift", "smallLift"]);
+    for (const e of lifts) {
+      expect((e.adjustmentDelta as number) > 0).toBe(true);
+    }
+  });
+
+  it("drops bucket only contains strictly negative adjustmentDelta, sorted ascending", () => {
+    const entries = [
+      makeEntry("lift", 4),
+      makeEntry("smallDrop", -1),
+      makeEntry("bigDrop", -6),
+      makeEntry("zero", 0),
+      makeEntry("null", null),
+    ];
+    const { drops } = bucketNormalisationDeltas(entries, 5);
+    expect(drops.map((e) => e.displayName)).toEqual(["bigDrop", "smallDrop"]);
+    for (const e of drops) {
+      expect((e.adjustmentDelta as number) < 0).toBe(true);
+    }
+  });
+
+  it("zero, null, and non-finite deltas never appear in either bucket", () => {
+    const entries = [
+      makeEntry("zero", 0),
+      makeEntry("null", null),
+      makeEntry("lift", 2),
+      makeEntry("drop", -2),
+      makeEntry("nanDelta", Number.NaN),
+      makeEntry("infDelta", Number.POSITIVE_INFINITY),
+    ];
+    const { lifts, drops } = bucketNormalisationDeltas(entries, 5);
+    const names = [...lifts, ...drops].map((e) => e.displayName);
+    expect(names).not.toContain("zero");
+    expect(names).not.toContain("null");
+    expect(names).not.toContain("nanDelta");
+    expect(names).not.toContain("infDelta");
+    expect(names).toEqual(expect.arrayContaining(["lift", "drop"]));
+  });
+
+  it("when every delta is negative, lifts must be empty — drops must not borrow them", () => {
+    const entries = [
+      makeEntry("a", -1),
+      makeEntry("b", -2),
+      makeEntry("c", -3),
+    ];
+    const { lifts, drops } = bucketNormalisationDeltas(entries, 5);
+    expect(lifts).toEqual([]);
+    expect(drops.map((e) => e.displayName)).toEqual(["c", "b", "a"]);
+  });
+
+  it("when every delta is positive, drops must be empty — lifts must not borrow them", () => {
+    const entries = [
+      makeEntry("a", 3),
+      makeEntry("b", 2),
+      makeEntry("c", 1),
+    ];
+    const { lifts, drops } = bucketNormalisationDeltas(entries, 5);
+    expect(drops).toEqual([]);
+    expect(lifts.map((e) => e.displayName)).toEqual(["a", "b", "c"]);
+  });
+
+  it("both buckets are capped at the limit argument", () => {
+    const entries = [
+      makeEntry("l1", 10),
+      makeEntry("l2", 9),
+      makeEntry("l3", 8),
+      makeEntry("d1", -10),
+      makeEntry("d2", -9),
+      makeEntry("d3", -8),
+    ];
+    const { lifts, drops } = bucketNormalisationDeltas(entries, 2);
+    expect(lifts.map((e) => e.displayName)).toEqual(["l1", "l2"]);
+    expect(drops.map((e) => e.displayName)).toEqual(["d1", "d2"]);
+  });
+
+  it("snapshot known limitations no longer imply normalisation or lenses are future work", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.knownLimitations.join(" ").toLowerCase();
+    // Lenses and tenure/role normalisation must not be described as future
+    // work anywhere in the on-page known-limitations list.
+    expect(joined).not.toMatch(/tenure\/role normalisation[^.]*later milestones/);
+    expect(joined).not.toMatch(/ranking math[^.]*later milestones/);
+    // The remaining pending work (composite, confidence bands, attribution,
+    // snapshots, movers, stability) must be named somewhere so a reader knows
+    // what is still missing.
+    expect(joined).toMatch(/composite/);
+    expect(joined).toMatch(/confidence bands/);
+    expect(joined).toMatch(/attribution/);
+  });
+
+  it("lens-stage limitations narrate composite as pending, not as M10/M11 responsibility", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const joined = snapshot.lenses.limitations.join(" ");
+    // The stale string "M10 synthesises the final composite" was a methodology
+    // lie: M10 is normalisation, not composite. Guard against it and its
+    // closest cousins creeping back in.
+    expect(joined).not.toMatch(/M10 synthesises the (final )?composite/);
+    expect(joined).not.toMatch(/M11 synthesises the (final )?composite/);
   });
 });

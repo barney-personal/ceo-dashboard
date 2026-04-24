@@ -1,15 +1,16 @@
 import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
-import type {
-  CorrelationPair,
-  EligibilityEntry,
-  EligibilityStatus,
-  EngineerNormalisation,
-  EngineeringRankingSnapshot,
-  LensDisagreementRow,
-  LensScoreSummary,
-  LensesBundle,
-  NormalisationBundle,
-  SignalAudit,
+import {
+  bucketNormalisationDeltas,
+  type CorrelationPair,
+  type EligibilityEntry,
+  type EligibilityStatus,
+  type EngineerNormalisation,
+  type EngineeringRankingSnapshot,
+  type LensDisagreementRow,
+  type LensScoreSummary,
+  type LensesBundle,
+  type NormalisationBundle,
+  type SignalAudit,
 } from "@/lib/data/engineering-ranking";
 
 function formatDate(iso: string): string {
@@ -703,28 +704,24 @@ function NormalisationDeltas({
 }: {
   entries: EngineerNormalisation[];
 }) {
-  const deltas = entries.filter(
-    (e) => e.adjustmentDelta !== null && Number.isFinite(e.adjustmentDelta),
+  const { lifts, drops } = bucketNormalisationDeltas(
+    entries,
+    NORMALISATION_DELTA_N,
   );
-  const lifters = [...deltas]
-    .sort((a, b) => (b.adjustmentDelta ?? 0) - (a.adjustmentDelta ?? 0))
-    .slice(0, NORMALISATION_DELTA_N);
-  const fallers = [...deltas]
-    .sort((a, b) => (a.adjustmentDelta ?? 0) - (b.adjustmentDelta ?? 0))
-    .slice(0, NORMALISATION_DELTA_N);
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="rounded-md border border-border/40 bg-background/60 p-4">
         <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Biggest adjustment lifts
         </h4>
-        {lifters.length === 0 ? (
+        {lifts.length === 0 ? (
           <p className="mt-3 text-xs italic text-muted-foreground">
-            No adjustment deltas computable yet.
+            No adjustment lifts — no engineer has an adjusted percentile above
+            their raw percentile in the current snapshot.
           </p>
         ) : (
           <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-            {lifters.map((entry) => (
+            {lifts.map((entry) => (
               <li key={`lift-${entry.emailHash || entry.displayName}`}>
                 <span className="text-foreground">{entry.displayName}</span>{" "}
                 <span className="tabular-nums text-primary">
@@ -742,14 +739,14 @@ function NormalisationDeltas({
         <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Biggest adjustment drops
         </h4>
-        {fallers.length === 0 ? (
+        {drops.length === 0 ? (
           <p className="mt-3 text-xs italic text-muted-foreground">
-            No adjustment drops — every engineer is at or above their raw
-            percentile.
+            No adjustment drops — no engineer has an adjusted percentile below
+            their raw percentile in the current snapshot.
           </p>
         ) : (
           <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
-            {fallers.map((entry) => (
+            {drops.map((entry) => (
               <li key={`drop-${entry.emailHash || entry.displayName}`}>
                 <span className="text-foreground">{entry.displayName}</span>{" "}
                 <span className="tabular-nums text-warning">
@@ -1033,11 +1030,14 @@ export function RankingScaffold({
               Why there is no ranked list yet
             </h3>
             <p className="text-sm text-muted-foreground">
-              Shipping a list today without the methodology underneath would
-              mean defending numbers we cannot yet explain. The scoring lenses,
-              tenure/role normalisation, confidence bands, and attribution
-              drilldowns all land in later milestones. The eligibility roster
-              below is the foundation the scoring will run on.
+              Eligibility, the signal orthogonality audit, three independent
+              scoring lenses, and tenure/role normalisation are all implemented
+              and visible below as exploratory inputs. The final composite
+              score, confidence bands, per-engineer attribution drilldowns,
+              ranking snapshots, the movers view, and the stability check are
+              still pending — so the page deliberately does not yet present a
+              single ranked list, because any rank would be defended against a
+              composite that has not been agreed.
             </p>
           </div>
         </div>
@@ -1104,9 +1104,11 @@ export function RankingScaffold({
       {snapshot.engineers.length === 0 ? (
         <section className="rounded-xl border border-dashed border-border/60 bg-background/40 p-8 text-center">
           <p className="text-sm text-muted-foreground">
-            No engineers are ranked yet. The signal orthogonality audit and
-            independent scoring lenses land in the next milestones, with the
-            eligibility roster above as input.
+            No engineers are ranked yet. Eligibility, the signal audit, the
+            three scoring lenses, and tenure/role normalisation above are the
+            inputs the final composite will draw on — the composite, confidence
+            bands, and per-engineer attribution are the remaining work before
+            any ranked list is shown.
           </p>
         </section>
       ) : null}
