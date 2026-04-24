@@ -154,6 +154,7 @@ function formatContextJson(ctx: BriefingContext): string {
           // in `roles.server.ts` and the report-count helpers in `managers.ts`.
           isManager:
             ctx.person.role === "manager" ||
+            ctx.person.role === "engineering_manager" ||
             ctx.person.role === "leadership" ||
             ctx.person.role === "ceo" ||
             ctx.person.directReportCount >= 2,

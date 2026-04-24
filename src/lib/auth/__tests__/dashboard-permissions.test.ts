@@ -58,7 +58,7 @@ describe("buildDashboardPermissionSummaries", () => {
     expect(
       summaries.find((summary) => summary.id === "engineering.codeReview"),
     ).toMatchObject({
-      requiredRole: "ceo",
+      requiredRole: "engineering_manager",
       editable: false,
       isOverride: false,
     });

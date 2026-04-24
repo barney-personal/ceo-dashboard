@@ -128,7 +128,8 @@ describe("/api/admin/permissions", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "Invalid role. Must be one of: everyone, manager, leadership, ceo",
+      error:
+        "Invalid role. Must be one of: everyone, manager, engineering_manager, leadership, ceo",
     });
   });
 

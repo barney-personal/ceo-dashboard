@@ -7,6 +7,7 @@ import type { Role } from "@/lib/auth/roles";
 const ROLE_LABELS: Record<Role, string> = {
   everyone: "Employee",
   manager: "Manager",
+  engineering_manager: "Eng manager",
   leadership: "Leadership",
   ceo: "CEO",
 };

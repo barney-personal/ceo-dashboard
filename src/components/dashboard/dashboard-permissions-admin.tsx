@@ -16,6 +16,7 @@ type RowStatus = "idle" | "saving" | "success" | "error";
 const ROLE_LABELS: Record<Role, string> = {
   everyone: "Everyone",
   manager: "Managers",
+  engineering_manager: "Eng managers",
   leadership: "Leadership",
   ceo: "CEO",
 };
@@ -23,7 +24,8 @@ const ROLE_LABELS: Record<Role, string> = {
 const ROLE_STYLES: Record<Role, string> = {
   ceo: "border-primary/20 bg-primary/10 text-primary",
   leadership: "border-amber-500/20 bg-amber-500/10 text-amber-700",
-  manager: "border-sky-500/20 bg-sky-500/10 text-sky-700",
+  engineering_manager: "border-sky-500/20 bg-sky-500/10 text-sky-700",
+  manager: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
   everyone: "border-border/60 bg-muted text-muted-foreground",
 };
 
