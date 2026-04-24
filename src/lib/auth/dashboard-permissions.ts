@@ -444,10 +444,11 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
   {
     id: "engineering.impact",
     label: "Engineering Impact",
-    description: "Leadership-only engineering impact report.",
+    description:
+      "Engineering impact report. Aggregate charts (distributions, ramp-up, pillar, AI tooling) are visible to everyone; individual-level drilldowns (Cleveland dots, per-engineer trajectories, watchlist) render only for leadership+.",
     href: "/dashboard/engineering/impact",
     groupLabel: "Team",
-    defaultRole: "leadership",
+    defaultRole: "everyone",
     redirectTo: "/dashboard/engineering",
   },
   {

@@ -21,6 +21,8 @@ import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
+import { resolveViewerEmail } from "@/lib/data/managers";
 
 function formatTenure(months: number): string {
   const y = Math.floor(months / 12);
@@ -61,7 +63,23 @@ export default async function EngineerProfilePage({
   try {
     const role = await getCurrentUserRole();
     isCeo = hasAccess(role, "ceo");
-    canSeeCodeReview = hasAccess(role, "engineering_manager");
+    const isEngManager = hasAccess(role, "engineering_manager");
+    let isSelf = false;
+    if (!isEngManager && profile.employeeEmail) {
+      const viewer = await getCurrentUserWithTimeout();
+      if (viewer.status === "authenticated") {
+        const viewerEmail = await resolveViewerEmail(
+          (viewer.user.emailAddresses ?? []).map((e) => e.emailAddress),
+        );
+        isSelf =
+          viewerEmail !== null &&
+          viewerEmail === profile.employeeEmail.toLowerCase();
+      }
+    }
+    // Engineering managers+ see every engineer's code review section.
+    // Anyone else only sees it on their own profile — a growth-focused
+    // self-view, not a peer leaderboard.
+    canSeeCodeReview = isEngManager || isSelf;
   } catch (err) {
     console.error("[engineer profile] role lookup failed", err);
   }
