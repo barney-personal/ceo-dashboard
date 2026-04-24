@@ -83,8 +83,12 @@ export default async function DashboardOverview() {
   // Use the impersonated user's ID when active, otherwise the real user
   const effectiveUserId = impersonation?.userId ?? realUserId;
 
-  const accessToken = effectiveUserId
-    ? await getUserGoogleAccessToken(effectiveUserId)
+  // Today's Meetings is always the *viewer's* calendar — an impersonated
+  // employee rarely has Google connected, and even if they do, showing their
+  // private day to the CEO isn't the intent. The rest of the page (briefing,
+  // role gating) still swaps to the impersonated identity.
+  const accessToken = realUserId
+    ? await getUserGoogleAccessToken(realUserId)
     : null;
 
   // When impersonating, swap to the target user's identity so the briefing
@@ -130,7 +134,7 @@ export default async function DashboardOverview() {
       () =>
         getMeetingsForRange(todayStart, todayEnd, {
           accessToken: accessToken ?? undefined,
-          userId: effectiveUserId ?? undefined,
+          userId: realUserId ?? undefined,
         }),
       { days: [], calendarAuthExpired: false },
     ),

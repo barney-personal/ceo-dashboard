@@ -105,4 +105,28 @@ describe("getUserGoogleAccessToken", () => {
 
     await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
   });
+
+  it("logs diagnostic context when returning null so prod failures are debuggable", async () => {
+    mockGetUserOauthAccessToken
+      .mockRejectedValueOnce(new Error("provider not found"))
+      .mockResolvedValueOnce({ data: [] });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+      expect(warn).toHaveBeenCalledWith(
+        "[google-token] returning null for user",
+        expect.objectContaining({
+          userId: "user_123",
+          sawAnyToken: false,
+          sawAnyScoped: false,
+          probeErrors: expect.objectContaining({
+            google: "provider not found",
+          }),
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

@@ -60,20 +60,37 @@ export async function getUserGoogleAccessToken(
     const getUserOauthAccessToken =
       client.users.getUserOauthAccessToken as unknown as GetUserOauthAccessTokenFn;
 
+    const probeErrors: Record<string, string> = {};
+    let sawAnyToken = false;
+    let sawAnyScoped = false;
+
     for (const provider of GOOGLE_OAUTH_PROVIDERS) {
       try {
         const response = await getUserOauthAccessToken(userId, provider);
-        const token = pickBestGoogleToken(
-          response.data as ClerkOauthAccessToken[]
-        );
+        const tokens = (response.data ?? []) as ClerkOauthAccessToken[];
+        if (tokens.length > 0) sawAnyToken = true;
+        if (tokens.some(hasCalendarScope)) sawAnyScoped = true;
+        const token = pickBestGoogleToken(tokens);
         if (token) return token;
-      } catch {
+      } catch (err) {
+        probeErrors[provider] =
+          err instanceof Error ? err.message : String(err);
         continue;
       }
     }
 
+    console.warn("[google-token] returning null for user", {
+      userId,
+      sawAnyToken,
+      sawAnyScoped,
+      probeErrors,
+    });
     return null;
-  } catch {
+  } catch (err) {
+    console.warn("[google-token] clerkClient() threw, returning null", {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
