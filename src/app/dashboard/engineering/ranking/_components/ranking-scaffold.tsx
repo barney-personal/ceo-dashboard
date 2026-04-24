@@ -1429,6 +1429,7 @@ function CompositeTopTable({
                 <th className="py-2 pr-3 text-right font-medium">A output</th>
                 <th className="py-2 pr-3 text-right font-medium">B impact</th>
                 <th className="py-2 pr-3 text-right font-medium">C delivery</th>
+                <th className="py-2 pr-3 text-right font-medium">D quality</th>
                 <th className="py-2 pr-3 text-right font-medium">Adjusted</th>
                 <th className="py-2 pr-3 text-right font-medium">Composite</th>
                 <th className="py-2 pr-3 font-medium">80% CI</th>
@@ -1463,6 +1464,9 @@ function CompositeTopTable({
                       {formatPercentile(e.delivery)}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
+                      {formatPercentile(e.quality)}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
                       {formatPercentile(e.adjusted)}
                     </td>
                     <td className="py-2 pr-3 text-right font-display tabular-nums text-foreground">
@@ -1477,7 +1481,7 @@ function CompositeTopTable({
                         : "—"}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">
-                      {e.presentMethodCount} / 4
+                      {e.presentMethodCount} / 5
                     </td>
                   </tr>
                 );
@@ -1659,7 +1663,7 @@ function EngineerAttributionPanel({
           {composite}
         </span>
         <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-          {entry.presentMethodCount} / 4 methods
+          {entry.presentMethodCount} / 5 methods
         </span>
       </summary>
       <div className="space-y-4 border-t border-border/30 p-3">
@@ -1887,7 +1891,7 @@ function AttributionSection({
           <ul className="mt-2 grid gap-1 text-[11px] text-muted-foreground md:grid-cols-2">
             {unscored.map((e) => (
               <li key={e.emailHash || e.displayName}>
-                {e.displayName} — {e.discipline} · {e.presentMethodCount} / 4
+                {e.displayName} — {e.discipline} · {e.presentMethodCount} / 5
                 methods present
               </li>
             ))}

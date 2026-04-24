@@ -18,7 +18,7 @@ export interface ImpactShapContribution {
 export interface ImpactEngineerPrediction {
   name: string;
   email: string;
-  email_hash: string;
+  
   discipline: string;
   pillar: string;
   level_label: string;

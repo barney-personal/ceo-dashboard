@@ -380,9 +380,9 @@ function buildSignalRows({
   squadDeliveryByName: Map<string, TeamSwarmiaMetrics>;
   now: Date;
 }): PerEngineerSignalRow[] {
-  const impactByHash = new Map(
+  const impactByEmail = new Map(
     getImpactModel().engineers.map((engineer) => [
-      engineer.email_hash,
+      (engineer.email ?? "").toLowerCase(),
       engineer,
     ]),
   );
@@ -405,7 +405,7 @@ function buildSignalRows({
           deletions: 0,
         })
       : null;
-    const modelRow = impactByHash.get(entry.emailHash);
+    const modelRow = impactByEmail.get(entry.email.toLowerCase());
     const aiUsage = aiUsageByEmail.get(entry.email.toLowerCase()) ?? null;
     const squadKey = normalizeTeamName(
       entry.canonicalSquad?.name ?? entry.squad,

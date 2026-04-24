@@ -707,12 +707,16 @@ export function hashEmailForRanking(email: string): string {
     .slice(0, 16);
 }
 
-function classifyDiscipline(
+export function classifyDiscipline(
   rpSpecialisation: string | undefined,
   jobTitle: string | undefined,
 ): Discipline {
   const s = (rpSpecialisation ?? "").trim().toLowerCase();
   const j = (jobTitle ?? "").toLowerCase();
+  // The "(M)" suffix on rp_specialisation marks managers across every
+  // discipline (e.g. "Engineer - Backend (M)", "Data Engineer - ML Ops (M)").
+  // Detect first so a manager variant never inherits the IC discipline below.
+  if (/\(m\)\s*$/.test(s)) return "EM";
   if (s === "backend engineer" || s === "python engineer") return "BE";
   if (s === "frontend engineer") return "FE";
   if (s === "engineering manager") return "EM";
@@ -738,6 +742,34 @@ function classifyDiscipline(
   if (s.includes("python")) return "BE";
   if (s.includes("technical operations")) return "Ops";
   return "Other";
+}
+
+/**
+ * Disciplines eligible for the competitive cohort — product-engineering IC
+ * roles (Backend and Frontend) whose primary output is merging code into
+ * product repos. Every other discipline is deliberately excluded:
+ *
+ *  - EM: managers ship less code by role design — ranking alongside ICs
+ *    mislabels the role itself as underperformance.
+ *  - QA: test / quality engineering has a different shipping cadence and
+ *    often lands changes via non-PR surfaces.
+ *  - ML: model training / data-science work does not line up with the
+ *    per-PR rubric and impact model on which this ranking is built.
+ *  - Ops: platform / infra / DevOps roles deploy changes via different
+ *    pipelines and often land fewer but higher-risk PRs.
+ *  - Other: any specialisation the discipline classifier could not
+ *    confidently tag (Data engineers, Graduate buckets, etc.).
+ *
+ * Rows that classify into any of those disciplines are dropped from the
+ * roster entirely — they do not appear in the eligibility coverage counts.
+ */
+const RANKABLE_DISCIPLINES: ReadonlySet<Discipline> = new Set<Discipline>([
+  "BE",
+  "FE",
+]);
+
+export function isRankableDiscipline(discipline: Discipline): boolean {
+  return RANKABLE_DISCIPLINES.has(discipline);
 }
 
 function classifyLevel(raw: string | undefined | null): string {
@@ -782,7 +814,7 @@ export interface EligibilityGithubMapRow {
 }
 
 export interface EligibilityImpactModelView {
-  engineers: Array<{ email_hash: string }>;
+  engineers: Array<{ email: string }>;
   /**
    * ISO timestamp the committed impact model was generated. Threaded through
    * from `src/data/impact-model.json` by the server loader so the methodology
@@ -922,7 +954,7 @@ function parseDate(value: string | null | undefined): Date | null {
  * Spine: engineering rows from Mode Headcount SSoT (any FTE/CS/contractor
  * with `hb_function` containing "engineer"). Augmented with:
  * - `githubEmployeeMap` (email → login), filtered to non-bot mappings
- * - impact-model presence (by `email_hash` only — the JSON is anonymised)
+ * - impact-model presence (by `email` — the JSON carries plain lowercased emails)
  * - the canonical `squads` registry (when supplied) for squad/pillar/PM
  *   metadata joined by lowercased squad name
  *
@@ -950,8 +982,10 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
     emailToLogin.set(m.employeeEmail.toLowerCase(), m.githubLogin);
   }
 
-  const impactHashes = new Set(
-    inputs.impactModel.engineers.map((e) => e.email_hash),
+  const impactEmails = new Set(
+    inputs.impactModel.engineers
+      .map((e) => (e.email ?? "").toLowerCase())
+      .filter((s) => s.length > 0),
   );
 
   // Registry is "present" only when the caller supplied a non-empty list.
@@ -975,6 +1009,15 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
 
   for (const row of inputs.headcountRows) {
     if (!isEngineerRow(row)) continue;
+    // Non-shipping roles (EMs, QA, Ops, data engineers, Other) are dropped
+    // from the roster — their output distribution is structurally different
+    // from IC shipping engineers, so ranking them alongside ICs would
+    // mislabel the role itself as underperformance.
+    const __disciplineForFilter = classifyDiscipline(
+      row.rp_specialisation ?? undefined,
+      row.job_title ?? undefined,
+    );
+    if (!isRankableDiscipline(__disciplineForFilter)) continue;
 
     const emailRaw = row.email ?? "";
     const email = emailRaw.toLowerCase();
@@ -1034,7 +1077,7 @@ export function buildEligibleRoster(inputs: EligibilityInputs): {
 
     const githubLogin = emailToLogin.get(email) ?? null;
     const emailHash = hashEmailForRanking(email);
-    const hasImpactModelRow = impactHashes.has(emailHash);
+    const hasImpactModelRow = impactEmails.has(email);
 
     let eligibility: EligibilityStatus;
     let reason: string;
@@ -2894,7 +2937,7 @@ function methodsPresentSummary(
   if (present.length < RANKING_COMPOSITE_MIN_METHODS) {
     return `Only ${present.join(", ")} present — below the ${RANKING_COMPOSITE_MIN_METHODS}-method minimum for composite.`;
   }
-  return `Median of ${present.join(", ")} (${present.length}/4 methods present).`;
+  return `Median of ${present.join(", ")} (${present.length}/5 methods present).`;
 }
 
 /**
@@ -5334,7 +5377,7 @@ export function buildStability(inputs: {
 export const RANKING_SOURCE_NOTES_BASE: readonly string[] = [
   "Roster spine: Mode Headcount SSoT (engineering rows). Manager chain comes from the `manager` / `line_manager_email` fields on the same row.",
   "GitHub identity: `githubEmployeeMap` (non-bot). Unmapped active engineers surface with `insufficient_mapping`, not silently dropped.",
-  "Impact model presence: `src/data/impact-model.json` joined by `email_hash` (SHA-256 of lowercased email, first 16 hex chars).",
+  "Impact model presence: `src/data/impact-model.json` joined by plain lowercased `email`.",
   "Display names and emails are resolved at request time and never written into persisted ranking snapshots.",
 ];
 

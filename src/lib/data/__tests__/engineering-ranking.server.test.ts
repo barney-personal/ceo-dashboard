@@ -135,7 +135,7 @@ function buildFixtureSnapshot() {
     }));
   const impactModel: EligibilityImpactModelView = {
     engineers: entries.map((e) => ({
-      email_hash: e.emailHash,
+      email: e.email,
       predicted: 1,
       actual: 1,
     })),

@@ -160,6 +160,10 @@ function classifyDiscipline(
   jobTitle: string | null,
 ): Discipline {
   const s = (spec ?? "").trim().toLowerCase();
+  // The "(M)" suffix on rp_specialisation marks managers across every
+  // discipline (e.g. "Engineer - Backend (M)"). Detect first so a manager
+  // variant never inherits an IC discipline below.
+  if (/\(m\)\s*$/.test(s)) return "EM";
   const exact = DISCIPLINE_BY_SPECIALISATION[s];
   if (exact) return exact;
 
@@ -212,10 +216,19 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
   };
 
   const activeEngineers = (headcountQuery.rows as RawEmployee[]).filter(
-    (e) =>
-      !e.termination_date &&
-      (e.hb_function ?? "").toLowerCase().includes("engineer") &&
-      e.start_date,
+    (e) => {
+      if (e.termination_date) return false;
+      if (!(e.hb_function ?? "").toLowerCase().includes("engineer")) return false;
+      if (!e.start_date) return false;
+      // Narrow to IC shipping roles (BE / FE) — drop EMs, QA, Platform, Data,
+      // ML, etc. so the impact analysis describes a homogeneous cohort and
+      // matches the engineer-ranking page's definition of "engineer".
+      const discipline = classifyDiscipline(
+        e.rp_specialisation ?? null,
+        e.job_title ?? null,
+      );
+      return discipline === "BE" || discipline === "FE";
+    },
   );
 
   const mapRows = await db

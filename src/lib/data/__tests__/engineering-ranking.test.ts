@@ -440,7 +440,7 @@ describe("buildEligibleRoster (M4 eligibility preflight)", () => {
       inputs({
         headcountRows: headcount,
         githubMap: gh,
-        impactModel: { engineers: [{ email_hash: emailHash }] },
+        impactModel: { engineers: [{ email: "shap@meetcleo.com" }] },
       }),
     );
     const shap = entries.find((e) => e.email === "shap@meetcleo.com")!;
@@ -2803,7 +2803,7 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
       headcountRows,
       githubMap,
       impactModel: {
-        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+        engineers: entries.map((e) => ({ email: e.email })),
       },
       signals,
       now,
@@ -3025,7 +3025,7 @@ describe("M13 methodology version and readiness provenance", () => {
       headcountRows,
       githubMap,
       impactModel: {
-        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+        engineers: entries.map((e) => ({ email: e.email })),
       },
       signals,
       now: new Date("2026-04-24T00:00:00Z"),
@@ -3363,7 +3363,7 @@ describe("M14 confidence bands and statistical tie handling", () => {
       headcountRows,
       githubMap,
       impactModel: {
-        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+        engineers: entries.map((e) => ({ email: e.email })),
       },
       signals,
       now: new Date("2026-04-24T00:00:00Z"),
@@ -3956,7 +3956,7 @@ describe("M15 per-engineer attribution drilldown", () => {
       headcountRows,
       githubMap,
       impactModel: {
-        engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+        engineers: entries.map((e) => ({ email: e.email })),
       },
       signals,
       now: new Date("2026-04-24T00:00:00Z"),
@@ -4142,7 +4142,7 @@ describe("M16 privacy-preserving ranking snapshot persistence", () => {
       }));
     const impactModel: EligibilityImpactModelView = {
       engineers: entries.map((e) => ({
-        email_hash: e.emailHash,
+        email: e.email,
         predicted: 1,
         actual: 1,
       })),
@@ -4250,7 +4250,7 @@ describe("M16 privacy-preserving ranking snapshot persistence", () => {
         isBot: false,
       }));
     const impactModel: EligibilityImpactModelView = {
-      engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+      engineers: entries.map((e) => ({ email: e.email })),
     };
     const snapshot = buildRankingSnapshot({
       headcountRows,
@@ -5684,7 +5684,7 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
         isBot: false,
       })),
       impactModel: {
-        engineers: normalisedEntries.map((e) => ({ email_hash: e.emailHash })),
+        engineers: normalisedEntries.map((e) => ({ email: e.email })),
         generated_at: "2026-04-20T12:00:00Z",
       },
       signals,
@@ -5748,7 +5748,7 @@ describe("M21 methodology panel, anti-gaming audit, freshness badges, manager ca
         isBot: false,
       })),
       impactModel: {
-        engineers: normalised.map((e) => ({ email_hash: e.emailHash })),
+        engineers: normalised.map((e) => ({ email: e.email })),
       },
       signals: normalised.map((e, i) =>
         signalRow(i + 1, { emailHash: e.emailHash }),
