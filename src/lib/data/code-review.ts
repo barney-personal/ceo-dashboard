@@ -95,6 +95,13 @@ export interface CodeReviewView {
   totalPrs: number;
 }
 
+export interface EngineerCodeReviewView {
+  windowDays: number;
+  rubricVersion: string;
+  analysedAtLatest: Date | null;
+  engineer: EngineerRollup | null;
+}
+
 interface AnalysisRow {
   repo: string;
   prNumber: number;
@@ -732,5 +739,24 @@ export async function getCodeReviewView(
     analysedAtLatest,
     engineers,
     totalPrs: rows.length,
+  };
+}
+
+export async function getEngineerCodeReview(
+  login: string,
+  opts: RollupOptions = {},
+): Promise<EngineerCodeReviewView> {
+  const view = await getCodeReviewView({ includePrevious: true, ...opts });
+  const match = login.toLowerCase();
+  const engineer =
+    view.engineers.find(
+      (candidate) => candidate.authorLogin.toLowerCase() === match,
+    ) ?? null;
+
+  return {
+    windowDays: view.windowDays,
+    rubricVersion: view.rubricVersion,
+    analysedAtLatest: view.analysedAtLatest,
+    engineer,
   };
 }
