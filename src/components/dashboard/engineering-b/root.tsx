@@ -1,5 +1,5 @@
 import type { Role } from "@/lib/auth/roles";
-import { EngineerPlaceholder } from "./engineer-placeholder";
+import { EngineerView } from "./engineer-view";
 import { ManagerView, type ManagerScopeKind } from "./manager-view";
 
 export type EngineeringBPersona = "engineer" | "manager";
@@ -53,7 +53,7 @@ export function EngineeringBRoot({
 
   return (
     <div data-testid="engineering-b-root" data-persona="engineer">
-      <EngineerPlaceholder />
+      <EngineerView />
     </div>
   );
 }

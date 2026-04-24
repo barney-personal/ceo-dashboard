@@ -9,9 +9,9 @@ vi.mock("../manager-view", () => ({
   ),
 }));
 
-vi.mock("../engineer-placeholder", () => ({
-  EngineerPlaceholder: () => (
-    <div data-testid="engineer-placeholder-stub">engineer placeholder stub</div>
+vi.mock("../engineer-view", () => ({
+  EngineerView: () => (
+    <div data-testid="engineer-view-stub">engineer view stub</div>
   ),
 }));
 
@@ -75,17 +75,17 @@ describe("EngineeringBRoot", () => {
     expect(view.getAttribute("data-scope")).toBe("org");
   });
 
-  it("renders the engineer placeholder for engineer persona roles", () => {
+  it("renders the engineer view for engineer persona roles", () => {
     render(<EngineeringBRoot effectiveRole="everyone" />);
     const root = screen.getByTestId("engineering-b-root");
     expect(root.getAttribute("data-persona")).toBe("engineer");
-    expect(screen.getByTestId("engineer-placeholder-stub")).toBeInTheDocument();
+    expect(screen.getByTestId("engineer-view-stub")).toBeInTheDocument();
     expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
   });
 
   it("does not leak manager content to engineering_manager persona", () => {
     render(<EngineeringBRoot effectiveRole="engineering_manager" />);
     expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
-    expect(screen.getByTestId("engineer-placeholder-stub")).toBeInTheDocument();
+    expect(screen.getByTestId("engineer-view-stub")).toBeInTheDocument();
   });
 });
