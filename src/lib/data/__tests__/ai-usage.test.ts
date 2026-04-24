@@ -18,6 +18,9 @@ import {
   buildMonthlyModelMix,
   buildTopModelTrends,
   buildUserMonthlyTrends,
+  computeLorenzCurve,
+  currentMonthStartIso,
+  currentWeekStartIso,
   getAiUsageData,
   getLatestMonthPeerSpend,
   getTrailingWeeklyTotals,
@@ -387,6 +390,71 @@ describe("getTrailingWeeklyTotals", () => {
       "2026-04-13",
     ]);
     expect(weekly.map((w) => w.cost)).toEqual([1200, 5200]);
+  });
+});
+
+describe("currentWeekStartIso", () => {
+  it("returns the Monday of the given week in UTC", () => {
+    // 2026-04-24 is a Friday; Monday of that week is 2026-04-20.
+    expect(currentWeekStartIso(new Date("2026-04-24T10:00:00Z"))).toBe(
+      "2026-04-20",
+    );
+    // Monday itself stays put.
+    expect(currentWeekStartIso(new Date("2026-04-20T00:00:00Z"))).toBe(
+      "2026-04-20",
+    );
+    // Sunday rolls back 6 days.
+    expect(currentWeekStartIso(new Date("2026-04-26T23:59:00Z"))).toBe(
+      "2026-04-20",
+    );
+  });
+});
+
+describe("currentMonthStartIso", () => {
+  it("returns the first of the month in UTC", () => {
+    expect(currentMonthStartIso(new Date("2026-04-24T10:00:00Z"))).toBe(
+      "2026-04-01",
+    );
+    expect(currentMonthStartIso(new Date("2026-01-01T00:00:00Z"))).toBe(
+      "2026-01-01",
+    );
+  });
+});
+
+describe("computeLorenzCurve", () => {
+  it("produces a curve, user count, and Gini bounded to [0, 1]", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const lorenz = computeLorenzCurve(data);
+
+    // 2 active users in latest month (alice + bob).
+    expect(lorenz.userCount).toBe(2);
+    // Total spend = alice (500+120) + bob (45) = 665.
+    expect(lorenz.totalSpend).toBe(665);
+    // First + last point always anchor at (0,0) and (1,1).
+    expect(lorenz.points[0]).toEqual({ x: 0, y: 0 });
+    expect(lorenz.points.at(-1)).toEqual({ x: 1, y: 1 });
+    expect(lorenz.gini).toBeGreaterThanOrEqual(0);
+    expect(lorenz.gini).toBeLessThanOrEqual(1);
+    // bob < alice, so curve should sit below the diagonal → gini > 0.
+    expect(lorenz.gini).toBeGreaterThan(0);
+  });
+
+  it("returns a flat equality line when there is no spend", async () => {
+    getReportDataMock.mockResolvedValueOnce(
+      makeReportData().map((entry) =>
+        entry.queryName === "Query 3" ? { ...entry, rows: [] } : entry,
+      ),
+    );
+    const data = await getAiUsageData();
+    const lorenz = computeLorenzCurve(data);
+    expect(lorenz.userCount).toBe(0);
+    expect(lorenz.totalSpend).toBe(0);
+    expect(lorenz.gini).toBe(0);
+    expect(lorenz.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ]);
   });
 });
 

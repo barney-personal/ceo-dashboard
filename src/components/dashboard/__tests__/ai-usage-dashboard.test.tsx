@@ -392,6 +392,27 @@ describe("AiUsageMetricCard", () => {
     expect(down.innerHTML).toContain("text-amber-700");
     expect(down.innerHTML).not.toContain("text-positive");
   });
+
+  it("renders deltas in muted foreground when neutralDelta is set", () => {
+    const { container: up } = render(
+      <AiUsageMetricCard label="Spend" value="$1" deltaPct={25} neutralDelta />,
+    );
+    // Neutral means neither good-green nor bad-amber.
+    expect(up.innerHTML).not.toContain("text-amber-700");
+    expect(up.innerHTML).not.toContain("text-positive");
+    expect(up.innerHTML).toContain("text-muted-foreground");
+
+    const { container: down } = render(
+      <AiUsageMetricCard
+        label="Spend"
+        value="$1"
+        deltaPct={-25}
+        neutralDelta
+      />,
+    );
+    expect(down.innerHTML).not.toContain("text-amber-700");
+    expect(down.innerHTML).not.toContain("text-positive");
+  });
 });
 
 describe("PeerDistributionStrip", () => {

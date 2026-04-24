@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { StackedAreaChart } from "@/components/charts/stacked-area-chart";
 import { SmallMultiplesTimeSeries } from "@/components/charts/small-multiples-time-series";
 import { Sparkline } from "@/components/charts/sparkline";
+import { LorenzCurve } from "@/components/charts/lorenz-curve";
 
 interface WeeklyCategoryRow {
   weekStart: string;
@@ -52,6 +53,13 @@ interface MonthlyModelMix {
   months: string[];
   models: Array<{ modelName: string; category: string; totalCost: number }>;
   rows: Array<{ monthStart: string; [modelName: string]: string | number }>;
+}
+
+interface LorenzPayload {
+  points: Array<{ x: number; y: number }>;
+  gini: number;
+  userCount: number;
+  totalSpend: number;
 }
 
 interface PersonLookup {
@@ -132,8 +140,11 @@ export function AiUsageDashboard({
   userTrends,
   modelTrends,
   monthlyModelMix,
+  lorenz,
   people,
   claudeDataStart,
+  currentWeekStart,
+  currentMonthStart,
   canViewProfiles = false,
 }: {
   weeklyByCategory: WeeklyCategoryRow[];
@@ -142,9 +153,16 @@ export function AiUsageDashboard({
   userTrends: Record<string, UserMonthlyTrendEntry[]>;
   modelTrends: ModelTrendPanel[];
   monthlyModelMix?: MonthlyModelMix;
+  lorenz?: LorenzPayload;
   people: PersonLookup[];
   /** ISO date for the vertical annotation on the weekly area chart. */
   claudeDataStart?: string;
+  /** Monday of the current (in-progress) week, so the latest bar is marked
+   *  as partial — Cairo's truthful-chart rule. */
+  currentWeekStart?: string;
+  /** First day of the current (in-progress) month — same rationale for the
+   *  model-mix chart's latest column. */
+  currentMonthStart?: string;
   /** When true, render user names as links to `/dashboard/people/${slug}`.
    *  That route is manager-gated, so non-managers see plain names and no
    *  dead-end link. */
@@ -365,10 +383,6 @@ export function AiUsageDashboard({
           .filter((u) => u.pillar === pillarFilter)
           .slice(0, leaderboardLimit);
 
-  const maxUserCost = userLeaderboard.rows[0]?.cost ?? 0;
-  const medianSharePct = maxUserCost
-    ? (userLeaderboard.medianCost / maxUserCost) * 100
-    : 0;
 
   return (
     <div className="space-y-8">
@@ -386,11 +400,14 @@ export function AiUsageDashboard({
             data={stackedWeekly.rows}
             series={stackedWeekly.series}
             yFormatType={weeklyMetric === "cost" ? "currency" : "tokens"}
-            annotations={
-              claudeDataStart
+            annotations={[
+              ...(claudeDataStart
                 ? [{ date: claudeDataStart, label: "Claude data begins" }]
-                : []
-            }
+                : []),
+              ...(currentWeekStart
+                ? [{ date: currentWeekStart, label: "Partial week — WTD" }]
+                : []),
+            ]}
           />
           <div
             className="absolute right-5 top-3 inline-flex rounded-md border border-border/60 bg-background p-0.5 text-[11px]"
@@ -417,7 +434,20 @@ export function AiUsageDashboard({
       )}
 
       {monthlyModelMix && monthlyModelMix.rows.length > 1 && (
-        <MonthlyModelMixChart mix={monthlyModelMix} />
+        <MonthlyModelMixChart
+          mix={monthlyModelMix}
+          currentMonthStart={currentMonthStart}
+        />
+      )}
+
+      {lorenz && lorenz.userCount >= 3 && (
+        <LorenzCurve
+          points={lorenz.points}
+          gini={lorenz.gini}
+          userCount={lorenz.userCount}
+          totalSpend={lorenz.totalSpend}
+          subtitle="Latest month, one point per active user"
+        />
       )}
 
       {modelBreakdown.rows.length > 0 && (
@@ -529,8 +559,8 @@ export function AiUsageDashboard({
                 Who&apos;s spending the most
               </h3>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Median peer: {formatCurrency(userLeaderboard.medianCost)} · grey
-                marker on share bars
+                Median peer this month:{" "}
+                {formatCurrency(userLeaderboard.medianCost)}
               </p>
             </div>
             <div className="flex gap-2 text-xs">
@@ -585,16 +615,10 @@ export function AiUsageDashboard({
                     $/day
                   </th>
                   <th className="px-5 py-2.5 text-right">Tokens</th>
-                  <th className="px-5 py-2.5 text-left w-48 hidden xl:table-cell">
-                    Share
-                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredUsers.map((user, i) => {
-                  const share = maxUserCost
-                    ? (user.cost / maxUserCost) * 100
-                    : 0;
                   const delta = deltaBadge(user.cost, user.priorCost);
                   return (
                     <tr
@@ -663,28 +687,13 @@ export function AiUsageDashboard({
                       <td className="px-5 py-2.5 text-right tabular-nums text-muted-foreground">
                         {formatTokens(user.tokens)}
                       </td>
-                      <td className="px-5 py-2.5 hidden xl:table-cell">
-                        <div className="relative h-1.5 w-40 rounded-full bg-muted/40">
-                          <div
-                            className="absolute inset-y-0 left-0 rounded-full bg-primary/70"
-                            style={{ width: `${Math.max(share, 1)}%` }}
-                          />
-                          {medianSharePct > 0 && (
-                            <div
-                              className="absolute top-[-3px] h-3.5 w-px bg-foreground/50"
-                              style={{ left: `${medianSharePct}%` }}
-                              title={`Median peer: ${formatCurrency(userLeaderboard.medianCost)}`}
-                            />
-                          )}
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}
                 {filteredUsers.length === 0 && (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={10}
                       className="px-5 py-8 text-center text-xs text-muted-foreground"
                     >
                       No users match the current filter.
@@ -702,12 +711,19 @@ export function AiUsageDashboard({
 
 /**
  * Monthly model mix — one stacked column per month, segments sized by model
- * spend. Lets you see which models are taking share over time AND the total
- * growing, in one figure (vs. the `SmallMultiplesTimeSeries` which shows
- * each model in isolation).
+ * spend. Defaults to "share %" because Cleveland warns that stacked-bar
+ * baselines beyond the bottom series are hard to compare; fixing the top
+ * at 100% resolves that for composition questions. Toggle to absolute $
+ * when the reader's question is magnitude, not mix.
  */
-function MonthlyModelMixChart({ mix }: { mix: MonthlyModelMix }) {
-  const [mode, setMode] = useState<"absolute" | "share">("absolute");
+function MonthlyModelMixChart({
+  mix,
+  currentMonthStart,
+}: {
+  mix: MonthlyModelMix;
+  currentMonthStart?: string;
+}) {
+  const [mode, setMode] = useState<"absolute" | "share">("share");
 
   const totals = useMemo(() => {
     return mix.rows.map((row) => {
@@ -764,6 +780,7 @@ function MonthlyModelMixChart({ mix }: { mix: MonthlyModelMix }) {
             const total = totals[i] ?? 0;
             const barHeightPx = 220;
             const scale = mode === "share" ? 1 : total / maxTotal;
+            const isPartial = row.monthStart === currentMonthStart;
             return (
               <div
                 key={row.monthStart}
@@ -773,14 +790,19 @@ function MonthlyModelMixChart({ mix }: { mix: MonthlyModelMix }) {
                   {formatCurrencyCompact(total)}
                 </div>
                 <div
-                  className="relative flex w-full flex-col overflow-hidden rounded-sm border border-border/40 bg-muted/10"
+                  className={`relative flex w-full flex-col overflow-hidden rounded-sm border ${
+                    isPartial
+                      ? "border-dashed border-muted-foreground/40 bg-muted/5"
+                      : "border-border/40 bg-muted/10"
+                  }`}
                   style={{ height: `${barHeightPx}px` }}
-                  title={`${formatMonth(row.monthStart)} · ${formatCurrency(total)}`}
+                  title={`${formatMonth(row.monthStart)} · ${formatCurrency(total)}${isPartial ? " (month-to-date)" : ""}`}
                 >
                   <div
                     className="absolute bottom-0 left-0 right-0 flex flex-col-reverse"
                     style={{
                       height: `${Math.max(scale * 100, 1)}%`,
+                      opacity: isPartial ? 0.55 : 1,
                     }}
                   >
                     {mix.models.map((model, mi) => {
@@ -805,8 +827,15 @@ function MonthlyModelMixChart({ mix }: { mix: MonthlyModelMix }) {
                     })}
                   </div>
                 </div>
-                <div className="whitespace-nowrap text-[10px] text-muted-foreground">
+                <div
+                  className={`whitespace-nowrap text-[10px] ${
+                    isPartial
+                      ? "italic text-muted-foreground/70"
+                      : "text-muted-foreground"
+                  }`}
+                >
                   {formatMonth(row.monthStart)}
+                  {isPartial && " · MTD"}
                 </div>
               </div>
             );

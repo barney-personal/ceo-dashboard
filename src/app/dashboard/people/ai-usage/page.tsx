@@ -13,6 +13,9 @@ import {
   buildMonthlyModelMix,
   buildTopModelTrends,
   buildUserMonthlyTrends,
+  computeLorenzCurve,
+  currentMonthStartIso,
+  currentWeekStartIso,
   getAiUsageData,
   getTrailingWeeklyTotals,
   summariseTotals,
@@ -113,6 +116,9 @@ export default async function PeopleAiUsagePage() {
   const monthlyModelMix = buildMonthlyModelMix(usage, 9);
   const weeklyTotals = getTrailingWeeklyTotals(usage, 12);
   const weeklySparkValues = weeklyTotals.map((w) => w.cost);
+  const lorenz = computeLorenzCurve(usage);
+  const currentWeekStart = currentWeekStartIso();
+  const currentMonthStart = currentMonthStartIso();
 
   const allPeople = [
     ...employees.employees,
@@ -195,6 +201,7 @@ export default async function PeopleAiUsagePage() {
           label="Trailing 30 days"
           value={formatCurrency(totals.trailing30DayCost)}
           deltaPct={trailing30Delta}
+          neutralDelta
           subtitle={
             totals.prior30DayCost > 0
               ? `vs ${formatCurrency(totals.prior30DayCost)} prior 30d`
@@ -207,6 +214,7 @@ export default async function PeopleAiUsagePage() {
           label={`${formatMonth(totals.latestMonthStart)} spend`}
           value={formatCurrency(totals.latestMonthCost)}
           deltaPct={monthDelta}
+          neutralDelta
           subtitle={
             totals.priorMonthCost > 0
               ? `vs ${formatCurrency(totals.priorMonthCost)} last month`
@@ -228,10 +236,18 @@ export default async function PeopleAiUsagePage() {
           modeUrl={modeUrl}
         />
         <AiUsageMetricCard
-          label={`Week of ${formatMonth(totals.latestWeekStart, "short-day")}`}
+          label={
+            totals.latestWeekStart === currentWeekStart
+              ? `Week of ${formatMonth(totals.latestWeekStart, "short-day")} (partial)`
+              : `Week of ${formatMonth(totals.latestWeekStart, "short-day")}`
+          }
           value={formatCurrency(totals.latestWeekCost)}
           deltaPct={null}
-          subtitle="latest complete week"
+          subtitle={
+            totals.latestWeekStart === currentWeekStart
+              ? "week-to-date — not a full 7 days"
+              : "latest complete week"
+          }
           modeUrl={modeUrl}
           sparkline={weeklySparkValues}
           sparklineColor="#7c3aed"
@@ -246,8 +262,11 @@ export default async function PeopleAiUsagePage() {
           userTrends={userTrendsRecord}
           modelTrends={modelTrends}
           monthlyModelMix={monthlyModelMix}
+          lorenz={lorenz}
           people={peopleList}
           claudeDataStart={CLAUDE_DATA_START_ISO}
+          currentWeekStart={currentWeekStart}
+          currentMonthStart={currentMonthStart}
           canViewProfiles={canViewProfiles}
         />
       ) : (
