@@ -136,15 +136,25 @@ function Header({ view }: { view: CodeReviewView }) {
         setError(body.error ?? `HTTP ${res.status}`);
         return;
       }
+      const failedCount = body.failed?.length ?? 0;
+      const skippedCount = body.skipped?.length ?? 0;
       const remaining =
-        body.candidatesConsidered - body.cached - body.analysed;
+        body.candidatesConsidered -
+        body.cached -
+        body.analysed -
+        failedCount -
+        skippedCount;
+      const parts = [
+        `Read ${body.analysed} new PRs`,
+        `re-used ${body.cached} prior reads`,
+      ];
+      if (failedCount > 0) parts.push(`${failedCount} failed`);
+      if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
       const suffix =
         remaining > 0
           ? ` · ${remaining} PR${remaining === 1 ? "" : "s"} still pending.`
-          : "";
-      setStatus(
-        `Read ${body.analysed} new PRs · re-used ${body.cached} prior reads · ${body.failed.length} skipped.${suffix}`,
-      );
+          : ".";
+      setStatus(`${parts.join(" · ")}${suffix}`);
       startTransition(() => router.refresh());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
