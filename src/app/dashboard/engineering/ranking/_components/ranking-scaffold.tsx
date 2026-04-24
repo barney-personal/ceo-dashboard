@@ -1,12 +1,14 @@
 import { AlertTriangle, CheckCircle2, CircleDashed } from "lucide-react";
 import {
   bucketNormalisationDeltas,
+  type AntiGamingRow,
   type AttributionBundle,
   type AttributionContribution,
   type CompositeBundle,
   type ConfidenceBundle,
   type ConfidenceTieGroup,
   type CorrelationPair,
+  type EffectiveSignalWeight,
   type EligibilityEntry,
   type EligibilityStatus,
   type EngineerAttribution,
@@ -17,10 +19,12 @@ import {
   type LensDisagreementRow,
   type LensScoreSummary,
   type LensesBundle,
+  type MethodologyBundle,
   type MoverCauseKind,
   type MoverEntry,
   type MoversBundle,
   type NormalisationBundle,
+  type RankingFreshnessBadge,
   type SignalAudit,
 } from "@/lib/data/engineering-ranking";
 
@@ -2160,6 +2164,340 @@ function MoversSection({ movers }: { movers: MoversBundle }) {
   );
 }
 
+const DOWNWEIGHT_LABEL: Record<AntiGamingRow["downweightStatus"], string> = {
+  full_weight: "Full weight",
+  down_weighted: "Down-weighted",
+  contextual_only: "Contextual only",
+};
+
+const DOWNWEIGHT_TONE: Record<AntiGamingRow["downweightStatus"], string> = {
+  full_weight: "border-primary/40 bg-primary/10 text-primary",
+  down_weighted: "border-warning/40 bg-warning/10 text-warning",
+  contextual_only:
+    "border-muted-foreground/30 bg-muted/40 text-muted-foreground",
+};
+
+const FRESHNESS_TONE: Record<
+  RankingFreshnessBadge["availability"],
+  string
+> = {
+  available: "border-primary/40 bg-primary/10 text-primary",
+  unavailable: "border-destructive/40 bg-destructive/5 text-destructive",
+  pending_source: "border-warning/40 bg-warning/10 text-warning",
+};
+
+function formatEffectiveWeight(w: EffectiveSignalWeight): string {
+  const pct = (w.totalWeight * 100).toFixed(1);
+  return `${pct}%`;
+}
+
+function MethodologySection({
+  methodology,
+}: {
+  methodology: MethodologyBundle;
+}) {
+  return (
+    <section className="rounded-xl border border-border/60 bg-card p-6 shadow-warm">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="max-w-3xl space-y-2">
+          <h3 className="font-display text-2xl italic tracking-tight text-foreground">
+            Methodology panel
+          </h3>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {methodology.contract}
+          </p>
+        </div>
+        <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <div>Version v{methodology.methodologyVersion}</div>
+          <div className="mt-1">
+            Rubric {methodology.rubricVersion ?? "not available"}
+          </div>
+        </div>
+      </header>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Composite rule
+          </h4>
+          <p className="mt-2 text-sm text-foreground">
+            {methodology.compositeRule}
+          </p>
+        </div>
+        <div className="rounded-md border border-border/40 bg-background/60 p-4">
+          <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Normalisation layer
+          </h4>
+          <p className="mt-2 text-sm text-foreground">
+            {methodology.normalisationSummary}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Lenses and lens weights
+        </h4>
+        <ul className="mt-3 space-y-3">
+          {methodology.lenses.map((lens) => (
+            <li
+              key={lens.key}
+              className="rounded-md border border-border/40 bg-card p-3"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-foreground">
+                    {lens.label}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {lens.description}
+                  </div>
+                </div>
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-2">
+                {lens.weights.map((w) => (
+                  <li
+                    key={`${lens.key}-${w.signal}`}
+                    className="rounded-full border border-border/40 bg-background/80 px-2.5 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    {w.signal} · {(w.weight * 100).toFixed(0)}%
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Effective signal weights across the composite
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Every signal's share across the four composite methods. Flagged
+          signals exceed the 30% ceiling — the dominance panel names the
+          trade-off explicitly.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="pb-2 pr-4">Signal</th>
+                <th className="pb-2 pr-4">Effective weight</th>
+                <th className="pb-2">Justification</th>
+              </tr>
+            </thead>
+            <tbody>
+              {methodology.effectiveWeights.map((w) => (
+                <tr
+                  key={w.signal}
+                  className="border-t border-border/30 align-top"
+                >
+                  <td className="py-2 pr-4 text-foreground">{w.signal}</td>
+                  <td className="py-2 pr-4">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${
+                        w.flagged
+                          ? "border-warning/40 bg-warning/10 text-warning"
+                          : "border-primary/40 bg-primary/10 text-primary"
+                      }`}
+                    >
+                      {formatEffectiveWeight(w)}
+                    </span>
+                  </td>
+                  <td className="py-2 text-muted-foreground">
+                    {w.flagged
+                      ? (w.justification ??
+                        "No methodology justification recorded.")
+                      : "Within ceiling."}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Anti-gaming audit
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          For every signal the ranking touches — scored or contextual — the
+          table names the gaming path, the mitigation, the residual weakness,
+          and whether the signal is down-weighted.
+        </p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="pb-2 pr-4">Signal</th>
+                <th className="pb-2 pr-4">Gaming path</th>
+                <th className="pb-2 pr-4">Mitigation</th>
+                <th className="pb-2 pr-4">Residual weakness</th>
+                <th className="pb-2">Posture</th>
+              </tr>
+            </thead>
+            <tbody>
+              {methodology.antiGamingRows.map((row) => (
+                <tr
+                  key={row.signal}
+                  className="border-t border-border/30 align-top"
+                >
+                  <td className="py-2 pr-4 font-medium text-foreground">
+                    {row.signal}
+                  </td>
+                  <td className="py-2 pr-4 text-muted-foreground">
+                    {row.gamingPath}
+                  </td>
+                  <td className="py-2 pr-4 text-muted-foreground">
+                    {row.mitigation}
+                  </td>
+                  <td className="py-2 pr-4 text-muted-foreground">
+                    {row.residualWeakness}
+                  </td>
+                  <td className="py-2">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${DOWNWEIGHT_TONE[row.downweightStatus]}`}
+                    >
+                      {DOWNWEIGHT_LABEL[row.downweightStatus]}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Data freshness
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Per-source timestamps and windows used by this ranking run. The
+          rubric version stays "not available" until `prReviewAnalyses` lands.
+        </p>
+        <ul className="mt-3 grid gap-3 sm:grid-cols-2">
+          {methodology.freshness.map((badge) => (
+            <li
+              key={`${badge.label}-${badge.source}`}
+              className="rounded-md border border-border/40 bg-card p-3"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    {badge.label}
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {badge.source}
+                  </div>
+                </div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] ${FRESHNESS_TONE[badge.availability]}`}
+                >
+                  {badge.availability === "pending_source"
+                    ? "pending"
+                    : badge.availability}
+                </span>
+              </div>
+              <dl className="mt-2 space-y-1 text-[11px] text-muted-foreground">
+                <div className="flex gap-2">
+                  <dt className="w-16 shrink-0 uppercase tracking-[0.12em]">
+                    Timestamp
+                  </dt>
+                  <dd className="text-foreground">
+                    {badge.timestamp ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="w-16 shrink-0 uppercase tracking-[0.12em]">
+                    Window
+                  </dt>
+                  <dd className="text-foreground">{badge.window ?? "—"}</dd>
+                </div>
+                {badge.note && (
+                  <div className="text-[11px] italic text-muted-foreground">
+                    {badge.note}
+                  </div>
+                )}
+              </dl>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Unavailable signals
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Signals the ranking would use if they existed. Listed here so a
+          reader never infers their absence from silence.
+        </p>
+        <ul className="mt-3 space-y-2 text-xs">
+          {methodology.unavailableSignals.map((u) => (
+            <li
+              key={u.name}
+              className="rounded-md border border-border/40 bg-card p-3"
+            >
+              <div className="text-sm font-medium text-foreground">
+                {u.name}
+              </div>
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                {u.reason}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-5 rounded-md border border-border/40 bg-background/60 p-4">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          Manager calibration
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {methodology.managerCalibration.note}
+        </p>
+        <dl className="mt-3 grid grid-cols-2 gap-3 text-xs md:grid-cols-3">
+          <div className="rounded-md border border-border/40 bg-card p-3">
+            <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Status
+            </dt>
+            <dd className="mt-1 text-foreground">
+              {methodology.managerCalibration.status.replace("_", " ")}
+            </dd>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card p-3">
+            <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Managers with directs
+            </dt>
+            <dd className="mt-1 text-foreground">
+              {methodology.managerCalibration.managersWithDirectReports}
+            </dd>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card p-3">
+            <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Direct-report links
+            </dt>
+            <dd className="mt-1 text-foreground">
+              {methodology.managerCalibration.directReportLinks}
+            </dd>
+          </div>
+          <div className="rounded-md border border-border/40 bg-card p-3">
+            <dt className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              Engineers with mapped manager
+            </dt>
+            <dd className="mt-1 text-foreground">
+              {methodology.managerCalibration.engineersWithMappedManager}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  );
+}
+
 function RosterTable({ entries }: { entries: EligibilityEntry[] }) {
   const preview = entries.slice(0, 12);
   const remaining = entries.length - preview.length;
@@ -2305,16 +2643,21 @@ export function RankingScaffold({
               drilldowns, privacy-preserving snapshot persistence (keyed on
               snapshot date + methodology version + email hash, with no
               display name, email, manager, or resolved GitHub login
-              written to the database), and the movers view (risers /
+              written to the database), the movers view (risers /
               fallers / cohort entrants / cohort exits with conservative
               cause narration against the most recent comparable prior
-              snapshot) are all live. The anti-gaming audit and the
-              stability check are still pending — so the rank is an
-              evidence composite, not a final adjudication.
+              snapshot), and the methodology panel (signal weights,
+              anti-gaming audit for every signal, per-source freshness
+              badges, and a manager-calibration stub ready for a later
+              feedback loop) are all live. The stability check is still
+              pending — so the rank is an evidence composite, not a final
+              adjudication.
             </p>
           </div>
         </div>
       </section>
+
+      <MethodologySection methodology={snapshot.methodology} />
 
       <CompositeSection
         composite={snapshot.composite}

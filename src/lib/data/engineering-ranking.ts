@@ -10,16 +10,17 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: the methodology panel / anti-gaming audit and the
- * stability check are still pending until `EngineeringRankingSnapshot.status
- * === "ready"`. Confidence bands and statistical-tie groups (M14) are live
- * and travel on the snapshot via `confidence`. Per-engineer attribution
- * drilldowns (M15) are live and travel on the snapshot via `attribution`.
- * Privacy-preserving ranking snapshot persistence (M16) is live via
- * `buildRankingSnapshotRows` + `engineeringRankingSnapshots` — rows carry
- * only the email hash, never display name, email, manager, or resolved
- * GitHub login. Movers view (M18) is live and travels on the snapshot via
- * `movers`.
+ * not a final adjudication: the stability check is still pending until
+ * `EngineeringRankingSnapshot.status === "ready"`. Confidence bands and
+ * statistical-tie groups (M14) are live and travel on the snapshot via
+ * `confidence`. Per-engineer attribution drilldowns (M15) are live and
+ * travel on the snapshot via `attribution`. Privacy-preserving ranking
+ * snapshot persistence (M16) is live via `buildRankingSnapshotRows` +
+ * `engineeringRankingSnapshots` — rows carry only the email hash, never
+ * display name, email, manager, or resolved GitHub login. Movers view (M18)
+ * is live and travels on the snapshot via `movers`. Methodology panel,
+ * anti-gaming audit, freshness badges, and manager-calibration stub (M21)
+ * are live and travel on the snapshot via `methodology`.
  */
 
 import { createHash } from "node:crypto";
@@ -78,10 +79,22 @@ import { createHash } from "node:crypto";
  *   rather than methodology noise because tenure/discipline/manager/squad
  *   and normalisation-cohort transitions are not encoded in the hash.
  *   Snapshot `status` still stays `methodology_pending` until the
- *   methodology panel / anti-gaming audit (M20) and the stability check
- *   (M21) also land.
+ *   methodology panel / anti-gaming audit and the stability check also land.
+ * - `1.0.0-methodology` — M21 methodology panel, anti-gaming audit,
+ *   freshness badges, and manager-calibration stub are live. Every signal
+ *   the ranking touches carries an explicit anti-gaming row (gaming path,
+ *   mitigation, residual weakness, down-weight posture). Freshness badges
+ *   surface the impact-model training date, signal window, per-source
+ *   windows, AI latest-month vs 180-day GitHub/Swarmia windows, Mode
+ *   headcount sync timestamp when available, and the rubric version as
+ *   "not available" until `prReviewAnalyses` lands. Every engineer's
+ *   attribution drilldown carries a manager-calibration stub (manager
+ *   email hash, direct-report list, `not_requested` status) so a later
+ *   manager-feedback loop can validate directs without changing the
+ *   ranking core. Snapshot `status` stays `methodology_pending` until the
+ *   stability check (M22) also lands.
  */
-export const RANKING_METHODOLOGY_VERSION = "0.9.0-movers" as const;
+export const RANKING_METHODOLOGY_VERSION = "1.0.0-methodology" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -314,6 +327,17 @@ export interface EngineeringRankingSnapshot {
    * state when no comparable prior snapshot exists.
    */
   movers: MoversBundle;
+  /**
+   * Methodology panel bundle (M21): a self-describing on-page description of
+   * what this ranking actually does. Composes the already-computed lens
+   * weights, composite rule, normalisation summary, effective signal weights
+   * and unavailable signals into a single, printable contract; adds the
+   * anti-gaming audit, freshness badges (impact-model training date, ranking
+   * snapshot date, signal window, per-source windows, rubric version) and a
+   * read-only manager-calibration stub so a later manager validation feedback
+   * loop can be wired without changing the ranking core.
+   */
+  methodology: MethodologyBundle;
   /** Known methodology limitations, surfaced verbatim on the page. */
   knownLimitations: string[];
   /** Signals the loader plans to incorporate, and their current availability. */
@@ -522,6 +546,13 @@ export interface EligibilityGithubMapRow {
 
 export interface EligibilityImpactModelView {
   engineers: Array<{ email_hash: string }>;
+  /**
+   * ISO timestamp the committed impact model was generated. Threaded through
+   * from `src/data/impact-model.json` by the server loader so the methodology
+   * freshness panel can show the model's training date. Optional because
+   * tests often construct minimal fixtures without the metadata.
+   */
+  generated_at?: string;
 }
 
 /**
@@ -601,6 +632,21 @@ export interface EligibilityInputs {
   moversMinGapDays?: number;
   /** Optional override for the movers top-N count (tests). */
   moversTopN?: number;
+  /**
+   * Optional ISO timestamp for when the Mode headcount SSoT was most recently
+   * synced. Surfaced on the methodology freshness panel. Null/undefined when
+   * the server loader does not currently have a sync timestamp to expose
+   * (the Mode sync pipeline writes to `modeReportData` but the age surface is
+   * not always joined through to the ranking page).
+   */
+  headcountGeneratedAt?: string | null;
+  /**
+   * Optional ISO month (YYYY-MM-DD) for the most recent AI usage month the
+   * server loader has aggregated. Surfaced on the methodology freshness panel
+   * to call out the AI-usage-vs-180-day-window window mismatch. Null when
+   * AI usage has not been fetched.
+   */
+  aiUsageLatestMonth?: string | null;
 }
 
 function isEngineerRow(row: EligibilityHeadcountRow): boolean {
@@ -2721,7 +2767,7 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel / anti-gaming audit (M20) and the stability check (M21) are still pending — the composite is an evidence rank, not a final adjudication.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M18) is live — risers, fallers, cohort entrants, and cohort exits are diffed against the most recent comparable prior snapshot with conservative cause narration. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check is still pending — the composite is an evidence rank, not a final adjudication until it lands.",
     ],
   };
 }
@@ -2777,7 +2823,7 @@ export const RANKING_MAX_SIGMA = 30 as const;
 
 /**
  * Seeded RNG constant for the M14 bootstrap. Snapshots are deterministic so
- * the M21 stability check can compare consecutive runs without picking up
+ * the M22 stability check can compare consecutive runs without picking up
  * methodology noise. Bumping the seed counts as a methodology change.
  */
 export const RANKING_BOOTSTRAP_SEED = 0x9e_37_79_b1 as const;
@@ -3197,7 +3243,7 @@ export function buildConfidence({
       `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
       `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
       `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
-      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M18) is live and attached to the snapshot via the movers bundle. The methodology panel / anti-gaming audit (M20) and the stability check (M21) remain pending.`,
+      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M18) is live and attached to the snapshot via the movers bundle. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check remains the only outstanding methodology milestone.`,
     ],
   };
 }
@@ -3284,6 +3330,50 @@ export interface EngineerAttributionContext {
   rawSquad: string | null;
   pillar: string | null;
   canonicalSquad: CanonicalSquadMetadata | null;
+  /**
+   * Direct-report context derived by scanning the eligibility roster for
+   * engineers whose `manager` field matches this engineer. M21 surfaces this
+   * so a manager can see, on their own drilldown, how many directs they have
+   * in the ranking cohort — this is the basis for a later calibration
+   * feedback loop (managers validating their directs' positions).
+   *
+   * `directReportHashes` contains email hashes only; display names are
+   * resolved at request time from the current eligibility roster and never
+   * persisted (matches the snapshot privacy invariant).
+   */
+  directReportCount: number;
+  directReportHashes: readonly string[];
+}
+
+/**
+ * Placeholder manager calibration status attached to every engineer
+ * attribution entry. M21 ships the shape only — the feedback loop is not
+ * wired yet. A later cycle can add a `confirmed` / `disputed` / `pending`
+ * state without changing the ranking core because every entry already
+ * carries this field.
+ */
+export interface EngineerAttributionCalibration {
+  /**
+   * Current calibration state. Always `"not_requested"` today — no manager
+   * has been asked to confirm their directs yet. The string literal type
+   * keeps every call site honest: adding a new state is an observable type
+   * change, not a silent copy tweak.
+   */
+  status: "not_requested";
+  /**
+   * Plain-language explainer for the page ("Ranking is read-only evidence;
+   * manager calibration feedback loop is structural only until the next
+   * methodology milestone"). Kept as a field so the copy is one edit away
+   * from being updated when the loop is wired.
+   */
+  note: string;
+  /**
+   * Email hash of the manager (resolved via the eligibility roster) so the
+   * later feedback loop can target requests at the right user without
+   * rejoining headcount. `null` when the engineer has no manager on record
+   * or the manager is not in the competitive roster (e.g. CEO / ex-manager).
+   */
+  managerEmailHash: string | null;
 }
 
 /** Discipline peer comparison — inherited from the M10 normalisation layer. */
@@ -3337,6 +3427,12 @@ export interface EngineerAttribution {
   peerComparison: EngineerAttributionPeerComparison;
   evidence: EngineerAttributionEvidence;
   context: EngineerAttributionContext;
+  /**
+   * M21 placeholder manager-calibration state. Ships the shape only so a
+   * later milestone can wire a feedback loop without changing the ranking
+   * core contract.
+   */
+  calibration: EngineerAttributionCalibration;
 }
 
 export interface AttributionBundle {
@@ -3554,6 +3650,30 @@ export function buildAttribution({
   );
   const totalMethods = composite.methods.length;
 
+  // Build direct-report / manager-email-hash indexes from the full roster so
+  // every engineer's attribution can expose their direct-report count and
+  // their manager's email hash without re-joining headcount. The lookup keys
+  // are lower-cased name/email strings — headcount sometimes stores the
+  // manager's name and sometimes their email, so we match against both.
+  const rosterByNormalisedIdentifier = new Map<string, EligibilityEntry>();
+  for (const entry of entries) {
+    const nameKey = entry.displayName.trim().toLowerCase();
+    if (nameKey) rosterByNormalisedIdentifier.set(nameKey, entry);
+    const emailKey = entry.email.trim().toLowerCase();
+    if (emailKey) rosterByNormalisedIdentifier.set(emailKey, entry);
+  }
+  const directReportsByManagerHash = new Map<string, string[]>();
+  for (const entry of entries) {
+    const managerKey = (entry.manager ?? "").trim().toLowerCase();
+    if (!managerKey) continue;
+    const managerEntry = rosterByNormalisedIdentifier.get(managerKey);
+    if (!managerEntry) continue;
+    const list =
+      directReportsByManagerHash.get(managerEntry.emailHash) ?? [];
+    list.push(entry.emailHash);
+    directReportsByManagerHash.set(managerEntry.emailHash, list);
+  }
+
   const attributionEntries: EngineerAttribution[] = [];
   for (const [, entry] of competitiveByHash) {
     const comp = compositeByHash.get(entry.emailHash);
@@ -3694,6 +3814,22 @@ export function buildAttribution({
         rawSquad: entry.squad,
         pillar: entry.pillar,
         canonicalSquad: entry.canonicalSquad,
+        directReportCount: (
+          directReportsByManagerHash.get(entry.emailHash) ?? []
+        ).length,
+        directReportHashes:
+          directReportsByManagerHash.get(entry.emailHash) ?? [],
+      },
+      calibration: {
+        status: "not_requested",
+        note: "Calibration structure is present — manager email hash and direct-report list are resolved at request time. The feedback loop that lets a manager confirm or dispute a direct's position is outstanding work bundled into the stability-check milestone.",
+        managerEmailHash: (() => {
+          const managerKey = (entry.manager ?? "").trim().toLowerCase();
+          if (!managerKey) return null;
+          const managerEntry =
+            rosterByNormalisedIdentifier.get(managerKey);
+          return managerEntry ? managerEntry.emailHash : null;
+        })(),
       },
     });
   }
@@ -3715,8 +3851,8 @@ export function buildAttribution({
     limitations: [
       `Attribution's positive/negative driver tag uses a linear approximation of each component's lift on the composite percentile: (1 / ${totalMethods}) × componentWeight × (percentile − 50). The composite itself is the median of the four method scores, not a weighted sum, so the driver magnitudes are directional labels rather than exact rank contributions.`,
       `Evidence links are limited to a GitHub PR-search URL filtered to merged PRs in the window. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and appear in the absent-signals list rather than the evidence block.`,
-      `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). The drilldown structure accepts a future manager-calibration flag without widening the attribution contract; manager calibration itself is outstanding work bundled into the methodology panel milestone (M20).`,
-      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M18) is live and renders against the most recent comparable prior snapshot. The methodology panel / anti-gaming audit (M20) and the stability check (M21) remain pending — attribution, snapshots, and movers land first so those later cycles can compare a defensible rank across several cycles.`,
+      `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). Every drilldown now carries a manager-calibration stub (direct-report count, manager email hash, \`not_requested\` status) so a later feedback loop can validate the ranking without touching the attribution contract.`,
+      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M18) is live and renders against the most recent comparable prior snapshot. The methodology panel, anti-gaming audit, freshness badges, and manager-calibration stub (M21) are live. The stability check remains the only outstanding methodology milestone — the composite is an evidence rank, not a final adjudication until that lands.`,
     ],
   };
 }
@@ -4253,7 +4389,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, and the movers view are implemented. The anti-gaming audit and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, privacy-preserving ranking snapshot persistence, movers view, methodology panel + anti-gaming audit + freshness badges + manager-calibration stub are implemented. The stability check is the only pending methodology milestone — the composite is an evidence rank, not a final adjudication until it lands.",
   "Movers view compares against the most recent prior snapshot at least `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology version. The scoring `inputHash` only covers GitHub activity, SHAP impact, and squad delivery context — tenure/discipline/manager/squad/cohort transitions are not encoded in the hash, so an unchanged hash paired with rank movement is labelled `ambiguous_context` rather than methodology noise.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
@@ -4304,6 +4440,473 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
     note: "`githubPrs` stores `merged_at` only. Opened-at / ready-for-review timestamps are not persisted, so per-engineer cycle time cannot be computed.",
   },
 ];
+
+/* --------------------------------------------------------------------------
+ * M21 methodology panel, anti-gaming audit, freshness badges, and manager
+ * calibration stub
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Canonical rubric-version marker. The per-PR LLM rubric source
+ * (`prReviewAnalyses` / `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts`)
+ * does not exist in this codebase today, so the methodology panel surfaces
+ * the version as an explicit "not available" state rather than fabricating
+ * one. When a future cycle adds the rubric, this constant can be replaced
+ * with a live version string and the methodology panel flips to "available"
+ * without touching the panel's render.
+ */
+export const RANKING_RUBRIC_VERSION: string | null = null;
+
+/**
+ * Down-weight posture for a signal in the ranking. `full_weight` means the
+ * signal carries its declared lens weight; `down_weighted` means the signal
+ * is intentionally suppressed (e.g. sqrt/log damping); `contextual_only`
+ * means the signal is read but never scored — it lives in the audit only.
+ */
+export type AntiGamingDownweight =
+  | "full_weight"
+  | "down_weighted"
+  | "contextual_only";
+
+/**
+ * One row in the anti-gaming audit. For every signal the ranking touches
+ * (scoring OR contextual) the page must be able to name: how it could be
+ * gamed, what the methodology does to resist it, and what the residual
+ * weakness is even with that mitigation in place. If a signal has no
+ * mitigation, the entry is still recorded — the "pure lens A PR count"
+ * row in past methodology was exactly this case.
+ */
+export interface AntiGamingRow {
+  signal: string;
+  gamingPath: string;
+  mitigation: string;
+  residualWeakness: string;
+  downweightStatus: AntiGamingDownweight;
+}
+
+/**
+ * Per-source freshness badge rendered on the methodology panel. `timestamp`
+ * is the ISO string that source was last updated (impact model trained,
+ * snapshot persisted, latest AI usage month, etc.); `window` is the lookback
+ * window the ranking reads from that source. Both are optional — a source
+ * that does not expose either can still appear on the panel with a single
+ * "not available" badge.
+ */
+export interface RankingFreshnessBadge {
+  label: string;
+  source: string;
+  timestamp: string | null;
+  window: string | null;
+  /**
+   * Whether the upstream signal is actually available to the ranking today.
+   * `available` means the source is wired and the ranking uses it;
+   * `unavailable` means no persisted source exists (rubric version today);
+   * `pending_source` means the source is wired but a timestamp is not
+   * currently threaded through to the page.
+   */
+  availability: "available" | "unavailable" | "pending_source";
+  note: string | null;
+}
+
+/**
+ * Aggregate manager-calibration status surfaced at the page level. Details
+ * per engineer live on `EngineerAttribution.calibration`; this summary just
+ * tells the reader "the structure is present, feedback loop is not wired
+ * yet" so no one mistakes a blank state for confirmed calibration.
+ */
+export interface ManagerCalibrationSummary {
+  status: "structure_only" | "pending" | "active";
+  /** Count of engineers with at least one mapped direct report in the roster. */
+  managersWithDirectReports: number;
+  /** Sum of direct-report counts across the ranking cohort. */
+  directReportLinks: number;
+  /** Engineers whose manager is a recognised manager in the roster. */
+  engineersWithMappedManager: number;
+  /** Plain-language explainer rendered on the page. */
+  note: string;
+}
+
+/**
+ * Lens summary intended for the methodology panel — a flattened, printable
+ * view of `RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS` plus human-readable
+ * labels and caveats. Duplicates some lens-definition data because the
+ * lenses bundle is scored-engineers centric; this type is page-copy centric.
+ */
+export interface MethodologyLensSpec {
+  key: CompositeMethod;
+  label: string;
+  weights: readonly { signal: string; weight: number }[];
+  description: string;
+}
+
+export interface MethodologyBundle {
+  /** Concise narrative prose for the top of the methodology panel. */
+  contract: string;
+  methodologyVersion: string;
+  rubricVersion: string | null;
+  lenses: readonly MethodologyLensSpec[];
+  compositeRule: string;
+  normalisationSummary: string;
+  effectiveWeights: readonly EffectiveSignalWeight[];
+  antiGamingRows: readonly AntiGamingRow[];
+  freshness: readonly RankingFreshnessBadge[];
+  unavailableSignals: readonly UnavailableSignal[];
+  knownLimitations: readonly string[];
+  managerCalibration: ManagerCalibrationSummary;
+}
+
+/**
+ * Anti-gaming audit rows. One row per signal the ranking touches (scoring
+ * AND contextual). The table is intentionally long because the page's
+ * reviewer-facing promise is that no signal is used without a visible
+ * statement of its gaming posture.
+ */
+export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
+  {
+    signal: "PR count (sqrt-damped)",
+    gamingPath:
+      "Open many tiny PRs to inflate output count without shipping meaningful work.",
+    mitigation:
+      "sqrt-damping in lens A, which caps the marginal return from each additional PR. PR count is only 20% of lens A, and lens A is 25% of the composite (median of four methods), so the effective ceiling is ~5%.",
+    residualWeakness:
+      "A persistent high-volume spammer can still rank ahead of a low-volume shipper of comparable impact until the per-PR LLM rubric signal lands to weight PR quality.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Commit count (sqrt-damped)",
+    gamingPath:
+      "Split work into many tiny commits to inflate commit count.",
+    mitigation:
+      "sqrt-damping and a lens-A weight of 15%, then median over four methods caps the effective share at ~3.75%.",
+    residualWeakness:
+      "Not every codebase uses atomic commits; repo convention affects this signal more than individual behaviour.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Net lines (log-signed)",
+    gamingPath:
+      "Include vendored code / large generated diffs / whitespace reflows to inflate net lines added.",
+    mitigation:
+      "log-signed transform dampens the marginal line contribution aggressively; lens-A weight is 15% and the composite is a median, capping effective share at ~3.75%.",
+    residualWeakness:
+      "Generated code and formatter-driven reflows can still move the signal; the ranking cannot detect semantic-vs-syntactic churn without a rubric.",
+    downweightStatus: "down_weighted",
+  },
+  {
+    signal: "Log-impact composite",
+    gamingPath:
+      "The SHAP impact model is trained on upstream behaviour; someone who games PR/commit counts upstream will see their impact score move too, so activity-gaming flows through to this composite.",
+    mitigation:
+      "Log-damping inside the composite, dominance check on final-rank correlation against PR count and log-impact at 0.75, and a methodology panel that marks the signal flagged above the 30% effective-weight ceiling.",
+    residualWeakness:
+      "Because log-impact appears in both lens A and the M10 normalisation layer, its effective share is 37.5% — above the 30% ceiling. Until the per-PR LLM rubric or individual review signals land to dilute its share, this is an explicit, visible trade-off on the dominance panel.",
+    downweightStatus: "contextual_only",
+  },
+  {
+    signal: "SHAP predicted impact",
+    gamingPath:
+      "Predicted impact is a function of tenure/discipline/level/pillar — not directly user-controllable.",
+    mitigation:
+      "Training pipeline lives upstream in `ml-impact/`; the ranking consumes the frozen JSON. Lens B weight is 40%, but lens B is 25% of the composite, capping the effective share at ~10%.",
+    residualWeakness:
+      "If the upstream training signals become gameable (e.g. self-reported tenure), this signal inherits that weakness.",
+    downweightStatus: "full_weight",
+  },
+  {
+    signal: "SHAP actual impact",
+    gamingPath:
+      "If the target impact metric (`impact_360d`) can be inflated via upstream behaviour, actual impact inherits that.",
+    mitigation:
+      "The target definition is fixed in `ml-impact/train.py`; the ranking does not override it. Lens B weight is 40%; effective share ~10%.",
+    residualWeakness:
+      "The target is a constructed metric; changes to its formula count as methodology changes and must bump `RANKING_METHODOLOGY_VERSION`.",
+    downweightStatus: "full_weight",
+  },
+  {
+    signal: "SHAP residual",
+    gamingPath:
+      "Residual is actual − predicted, so both upstream weaknesses apply.",
+    mitigation:
+      "Lens B weight is 20%, composite median caps effective share at ~5%.",
+    residualWeakness:
+      "A small residual differential can swing a single engineer's lens B score without reflecting any real behaviour change.",
+    downweightStatus: "full_weight",
+  },
+  {
+    signal: "Squad review rate %",
+    gamingPath:
+      "Team-level signal; cannot be gamed by a single engineer. An engineer could choose a high-review-rate squad to inflate their delivery lens.",
+    mitigation:
+      "Lens C is contextual: capped at 25% of the composite (one of four methods) and narrated as squad-delivery context on the page. Squad-delivery context is the only team-level input to the individual rank.",
+    residualWeakness:
+      "Ecological fallacy — the ranking cannot distinguish a strong engineer on a strong squad from a weak engineer coasting on the squad's delivery performance. Future per-engineer review data would replace this.",
+    downweightStatus: "contextual_only",
+  },
+  {
+    signal: "Squad cycle time (inverted)",
+    gamingPath:
+      "Team-level; inherits the squad review-rate gaming posture.",
+    mitigation:
+      "Inverted rank percentile (lower cycle time = higher score); weight 30% in lens C, ~7.5% effective share.",
+    residualWeakness:
+      "Squads with different PR-size norms will read differently here without reflecting individual behaviour.",
+    downweightStatus: "contextual_only",
+  },
+  {
+    signal: "Squad time-to-first-review (inverted)",
+    gamingPath:
+      "Team-level; inherits the squad review-rate gaming posture.",
+    mitigation:
+      "Inverted rank percentile; weight 30% in lens C, ~7.5% effective share. Narrated as contextual.",
+    residualWeakness:
+      "Team-wide review discipline; no individual accountability visible.",
+    downweightStatus: "contextual_only",
+  },
+  {
+    signal: "AI tokens / AI spend",
+    gamingPath:
+      "Easy to inflate — open a session, run prompts without using output, and tokens accumulate.",
+    mitigation:
+      "AI usage is audit-only: never enters any lens, composite, or normalisation. Listed in the signal inventory and planned-signals panel only for traceability.",
+    residualWeakness:
+      "A future cycle that wants to use AI usage as a signal must first validate it against independent evidence; otherwise the gaming path is trivial.",
+    downweightStatus: "contextual_only",
+  },
+  {
+    signal: "Self-review (individual review graph)",
+    gamingPath:
+      "Rubber-stamp a teammate's PR in return for a similar rubber-stamp review — inflates review counts without review quality.",
+    mitigation:
+      "Not applicable today — the individual review graph is not persisted. The page marks it as unavailable instead of silently treating it as neutral.",
+    residualWeakness:
+      "Until reviewer identities and timestamps are persisted, review gaming is invisible to the ranking; it can neither reward nor penalise a reviewer for their edits.",
+    downweightStatus: "contextual_only",
+  },
+];
+
+/**
+ * Human-readable lens descriptions for the methodology panel. These are the
+ * page-copy equivalents of `RANKING_LENS_DEFINITIONS`/`RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS`
+ * — one sentence per lens explaining what the lens is trying to measure.
+ */
+const METHODOLOGY_LENS_DESCRIPTIONS: Record<CompositeMethod, string> = {
+  output:
+    "Individual GitHub output — merged PRs, commits, and signed-log net lines over the window, damped so volume alone cannot dominate.",
+  impact:
+    "ML-predicted and measured impact from the SHAP model in `src/data/impact-model.json`, plus the residual between them.",
+  delivery:
+    "Squad-level delivery health from Swarmia — context only, capped at 25% of the composite.",
+  adjusted:
+    "Tenure and role-adjusted percentile layer over the log-impact composite: discipline-partitioned percentiles with documented pooling, level residual percentiles (OLS), and tenure-exposure adjustment.",
+};
+
+function buildMethodologyLenses(): readonly MethodologyLensSpec[] {
+  const methods: CompositeMethod[] = [
+    "output",
+    "impact",
+    "delivery",
+    "adjusted",
+  ];
+  return methods.map((method) => ({
+    key: method,
+    label: RANKING_COMPOSITE_METHOD_LABELS[method],
+    weights: RANKING_COMPOSITE_METHOD_SIGNAL_WEIGHTS[method].map((w) => ({
+      signal: w.signal,
+      weight: w.weight,
+    })),
+    description: METHODOLOGY_LENS_DESCRIPTIONS[method],
+  }));
+}
+
+function buildFreshnessBadges(params: {
+  signalWindowStart: string;
+  signalWindowEnd: string;
+  snapshotDate: string;
+  impactModelGeneratedAt: string | null;
+  rubricVersion: string | null;
+  aiUsageLatestMonth: string | null;
+  headcountGeneratedAt: string | null;
+}): RankingFreshnessBadge[] {
+  const startIso = params.signalWindowStart.slice(0, 10);
+  const endIso = params.signalWindowEnd.slice(0, 10);
+  const window = `${startIso} → ${endIso}`;
+  return [
+    {
+      label: "Ranking snapshot",
+      source: "engineeringRankingSnapshots",
+      timestamp: params.snapshotDate,
+      window,
+      availability: "available",
+      note: "Snapshot date stamps the persisted rows used by movers / stability.",
+    },
+    {
+      label: "Signal window",
+      source: "buildRankingSnapshot",
+      timestamp: params.signalWindowEnd,
+      window,
+      availability: "available",
+      note: `Default ${RANKING_SIGNAL_WINDOW_DAYS}-day lookback. GitHub PRs/commits and Swarmia DORA share this window.`,
+    },
+    {
+      label: "Impact model",
+      source: "src/data/impact-model.json",
+      timestamp: params.impactModelGeneratedAt,
+      window: "Model training cohort (see ml-impact/train.py)",
+      availability: params.impactModelGeneratedAt
+        ? "available"
+        : "pending_source",
+      note: params.impactModelGeneratedAt
+        ? "SHAP model JSON `generated_at` is the training timestamp. Retrain in `ml-impact/` bumps the JSON in-place."
+        : "Training timestamp not yet threaded through to the page.",
+    },
+    {
+      label: "GitHub PR/commit window",
+      source: "githubPrs, githubCommits",
+      timestamp: params.signalWindowEnd,
+      window,
+      availability: "available",
+      note: "Aggregated from the 180-day signal window at request time.",
+    },
+    {
+      label: "Swarmia DORA",
+      source: "src/lib/data/swarmia.ts",
+      timestamp: params.signalWindowEnd,
+      window,
+      availability: "available",
+      note: "Squad/pillar-level DORA over `last_180_days`. Contextual only.",
+    },
+    {
+      label: "AI usage",
+      source: "src/lib/data/ai-usage.ts",
+      timestamp: params.aiUsageLatestMonth,
+      window: params.aiUsageLatestMonth
+        ? `Latest month: ${params.aiUsageLatestMonth}`
+        : "Latest month only",
+      availability: "available",
+      note: "AI usage reads the latest-month summary, not the 180-day window. Audit-only — never scored.",
+    },
+    {
+      label: "Mode headcount SSoT",
+      source: "getReportData('people', 'headcount')",
+      timestamp: params.headcountGeneratedAt,
+      window: "Active-as-of now",
+      availability: params.headcountGeneratedAt
+        ? "available"
+        : "pending_source",
+      note: params.headcountGeneratedAt
+        ? "Headcount sync timestamp threaded through from the Mode sync pipeline."
+        : "Mode sync timestamp not currently joined through to the ranking page.",
+    },
+    {
+      label: "Per-PR rubric (RUBRIC_VERSION)",
+      source:
+        "src/lib/integrations/code-review-analyser.ts (prReviewAnalyses)",
+      timestamp: null,
+      window: null,
+      availability: params.rubricVersion ? "available" : "unavailable",
+      note: params.rubricVersion
+        ? `Rubric version ${params.rubricVersion}.`
+        : "Rubric source is not present in this codebase. No per-PR quality signal enters the ranking today.",
+    },
+  ];
+}
+
+function buildManagerCalibrationSummary(
+  attributionEntries: readonly EngineerAttribution[],
+): ManagerCalibrationSummary {
+  let managersWithDirectReports = 0;
+  let directReportLinks = 0;
+  let engineersWithMappedManager = 0;
+  for (const entry of attributionEntries) {
+    if (entry.context.directReportCount > 0) {
+      managersWithDirectReports += 1;
+      directReportLinks += entry.context.directReportCount;
+    }
+    if (entry.calibration.managerEmailHash) {
+      engineersWithMappedManager += 1;
+    }
+  }
+  return {
+    status: "structure_only",
+    managersWithDirectReports,
+    directReportLinks,
+    engineersWithMappedManager,
+    note: "Manager-calibration structure is present on every engineer's attribution drilldown (status: not_requested, manager email hash, direct-report list). The feedback loop — managers confirming/disputing their directs' positions — is outstanding work bundled into the stability-check milestone.",
+  };
+}
+
+/**
+ * Build the methodology panel bundle. Composes already-computed inputs:
+ *  - `composite.effectiveSignalWeights` for the weight decomposition
+ *  - `attribution.entries` for manager-calibration aggregates and
+ *    direct-report wiring
+ *  - `audit.unavailableSignals` for the rubric/review unavailable list
+ *
+ * Adds the anti-gaming table (static per signal inventory), freshness
+ * badges (impact-model training date, signal window, rubric version, AI
+ * latest-month, Mode headcount freshness), and a plain-language composite
+ * rule + normalisation summary that matches the live math.
+ */
+export function buildMethodology(params: {
+  composite: CompositeBundle;
+  normalisation: NormalisationBundle;
+  attribution: AttributionBundle;
+  audit: SignalAudit;
+  knownLimitations: readonly string[];
+  signalWindowStart: string;
+  signalWindowEnd: string;
+  snapshotDate: string;
+  impactModelGeneratedAt: string | null;
+  aiUsageLatestMonth: string | null;
+  headcountGeneratedAt: string | null;
+  rubricVersion?: string | null;
+}): MethodologyBundle {
+  const {
+    composite,
+    normalisation,
+    attribution,
+    audit,
+    knownLimitations,
+    signalWindowStart,
+    signalWindowEnd,
+    snapshotDate,
+    impactModelGeneratedAt,
+    aiUsageLatestMonth,
+    headcountGeneratedAt,
+  } = params;
+  const rubricVersion = params.rubricVersion ?? RANKING_RUBRIC_VERSION;
+
+  const lenses = buildMethodologyLenses();
+  const compositeRule = composite.contract;
+  const normalisationSummary = `Normalisation pipeline: rank-percentile of ${normalisation.sourceSignal}, then discipline-partitioned percentiles (min cohort ${normalisation.minCohortSize}, documented pooling in \`DISCIPLINE_POOL_FALLBACK\`), level residual percentile from an OLS fit on level number, and tenure exposure adjustment capped at the ${normalisation.windowDays}-day signal window. Final \`adjustedPercentile\` is the equal-weighted mean of the three components and feeds the composite as one of four methods.`;
+  const freshness = buildFreshnessBadges({
+    signalWindowStart,
+    signalWindowEnd,
+    snapshotDate,
+    impactModelGeneratedAt,
+    rubricVersion,
+    aiUsageLatestMonth,
+    headcountGeneratedAt,
+  });
+  const managerCalibration = buildManagerCalibrationSummary(attribution.entries);
+
+  const contract = `The ranking is the median of four methods (A individual output, B SHAP impact, C squad delivery, tenure/role-adjusted percentile). Engineers must have at least ${composite.minPresentMethods} present methods to be scored; otherwise their row is unscored rather than assigned a neutral rank. Every signal below is listed with its anti-gaming posture; every source below is listed with its current freshness. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted today and appear in the unavailable-signals list rather than the score. Manager calibration is structural — an engineer's attribution drilldown carries direct-report context and a \`not_requested\` calibration placeholder so a later feedback loop can validate the ranking without changing the ranking core.`;
+
+  return {
+    contract,
+    methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    rubricVersion,
+    lenses,
+    compositeRule,
+    normalisationSummary,
+    effectiveWeights: composite.effectiveSignalWeights,
+    antiGamingRows: RANKING_ANTI_GAMING_ROWS,
+    freshness,
+    unavailableSignals: audit.unavailableSignals,
+    knownLimitations,
+    managerCalibration,
+  };
+}
 
 /**
  * Persistence row shape for `engineeringRankingSnapshots`. Mirrors the
@@ -4488,10 +5091,11 @@ export function buildRankingSnapshotRows(
  * the fetching and calls this; tests call it with fixtures.
  *
  * Status stays `methodology_pending` even though the composite, confidence
- * bands, per-engineer attribution, ranking snapshot persistence, and the
- * movers view are all live — the methodology panel / anti-gaming audit and
- * the stability check are the remaining milestones that must land before the
- * methodology is defensible enough to advertise as `ready`.
+ * bands, per-engineer attribution, ranking snapshot persistence, movers,
+ * and the methodology panel / anti-gaming audit / freshness badges /
+ * manager-calibration stub are all live — the stability check is the
+ * remaining milestone that must land before the methodology is defensible
+ * enough to advertise as `ready`.
  */
 export function buildRankingSnapshot(
   inputs: EligibilityInputs,
@@ -4548,6 +5152,19 @@ export function buildRankingSnapshot(
     minGapDays: inputs.moversMinGapDays,
     topN: inputs.moversTopN,
   });
+  const methodology = buildMethodology({
+    composite,
+    normalisation,
+    attribution,
+    audit,
+    knownLimitations: KNOWN_LIMITATIONS,
+    signalWindowStart: windowStart,
+    signalWindowEnd: windowEnd,
+    snapshotDate: toSnapshotDate(now),
+    impactModelGeneratedAt: inputs.impactModel.generated_at ?? null,
+    aiUsageLatestMonth: inputs.aiUsageLatestMonth ?? null,
+    headcountGeneratedAt: inputs.headcountGeneratedAt ?? null,
+  });
 
   // Only engineers with a non-null composite rank are materialised into the
   // top-level `engineers` array — unscored competitive engineers remain
@@ -4599,6 +5216,7 @@ export function buildRankingSnapshot(
     confidence,
     attribution,
     movers,
+    methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };
@@ -4653,6 +5271,24 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
     confidence,
     eligibilityEntries: entries,
   });
+  const audit = buildSignalAudit({
+    entries,
+    windowDays: RANKING_SIGNAL_WINDOW_DAYS,
+    reviewSignalsPersisted: false,
+  });
+  const methodology = buildMethodology({
+    composite,
+    normalisation,
+    attribution,
+    audit,
+    knownLimitations: KNOWN_LIMITATIONS,
+    signalWindowStart: windowStart,
+    signalWindowEnd: windowEnd,
+    snapshotDate: toSnapshotDate(now),
+    impactModelGeneratedAt: null,
+    aiUsageLatestMonth: null,
+    headcountGeneratedAt: null,
+  });
 
   return {
     status: "methodology_pending",
@@ -4669,17 +5305,14 @@ export async function getEngineeringRanking(): Promise<EngineeringRankingSnapsho
         impactModel: { engineers: [] },
       }),
     },
-    audit: buildSignalAudit({
-      entries,
-      windowDays: RANKING_SIGNAL_WINDOW_DAYS,
-      reviewSignalsPersisted: false,
-    }),
+    audit,
     lenses,
     normalisation,
     composite,
     confidence,
     attribution,
     movers,
+    methodology,
     knownLimitations: [...KNOWN_LIMITATIONS],
     plannedSignals: PLANNED_SIGNALS.map((s) => ({ ...s })),
   };

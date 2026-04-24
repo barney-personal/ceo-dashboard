@@ -40,10 +40,13 @@ import {
   buildNormalisation,
   buildRankingSnapshot,
   buildSignalAudit,
+  buildMethodology,
   buildSourceNotes,
   computeSpearmanRho,
   getEngineeringRanking,
   hashEmailForRanking,
+  RANKING_ANTI_GAMING_ROWS,
+  RANKING_RUBRIC_VERSION,
   type AttributionContribution,
   type CompositeBundle,
   type CompositeMethod,
@@ -59,6 +62,8 @@ import {
   type EngineerCompositeEntry,
   type EngineerConfidence,
   type EngineerNormalisation,
+  type AntiGamingRow,
+  type MethodologyBundle,
   type MoversBundle,
   type PerEngineerSignalRow,
   type RankingSnapshotRow,
@@ -2960,7 +2965,7 @@ describe("M13 methodology version and readiness provenance", () => {
     // confidence, …); the regression guard below pins that the version
     // names a real stage rather than reverting to the scaffold label.
     const version = RANKING_METHODOLOGY_VERSION.toLowerCase();
-    expect(version).toMatch(/composite|confidence|attribution|snapshot|movers|stability/);
+    expect(version).toMatch(/composite|confidence|attribution|snapshot|movers|stability|methodology/);
   });
 
   it("snapshot stamps the current methodology version on every snapshot", () => {
@@ -3409,7 +3414,7 @@ describe("M14 confidence bands and statistical tie handling", () => {
     // methodology chain.
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
-    expect(v).toMatch(/confidence|attribution|snapshot|movers|stability/);
+    expect(v).toMatch(/confidence|attribution|snapshot|movers|stability|methodology/);
   });
 
   it("known-limitations narrate confidence bands as implemented (not pending) once M14 lands", () => {
@@ -3971,7 +3976,7 @@ describe("M15 per-engineer attribution drilldown", () => {
     // have to rewrite this test every time the version string changes.
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
-    expect(v).toMatch(/attribution|snapshot|movers|stability/);
+    expect(v).toMatch(/attribution|snapshot|movers|stability|methodology/);
   });
 
   it("known limitations narrate attribution as implemented, not pending", () => {
@@ -4143,7 +4148,7 @@ describe("M16 privacy-preserving ranking snapshot persistence", () => {
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.1.0-scaffold");
     expect(v).not.toBe("0.7.0-attribution");
-    expect(v).toMatch(/snapshot|movers|stability/);
+    expect(v).toMatch(/snapshot|movers|stability|methodology/);
   });
 
   it("toSnapshotDate formats a UTC calendar day (YYYY-MM-DD) from a Date", async () => {
@@ -5221,7 +5226,7 @@ describe("M18 movers view", () => {
     const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
     expect(v).not.toBe("0.7.0-attribution");
     expect(v).not.toBe("0.8.0-snapshots");
-    expect(v).toMatch(/mover|stability/);
+    expect(v).toMatch(/mover|stability|methodology/);
   });
 });
 
@@ -5292,5 +5297,369 @@ describe("M19 page limitations no longer claim movers are pending", () => {
         ).toBe(true);
       }
     }
+  });
+});
+
+describe("M21 methodology panel, anti-gaming audit, freshness badges, manager calibration", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: "Platform",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: index,
+      commitCount: index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: 24,
+      squadReviewRatePercent: 80,
+      squadTimeToFirstReviewHours: 2,
+      squadPrsInProgress: 6,
+      ...overrides,
+    };
+  }
+
+  it("bumps the methodology version to a post-movers methodology-era label", () => {
+    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toMatch(/methodology/);
+  });
+
+  it("rubric version is null until prReviewAnalyses lands", () => {
+    expect(RANKING_RUBRIC_VERSION).toBeNull();
+  });
+
+  it("exposes an anti-gaming row for every scoring and contextual signal", () => {
+    const signals = RANKING_ANTI_GAMING_ROWS.map((row) => row.signal);
+    const mustCover = [
+      /pr count/i,
+      /commit count/i,
+      /net lines/i,
+      /log-impact/i,
+      /shap predicted/i,
+      /shap actual/i,
+      /shap residual/i,
+      /squad review rate/i,
+      /squad cycle time/i,
+      /squad time-to-first-review/i,
+      /ai tokens|ai spend/i,
+      /self-review|individual review graph/i,
+    ];
+    for (const pattern of mustCover) {
+      expect(
+        signals.some((s) => pattern.test(s)),
+        `Anti-gaming audit missing a row matching ${pattern}`,
+      ).toBe(true);
+    }
+  });
+
+  it("every anti-gaming row carries gaming path, mitigation, residual, and down-weight posture", () => {
+    for (const row of RANKING_ANTI_GAMING_ROWS) {
+      expect(row.signal.length).toBeGreaterThan(0);
+      expect(row.gamingPath.length).toBeGreaterThan(10);
+      expect(row.mitigation.length).toBeGreaterThan(10);
+      expect(row.residualWeakness.length).toBeGreaterThan(5);
+      expect(["full_weight", "down_weighted", "contextual_only"]).toContain(
+        row.downweightStatus,
+      );
+    }
+  });
+
+  it("AI usage and individual review graph are labelled contextual-only (never scored)", () => {
+    const aiRow: AntiGamingRow | undefined = RANKING_ANTI_GAMING_ROWS.find(
+      (r) => /ai/i.test(r.signal),
+    );
+    const reviewRow: AntiGamingRow | undefined = RANKING_ANTI_GAMING_ROWS.find(
+      (r) => /self-review|review graph/i.test(r.signal),
+    );
+    expect(aiRow?.downweightStatus).toBe("contextual_only");
+    expect(reviewRow?.downweightStatus).toBe("contextual_only");
+  });
+
+  it("buildMethodology surfaces methodology version, contract, lenses, and anti-gaming rows", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [], generated_at: "2026-04-20T12:00:00Z" },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const m: MethodologyBundle = snapshot.methodology;
+    expect(m.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+    expect(m.contract.length).toBeGreaterThan(100);
+    expect(m.lenses).toHaveLength(4);
+    for (const lens of m.lenses) {
+      expect(lens.weights.length).toBeGreaterThan(0);
+      const weightSum = lens.weights.reduce((s, w) => s + w.weight, 0);
+      expect(weightSum).toBeCloseTo(1, 6);
+    }
+    expect(m.antiGamingRows.length).toBe(RANKING_ANTI_GAMING_ROWS.length);
+    expect(m.effectiveWeights.length).toBeGreaterThan(0);
+    expect(m.normalisationSummary).toMatch(/tenure|discipline|level/i);
+    expect(m.compositeRule.toLowerCase()).toMatch(/median/);
+  });
+
+  it("freshness badges include impact-model training date, signal window, and rubric-not-available", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [], generated_at: "2026-04-20T12:00:00Z" },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const freshness = snapshot.methodology.freshness;
+    const impactBadge = freshness.find((b) => /impact model/i.test(b.label));
+    expect(impactBadge?.timestamp).toBe("2026-04-20T12:00:00Z");
+    expect(impactBadge?.availability).toBe("available");
+
+    const windowBadge = freshness.find((b) => /signal window/i.test(b.label));
+    expect(windowBadge?.window).toContain("2026-04-24");
+    expect(windowBadge?.availability).toBe("available");
+
+    const rubricBadge = freshness.find((b) =>
+      /rubric/i.test(`${b.source} ${b.label}`),
+    );
+    expect(rubricBadge).toBeDefined();
+    expect(rubricBadge?.timestamp).toBeNull();
+    expect(rubricBadge?.availability).toBe("unavailable");
+
+    const aiBadge = freshness.find((b) => /ai usage/i.test(b.label));
+    expect(aiBadge?.note?.toLowerCase()).toMatch(/latest[- ]month/);
+  });
+
+  it("freshness badge for impact model flips to pending_source when no training date is supplied", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    const impact = snapshot.methodology.freshness.find((b) =>
+      /impact model/i.test(b.label),
+    );
+    expect(impact?.timestamp).toBeNull();
+    expect(impact?.availability).toBe("pending_source");
+  });
+
+  it("every attribution entry carries a calibration stub (status not_requested) and direct-report context", () => {
+    const rosterEntries = [
+      competitiveEntry(1, {
+        displayName: "Manager Mary",
+        email: "mary@meetcleo.com",
+        manager: "Boss",
+      }),
+      competitiveEntry(2, {
+        displayName: "Direct Dan",
+        email: "dan@meetcleo.com",
+        manager: "Manager Mary",
+      }),
+      competitiveEntry(3, {
+        displayName: "Direct Dee",
+        email: "dee@meetcleo.com",
+        manager: "mary@meetcleo.com",
+      }),
+    ];
+    const normalisedEntries = rosterEntries.map((entry) => ({
+      ...entry,
+      emailHash: hashEmailForRanking(entry.email),
+    }));
+    const signals = normalisedEntries.map((e, i) =>
+      signalRow(i + 1, { emailHash: e.emailHash }),
+    );
+    const snapshot = buildRankingSnapshot({
+      headcountRows: normalisedEntries.map((e) => ({
+        email: e.email,
+        preferred_name: e.displayName,
+        hb_function: "Engineering",
+        hb_level: e.levelLabel,
+        hb_squad: e.squad ?? null,
+        rp_specialisation: "Backend Engineer",
+        rp_department_name: "Core Pillar",
+        job_title: "Senior Backend Engineer",
+        manager: e.manager,
+        line_manager_email: null,
+        start_date: "2023-01-01",
+        termination_date: null,
+      })),
+      githubMap: normalisedEntries.map((e) => ({
+        githubLogin: e.githubLogin ?? e.email,
+        employeeEmail: e.email,
+        isBot: false,
+      })),
+      impactModel: {
+        engineers: normalisedEntries.map((e) => ({ email_hash: e.emailHash })),
+        generated_at: "2026-04-20T12:00:00Z",
+      },
+      signals,
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+
+    for (const attr of snapshot.attribution.entries) {
+      expect(attr.calibration.status).toBe("not_requested");
+      expect(attr.calibration.note.length).toBeGreaterThan(10);
+    }
+
+    const mary = snapshot.attribution.entries.find(
+      (a) => a.displayName === "Manager Mary",
+    );
+    expect(mary).toBeDefined();
+    expect(mary?.context.directReportCount).toBe(2);
+    expect(mary?.context.directReportHashes.length).toBe(2);
+
+    const dan = snapshot.attribution.entries.find(
+      (a) => a.displayName === "Direct Dan",
+    );
+    expect(dan?.calibration.managerEmailHash).toBe(mary?.emailHash);
+    expect(dan?.context.directReportCount).toBe(0);
+  });
+
+  it("manager-calibration summary on the methodology bundle aggregates directs from the attribution entries", () => {
+    const rosterEntries = [
+      competitiveEntry(1, {
+        displayName: "Manager Mary",
+        email: "mary@meetcleo.com",
+        manager: "Boss",
+      }),
+      competitiveEntry(2, {
+        displayName: "Direct Dan",
+        email: "dan@meetcleo.com",
+        manager: "Manager Mary",
+      }),
+    ];
+    const normalised = rosterEntries.map((entry) => ({
+      ...entry,
+      emailHash: hashEmailForRanking(entry.email),
+    }));
+    const snapshot = buildRankingSnapshot({
+      headcountRows: normalised.map((e) => ({
+        email: e.email,
+        preferred_name: e.displayName,
+        hb_function: "Engineering",
+        hb_level: e.levelLabel,
+        hb_squad: e.squad ?? null,
+        rp_specialisation: "Backend Engineer",
+        rp_department_name: "Core Pillar",
+        job_title: "Senior Backend Engineer",
+        manager: e.manager,
+        line_manager_email: null,
+        start_date: "2023-01-01",
+        termination_date: null,
+      })),
+      githubMap: normalised.map((e) => ({
+        githubLogin: e.githubLogin ?? e.email,
+        employeeEmail: e.email,
+        isBot: false,
+      })),
+      impactModel: {
+        engineers: normalised.map((e) => ({ email_hash: e.emailHash })),
+      },
+      signals: normalised.map((e, i) =>
+        signalRow(i + 1, { emailHash: e.emailHash }),
+      ),
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+
+    const summary = snapshot.methodology.managerCalibration;
+    expect(summary.status).toBe("structure_only");
+    expect(summary.managersWithDirectReports).toBe(1);
+    expect(summary.directReportLinks).toBe(1);
+    expect(summary.engineersWithMappedManager).toBe(1);
+    expect(summary.note.length).toBeGreaterThan(20);
+  });
+
+  it("methodology panel knownLimitations does not claim anti-gaming or methodology panel is still pending", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    for (const line of snapshot.methodology.knownLimitations) {
+      const lower = line.toLowerCase();
+      if (/\b(pending|outstanding)\b/.test(lower)) {
+        expect(lower).toMatch(/stability/);
+        expect(lower).not.toMatch(/methodology panel[^.]*\bpending\b/);
+        expect(lower).not.toMatch(/anti-gaming[^.]*\bpending\b/);
+        expect(lower).not.toMatch(/manager calibration[^.]*\bpending\b/);
+      }
+    }
+  });
+
+  it("effective weights on the methodology panel match the composite bundle so the panel stays honest", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      now: new Date("2026-04-24T00:00:00Z"),
+    });
+    expect(snapshot.methodology.effectiveWeights).toBe(
+      snapshot.composite.effectiveSignalWeights,
+    );
+  });
+
+  it("unavailable signals on the methodology panel mirror the signal audit", () => {
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    expect(snapshot.methodology.unavailableSignals).toBe(
+      snapshot.audit.unavailableSignals,
+    );
+  });
+
+  it("buildMethodology is a pure helper that can run outside buildRankingSnapshot", () => {
+    const signals = Array.from({ length: 3 }, (_, i) => signalRow(i + 1));
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+      signals,
+    });
+    const methodology = buildMethodology({
+      composite: snapshot.composite,
+      normalisation: snapshot.normalisation,
+      attribution: snapshot.attribution,
+      audit: snapshot.audit,
+      knownLimitations: ["stability check pending"],
+      signalWindowStart: "2026-01-01T00:00:00Z",
+      signalWindowEnd: "2026-04-24T00:00:00Z",
+      snapshotDate: "2026-04-24",
+      impactModelGeneratedAt: "2026-04-20T12:00:00Z",
+      aiUsageLatestMonth: "2026-04-01",
+      headcountGeneratedAt: null,
+      rubricVersion: null,
+    });
+    expect(methodology.knownLimitations).toEqual(["stability check pending"]);
+    expect(
+      methodology.freshness.find((b) => /ranking snapshot/i.test(b.label))
+        ?.timestamp,
+    ).toBe("2026-04-24");
   });
 });

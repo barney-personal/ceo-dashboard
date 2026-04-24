@@ -413,6 +413,16 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       now,
     });
 
+    // The AI usage latest-month marker is the same for every user in the map
+    // (the rollup is per-month); picking the first entry with a non-null
+    // `latestMonthStart` is enough to drive the freshness badge.
+    let aiUsageLatestMonth: string | null = null;
+    for (const summary of aiUsageByEmail.values()) {
+      if (summary.latestMonthStart) {
+        aiUsageLatestMonth = summary.latestMonthStart;
+        break;
+      }
+    }
     const snapshot = buildRankingSnapshot({
       headcountRows,
       githubMap,
@@ -424,6 +434,7 @@ export async function getEngineeringRankingSnapshotWithSignals(): Promise<{
       windowDays: RANKING_SIGNAL_WINDOW_DAYS,
       githubOrg: process.env.GITHUB_ORG ?? null,
       priorSnapshotRows,
+      aiUsageLatestMonth,
     });
 
     return { snapshot, signals };
