@@ -2826,15 +2826,14 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     }
   });
 
-  it("composite limitations name confidence and attribution as implemented, and snapshots/movers as pending", () => {
+  it("composite limitations name confidence / attribution / snapshot persistence as implemented, and movers as pending", () => {
     const composite = buildComposite({
       entries: [],
       lenses: buildLenses({ entries: [] }),
       normalisation: buildNormalisation({ entries: [] }),
     });
     const joined = composite.limitations.join(" ").toLowerCase();
-    // Snapshots and movers must still be named as outstanding work.
-    expect(joined).toMatch(/snapshots/);
+    // Movers must still be named as outstanding work.
     expect(joined).toMatch(/movers/);
     // Confidence bands are live (M14) — they must not be narrated
     // as still-pending future work in the composite limitations.
@@ -2845,9 +2844,14 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(joined).not.toMatch(
       /attribution[^.]*(still pending|not yet|yet to|pending)/,
     );
+    // Snapshot persistence (M16) is now live — it must not appear on the
+    // pending list either.
+    expect(joined).not.toMatch(
+      /snapshot[^.]*(still pending|not yet|yet to|are pending|remain pending)/,
+    );
   });
 
-  it("snapshot known limitations narrate composite + confidence + attribution as implemented, and snapshots/movers/stability as pending", () => {
+  it("snapshot known limitations narrate composite + confidence + attribution + snapshot persistence as implemented, and movers/stability as pending", () => {
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -2870,9 +2874,13 @@ describe("M12 composite score contract + sensitivity + dominance", () => {
     expect(joined).not.toMatch(
       /attribution[^.]*(still pending|not yet|yet to|pending)/,
     );
-    // Snapshots, movers, and stability are still genuinely pending and
-    // must be named so a reader sees what is still missing.
-    expect(joined).toMatch(/snapshots/);
+    // Snapshot persistence is live (M16) — it must not appear on the
+    // pending list.
+    expect(joined).not.toMatch(
+      /snapshot[^.]*(still pending|not yet|yet to|are pending|remain pending)/,
+    );
+    // Movers and stability are still genuinely pending and must be named so
+    // a reader sees what is still missing.
     expect(joined).toMatch(/movers/);
     expect(joined).toMatch(/stability/);
   });
@@ -3004,11 +3012,11 @@ describe("M13 methodology version and readiness provenance", () => {
     }
   });
 
-  it("known-limitations still describe composite + confidence + attribution as implemented but not final", () => {
+  it("known-limitations still describe composite + confidence + attribution + snapshot persistence as implemented but not final", () => {
     // Regression guard: the version bump must not accidentally demote the
     // page's honesty about what is and isn't finished. Composite, confidence
-    // bands, and attribution drilldowns are live; snapshots / movers /
-    // stability are not.
+    // bands, attribution drilldowns, and snapshot persistence (M16) are
+    // live; movers / anti-gaming / stability are not.
     const snapshot = buildRankingSnapshot({
       headcountRows: [],
       githubMap: [],
@@ -3024,8 +3032,10 @@ describe("M13 methodology version and readiness provenance", () => {
     expect(joined).not.toMatch(
       /attribution[^.]*(still pending|not yet|yet to|pending)/,
     );
+    expect(joined).not.toMatch(
+      /snapshot[^.]*(still pending|not yet|yet to|are pending|remain pending)/,
+    );
     expect(joined).toMatch(/attribution/);
-    expect(joined).toMatch(/snapshots/);
     expect(joined).toMatch(/movers/);
     expect(joined).toMatch(/stability/);
   });
@@ -3946,8 +3956,14 @@ describe("M15 per-engineer attribution drilldown", () => {
     }
   });
 
-  it("methodology version names the attribution stage", () => {
-    expect(RANKING_METHODOLOGY_VERSION.toLowerCase()).toContain("attribution");
+  it("methodology version names a post-attribution stage (attribution or later)", () => {
+    // The version bumped to `0.7.0-attribution` at M15 and to
+    // `0.8.0-snapshots` at M16. The guard accepts any post-scaffold label
+    // that matches the live methodology chain so later milestones do not
+    // have to rewrite this test every time the version string changes.
+    const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
+    expect(v).not.toBe("0.1.0-scaffold");
+    expect(v).toMatch(/attribution|snapshot|movers|stability/);
   });
 
   it("known limitations narrate attribution as implemented, not pending", () => {
@@ -3966,23 +3982,28 @@ describe("M15 per-engineer attribution drilldown", () => {
     );
     // Attribution should be named as part of the implemented stack.
     expect(joined).toMatch(/attribution/);
-    // Remaining work (snapshots, movers, anti-gaming, stability) must still
-    // be named so the reader sees what is outstanding.
-    expect(joined).toMatch(/snapshots/);
+    // After M16 snapshots are implemented; remaining work is movers,
+    // anti-gaming, and stability — those three must still be named so the
+    // reader sees what is outstanding.
     expect(joined).toMatch(/movers/);
     expect(joined).toMatch(/stability/);
   });
 
-  it("attribution-stage limitations name snapshots/movers/anti-gaming/stability as pending and do not claim attribution is pending", () => {
+  it("attribution-stage limitations name movers/anti-gaming/stability as pending and do not claim attribution or snapshot persistence is pending", () => {
     const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
     const signals = Array.from({ length: 3 }, (_, i) => signalRow(i + 1));
     const { attribution } = buildAttributionBundle(entries, signals);
     const joined = attribution.limitations.join(" ").toLowerCase();
-    expect(joined).toMatch(/snapshots/);
+    // Post-M16 the outstanding work is movers / anti-gaming / stability.
+    // Snapshot persistence is no longer pending — it must either be absent
+    // from the limitations list or narrated as implemented.
     expect(joined).toMatch(/movers/);
     expect(joined).toMatch(/stability/);
     expect(joined).not.toMatch(/attribution is (still )?pending/);
     expect(joined).not.toMatch(/attribution drilldowns pending/);
+    // Narrow: within a 50-char window, snapshot persistence must not be
+    // claimed as still/remain pending.
+    expect(joined).not.toMatch(/snapshot[^.]{0,40}(still pending|remain pending)/);
   });
 
   it("attribution contract names the reconciliation tolerance and driver cap", () => {
@@ -4011,5 +4032,494 @@ describe("M15 per-engineer attribution drilldown", () => {
     const _engineer: EngineerAttribution | null = null;
     expect(_contribution).toBeNull();
     expect(_engineer).toBeNull();
+  });
+});
+
+describe("M16 privacy-preserving ranking snapshot persistence", () => {
+  function competitiveEntry(
+    index: number,
+    overrides: Partial<EligibilityEntry> = {},
+  ): EligibilityEntry {
+    const email = `eng${index}@meetcleo.com`;
+    return {
+      emailHash: hashEmailForRanking(email),
+      displayName: `Engineer ${index}`,
+      email,
+      githubLogin: `eng${index}`,
+      discipline: "BE",
+      levelLabel: "L4",
+      squad: index % 2 === 0 ? "Platform" : "Risk",
+      pillar: "Core",
+      canonicalSquad: null,
+      manager: "Boss",
+      startDate: "2023-01-01",
+      tenureDays: 800,
+      isLeaverOrInactive: false,
+      hasImpactModelRow: true,
+      eligibility: "competitive",
+      reason: "Eligible",
+      ...overrides,
+    };
+  }
+
+  function signalRow(
+    index: number,
+    overrides: Partial<PerEngineerSignalRow> = {},
+  ): PerEngineerSignalRow {
+    return {
+      emailHash: hashEmailForRanking(`eng${index}@meetcleo.com`),
+      prCount: 30 + index,
+      commitCount: 60 + index * 2,
+      additions: index * 100,
+      deletions: index * 10,
+      shapPredicted: index * 50,
+      shapActual: index * 60,
+      shapResidual: index * 10,
+      aiTokens: index * 1_000,
+      aiSpend: index * 5,
+      squadCycleTimeHours: index % 2 === 0 ? 24 : 48,
+      squadReviewRatePercent: index % 2 === 0 ? 82 : 76,
+      squadTimeToFirstReviewHours: index % 2 === 0 ? 2 : 4,
+      squadPrsInProgress: index % 2 === 0 ? 6 : 9,
+      ...overrides,
+    };
+  }
+
+  function buildSnapshot(
+    entries: EligibilityEntry[],
+    signals: PerEngineerSignalRow[],
+    now: Date = new Date("2026-04-24T12:34:56Z"),
+  ) {
+    const headcountRows: EligibilityHeadcountRow[] = entries.map((e) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      rp_specialisation: "Backend Eng",
+      hb_function: "Engineering",
+      hb_level: e.levelLabel,
+      job_title: e.levelLabel,
+      hb_squad: e.squad ?? null,
+      line_manager_email: "boss@meetcleo.com",
+      manager: e.manager,
+      start_date: e.startDate,
+    }));
+    const githubMap: EligibilityGithubMapRow[] = entries
+      .filter((e): e is EligibilityEntry & { githubLogin: string } =>
+        Boolean(e.githubLogin),
+      )
+      .map((e) => ({
+        githubLogin: e.githubLogin,
+        employeeEmail: e.email,
+        isBot: false,
+      }));
+    const impactModel: EligibilityImpactModelView = {
+      engineers: entries.map((e) => ({
+        email_hash: e.emailHash,
+        predicted: 1,
+        actual: 1,
+      })),
+    };
+    return buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel,
+      signals,
+      now,
+      reviewSignalsPersisted: false,
+    });
+  }
+
+  it("methodology version names the snapshots stage", () => {
+    // Any post-attribution label that either mentions snapshots or a later
+    // stage (movers/stability) is acceptable — the guard is against drifting
+    // back to an earlier methodology label by accident.
+    const v = RANKING_METHODOLOGY_VERSION.toLowerCase();
+    expect(v).not.toBe("0.1.0-scaffold");
+    expect(v).not.toBe("0.7.0-attribution");
+    expect(v).toMatch(/snapshot|movers|stability/);
+  });
+
+  it("toSnapshotDate formats a UTC calendar day (YYYY-MM-DD) from a Date", async () => {
+    const { toSnapshotDate } = await import("../engineering-ranking");
+    expect(toSnapshotDate(new Date("2026-04-24T00:00:00Z"))).toBe("2026-04-24");
+    expect(toSnapshotDate(new Date("2026-04-24T23:59:59Z"))).toBe("2026-04-24");
+    // Midnight UTC wraps cleanly even across a local DST boundary.
+    expect(toSnapshotDate(new Date("2026-03-29T00:00:00Z"))).toBe("2026-03-29");
+  });
+
+  it("computeRankingInputHash is deterministic for byte-identical inputs", async () => {
+    const { computeRankingInputHash } = await import("../engineering-ranking");
+    const signal = signalRow(1);
+    expect(computeRankingInputHash(signal)).toBe(computeRankingInputHash(signal));
+    expect(computeRankingInputHash(signal)).toBe(
+      computeRankingInputHash({ ...signal }),
+    );
+  });
+
+  it("computeRankingInputHash changes when a scored signal changes", async () => {
+    const { computeRankingInputHash } = await import("../engineering-ranking");
+    const base = signalRow(1);
+    const bumped = { ...base, prCount: (base.prCount ?? 0) + 1 };
+    expect(computeRankingInputHash(bumped)).not.toBe(
+      computeRankingInputHash(base),
+    );
+  });
+
+  it("computeRankingInputHash ignores AI tokens and AI spend (non-scoring signals)", async () => {
+    const { computeRankingInputHash } = await import("../engineering-ranking");
+    const base = signalRow(1, { aiTokens: 1_000, aiSpend: 10 });
+    const inflated = { ...base, aiTokens: 10_000_000, aiSpend: 9_999 };
+    expect(computeRankingInputHash(inflated)).toBe(
+      computeRankingInputHash(base),
+    );
+  });
+
+  it("buildRankingSnapshotRows emits one row per composite entry", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 6 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    expect(rows.length).toBe(snapshot.composite.entries.length);
+    expect(rows.every((r) => r.emailHash.length === 16)).toBe(true);
+  });
+
+  it("buildRankingSnapshotRows excludes ramp-up and leaver engineers", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    // `eligibility` on the EligibilityEntry fixture is ignored — the real
+    // eligibility is derived inside `buildRankingSnapshot` from the
+    // `start_date` on the headcount row. Use a <90d start date for the
+    // ramp-up engineer and a termination flag for the leaver.
+    const now = new Date("2026-04-24T12:34:56Z");
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3, { startDate: "2026-03-10" }), // ~45 days tenure
+      competitiveEntry(4),
+    ];
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const headcountRows: EligibilityHeadcountRow[] = entries.map((e, i) => ({
+      email: e.email,
+      preferred_name: e.displayName,
+      rp_specialisation: "Backend Eng",
+      hb_function: "Engineering",
+      hb_level: e.levelLabel,
+      job_title: e.levelLabel,
+      hb_squad: e.squad ?? null,
+      line_manager_email: "boss@meetcleo.com",
+      manager: e.manager,
+      start_date: e.startDate,
+      // Index 3 is the leaver — termination_date before `now`.
+      termination_date: i === 3 ? "2026-02-01" : null,
+    }));
+    const githubMap: EligibilityGithubMapRow[] = entries
+      .filter((e): e is EligibilityEntry & { githubLogin: string } =>
+        Boolean(e.githubLogin),
+      )
+      .map((e) => ({
+        githubLogin: e.githubLogin,
+        employeeEmail: e.email,
+        isBot: false,
+      }));
+    const impactModel: EligibilityImpactModelView = {
+      engineers: entries.map((e) => ({ email_hash: e.emailHash })),
+    };
+    const snapshot = buildRankingSnapshot({
+      headcountRows,
+      githubMap,
+      impactModel,
+      signals,
+      now,
+      reviewSignalsPersisted: false,
+    });
+    const rows = buildRankingSnapshotRows(snapshot);
+    const hashes = new Set(rows.map((r) => r.emailHash));
+    // The two competitive engineers must be persisted; the ramp-up and
+    // leaver must be absent because persistence mirrors the competitive
+    // composite cohort.
+    expect(hashes.has(entries[0].emailHash)).toBe(true);
+    expect(hashes.has(entries[1].emailHash)).toBe(true);
+    expect(hashes.has(entries[2].emailHash)).toBe(false);
+    expect(hashes.has(entries[3].emailHash)).toBe(false);
+  });
+
+  it("persistence rows NEVER include display name, email, manager, or resolved GitHub login", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+
+    const allowedKeys = new Set([
+      "snapshotDate",
+      "methodologyVersion",
+      "signalWindowStart",
+      "signalWindowEnd",
+      "emailHash",
+      "eligibilityStatus",
+      "rank",
+      "compositeScore",
+      "adjustedPercentile",
+      "rawPercentile",
+      "methodA",
+      "methodB",
+      "methodC",
+      "confidenceLow",
+      "confidenceHigh",
+      "inputHash",
+      "metadata",
+    ]);
+
+    for (const row of rows) {
+      const rowKeys = Object.keys(row);
+      for (const key of rowKeys) {
+        expect(allowedKeys.has(key)).toBe(true);
+      }
+      // Affirmatively check the fields we must never persist.
+      const loose = row as unknown as Record<string, unknown>;
+      expect(loose.displayName).toBeUndefined();
+      expect(loose.email).toBeUndefined();
+      expect(loose.manager).toBeUndefined();
+      expect(loose.githubLogin).toBeUndefined();
+      expect(loose.squad).toBeUndefined();
+      // Serialise the whole row and confirm no resolvable identity string
+      // leaked through (display name, email, or GitHub login).
+      const serialised = JSON.stringify(row);
+      for (const e of entries) {
+        expect(serialised).not.toContain(e.displayName);
+        expect(serialised).not.toContain(e.email);
+        if (e.githubLogin) expect(serialised).not.toContain(e.githubLogin);
+      }
+    }
+  });
+
+  it("metadata jsonb contains only non-identifying shape fields", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    const allowedMetadataKeys = new Set([
+      "presentMethodCount",
+      "dominanceBlocked",
+      "dominanceRiskApplied",
+      "confidenceWidth",
+      "inTieGroup",
+    ]);
+    for (const row of rows) {
+      for (const key of Object.keys(row.metadata)) {
+        expect(allowedMetadataKeys.has(key)).toBe(true);
+      }
+      expect(typeof row.metadata.presentMethodCount).toBe("number");
+      expect(typeof row.metadata.dominanceBlocked).toBe("boolean");
+      expect(typeof row.metadata.inTieGroup).toBe("boolean");
+    }
+  });
+
+  it("rows stamp the snapshot's methodology version verbatim", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.methodologyVersion).toBe(snapshot.methodologyVersion);
+      expect(row.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+    }
+  });
+
+  it("rows carry the snapshot's signal window verbatim so M17 movers can align windows", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    for (const row of rows) {
+      expect(row.signalWindowStart.toISOString()).toBe(
+        snapshot.signalWindow.start,
+      );
+      expect(row.signalWindowEnd.toISOString()).toBe(
+        snapshot.signalWindow.end,
+      );
+    }
+  });
+
+  it("default snapshotDate is the UTC calendar day of snapshot.generatedAt", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals, new Date("2026-04-24T12:34:56Z"));
+    const rows = buildRankingSnapshotRows(snapshot);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.snapshotDate).toBe("2026-04-24");
+    }
+  });
+
+  it("override snapshotDate is honoured so backfills can key on an explicit day", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot, {
+      snapshotDate: "2026-01-01",
+    });
+    for (const row of rows) {
+      expect(row.snapshotDate).toBe("2026-01-01");
+    }
+  });
+
+  it("buildRankingSnapshotRows is idempotent for a given snapshot + inputs", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 4 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const signalsByHash = new Map(signals.map((s) => [s.emailHash, s]));
+    const a = buildRankingSnapshotRows(snapshot, {
+      snapshotDate: "2026-04-24",
+      signalsByHash,
+    });
+    const b = buildRankingSnapshotRows(snapshot, {
+      snapshotDate: "2026-04-24",
+      signalsByHash,
+    });
+    expect(a.length).toBe(b.length);
+    const norm = (rs: { snapshotDate: string; emailHash: string }[]) =>
+      rs
+        .map((r) => `${r.snapshotDate}|${r.emailHash}`)
+        .sort()
+        .join(",");
+    expect(norm(a)).toBe(norm(b));
+  });
+
+  it("inputHash is populated when signals are supplied and null otherwise", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+
+    const withSignals = buildRankingSnapshotRows(snapshot, {
+      signalsByHash: new Map(signals.map((s) => [s.emailHash, s])),
+    });
+    expect(withSignals.every((r) => r.inputHash !== null)).toBe(true);
+    expect(new Set(withSignals.map((r) => r.inputHash)).size).toBeGreaterThan(
+      1,
+    );
+
+    const withoutSignals = buildRankingSnapshotRows(snapshot);
+    expect(withoutSignals.every((r) => r.inputHash === null)).toBe(true);
+  });
+
+  it("methodology version bumps produce a parallel snapshot slice rather than overwriting", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+
+    // Simulate a second methodology version by cloning and rewriting the
+    // version field — the natural key is (date, version, emailHash) so rows
+    // from the two versions must be distinguishable even for the same day.
+    const rowsV1 = buildRankingSnapshotRows(snapshot, {
+      snapshotDate: "2026-04-24",
+    });
+    const rowsV2 = buildRankingSnapshotRows(
+      { ...snapshot, methodologyVersion: "0.99.0-hypothetical" },
+      { snapshotDate: "2026-04-24" },
+    );
+
+    expect(rowsV1.length).toBe(rowsV2.length);
+    // Natural keys must differ between the two slices so a database upsert
+    // does not collide the v1 row with the v2 row.
+    const keyV1 = (r: { snapshotDate: string; methodologyVersion: string; emailHash: string }) =>
+      `${r.snapshotDate}|${r.methodologyVersion}|${r.emailHash}`;
+    const v1Keys = new Set(rowsV1.map(keyV1));
+    const v2Keys = new Set(rowsV2.map(keyV1));
+    for (const key of v1Keys) {
+      expect(v2Keys.has(key)).toBe(false);
+    }
+  });
+
+  it("scored rows carry rank / composite / method A-C / confidence and unscored rows are null", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    // Two competitive engineers + one engineer with no signals (composite
+    // should be null / unscored).
+    const entries: EligibilityEntry[] = [
+      competitiveEntry(1),
+      competitiveEntry(2),
+      competitiveEntry(3),
+    ];
+    const signals: PerEngineerSignalRow[] = [
+      signalRow(1),
+      signalRow(2),
+      // engineer 3 is unscored: no prs / commits / impact rows
+      {
+        emailHash: hashEmailForRanking("eng3@meetcleo.com"),
+        prCount: null,
+        commitCount: null,
+        additions: null,
+        deletions: null,
+        shapPredicted: null,
+        shapActual: null,
+        shapResidual: null,
+        aiTokens: null,
+        aiSpend: null,
+        squadCycleTimeHours: null,
+        squadReviewRatePercent: null,
+        squadTimeToFirstReviewHours: null,
+        squadPrsInProgress: null,
+      },
+    ];
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    const unscoredHash = entries[2].emailHash;
+    const unscoredRow = rows.find((r) => r.emailHash === unscoredHash);
+    expect(unscoredRow).toBeDefined();
+    expect(unscoredRow!.rank).toBeNull();
+    expect(unscoredRow!.compositeScore).toBeNull();
+
+    const scoredRows = rows.filter((r) => r.emailHash !== unscoredHash);
+    for (const row of scoredRows) {
+      expect(row.rank).not.toBeNull();
+      expect(row.compositeScore).not.toBeNull();
+    }
+  });
+
+  it("eligibilityStatus is sourced from the eligibility preflight", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const entries = Array.from({ length: 3 }, (_, i) => competitiveEntry(i + 1));
+    const signals = entries.map((_, i) => signalRow(i + 1));
+    const snapshot = buildSnapshot(entries, signals);
+    const rows = buildRankingSnapshotRows(snapshot);
+    for (const row of rows) {
+      expect(["competitive", "ramp_up", "inactive_or_leaver"]).toContain(
+        row.eligibilityStatus,
+      );
+    }
+  });
+
+  it("empty snapshot yields zero rows", async () => {
+    const { buildRankingSnapshotRows } = await import("../engineering-ranking");
+    const snapshot = buildRankingSnapshot({
+      headcountRows: [],
+      githubMap: [],
+      impactModel: { engineers: [] },
+    });
+    const rows = buildRankingSnapshotRows(snapshot);
+    expect(rows).toEqual([]);
+  });
+
+  it("RankingSnapshotRow and RankingSnapshotRowMetadata types are exported", async () => {
+    const mod = await import("../engineering-ranking");
+    // Compile-time shape guard: the types exist on the module so external
+    // callers (API routes, admin tools) can consume them.
+    const _row: import("../engineering-ranking").RankingSnapshotRow | null = null;
+    const _meta:
+      | import("../engineering-ranking").RankingSnapshotRowMetadata
+      | null = null;
+    expect(typeof mod.buildRankingSnapshotRows).toBe("function");
+    expect(typeof mod.computeRankingInputHash).toBe("function");
+    expect(typeof mod.toSnapshotDate).toBe("function");
+    expect(_row).toBeNull();
+    expect(_meta).toBeNull();
   });
 });

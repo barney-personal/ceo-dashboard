@@ -10,12 +10,13 @@
 
 import { db } from "@/lib/db";
 import {
+  engineeringRankingSnapshots,
   githubCommits,
   githubEmployeeMap,
   githubPrs,
   squads,
 } from "@/lib/db/schema";
-import { count, eq, gte, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -32,12 +33,16 @@ import {
   RANKING_SIGNAL_WINDOW_DAYS,
   buildEligibleRoster,
   buildRankingSnapshot,
+  buildRankingSnapshotRows,
   getEngineeringRanking,
+  toSnapshotDate,
   type EligibilityGithubMapRow,
   type EligibilityHeadcountRow,
   type EligibilitySquadsRegistryRow,
   type EngineeringRankingSnapshot,
   type PerEngineerSignalRow,
+  type RankingSnapshotRow,
+  type RankingSnapshotRowMetadata,
 } from "@/lib/data/engineering-ranking";
 
 async function fetchHeadcountRows(): Promise<EligibilityHeadcountRow[]> {
@@ -301,4 +306,201 @@ export async function getEngineeringRankingSnapshot(): Promise<EngineeringRankin
     );
     return getEngineeringRanking();
   }
+}
+
+function numericString(value: number | null): string | null {
+  if (value === null) return null;
+  if (!Number.isFinite(value)) return null;
+  return value.toString();
+}
+
+function parseNumeric(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Persist a ranking snapshot. Idempotent for a given `(snapshotDate,
+ * methodologyVersion, emailHash)` triple — re-running on the same UTC day
+ * under the same methodology version replaces the prior values for that
+ * engineer without duplicating rows. Methodology version bumps produce a
+ * parallel snapshot slice; M17 movers compare like-for-like snapshots only.
+ *
+ * Rows never contain display name, email, resolved GitHub login, manager
+ * name, or canonical squad name — `buildRankingSnapshotRows` enforces the
+ * privacy shape and this helper only widens it to the Drizzle column set.
+ */
+export async function persistRankingSnapshot(
+  snapshot: EngineeringRankingSnapshot,
+  options?: {
+    snapshotDate?: string;
+    signals?: readonly PerEngineerSignalRow[];
+  },
+): Promise<{ rowsWritten: number; snapshotDate: string }> {
+  const signalsByHash = options?.signals
+    ? new Map(options.signals.map((s) => [s.emailHash, s]))
+    : undefined;
+  const rows = buildRankingSnapshotRows(snapshot, {
+    snapshotDate: options?.snapshotDate,
+    signalsByHash,
+  });
+  if (rows.length === 0) {
+    return {
+      rowsWritten: 0,
+      snapshotDate:
+        options?.snapshotDate ?? toSnapshotDate(new Date(snapshot.generatedAt)),
+    };
+  }
+
+  const values = rows.map((row) => ({
+    snapshotDate: row.snapshotDate,
+    methodologyVersion: row.methodologyVersion,
+    signalWindowStart: row.signalWindowStart,
+    signalWindowEnd: row.signalWindowEnd,
+    emailHash: row.emailHash,
+    eligibilityStatus: row.eligibilityStatus,
+    rank: row.rank,
+    compositeScore: numericString(row.compositeScore),
+    adjustedPercentile: numericString(row.adjustedPercentile),
+    rawPercentile: numericString(row.rawPercentile),
+    methodA: numericString(row.methodA),
+    methodB: numericString(row.methodB),
+    methodC: numericString(row.methodC),
+    confidenceLow: numericString(row.confidenceLow),
+    confidenceHigh: numericString(row.confidenceHigh),
+    inputHash: row.inputHash,
+    metadata: row.metadata,
+  }));
+
+  await db
+    .insert(engineeringRankingSnapshots)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [
+        engineeringRankingSnapshots.snapshotDate,
+        engineeringRankingSnapshots.methodologyVersion,
+        engineeringRankingSnapshots.emailHash,
+      ],
+      set: {
+        signalWindowStart: engineeringRankingSnapshots.signalWindowStart,
+        signalWindowEnd: engineeringRankingSnapshots.signalWindowEnd,
+        eligibilityStatus: engineeringRankingSnapshots.eligibilityStatus,
+        rank: engineeringRankingSnapshots.rank,
+        compositeScore: engineeringRankingSnapshots.compositeScore,
+        adjustedPercentile: engineeringRankingSnapshots.adjustedPercentile,
+        rawPercentile: engineeringRankingSnapshots.rawPercentile,
+        methodA: engineeringRankingSnapshots.methodA,
+        methodB: engineeringRankingSnapshots.methodB,
+        methodC: engineeringRankingSnapshots.methodC,
+        confidenceLow: engineeringRankingSnapshots.confidenceLow,
+        confidenceHigh: engineeringRankingSnapshots.confidenceHigh,
+        inputHash: engineeringRankingSnapshots.inputHash,
+        metadata: engineeringRankingSnapshots.metadata,
+        generatedAt: engineeringRankingSnapshots.generatedAt,
+      },
+    });
+
+  return { rowsWritten: rows.length, snapshotDate: rows[0].snapshotDate };
+}
+
+/**
+ * Read a persisted ranking snapshot slice. Returns rows ordered by rank
+ * ascending (unscored engineers last), restricted to the given methodology
+ * version so cross-methodology snapshots cannot accidentally be merged.
+ */
+export async function readRankingSnapshot(params: {
+  snapshotDate: string;
+  methodologyVersion: string;
+}): Promise<RankingSnapshotRow[]> {
+  const rows = await db
+    .select()
+    .from(engineeringRankingSnapshots)
+    .where(
+      and(
+        eq(engineeringRankingSnapshots.snapshotDate, params.snapshotDate),
+        eq(
+          engineeringRankingSnapshots.methodologyVersion,
+          params.methodologyVersion,
+        ),
+      ),
+    )
+    .orderBy(
+      asc(engineeringRankingSnapshots.rank),
+      asc(engineeringRankingSnapshots.emailHash),
+    );
+
+  return rows.map((row) => ({
+    snapshotDate: row.snapshotDate,
+    methodologyVersion: row.methodologyVersion,
+    signalWindowStart: row.signalWindowStart,
+    signalWindowEnd: row.signalWindowEnd,
+    emailHash: row.emailHash,
+    eligibilityStatus: row.eligibilityStatus as RankingSnapshotRow["eligibilityStatus"],
+    rank: row.rank,
+    compositeScore: parseNumeric(row.compositeScore),
+    adjustedPercentile: parseNumeric(row.adjustedPercentile),
+    rawPercentile: parseNumeric(row.rawPercentile),
+    methodA: parseNumeric(row.methodA),
+    methodB: parseNumeric(row.methodB),
+    methodC: parseNumeric(row.methodC),
+    confidenceLow: parseNumeric(row.confidenceLow),
+    confidenceHigh: parseNumeric(row.confidenceHigh),
+    inputHash: row.inputHash,
+    metadata: (row.metadata as RankingSnapshotRowMetadata | null) ?? {
+      presentMethodCount: 0,
+      dominanceBlocked: false,
+      dominanceRiskApplied: false,
+      confidenceWidth: null,
+      inTieGroup: false,
+    },
+  }));
+}
+
+/**
+ * List the distinct snapshot slices that have been persisted, ordered most
+ * recent first. Useful for M17 movers which needs the two most recent
+ * comparable snapshots (matching methodology version) at least N days
+ * apart, and for the admin data-status view.
+ */
+export async function listRankingSnapshotSlices(params?: {
+  methodologyVersion?: string;
+  limit?: number;
+}): Promise<
+  Array<{ snapshotDate: string; methodologyVersion: string; rowCount: number }>
+> {
+  const limit = params?.limit ?? 60;
+  const baseSelect = db
+    .select({
+      snapshotDate: engineeringRankingSnapshots.snapshotDate,
+      methodologyVersion: engineeringRankingSnapshots.methodologyVersion,
+      rowCount: count(engineeringRankingSnapshots.id),
+    })
+    .from(engineeringRankingSnapshots);
+
+  const withFilter = params?.methodologyVersion
+    ? baseSelect.where(
+        eq(
+          engineeringRankingSnapshots.methodologyVersion,
+          params.methodologyVersion,
+        ),
+      )
+    : baseSelect;
+
+  const rows = await withFilter
+    .groupBy(
+      engineeringRankingSnapshots.snapshotDate,
+      engineeringRankingSnapshots.methodologyVersion,
+    )
+    .orderBy(
+      desc(engineeringRankingSnapshots.snapshotDate),
+      desc(engineeringRankingSnapshots.methodologyVersion),
+    )
+    .limit(limit);
+
+  return rows.map((row) => ({
+    snapshotDate: row.snapshotDate,
+    methodologyVersion: row.methodologyVersion,
+    rowCount: Number(row.rowCount) || 0,
+  }));
 }

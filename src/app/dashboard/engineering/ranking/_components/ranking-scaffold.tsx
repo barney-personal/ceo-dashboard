@@ -2031,11 +2031,14 @@ export function RankingScaffold({
               context), and the tenure/role-adjusted percentile. Effective
               signal-weight decomposition, leave-one-method-out sensitivity,
               a PR/log-impact dominance check, 80% bootstrap confidence
-              bands with statistical-tie groups, and per-engineer attribution
-              drilldowns are all visible below. Ranking snapshots, the
-              movers view, the anti-gaming audit, and the stability check
-              are still pending — so the rank is an evidence composite, not
-              a final adjudication.
+              bands with statistical-tie groups, per-engineer attribution
+              drilldowns, and privacy-preserving snapshot persistence (keyed
+              on snapshot date + methodology version + email hash, with no
+              display name, email, manager, or resolved GitHub login
+              written to the database) are all live. The movers view, the
+              anti-gaming audit, and the stability check are still pending
+              — so the rank is an evidence composite, not a final
+              adjudication.
             </p>
           </div>
         </div>

@@ -602,3 +602,72 @@ export const userBriefings = pgTable(
     index("user_briefings_date_idx").on(table.briefingDate),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Engineering ranking snapshots
+// ---------------------------------------------------------------------------
+// Persisted per-engineer ranking rows keyed by the salted `email_hash` only.
+// Display name, email, manager, and resolved GitHub login are resolved at
+// request time from Mode Headcount SSoT / `githubEmployeeMap` and are NEVER
+// written here — persistence is privacy-preserving by construction.
+//
+// The natural key is (snapshot_date, methodology_version, email_hash) so a
+// persist call is idempotent for a given calendar day under a given
+// methodology version. Methodology changes bump `methodology_version`
+// (`RANKING_METHODOLOGY_VERSION`) and produce a new snapshot slice rather
+// than overwriting the old one — the M17 movers view compares like with
+// like and labels cross-methodology movement separately.
+
+export const engineeringRankingSnapshots = pgTable(
+  "engineering_ranking_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    // Calendar day ("YYYY-MM-DD", UTC) the snapshot was taken. Buckets multiple
+    // persist calls on the same day into a single idempotent row per engineer.
+    snapshotDate: text("snapshot_date").notNull(),
+    methodologyVersion: text("methodology_version").notNull(),
+    signalWindowStart: timestamp("signal_window_start", {
+      withTimezone: true,
+    }).notNull(),
+    signalWindowEnd: timestamp("signal_window_end", {
+      withTimezone: true,
+    }).notNull(),
+    // Salted 16-char SHA-256 hash (see `hashEmailForRanking`). Safe to persist;
+    // resolution to display name / email / login happens at request time.
+    emailHash: text("email_hash").notNull(),
+    eligibilityStatus: text("eligibility_status").notNull(),
+    rank: integer("rank"),
+    compositeScore: numeric("composite_score", { precision: 7, scale: 4 }),
+    adjustedPercentile: numeric("adjusted_percentile", {
+      precision: 7,
+      scale: 4,
+    }),
+    rawPercentile: numeric("raw_percentile", { precision: 7, scale: 4 }),
+    methodA: numeric("method_a", { precision: 7, scale: 4 }),
+    methodB: numeric("method_b", { precision: 7, scale: 4 }),
+    methodC: numeric("method_c", { precision: 7, scale: 4 }),
+    confidenceLow: numeric("confidence_low", { precision: 7, scale: 4 }),
+    confidenceHigh: numeric("confidence_high", { precision: 7, scale: 4 }),
+    // Stable hash of the per-engineer input signals (PR/commit counts, impact
+    // model row, tenure days, etc.) so M17 movers can distinguish input drift
+    // from methodology drift without persisting the raw signals.
+    inputHash: text("input_hash"),
+    // Non-identifying metadata (present-method count, dominance flag, etc.).
+    // MUST NOT contain display name, email, resolved GitHub login, manager
+    // name, or raw signal values — any such field is a privacy leak.
+    metadata: jsonb("metadata"),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("engineering_ranking_snapshots_natural_key").on(
+      table.snapshotDate,
+      table.methodologyVersion,
+      table.emailHash,
+    ),
+    index("engineering_ranking_snapshots_date_version_idx").on(
+      table.snapshotDate,
+      table.methodologyVersion,
+    ),
+    index("engineering_ranking_snapshots_email_hash_idx").on(table.emailHash),
+  ]
+);

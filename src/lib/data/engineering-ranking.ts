@@ -10,12 +10,15 @@
  * database.
  *
  * Downstream callers must treat the current composite as an evidence rank,
- * not a final adjudication: ranking snapshots, the movers view, the
- * anti-gaming audit, and the stability check are still pending until
- * `EngineeringRankingSnapshot.status === "ready"`. Confidence bands and
- * statistical-tie groups (M14) are live and travel on the snapshot via
- * `confidence`. Per-engineer attribution drilldowns (M15) are live and
- * travel on the snapshot via `attribution`.
+ * not a final adjudication: the movers view, the anti-gaming audit, and the
+ * stability check are still pending until `EngineeringRankingSnapshot.status
+ * === "ready"`. Confidence bands and statistical-tie groups (M14) are live
+ * and travel on the snapshot via `confidence`. Per-engineer attribution
+ * drilldowns (M15) are live and travel on the snapshot via `attribution`.
+ * Privacy-preserving ranking snapshot persistence (M16) is live via
+ * `buildRankingSnapshotRows` + `engineeringRankingSnapshots` — rows carry
+ * only the email hash, never display name, email, manager, or resolved
+ * GitHub login.
  */
 
 import { createHash } from "node:crypto";
@@ -52,8 +55,19 @@ import { createHash } from "node:crypto";
  *   defended from visible contributions. Snapshot `status` still stays
  *   `methodology_pending` until snapshots, movers, anti-gaming, and
  *   stability also land.
+ * - `0.8.0-snapshots` — M16 privacy-preserving ranking snapshot persistence
+ *   is live. `buildRankingSnapshotRows` produces plain POJO rows keyed on
+ *   (snapshotDate, methodologyVersion, emailHash); the Drizzle table
+ *   `engineeringRankingSnapshots` stores only the email hash, methodology
+ *   metadata, composite + method scores, confidence CI, an `inputHash` for
+ *   M17 movers to distinguish input drift from methodology drift, and a
+ *   narrow non-identifying metadata jsonb. Display name, email, manager,
+ *   and resolved GitHub login are never persisted. Methodology bumps
+ *   produce a parallel snapshot slice so M17 movers compare like-for-like.
+ *   Snapshot `status` still stays `methodology_pending` until movers,
+ *   anti-gaming, and stability also land.
  */
-export const RANKING_METHODOLOGY_VERSION = "0.7.0-attribution" as const;
+export const RANKING_METHODOLOGY_VERSION = "0.8.0-snapshots" as const;
 
 /** Signals are audited over the last six months by default. */
 export const RANKING_SIGNAL_WINDOW_DAYS = 180 as const;
@@ -2666,7 +2680,7 @@ export function buildComposite({
       "Composite is the median of present methods. It is explicit about what is scored and what is not — engineers with fewer than 2 present methods are unscored, not ranked at the bottom.",
       "Log-impact appears in both lens A and the M10 normalisation layer, which pushes its effective weight above the 30% ceiling. The dominance panel names this trade-off; the rank should not be read as final until per-PR quality signals dilute its share.",
       "Dominance check: if the final rank's Spearman correlation with PR count or log-impact exceeds 0.75 the ranking has collapsed into activity volume and the page warns. Do not override the warning without a methodology change.",
-      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
+      "Confidence bands (M14) sit on top of the composite via the dedicated confidence bundle and the on-page CI rendering. Per-engineer attribution drilldowns (M15) are live via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — snapshots key on (snapshotDate, methodologyVersion, emailHash) and never store display name, email, manager, or resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) are still pending — the composite is an evidence rank, not a final adjudication.",
     ],
   };
 }
@@ -3142,7 +3156,7 @@ export function buildConfidence({
       `Confidence bands are an 80% bootstrap CI on the composite percentile. They are not a hypothesis test against the cohort median; they only express "given the methodology, this is the range of percentile values this engineer would land on under signal jitter".`,
       `Sigma is a deterministic function of method spread and the documented uncertainty factors (low PR count, short tenure, missing impact-model row, unmapped GitHub login, dominance-blocked composite). The factors are intentionally simple — better-calibrated sigmas need a labelled validation set we do not have today.`,
       `Statistical-tie groups are detected by rank-adjacent band overlap only. A more principled definition (e.g. all-pairs overlap inside a cluster) is a deferred refinement; today's groups should be read as "the page must not narrate an order here", not "these engineers are all equal in absolute terms".`,
-      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
+      `Per-engineer attribution drilldowns (M15) are live and travel on the snapshot via the attribution bundle. Privacy-preserving ranking snapshot persistence (M16) is live — rows carry only the email hash, never display name / email / manager / resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending.`,
     ],
   };
 }
@@ -3661,7 +3675,7 @@ export function buildAttribution({
       `Attribution's positive/negative driver tag uses a linear approximation of each component's lift on the composite percentile: (1 / ${totalMethods}) × componentWeight × (percentile − 50). The composite itself is the median of the four method scores, not a weighted sum, so the driver magnitudes are directional labels rather than exact rank contributions.`,
       `Evidence links are limited to a GitHub PR-search URL filtered to merged PRs in the window. Per-PR LLM rubric, individual review turnaround, and PR-level cycle time are not persisted in the current schema and appear in the absent-signals list rather than the evidence block.`,
       `Manager-chain and squad context come from the eligibility row (Mode Headcount SSoT and the squads registry when joined). The drilldown structure accepts a future manager-calibration flag without widening the attribution contract; calibration itself is outstanding work for M18.`,
-      `Ranking snapshots (M16), movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending. The per-engineer attribution lands first so the later snapshots can carry a defensible rank from cycle one.`,
+      `Privacy-preserving ranking snapshot persistence (M16) is live; the schema keys on (snapshotDate, methodologyVersion, emailHash) so cross-methodology snapshots cannot be merged by accident, and rows carry no display name / email / manager / resolved GitHub login. Movers view (M17), anti-gaming audit (M18), and stability check (M19) remain pending — attribution and snapshots land first so those later cycles can compare a defensible rank from cycle one.`,
     ],
   };
 }
@@ -3705,7 +3719,7 @@ export function buildSourceNotes(inputs: EligibilityInputs): string[] {
 const KNOWN_LIMITATIONS: readonly string[] = [
   "Per-PR LLM rubric signal (prReviewAnalyses / RUBRIC_VERSION) is not yet wired. Documented as the highest-priority future signal.",
   "Individual review graph, review turnaround, and PR-level cycle time are not persisted in `githubPrs` / `githubPrMetrics` today. The page must not claim these signals until the schema/sync is extended.",
-  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, and per-engineer attribution drilldowns are implemented. Ranking snapshots, movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
+  "Eligibility, signal orthogonality audit, three independent scoring lenses, tenure/role normalisation, the composite score with effective-weight decomposition / leave-one-method-out sensitivity / PR/log-impact dominance check, 80% bootstrap confidence bands with statistical-tie groups, per-engineer attribution drilldowns, and privacy-preserving ranking snapshot persistence are implemented. The movers view, anti-gaming audit, and stability check are still pending — the composite is an evidence rank, not a final adjudication.",
   "Swarmia DORA is squad/pillar context only — it describes teams, not individuals, and must not be used as individual review evidence.",
   "Squads registry does not contain manager chain. Manager and direct-report context comes from Mode Headcount SSoT / people loaders; the ranking methodology must not imply `squads` as the source of manager relationships.",
   "AI usage (tokens/spend) is contextual and audit-only. It must not directly reward individuals without independent validation.",
@@ -3757,13 +3771,191 @@ const PLANNED_SIGNALS: EngineeringRankingSnapshot["plannedSignals"] = [
 ];
 
 /**
+ * Persistence row shape for `engineeringRankingSnapshots`. Mirrors the
+ * Drizzle column contract but kept as a plain POJO so the pure helper that
+ * produces it can be exercised without a database connection.
+ *
+ * Privacy invariant (tested): this shape is restricted to the email hash
+ * plus methodology metadata — display name, resolved GitHub login, email,
+ * manager, or raw squad name must NEVER appear here. The Drizzle `metadata`
+ * jsonb column is similarly restricted by construction in
+ * `buildRankingSnapshotRows`.
+ */
+export interface RankingSnapshotRow {
+  snapshotDate: string;
+  methodologyVersion: string;
+  signalWindowStart: Date;
+  signalWindowEnd: Date;
+  emailHash: string;
+  eligibilityStatus: EligibilityStatus;
+  rank: number | null;
+  compositeScore: number | null;
+  adjustedPercentile: number | null;
+  rawPercentile: number | null;
+  methodA: number | null;
+  methodB: number | null;
+  methodC: number | null;
+  confidenceLow: number | null;
+  confidenceHigh: number | null;
+  inputHash: string | null;
+  metadata: RankingSnapshotRowMetadata;
+}
+
+/**
+ * Non-identifying metadata safe to persist alongside a ranking row. Values
+ * are deliberately coarse — anything that could deanonymise an engineer in
+ * a small cohort is excluded. Updates to this shape must not introduce
+ * fields that can be correlated with the email hash to recover identity.
+ */
+export interface RankingSnapshotRowMetadata {
+  /** Number of composite methods present for this engineer (0..4). */
+  presentMethodCount: number;
+  /** True when the composite was globally dominance-blocked this run. */
+  dominanceBlocked: boolean;
+  /** True when the cohort's composite dominance check skipped this signal. */
+  dominanceRiskApplied: boolean;
+  /** Confidence-band width in composite-percentile points; null when unknown. */
+  confidenceWidth: number | null;
+  /** True when the engineer sat in a statistical-tie group. */
+  inTieGroup: boolean;
+}
+
+/**
+ * Canonical ISO date formatter for `snapshot_date` (UTC calendar day).
+ * The natural key uses this string verbatim so `persistRankingSnapshot`
+ * being called twice on the same UTC day is idempotent under the same
+ * methodology version.
+ */
+export function toSnapshotDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+const INPUT_HASH_SIGNAL_FIELDS: readonly (keyof PerEngineerSignalRow)[] = [
+  "prCount",
+  "commitCount",
+  "additions",
+  "deletions",
+  "shapPredicted",
+  "shapActual",
+  "shapResidual",
+  "squadCycleTimeHours",
+  "squadReviewRatePercent",
+  "squadTimeToFirstReviewHours",
+  "squadPrsInProgress",
+];
+
+/**
+ * Deterministic hash of the subset of per-engineer input signals used by
+ * the ranking methodology. Stable across runs when the inputs are
+ * byte-identical — M17 movers can compare it across snapshots to tell
+ * "the inputs moved" from "the methodology moved" without persisting the
+ * raw values.
+ *
+ * AI tokens/spend are excluded because they do not enter scoring and so
+ * must not be mistakenly attributed as a ranking input. The hash is
+ * truncated to 16 hex chars, matching `hashEmailForRanking`.
+ */
+export function computeRankingInputHash(row: PerEngineerSignalRow): string {
+  const payload = INPUT_HASH_SIGNAL_FIELDS.map((field) => {
+    const value = row[field];
+    if (value === null || value === undefined) return `${String(field)}:null`;
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      return `${String(field)}:nan`;
+    }
+    if (typeof value === "number") {
+      // Round to 6 decimal places so tiny floating-point jitter does not
+      // flip the hash on re-ingest of the same upstream row.
+      return `${String(field)}:${Number(value.toFixed(6))}`;
+    }
+    return `${String(field)}:${String(value)}`;
+  }).join("|");
+  return createHash("sha256").update(payload).digest("hex").slice(0, 16);
+}
+
+/**
+ * Build the persistence rows for a ranking snapshot. One row is emitted per
+ * competitive engineer in `snapshot.composite.entries`, scored or unscored —
+ * ramp-up and leaver engineers are already filtered out upstream by the
+ * composite builder. Rows NEVER include display name, email, manager,
+ * canonical squad name, or resolved GitHub login; the privacy guarantee is
+ * enforced at the construction site, not only in the schema.
+ *
+ * `snapshotDate` defaults to the UTC calendar day of `snapshot.generatedAt`,
+ * so under normal usage the natural key `(snapshotDate, methodologyVersion,
+ * emailHash)` is idempotent for same-day persist calls.
+ *
+ * `signalsByHash` is optional — when supplied, the per-engineer
+ * `inputHash` is populated. Pass the same signal rows the snapshot was
+ * built from to align the hash with the inputs that produced the rank.
+ */
+export function buildRankingSnapshotRows(
+  snapshot: EngineeringRankingSnapshot,
+  options?: {
+    snapshotDate?: string;
+    signalsByHash?: ReadonlyMap<string, PerEngineerSignalRow>;
+  },
+): RankingSnapshotRow[] {
+  const snapshotDate =
+    options?.snapshotDate ?? toSnapshotDate(new Date(snapshot.generatedAt));
+  const signalWindowStart = new Date(snapshot.signalWindow.start);
+  const signalWindowEnd = new Date(snapshot.signalWindow.end);
+  const normalisedByHash = new Map(
+    snapshot.normalisation.entries.map((n) => [n.emailHash, n]),
+  );
+  const confidenceByHash = new Map(
+    snapshot.confidence.entries.map((c) => [c.emailHash, c]),
+  );
+  const eligibilityByHash = new Map(
+    snapshot.eligibility.entries.map((e) => [e.emailHash, e.eligibility]),
+  );
+  const dominanceBlocked = snapshot.composite.dominanceBlocked;
+
+  return snapshot.composite.entries.map((entry) => {
+    const normalised = normalisedByHash.get(entry.emailHash);
+    const confidence = confidenceByHash.get(entry.emailHash);
+    const eligibility =
+      eligibilityByHash.get(entry.emailHash) ?? "competitive";
+    const signals = options?.signalsByHash?.get(entry.emailHash);
+    const dominanceRiskApplied = snapshot.composite.finalRankCorrelations.some(
+      (corr) => corr.dominanceRisk,
+    );
+
+    return {
+      snapshotDate,
+      methodologyVersion: snapshot.methodologyVersion,
+      signalWindowStart,
+      signalWindowEnd,
+      emailHash: entry.emailHash,
+      eligibilityStatus: eligibility,
+      rank: entry.rank,
+      compositeScore: entry.composite,
+      adjustedPercentile: normalised?.adjustedPercentile ?? null,
+      rawPercentile: normalised?.rawPercentile ?? null,
+      methodA: entry.output,
+      methodB: entry.impact,
+      methodC: entry.delivery,
+      confidenceLow: confidence?.ciLow ?? null,
+      confidenceHigh: confidence?.ciHigh ?? null,
+      inputHash: signals ? computeRankingInputHash(signals) : null,
+      metadata: {
+        presentMethodCount: entry.presentMethodCount,
+        dominanceBlocked,
+        dominanceRiskApplied,
+        confidenceWidth: confidence?.ciWidth ?? null,
+        inTieGroup: confidence?.inTieGroup ?? false,
+      },
+    };
+  });
+}
+
+/**
  * Build a snapshot from already-fetched inputs. The server-side loader does
  * the fetching and calls this; tests call it with fixtures.
  *
- * Status stays `methodology_pending` even though the composite now populates
- * `snapshot.engineers` — confidence bands, per-engineer attribution,
- * persisted snapshots, movers, anti-gaming audit, and stability checks are
- * still pending post-composite milestones and must land before the
+ * Status stays `methodology_pending` even though the composite, confidence
+ * bands, per-engineer attribution, and ranking snapshot persistence are all
+ * live — the movers view, anti-gaming audit, and stability check are the
+ * remaining post-attribution milestones that must land before the
  * methodology is defensible enough to advertise as `ready`.
  */
 export function buildRankingSnapshot(

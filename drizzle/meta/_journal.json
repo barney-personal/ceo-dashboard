@@ -148,6 +148,13 @@
       "when": 1776984660527,
       "tag": "0020_add_user_briefings",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1776998227164,
+      "tag": "0021_engineering_ranking_snapshots",
+      "breakpoints": true
     }
   ]
 }
