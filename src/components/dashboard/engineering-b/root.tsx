@@ -1,5 +1,6 @@
-import { Info } from "lucide-react";
 import type { Role } from "@/lib/auth/roles";
+import { EngineerPlaceholder } from "./engineer-placeholder";
+import { ManagerView, type ManagerScopeKind } from "./manager-view";
 
 export type EngineeringBPersona = "engineer" | "manager";
 
@@ -9,42 +10,50 @@ export function resolvePersona(effectiveRole: Role): EngineeringBPersona {
     : "engineer";
 }
 
-interface EngineeringBRootProps {
-  effectiveRole: Role;
+/**
+ * For the manager persona, pick the scope kind from the effective role. CEO
+ * and leadership see the full org stack rank. Any other effective role falling
+ * into the manager persona (not reachable in first pass thanks to M4, but kept
+ * consistent in code) would use direct-reports scoping.
+ */
+export function resolveManagerScope(effectiveRole: Role): ManagerScopeKind {
+  return effectiveRole === "ceo" || effectiveRole === "leadership"
+    ? "org"
+    : "directs";
 }
 
-export function EngineeringBRoot({ effectiveRole }: EngineeringBRootProps) {
-  const persona = resolvePersona(effectiveRole);
-  return (
-    <section
-      data-testid="engineering-b-root"
-      data-persona={persona}
-      className="space-y-6"
-    >
-      <div className="rounded-xl border border-border/60 bg-card px-5 py-4 shadow-warm">
-        <div className="flex items-start gap-3">
-          <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
-          <div className="space-y-1">
-            <p className="font-display text-lg italic text-foreground">
-              Engineering — simplified view
-            </p>
-            <p className="text-sm text-muted-foreground">
-              {persona === "manager"
-                ? "Manager view: stack rank with promote / performance-manage candidates, confidence bands, and per-engineer attribution. Composite score and rendering land in milestones M6 – M9."
-                : "Engineer view: your own percentile bands across org, pillar, and squad, with 2 – 4 concrete takeaways. Composite score and rendering land in milestones M6 – M9."}
-            </p>
-          </div>
-        </div>
-      </div>
+interface EngineeringBRootProps {
+  effectiveRole: Role;
+  /**
+   * Manager email to scope to when the view runs in "directs" scope. Not
+   * reachable in the first-pass B-side (M4 gate), so callers don't supply it
+   * outside tests / controlled previews.
+   */
+  managerEmail?: string | null;
+}
 
-      <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-5 py-8 text-center">
-        <p className="font-display text-base italic text-muted-foreground">
-          B-side surface
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Single root. No tabs. No impact model. No competing ranks.
-        </p>
+export function EngineeringBRoot({
+  effectiveRole,
+  managerEmail,
+}: EngineeringBRootProps) {
+  const persona = resolvePersona(effectiveRole);
+
+  if (persona === "manager") {
+    const scope = resolveManagerScope(effectiveRole);
+    return (
+      <div
+        data-testid="engineering-b-root"
+        data-persona="manager"
+        data-scope={scope}
+      >
+        <ManagerView scope={scope} managerEmail={managerEmail ?? null} />
       </div>
-    </section>
+    );
+  }
+
+  return (
+    <div data-testid="engineering-b-root" data-persona="engineer">
+      <EngineerPlaceholder />
+    </div>
   );
 }

@@ -7,6 +7,7 @@ const {
   mockGetEngineeringViewResolution,
   mockEngineeringTabs,
   mockEngineeringViewToggle,
+  mockEngineeringBRoot,
 } = vi.hoisted(() => ({
   mockGetCurrentUserRole: vi.fn(),
   mockGetDashboardPermissionRoleMap: vi.fn(),
@@ -20,6 +21,17 @@ const {
       data-toggle-on={initialToggleOn ? "true" : "false"}
     />
   )),
+  mockEngineeringBRoot: vi.fn(({ effectiveRole }: { effectiveRole: string }) => {
+    const persona =
+      effectiveRole === "ceo" || effectiveRole === "leadership"
+        ? "manager"
+        : "engineer";
+    return (
+      <div data-testid="engineering-b-root" data-persona={persona}>
+        b-side root stub
+      </div>
+    );
+  }),
 }));
 
 vi.mock("@/lib/auth/roles.server", () => ({
@@ -40,6 +52,10 @@ vi.mock("@/components/dashboard/engineering-tabs", () => ({
 
 vi.mock("@/components/dashboard/engineering-view-toggle", () => ({
   EngineeringViewToggle: mockEngineeringViewToggle,
+}));
+
+vi.mock("@/components/dashboard/engineering-b/root", () => ({
+  EngineeringBRoot: mockEngineeringBRoot,
 }));
 
 import EngineeringLayout from "../layout";

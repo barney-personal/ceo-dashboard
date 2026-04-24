@@ -1,9 +1,25 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../manager-view", () => ({
+  ManagerView: ({ scope }: { scope: string }) => (
+    <div data-testid="manager-view-stub" data-scope={scope}>
+      manager view stub
+    </div>
+  ),
+}));
+
+vi.mock("../engineer-placeholder", () => ({
+  EngineerPlaceholder: () => (
+    <div data-testid="engineer-placeholder-stub">engineer placeholder stub</div>
+  ),
+}));
+
 import {
   EngineeringBRoot,
+  resolveManagerScope,
   resolvePersona,
-} from "@/components/dashboard/engineering-b/root";
+} from "../root";
 
 describe("resolvePersona", () => {
   it("maps ceo to manager persona", () => {
@@ -27,28 +43,49 @@ describe("resolvePersona", () => {
   });
 });
 
+describe("resolveManagerScope", () => {
+  it("returns org for ceo", () => {
+    expect(resolveManagerScope("ceo")).toBe("org");
+  });
+
+  it("returns org for leadership", () => {
+    expect(resolveManagerScope("leadership")).toBe("org");
+  });
+
+  it("returns directs for any lower role (unreachable in first pass)", () => {
+    expect(resolveManagerScope("manager")).toBe("directs");
+    expect(resolveManagerScope("engineering_manager")).toBe("directs");
+    expect(resolveManagerScope("everyone")).toBe("directs");
+  });
+});
+
 describe("EngineeringBRoot", () => {
-  it("renders the manager persona copy for CEO", () => {
+  it("renders the manager view with org scope for CEO", () => {
     render(<EngineeringBRoot effectiveRole="ceo" />);
     const root = screen.getByTestId("engineering-b-root");
     expect(root.getAttribute("data-persona")).toBe("manager");
-    expect(screen.getByText(/Manager view/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Engineer view/i)).not.toBeInTheDocument();
+    expect(root.getAttribute("data-scope")).toBe("org");
+    const view = screen.getByTestId("manager-view-stub");
+    expect(view.getAttribute("data-scope")).toBe("org");
   });
 
-  it("renders the engineer persona copy for non-leadership", () => {
+  it("renders the manager view with org scope for leadership", () => {
+    render(<EngineeringBRoot effectiveRole="leadership" />);
+    const view = screen.getByTestId("manager-view-stub");
+    expect(view.getAttribute("data-scope")).toBe("org");
+  });
+
+  it("renders the engineer placeholder for engineer persona roles", () => {
     render(<EngineeringBRoot effectiveRole="everyone" />);
     const root = screen.getByTestId("engineering-b-root");
     expect(root.getAttribute("data-persona")).toBe("engineer");
-    expect(screen.getByText(/Engineer view/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Manager view/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("engineer-placeholder-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
   });
 
-  it("advertises the B-side surface framing regardless of persona", () => {
-    render(<EngineeringBRoot effectiveRole="leadership" />);
-    expect(screen.getByText(/B-side surface/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Single root\. No tabs\. No impact model\./i),
-    ).toBeInTheDocument();
+  it("does not leak manager content to engineering_manager persona", () => {
+    render(<EngineeringBRoot effectiveRole="engineering_manager" />);
+    expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
+    expect(screen.getByTestId("engineer-placeholder-stub")).toBeInTheDocument();
   });
 });
