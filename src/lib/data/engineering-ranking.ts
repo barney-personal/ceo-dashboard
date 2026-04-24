@@ -685,9 +685,20 @@ export function aggregateQualitySignals(
 }
 
 /**
- * Hash an email for ranking. Matches the convention in
- * `src/lib/data/impact-model.server.ts` so the SHAP model lookups align with
- * the roster keys in a single snapshot.
+ * Hash an email for ranking.
+ *
+ * NOTE: This is an **unsalted** SHA-256 truncated to 16 hex chars — it
+ * matches the committed `src/data/impact-model.json` hash convention so
+ * SHAP lookups align with the ranking roster in a single snapshot.
+ * `src/lib/data/impact-model.server.ts` *also* hashes emails, but uses
+ * `createHmac("sha256", IMPACT_MODEL_HASH_KEY)` for its live identity
+ * resolution — see the comment there for why. These truncated SHA-256
+ * hashes are reversible against the Cleo email directory (small keyspace)
+ * and must therefore be treated as pseudonymous, not anonymous.
+ *
+ * Follow-up: route this through the HMAC flow before
+ * `engineeringRankingSnapshots` accumulates meaningful history so snapshot
+ * rows stay consistent with the ML pipeline's stronger hash.
  */
 export function hashEmailForRanking(email: string): string {
   return createHash("sha256")

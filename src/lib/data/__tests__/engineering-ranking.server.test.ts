@@ -22,12 +22,22 @@ vi.mock("@/lib/db", () => {
   const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
   const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
   const insert = vi.fn().mockReturnValue({ values });
+  const deleteWhere = vi.fn().mockResolvedValue(undefined);
+  const deleteFn = vi.fn().mockReturnValue({ where: deleteWhere });
+  const mockDb: Record<string, unknown> = {
+    insert,
+    delete: deleteFn,
+    select: vi.fn(),
+  };
+  // The live code wraps persist writes in `db.transaction(async (tx) => ...)`;
+  // forward the callback to `mockDb` itself so the same `insert` / `delete`
+  // spies capture the calls that happen inside the transaction.
+  mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+    cb(mockDb),
+  );
   return {
-    db: {
-      insert,
-      select: vi.fn(),
-    },
-    __mocks: { insert, values, onConflictDoUpdate },
+    db: mockDb,
+    __mocks: { insert, values, onConflictDoUpdate, delete: deleteFn, deleteWhere },
   };
 });
 
@@ -144,12 +154,17 @@ function buildFixtureSnapshot() {
 describe("persistRankingSnapshot (M17 persistence correctness)", () => {
   beforeEach(() => {
     vi.mocked(db.insert).mockClear();
+    vi.mocked(db.delete).mockClear();
     // Re-wire the fluent chain each test so captured calls stay isolated.
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
     const values = vi.fn().mockReturnValue({ onConflictDoUpdate });
     vi.mocked(db.insert).mockReturnValue({
       values,
     } as unknown as ReturnType<typeof db.insert>);
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(db.delete).mockReturnValue({
+      where: deleteWhere,
+    } as unknown as ReturnType<typeof db.delete>);
   });
 
   it("populates a non-null input_hash in the persisted values when signals are supplied", async () => {
@@ -224,6 +239,22 @@ describe("persistRankingSnapshot (M17 persistence correctness)", () => {
       const fragment = flattenSqlLiteralText(value).toLowerCase();
       expect(fragment).toContain("excluded.");
     }
+  });
+
+  it("deletes stale rows from the same slice whose email_hash is no longer in the incoming set", async () => {
+    // A same-day re-POST whose competitive cohort shrinks must drop rows
+    // for engineers who fell out of the set — otherwise the stale hashes
+    // linger at the (snapshot_date, methodology_version) slice and poison
+    // subsequent movers / stability reads.
+    const { snapshot, signals } = buildFixtureSnapshot();
+    await persistRankingSnapshot(snapshot, { signals });
+
+    expect(vi.mocked(db.delete)).toHaveBeenCalledOnce();
+    expect(vi.mocked(db.delete).mock.calls[0][0]).toBeDefined();
+    const deleteResult = vi.mocked(db.delete).mock.results[0].value as {
+      where: ReturnType<typeof vi.fn>;
+    };
+    expect(deleteResult.where).toHaveBeenCalledOnce();
   });
 
   it("emits no database write when the snapshot has no composite entries", async () => {

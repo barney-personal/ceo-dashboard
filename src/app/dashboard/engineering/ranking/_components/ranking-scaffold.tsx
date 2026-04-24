@@ -32,12 +32,16 @@ import {
 } from "@/lib/data/engineering-ranking";
 
 function formatDate(iso: string): string {
+  // Snapshot dates are always UTC midnight (either a bare `YYYY-MM-DD` string
+  // or `...T00:00:00Z`). Render in UTC so viewers in negative offsets (e.g.
+  // US timezones) don't see the previous calendar day.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 
@@ -520,7 +524,7 @@ function LensesSection({ lenses }: { lenses: LensesBundle }) {
             built to disagree — the disagreement table below is where the
             methodology earns its money. The composite above takes the median
             of all four methods (A, B, C, adjusted) so a single noisy lens
-            cannot single-handedly drag an engineer's rank.
+            cannot single-handedly drag an engineer&apos;s rank.
           </p>
         </div>
         <div className="text-right text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -1261,8 +1265,8 @@ function ConfidenceSection({ confidence }: { confidence: ConfidenceBundle }) {
           </h4>
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             Rank-adjacent engineers whose 80% CIs overlap. Read these as
-            "the page must not narrate an order between them" — not "they are
-            equal in absolute terms".
+            &ldquo;the page must not narrate an order between them&rdquo; — not
+            &ldquo;they are equal in absolute terms&rdquo;.
           </p>
           {confidence.tieGroups.length === 0 ? (
             <p className="mt-3 text-xs italic text-muted-foreground">
@@ -2500,7 +2504,7 @@ function MethodologySection({
           Effective signal weights across the composite
         </h4>
         <p className="mt-1 text-xs text-muted-foreground">
-          Every signal's share across the four composite methods. Flagged
+          Every signal&apos;s share across the four composite methods. Flagged
           signals exceed the 30% ceiling — the dominance panel names the
           trade-off explicitly.
         </p>
@@ -2602,7 +2606,7 @@ function MethodologySection({
         </h4>
         <p className="mt-1 text-xs text-muted-foreground">
           Per-source timestamps and windows used by this ranking run. The
-          rubric version stays "not available" until `prReviewAnalyses` lands.
+          rubric version stays &ldquo;not available&rdquo; until `prReviewAnalyses` lands.
         </p>
         <ul className="mt-3 grid gap-3 sm:grid-cols-2">
           {methodology.freshness.map((badge) => (

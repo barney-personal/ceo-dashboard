@@ -620,10 +620,19 @@ export const userBriefings = pgTable(
 // ---------------------------------------------------------------------------
 // Engineering ranking snapshots
 // ---------------------------------------------------------------------------
-// Persisted per-engineer ranking rows keyed by the salted `email_hash` only.
-// Display name, email, manager, and resolved GitHub login are resolved at
-// request time from Mode Headcount SSoT / `githubEmployeeMap` and are NEVER
-// written here — persistence is privacy-preserving by construction.
+// Persisted per-engineer ranking rows keyed by `email_hash` only. Display
+// name, email, manager, and resolved GitHub login are resolved at request
+// time from Mode Headcount SSoT / `githubEmployeeMap` and are NEVER written
+// here — persistence is privacy-preserving by construction.
+//
+// IMPORTANT: `email_hash` is currently an UNSALTED SHA-256 truncated to 16
+// hex chars (see `hashEmailForRanking`). This is a deliberate short-term
+// choice so snapshot keys align with the existing `impact-model.json`
+// convention; anyone with DB read access plus the Cleo email directory
+// could recover identity by precomputing `sha256(email)[:16]` over the
+// small plausible keyspace. Tracked follow-up: wire this through the
+// `IMPACT_MODEL_HASH_KEY` HMAC before the snapshot table accumulates
+// meaningful history.
 //
 // The natural key is (snapshot_date, methodology_version, email_hash) so a
 // persist call is idempotent for a given calendar day under a given
@@ -646,8 +655,9 @@ export const engineeringRankingSnapshots = pgTable(
     signalWindowEnd: timestamp("signal_window_end", {
       withTimezone: true,
     }).notNull(),
-    // Salted 16-char SHA-256 hash (see `hashEmailForRanking`). Safe to persist;
-    // resolution to display name / email / login happens at request time.
+    // Unsalted 16-char SHA-256 hash (see `hashEmailForRanking`) — reversible
+    // against the Cleo email directory; treat as pseudonymous, not anonymous.
+    // Resolution to display name / email / login happens at request time.
     emailHash: text("email_hash").notNull(),
     eligibilityStatus: text("eligibility_status").notNull(),
     rank: integer("rank"),

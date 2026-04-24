@@ -17,7 +17,18 @@ import {
   prReviewAnalyses,
   squads,
 } from "@/lib/db/schema";
-import { and, asc, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gte,
+  lte,
+  notInArray,
+  sql,
+  sum,
+} from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -183,7 +194,7 @@ async function fetchSquadDeliveryContext(): Promise<
 /**
  * Pull per-PR rubric rows (rubric version `RANKING_QUALITY_RUBRIC_VERSION`)
  * merged inside the signal window, joined through `githubEmployeeMap` so
- * every row resolves to an employee email → salted hash.
+ * every row resolves to an employee email → ranking email hash.
  *
  * The quality lens is strict about rubric-version mixing — only rows with
  * the current version are returned — and bots / unmapped GitHub logins are
@@ -602,40 +613,65 @@ export async function persistRankingSnapshot(
     generatedAt,
   }));
 
-  // ON CONFLICT DO UPDATE must pull from PostgreSQL's `EXCLUDED` pseudo-row
-  // (the incoming values), not from the existing row in the target table. A
-  // same-day refresh after new GitHub / impact-model / squad inputs must
-  // replace rank, scores, confidence, input_hash, metadata, and generated_at.
-  await db
-    .insert(engineeringRankingSnapshots)
-    .values(values)
-    .onConflictDoUpdate({
-      target: [
-        engineeringRankingSnapshots.snapshotDate,
-        engineeringRankingSnapshots.methodologyVersion,
-        engineeringRankingSnapshots.emailHash,
-      ],
-      set: {
-        signalWindowStart: sql`excluded.signal_window_start`,
-        signalWindowEnd: sql`excluded.signal_window_end`,
-        eligibilityStatus: sql`excluded.eligibility_status`,
-        rank: sql`excluded.rank`,
-        compositeScore: sql`excluded.composite_score`,
-        adjustedPercentile: sql`excluded.adjusted_percentile`,
-        rawPercentile: sql`excluded.raw_percentile`,
-        methodA: sql`excluded.method_a`,
-        methodB: sql`excluded.method_b`,
-        methodC: sql`excluded.method_c`,
-        methodD: sql`excluded.method_d`,
-        confidenceLow: sql`excluded.confidence_low`,
-        confidenceHigh: sql`excluded.confidence_high`,
-        inputHash: sql`excluded.input_hash`,
-        metadata: sql`excluded.metadata`,
-        generatedAt: sql`excluded.generated_at`,
-      },
-    });
+  const snapshotDate = rows[0].snapshotDate;
+  const methodologyVersion = rows[0].methodologyVersion;
+  const keptHashes = values.map((v) => v.emailHash);
 
-  return { rowsWritten: rows.length, snapshotDate: rows[0].snapshotDate };
+  // Upsert the new rows AND drop any rows from the same
+  // (snapshot_date, methodology_version) slice whose email_hash is not in
+  // the incoming set. Same-day re-POSTs can shrink the competitive cohort
+  // (e.g. an engineer drops out between runs); without the delete, stale
+  // rows would linger and contaminate downstream movers / stability reads.
+  //
+  // ON CONFLICT DO UPDATE must pull from PostgreSQL's `EXCLUDED` pseudo-row
+  // (the incoming values), not from the existing row in the target table,
+  // so a same-day refresh replaces rank / scores / confidence / input_hash
+  // / metadata / generated_at with the new values.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(engineeringRankingSnapshots)
+      .values(values)
+      .onConflictDoUpdate({
+        target: [
+          engineeringRankingSnapshots.snapshotDate,
+          engineeringRankingSnapshots.methodologyVersion,
+          engineeringRankingSnapshots.emailHash,
+        ],
+        set: {
+          signalWindowStart: sql`excluded.signal_window_start`,
+          signalWindowEnd: sql`excluded.signal_window_end`,
+          eligibilityStatus: sql`excluded.eligibility_status`,
+          rank: sql`excluded.rank`,
+          compositeScore: sql`excluded.composite_score`,
+          adjustedPercentile: sql`excluded.adjusted_percentile`,
+          rawPercentile: sql`excluded.raw_percentile`,
+          methodA: sql`excluded.method_a`,
+          methodB: sql`excluded.method_b`,
+          methodC: sql`excluded.method_c`,
+          methodD: sql`excluded.method_d`,
+          confidenceLow: sql`excluded.confidence_low`,
+          confidenceHigh: sql`excluded.confidence_high`,
+          inputHash: sql`excluded.input_hash`,
+          metadata: sql`excluded.metadata`,
+          generatedAt: sql`excluded.generated_at`,
+        },
+      });
+
+    await tx
+      .delete(engineeringRankingSnapshots)
+      .where(
+        and(
+          eq(engineeringRankingSnapshots.snapshotDate, snapshotDate),
+          eq(
+            engineeringRankingSnapshots.methodologyVersion,
+            methodologyVersion,
+          ),
+          notInArray(engineeringRankingSnapshots.emailHash, keptHashes),
+        ),
+      );
+  });
+
+  return { rowsWritten: rows.length, snapshotDate };
 }
 
 /**
