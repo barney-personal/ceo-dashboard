@@ -16,7 +16,7 @@ import {
   githubPrs,
   squads,
 } from "@/lib/db/schema";
-import { and, asc, count, desc, eq, gte, lt, lte, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
 import { getReportData } from "@/lib/data/mode";
 import { getImpactModel } from "@/lib/data/impact-model";
 import {
@@ -182,9 +182,14 @@ async function fetchSquadDeliveryContext(): Promise<
  *
  *   1. Most recent slice at least `minGapDays` old, same methodology.
  *   2. Most recent slice at least `minGapDays` old, any methodology.
- *   3. Most recent slice strictly older than the current snapshot date
- *      (regardless of gap), so `buildMovers` can emit `insufficient_gap`
- *      with the real gap rather than degrading to `no_prior_snapshot`.
+ *   3. Most recent slice on or before the current snapshot date (regardless
+ *      of gap), preferring the current methodology when multiple slices
+ *      share the winning date. Snapshot keys are date-granular, so this
+ *      fallback surfaces same-day same-methodology and same-day
+ *      different-methodology slices as well as strictly older ones — in
+ *      every case `buildMovers` emits `insufficient_gap` with the real
+ *      `priorSnapshotGapDays` (including 0-day gaps for same-day slices)
+ *      rather than degrading to `no_prior_snapshot`.
  *
  * Returns an empty array only when no prior slice exists at all.
  */
@@ -234,9 +239,16 @@ export async function fetchPriorSnapshotRowsForMovers(params: {
   }
 
   // Fallback: no slice is old enough, but a too-recent prior slice may
-  // still exist. Surface it so `buildMovers` renders `insufficient_gap`
-  // instead of the stronger `no_prior_snapshot` empty state — the reader
-  // learns the exact gap rather than being told there is no history.
+  // still exist — including same-day slices (snapshot keys are date-
+  // granular, so a previous POST today with either methodology version
+  // shows up here). Surface it so `buildMovers` renders `insufficient_gap`
+  // with the actual gap (including 0-day) instead of the stronger
+  // `no_prior_snapshot` empty state.
+  //
+  // Ordering: most recent date first, breaking date ties by preferring the
+  // current methodology version. This keeps same-day same-methodology
+  // refreshes ahead of same-day other-methodology rows without disturbing
+  // the "most recent wins" rule when dates differ.
   if (!priorSlice) {
     const tooRecentSlice = await db
       .select({
@@ -245,10 +257,14 @@ export async function fetchPriorSnapshotRowsForMovers(params: {
       })
       .from(engineeringRankingSnapshots)
       .where(
-        lt(engineeringRankingSnapshots.snapshotDate, params.currentSnapshotDate),
+        lte(
+          engineeringRankingSnapshots.snapshotDate,
+          params.currentSnapshotDate,
+        ),
       )
       .orderBy(
         desc(engineeringRankingSnapshots.snapshotDate),
+        sql`CASE WHEN ${engineeringRankingSnapshots.methodologyVersion} = ${params.currentMethodologyVersion} THEN 0 ELSE 1 END`,
         desc(engineeringRankingSnapshots.methodologyVersion),
       )
       .limit(1);

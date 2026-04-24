@@ -589,8 +589,12 @@ export interface EligibilityInputs {
    * Every row MUST share the same `(snapshotDate, methodologyVersion)`.
    * The server loader picks the most recent slice at least
    * `RANKING_MOVERS_MIN_GAP_DAYS` days old, preferring the same methodology
-   * version. When absent/empty, the movers bundle emits a
-   * `no_prior_snapshot` empty state rather than fabricating movement.
+   * version. If no slice is old enough, the server loader falls through to
+   * the most recent slice on or before the current snapshot date — including
+   * same-day slices from an earlier POST — so the bundle renders
+   * `insufficient_gap` with the real `priorSnapshotGapDays` (including
+   * 0-day gaps) instead of `no_prior_snapshot`. When absent/empty, the
+   * bundle still emits `no_prior_snapshot`.
    */
   priorSnapshotRows?: readonly RankingSnapshotRow[];
   /** Optional override for the movers minimum gap (tests). */

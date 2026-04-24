@@ -446,3 +446,205 @@ describe("fetchPriorSnapshotRowsForMovers (M19 too-recent slice surfacing)", () 
     expect(vi.mocked(db.select)).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("fetchPriorSnapshotRowsForMovers (M20 same-day slice surfacing)", () => {
+  beforeEach(() => {
+    vi.mocked(db.select).mockReset();
+  });
+
+  it("surfaces a same-day same-methodology slice as insufficient_gap with a 0-day gap", async () => {
+    // Snapshot keys are (date, methodology, emailHash). A same-day re-POST
+    // (or a late page load after an earlier POST today) persists rows whose
+    // `snapshotDate` equals the live-built `currentSnapshotDate`. Pre-M20
+    // the fallback used `lt(... < currentSnapshotDate)`, so these rows were
+    // missed and the page rendered `no_prior_snapshot` instead of
+    // `insufficient_gap` (0 days).
+    const currentSnapshotDate = "2026-04-24";
+    const sameDaySameMeth = {
+      snapshotDate: currentSnapshotDate,
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    };
+    const priorRows = [
+      persistedRow(1, { snapshotDate: currentSnapshotDate }),
+      persistedRow(2, { snapshotDate: currentSnapshotDate }),
+    ];
+    const selectResults: unknown[] = [
+      [], // old-enough same methodology — none
+      [], // old-enough any methodology — none
+      [sameDaySameMeth], // M20 fallback: `lte(... <= currentSnapshotDate)`
+      priorRows, // readRankingSnapshot loads the row content
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () =>
+        chainFor(selectResults.shift() ?? []) as unknown as ReturnType<
+          typeof db.select
+        >,
+    );
+
+    const fetched = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(fetched).toHaveLength(priorRows.length);
+    expect(fetched[0]?.snapshotDate).toBe(currentSnapshotDate);
+    expect(fetched[0]?.methodologyVersion).toBe(RANKING_METHODOLOGY_VERSION);
+
+    const movers = buildMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite: {
+        contract: "",
+        methods: [],
+        minPresentMethods: 2,
+        maxSingleSignalEffectiveWeight: 0.3,
+        dominanceCorrelationThreshold: 0.75,
+        entries: [],
+        topN: [],
+        effectiveSignalWeights: [],
+        leaveOneOut: [],
+        finalRankCorrelations: [],
+        dominanceWarnings: [],
+        dominanceBlocked: false,
+        limitations: [],
+      },
+      confidence: {
+        contract: "",
+        bootstrapIterations: 0,
+        ciCoverage: 0.8,
+        dominanceWidening: 1.5,
+        globalDominanceApplied: false,
+        entries: [],
+        tieGroups: [],
+        limitations: [],
+      },
+      eligibilityEntries: [],
+      priorRows: fetched,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(movers.status).toBe("insufficient_gap");
+    expect(movers.priorSnapshot?.snapshotDate).toBe(currentSnapshotDate);
+    expect(movers.priorSnapshotGapDays).toBe(0);
+    expect(movers.methodologyChanged).toBe(false);
+    expect(movers.risers).toHaveLength(0);
+    expect(movers.fallers).toHaveLength(0);
+  });
+
+  it("surfaces a same-day different-methodology slice as insufficient_gap with a 0-day gap", async () => {
+    const currentSnapshotDate = "2026-04-24";
+    const otherMethodology = "0.8.0-snapshots";
+    expect(otherMethodology).not.toBe(RANKING_METHODOLOGY_VERSION);
+    const sameDayOtherMeth = {
+      snapshotDate: currentSnapshotDate,
+      methodologyVersion: otherMethodology,
+    };
+    const priorRows = [
+      persistedRow(1, {
+        snapshotDate: currentSnapshotDate,
+        methodologyVersion: otherMethodology,
+      }),
+    ];
+    const selectResults: unknown[] = [
+      [],
+      [],
+      [sameDayOtherMeth],
+      priorRows,
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () =>
+        chainFor(selectResults.shift() ?? []) as unknown as ReturnType<
+          typeof db.select
+        >,
+    );
+
+    const fetched = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(fetched).toHaveLength(priorRows.length);
+    expect(fetched[0]?.methodologyVersion).toBe(otherMethodology);
+
+    const movers = buildMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      composite: {
+        contract: "",
+        methods: [],
+        minPresentMethods: 2,
+        maxSingleSignalEffectiveWeight: 0.3,
+        dominanceCorrelationThreshold: 0.75,
+        entries: [],
+        topN: [],
+        effectiveSignalWeights: [],
+        leaveOneOut: [],
+        finalRankCorrelations: [],
+        dominanceWarnings: [],
+        dominanceBlocked: false,
+        limitations: [],
+      },
+      confidence: {
+        contract: "",
+        bootstrapIterations: 0,
+        ciCoverage: 0.8,
+        dominanceWidening: 1.5,
+        globalDominanceApplied: false,
+        entries: [],
+        tieGroups: [],
+        limitations: [],
+      },
+      eligibilityEntries: [],
+      priorRows: fetched,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    // `insufficient_gap` takes precedence over `methodology_changed` because
+    // gap < minGap is evaluated before the methodology status switch, so the
+    // status stays `insufficient_gap` even though the methodology version
+    // differs. `methodologyChanged` boolean still reflects the mismatch so
+    // the page can surface the warning copy.
+    expect(movers.status).toBe("insufficient_gap");
+    expect(movers.priorSnapshot?.snapshotDate).toBe(currentSnapshotDate);
+    expect(movers.priorSnapshot?.methodologyVersion).toBe(otherMethodology);
+    expect(movers.priorSnapshotGapDays).toBe(0);
+    expect(movers.methodologyChanged).toBe(true);
+    expect(movers.risers).toHaveLength(0);
+    expect(movers.fallers).toHaveLength(0);
+  });
+
+  it("still returns the strictly-older too-recent slice when no same-day slice exists (regression against the M19 fallback)", async () => {
+    // Ensures the M20 `lte` fallback did not change the behaviour for the
+    // M19 case (earlier-date too-recent slice with no same-day rows).
+    const currentSnapshotDate = "2026-04-24";
+    const olderTooRecentSlice = {
+      snapshotDate: "2026-04-22",
+      methodologyVersion: RANKING_METHODOLOGY_VERSION,
+    };
+    const priorRows = [persistedRow(1, { snapshotDate: "2026-04-22" })];
+    const selectResults: unknown[] = [
+      [],
+      [],
+      [olderTooRecentSlice],
+      priorRows,
+    ];
+    vi.mocked(db.select).mockImplementation(
+      () =>
+        chainFor(selectResults.shift() ?? []) as unknown as ReturnType<
+          typeof db.select
+        >,
+    );
+
+    const rows = await fetchPriorSnapshotRowsForMovers({
+      currentSnapshotDate,
+      currentMethodologyVersion: RANKING_METHODOLOGY_VERSION,
+      minGapDays: RANKING_MOVERS_MIN_GAP_DAYS,
+    });
+
+    expect(rows).toHaveLength(priorRows.length);
+    expect(rows[0]?.snapshotDate).toBe("2026-04-22");
+    expect(vi.mocked(db.select)).toHaveBeenCalledTimes(4);
+  });
+});
