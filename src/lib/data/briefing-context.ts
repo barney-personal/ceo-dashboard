@@ -8,18 +8,28 @@ import { getMeetingsForRange } from "@/lib/data/meetings";
 import { getDirectReportCountByAnyEmail } from "@/lib/data/managers";
 import { getUserGoogleAccessToken } from "@/lib/auth/google-token.server";
 import type { Role } from "@/lib/auth/roles";
+import { loadRecentShipsForSquad } from "@/lib/data/briefing-ships";
+import { loadManagerFlags } from "@/lib/data/briefing-manager-flags";
 import {
   collectOkrsForPillar,
   firstNameOf,
   relevantSectionsFor,
   summarisePillarOkrs,
   summariseSquadOkrs,
+  type BriefingManagerFlagsBlock,
   type BriefingOkrBlock,
   type BriefingOkrEntry,
   type BriefingPerson,
+  type BriefingShipsBlock,
 } from "@/lib/data/briefing-helpers";
 
-export type { BriefingOkrBlock, BriefingOkrEntry, BriefingPerson };
+export type {
+  BriefingManagerFlagsBlock,
+  BriefingOkrBlock,
+  BriefingOkrEntry,
+  BriefingPerson,
+  BriefingShipsBlock,
+};
 
 export interface BriefingCompanyMetrics {
   ltvPaidCacRatio: number | null;
@@ -39,9 +49,29 @@ export interface BriefingContext {
   company: BriefingCompanyMetrics;
   pillarOkrs: BriefingOkrBlock;
   squadOkrs: BriefingOkrBlock;
+  /** Recent merged PRs from the reader's squad. Null when the reader has no
+   * squad or the reader's function doesn't ship code. */
+  squadShips: BriefingShipsBlock | null;
+  /** Worth-a-look flags for the reader's direct reports. Null when the reader
+   * isn't a manager or no engineering snapshot exists. */
+  managerFlags: BriefingManagerFlagsBlock | null;
   meetings: BriefingMeetings | null;
   relevantDashboardSections: string[];
   generatedAtIso: string;
+}
+
+/**
+ * Functions whose members would find "what shipped" meaningful. Product-adjacent
+ * non-engineers benefit from seeing their squad's output too, but raw PR titles
+ * are engineer-specific enough that we gate to engineering-leaning roles.
+ */
+function functionShipsPRs(fn: string): boolean {
+  const lower = fn.toLowerCase();
+  return (
+    lower.includes("engineering") ||
+    lower.includes("machine learning") ||
+    lower.includes("data")
+  );
 }
 
 /**
@@ -197,11 +227,49 @@ export async function getBriefingContext({
   };
 
   const personSquad = person?.squad ?? "";
+
+  const squadMembers =
+    person && personSquad
+      ? allEmployees.filter(
+          (p) => p.squad.toLowerCase() === personSquad.toLowerCase(),
+        )
+      : [];
+
+  const shouldLoadShips =
+    person !== null && squadMembers.length > 0 && functionShipsPRs(person.function);
+  const shouldLoadFlags = person !== null && directReportCount >= 2;
+
+  const [squadShips, managerFlags] = await Promise.all([
+    shouldLoadShips
+      ? tolerantLoad(
+          "loadRecentShipsForSquad",
+          () =>
+            loadRecentShipsForSquad({
+              squad: personSquad,
+              squadMembers,
+            }),
+          null,
+        )
+      : Promise.resolve(null),
+    shouldLoadFlags
+      ? tolerantLoad(
+          "loadManagerFlags",
+          () =>
+            loadManagerFlags({
+              managerEmail: person?.email ?? null,
+            }),
+          null,
+        )
+      : Promise.resolve(null),
+  ]);
+
   return {
     person,
     company,
     pillarOkrs: summarisePillarOkrs(pillarLevelOkrs, personSquad),
     squadOkrs: summariseSquadOkrs(pillarLevelOkrs, personSquad),
+    squadShips,
+    managerFlags,
     meetings,
     relevantDashboardSections: relevantSectionsFor(role, person),
     generatedAtIso: new Date().toISOString(),
