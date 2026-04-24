@@ -51,8 +51,16 @@ interface ModelTrendPanel {
 
 interface MonthlyModelMix {
   months: string[];
-  models: Array<{ modelName: string; category: string; totalCost: number }>;
-  rows: Array<{ monthStart: string; [modelName: string]: string | number }>;
+  /** `key` is a stable composite ("category::modelName") — reading
+   *  `row[model.key]` avoids silent merges when the same modelName appears
+   *  under multiple tool categories. */
+  models: Array<{
+    key: string;
+    modelName: string;
+    category: string;
+    totalCost: number;
+  }>;
+  rows: Array<{ monthStart: string; [key: string]: string | number }>;
 }
 
 interface LorenzPayload {
@@ -729,7 +737,7 @@ function MonthlyModelMixChart({
     return mix.rows.map((row) => {
       let total = 0;
       for (const m of mix.models) {
-        total += Number(row[m.modelName] ?? 0);
+        total += Number(row[m.key] ?? 0);
       }
       return total;
     });
@@ -806,22 +814,22 @@ function MonthlyModelMixChart({
                     }}
                   >
                     {mix.models.map((model, mi) => {
-                      const value = Number(row[model.modelName] ?? 0);
+                      const value = Number(row[model.key] ?? 0);
                       if (value <= 0) return null;
                       const pct = total > 0 ? (value / total) * 100 : 0;
                       const color =
-                        model.modelName === "Other"
+                        model.category === "other"
                           ? "#9ca3af"
                           : MODEL_PALETTE[mi % MODEL_PALETTE.length];
                       return (
                         <div
-                          key={model.modelName}
+                          key={model.key}
                           style={{
                             height: `${pct}%`,
                             backgroundColor: color,
                             opacity: 0.9,
                           }}
-                          title={`${model.modelName}: ${formatCurrency(value)} (${pct.toFixed(1)}%)`}
+                          title={`${model.modelName} (${model.category}): ${formatCurrency(value)} (${pct.toFixed(1)}%)`}
                         />
                       );
                     })}
@@ -845,12 +853,12 @@ function MonthlyModelMixChart({
 
       <ul className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 px-5 py-3 text-[11px]">
         {mix.models.map((m, i) => (
-          <li key={m.modelName} className="flex items-center gap-1.5">
+          <li key={m.key} className="flex items-center gap-1.5">
             <span
               className="inline-block h-2 w-2 rounded-sm"
               style={{
                 backgroundColor:
-                  m.modelName === "Other"
+                  m.category === "other"
                     ? "#9ca3af"
                     : MODEL_PALETTE[i % MODEL_PALETTE.length],
               }}

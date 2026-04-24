@@ -298,12 +298,30 @@ describe("AiUsageDashboard", () => {
         monthlyModelMix={{
           months: ["2026-03-01", "2026-04-01"],
           models: [
-            { modelName: "Claude Sonnet 4.6", category: "claude", totalCost: 8300 },
-            { modelName: "default", category: "cursor", totalCost: 4600 },
+            {
+              key: "claude::Claude Sonnet 4.6",
+              modelName: "Claude Sonnet 4.6",
+              category: "claude",
+              totalCost: 8300,
+            },
+            {
+              key: "cursor::default",
+              modelName: "default",
+              category: "cursor",
+              totalCost: 4600,
+            },
           ],
           rows: [
-            { monthStart: "2026-03-01", "Claude Sonnet 4.6": 3800, default: 1800 },
-            { monthStart: "2026-04-01", "Claude Sonnet 4.6": 4500, default: 2800 },
+            {
+              monthStart: "2026-03-01",
+              "claude::Claude Sonnet 4.6": 3800,
+              "cursor::default": 1800,
+            },
+            {
+              monthStart: "2026-04-01",
+              "claude::Claude Sonnet 4.6": 4500,
+              "cursor::default": 2800,
+            },
           ],
         }}
         people={PEOPLE}

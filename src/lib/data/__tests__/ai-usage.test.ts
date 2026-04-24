@@ -466,11 +466,12 @@ describe("buildMonthlyModelMix", () => {
 
     // Only one real (non-ALL MODELS) row in MoM Usage: Claude Sonnet 4.6 in April.
     expect(mix.models.map((m) => m.modelName)).toEqual(["Claude Sonnet 4.6"]);
+    expect(mix.models[0].key).toBe("claude::Claude Sonnet 4.6");
     expect(mix.months).toEqual(["2026-04-01"]);
     expect(mix.rows).toHaveLength(1);
     expect(mix.rows[0]).toEqual({
       monthStart: "2026-04-01",
-      "Claude Sonnet 4.6": 2000,
+      "claude::Claude Sonnet 4.6": 2000,
     });
   });
 
@@ -527,11 +528,71 @@ describe("buildMonthlyModelMix", () => {
       "Claude Sonnet 4.6",
       "Other",
     ]);
+    expect(mix.models.map((m) => m.key)).toEqual([
+      "claude::Claude Sonnet 4.6",
+      "other::other",
+    ]);
     expect(mix.rows[0]).toEqual({
       monthStart: "2026-04-01",
-      "Claude Sonnet 4.6": 5000,
+      "claude::Claude Sonnet 4.6": 5000,
       // 3000 (Opus) + 1000 (gpt-5)
-      Other: 4000,
+      "other::other": 4000,
+    });
+  });
+
+  it("keeps same-named models separate when they appear under multiple categories", async () => {
+    // Regression for the "Claude Sonnet 4.6 used via Claude AND Cursor"
+    // case that would previously collapse into one segment with arbitrary
+    // category attribution.
+    getReportDataMock.mockResolvedValueOnce([
+      ...makeReportData().filter((r) => r.queryName !== "MoM Usage"),
+      {
+        reportName: "AI Model Usage Dashboard",
+        section: "people",
+        category: "ai-usage",
+        queryName: "MoM Usage",
+        columns: [],
+        rows: [
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 1000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "cursor",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 20,
+            n_days: 20,
+            total_cost: 2500,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+        ],
+        rowCount: 2,
+        syncedAt: new Date("2026-04-22T06:00:00Z"),
+      },
+    ]);
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 9);
+
+    // Two distinct segments, not one merged segment.
+    expect(mix.models).toHaveLength(2);
+    const byCat = Object.fromEntries(
+      mix.models.map((m) => [m.category, m.totalCost]),
+    );
+    expect(byCat).toEqual({ claude: 1000, cursor: 2500 });
+
+    // Row carries both composite keys and preserves the category-level split.
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "claude::Claude Sonnet 4.6": 1000,
+      "cursor::Claude Sonnet 4.6": 2500,
     });
   });
 });

@@ -578,18 +578,35 @@ export function computeLorenzCurve(data: AiUsageData): {
   };
 }
 
+/**
+ * Build a stable composite key for a (category, modelName) pair. Prod data
+ * has model names that appear under multiple tool categories (e.g. Cursor's
+ * "auto" and Claude's native model sometimes share labels), so keying on
+ * modelName alone silently merges those segments and picks whichever row
+ * happened to be written last for the category attribution.
+ */
+function modelKey(category: string, modelName: string): string {
+  return `${category}::${modelName}`;
+}
+
 export function buildMonthlyModelMix(
   data: AiUsageData,
   topN = 9,
 ): {
   months: string[];
-  models: Array<{ modelName: string; category: string; totalCost: number }>;
-  rows: Array<{ monthStart: string; [modelName: string]: string | number }>;
+  models: Array<{
+    /** Stable composite (`category::modelName`) — use for row-cost lookups. */
+    key: string;
+    modelName: string;
+    category: string;
+    totalCost: number;
+  }>;
+  rows: Array<{ monthStart: string; [key: string]: string | number }>;
 } {
   const byMonthModel = new Map<string, Map<string, number>>();
   const totalByModel = new Map<
     string,
-    { cost: number; category: string }
+    { cost: number; category: string; modelName: string }
   >();
   const months = new Set<string>();
 
@@ -598,56 +615,59 @@ export function buildMonthlyModelMix(
       continue;
     }
     months.add(row.monthStart);
+    const key = modelKey(row.category, row.modelName);
+
     const perMonth =
       byMonthModel.get(row.monthStart) ?? new Map<string, number>();
-    perMonth.set(
-      row.modelName,
-      (perMonth.get(row.modelName) ?? 0) + row.totalCost,
-    );
+    perMonth.set(key, (perMonth.get(key) ?? 0) + row.totalCost);
     byMonthModel.set(row.monthStart, perMonth);
 
-    const existing = totalByModel.get(row.modelName);
-    totalByModel.set(row.modelName, {
+    const existing = totalByModel.get(key);
+    totalByModel.set(key, {
       cost: (existing?.cost ?? 0) + row.totalCost,
       category: row.category,
+      modelName: row.modelName,
     });
   }
 
   const sortedModels = [...totalByModel.entries()]
     .sort((a, b) => b[1].cost - a[1].cost)
-    .map(([modelName, { cost, category }]) => ({
+    .map(([key, { cost, category, modelName }]) => ({
+      key,
       modelName,
       category,
       totalCost: cost,
     }));
   const topModels = sortedModels.slice(0, topN);
-  const restNames = new Set(sortedModels.slice(topN).map((m) => m.modelName));
+  const restKeys = new Set(sortedModels.slice(topN).map((m) => m.key));
 
+  const OTHER_KEY = "other::other";
   const sortedMonths = [...months].sort();
   const rows = sortedMonths.map((monthStart) => {
-    const perMonth = byMonthModel.get(monthStart) ?? new Map();
-    const row: { monthStart: string; [modelName: string]: string | number } = {
+    const perMonth = byMonthModel.get(monthStart) ?? new Map<string, number>();
+    const row: { monthStart: string; [key: string]: string | number } = {
       monthStart,
     };
     for (const model of topModels) {
-      row[model.modelName] = perMonth.get(model.modelName) ?? 0;
+      row[model.key] = perMonth.get(model.key) ?? 0;
     }
     let otherCost = 0;
-    for (const name of restNames) {
-      otherCost += perMonth.get(name) ?? 0;
+    for (const k of restKeys) {
+      otherCost += perMonth.get(k) ?? 0;
     }
-    if (restNames.size > 0) {
-      row.Other = otherCost;
+    if (restKeys.size > 0) {
+      row[OTHER_KEY] = otherCost;
     }
     return row;
   });
 
   const models = [...topModels];
-  if (restNames.size > 0) {
+  if (restKeys.size > 0) {
     models.push({
+      key: OTHER_KEY,
       modelName: "Other",
       category: "other",
-      totalCost: [...sortedModels.slice(topN)].reduce(
+      totalCost: sortedModels.slice(topN).reduce(
         (s, m) => s + m.totalCost,
         0,
       ),
