@@ -79,12 +79,19 @@ export async function getUserGoogleAccessToken(
       }
     }
 
-    console.warn("[google-token] returning null for user", {
-      userId,
-      sawAnyToken,
-      sawAnyScoped,
-      probeErrors,
-    });
+    // Only warn when the null return is actionable: Clerk returned tokens
+    // that we couldn't use, or the probe itself errored. Users who simply
+    // haven't connected Google ("no tokens at all, no errors") are the
+    // boring case and don't need to spam logs on every overview load.
+    const hasProbeErrors = Object.keys(probeErrors).length > 0;
+    if (sawAnyToken || hasProbeErrors) {
+      console.warn("[google-token] returning null for user", {
+        userId,
+        sawAnyToken,
+        sawAnyScoped,
+        probeErrors,
+      });
+    }
     return null;
   } catch (err) {
     console.warn("[google-token] clerkClient() threw, returning null", {

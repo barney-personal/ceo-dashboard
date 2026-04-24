@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockGetUserOauthAccessToken } = vi.hoisted(() => ({
   mockGetUserOauthAccessToken: vi.fn(),
@@ -15,8 +15,18 @@ vi.mock("@clerk/nextjs/server", () => ({
 import { getUserGoogleAccessToken, GOOGLE_CALENDAR_READONLY_SCOPE } from "@/lib/auth/google-token.server";
 
 describe("getUserGoogleAccessToken", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.resetAllMocks();
+    // Silence structured diagnostic warns emitted on null returns so they
+    // don't clutter test output. Individual tests re-spy if they want to
+    // assert call shape.
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
   });
 
   it("uses the current Clerk google provider id", async () => {
@@ -106,27 +116,31 @@ describe("getUserGoogleAccessToken", () => {
     await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
   });
 
-  it("logs diagnostic context when returning null so prod failures are debuggable", async () => {
+  it("logs diagnostic context when a probe throws so prod failures are debuggable", async () => {
     mockGetUserOauthAccessToken
       .mockRejectedValueOnce(new Error("provider not found"))
       .mockResolvedValueOnce({ data: [] });
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
-      expect(warn).toHaveBeenCalledWith(
-        "[google-token] returning null for user",
-        expect.objectContaining({
-          userId: "user_123",
-          sawAnyToken: false,
-          sawAnyScoped: false,
-          probeErrors: expect.objectContaining({
-            google: "provider not found",
-          }),
+    await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[google-token] returning null for user",
+      expect.objectContaining({
+        userId: "user_123",
+        sawAnyToken: false,
+        sawAnyScoped: false,
+        probeErrors: expect.objectContaining({
+          google: "provider not found",
         }),
-      );
-    } finally {
-      warn.mockRestore();
-    }
+      }),
+    );
+  });
+
+  it("stays quiet when the user simply hasn't connected Google", async () => {
+    // Both providers return empty, no errors — this is the boring "no
+    // Google account" case and shouldn't spam logs on every overview load.
+    mockGetUserOauthAccessToken.mockResolvedValue({ data: [] });
+
+    await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
