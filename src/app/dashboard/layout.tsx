@@ -5,6 +5,7 @@ import { ImpersonationBanner } from "@/components/dashboard/impersonation-banner
 import { Bell } from "lucide-react";
 import { PageViewTracker } from "@/components/dashboard/page-view-tracker";
 import { EnpsTakeover } from "@/components/dashboard/enps-takeover";
+import { GOOGLE_CALENDAR_READONLY_SCOPE } from "@/lib/auth/google-token.server";
 
 export default async function DashboardLayout({
   children,
@@ -45,7 +46,13 @@ export default async function DashboardLayout({
               <Bell className="h-4 w-4" />
             </button>
             <div className="h-5 w-px bg-border" />
-            <UserButton />
+            <UserButton
+              userProfileProps={{
+                additionalOAuthScopes: {
+                  google: [GOOGLE_CALENDAR_READONLY_SCOPE],
+                },
+              }}
+            />
           </div>
         </header>
         <PageViewTracker />

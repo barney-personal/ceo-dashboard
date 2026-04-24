@@ -1,5 +1,42 @@
 import { clerkClient } from "@clerk/nextjs/server";
 
+export const GOOGLE_CALENDAR_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/calendar.readonly";
+
+const GOOGLE_OAUTH_PROVIDERS = ["google", "oauth_google"] as const;
+
+interface ClerkOauthAccessToken {
+  token?: string | null;
+  scopes?: string[] | null;
+  expiresAt?: number | null;
+}
+
+function hasCalendarScope(token: ClerkOauthAccessToken): boolean {
+  return Array.isArray(token.scopes)
+    ? token.scopes.includes(GOOGLE_CALENDAR_READONLY_SCOPE)
+    : false;
+}
+
+function pickBestGoogleToken(
+  tokens: ClerkOauthAccessToken[]
+): string | null {
+  const usableTokens = tokens.filter(
+    (token): token is ClerkOauthAccessToken & { token: string } =>
+      typeof token.token === "string" && token.token.length > 0
+  );
+  if (usableTokens.length === 0) return null;
+
+  const calendarScopedTokens = usableTokens
+    .filter(hasCalendarScope)
+    .sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0));
+  if (calendarScopedTokens[0]) return calendarScopedTokens[0].token;
+
+  const freshestToken = [...usableTokens].sort(
+    (a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0)
+  )[0];
+  return freshestToken?.token ?? null;
+}
+
 /**
  * Get a Google OAuth access token for a specific user via Clerk.
  * Returns the token string, or null if the user hasn't connected Google
@@ -12,15 +49,23 @@ export async function getUserGoogleAccessToken(
 ): Promise<string | null> {
   try {
     const client = await clerkClient();
-    const response = await client.users.getUserOauthAccessToken(
-      userId,
-      "oauth_google"
-    );
 
-    const token = response.data[0];
-    if (!token?.token) return null;
+    for (const provider of GOOGLE_OAUTH_PROVIDERS) {
+      try {
+        const response = await client.users.getUserOauthAccessToken(
+          userId,
+          provider
+        );
+        const token = pickBestGoogleToken(
+          response.data as ClerkOauthAccessToken[]
+        );
+        if (token) return token;
+      } catch {
+        continue;
+      }
+    }
 
-    return token.token;
+    return null;
   } catch {
     return null;
   }

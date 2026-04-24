@@ -15,6 +15,12 @@ export class CalendarAuthError extends Error {
   }
 }
 
+function isCalendarScopeError(message: string): boolean {
+  return /insufficientpermissions|insufficient authentication scopes|insufficient scopes/i.test(
+    message
+  );
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers
 // ---------------------------------------------------------------------------
@@ -78,9 +84,17 @@ async function gcalRequest<T>(
         signal: controller.signal,
       });
 
+      const responseText = res.ok ? "" : await res.text();
+
       if (res.status === 401) {
         throw new CalendarAuthError(
-          `Google Calendar token rejected (401): ${await res.text()}`
+          `Google Calendar token rejected (401): ${responseText}`
+        );
+      }
+
+      if (res.status === 403 && isCalendarScopeError(responseText)) {
+        throw new CalendarAuthError(
+          `Google Calendar scope rejected (403): ${responseText}`
         );
       }
 
@@ -96,7 +110,7 @@ async function gcalRequest<T>(
       }
 
       if (!res.ok) {
-        throw new Error(`Google Calendar API error ${res.status}: ${await res.text()}`);
+        throw new Error(`Google Calendar API error ${res.status}: ${responseText}`);
       }
 
       return (await res.json()) as T;
