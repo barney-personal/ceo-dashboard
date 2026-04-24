@@ -83,11 +83,11 @@ export default async function ImpactModelPage({
   let visibleModel = model;
   if (!canPickAnyManager && teamView) {
     const teamHashes = new Set(
-      teamView.entries.map((e) => e.engineer.email_hash),
+      teamView.entries.map((e) => e.engineer.email),
     );
     visibleModel = {
       ...model,
-      engineers: model.engineers.filter((e) => teamHashes.has(e.email_hash)),
+      engineers: model.engineers.filter((e) => teamHashes.has(e.email)),
     };
   }
 

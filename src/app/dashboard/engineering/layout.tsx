@@ -48,6 +48,10 @@ export default async function EngineeringLayout({
             role,
             permissionRoles["engineering.codeReview"],
           )}
+          showRanking={hasAccess(
+            role,
+            permissionRoles["engineering.ranking"],
+          )}
         />
       </Suspense>
 

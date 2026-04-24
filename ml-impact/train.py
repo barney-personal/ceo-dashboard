@@ -672,40 +672,17 @@ def main():
     OUT_PATH.write_text(json.dumps(output, indent=2))
     print(f"\nWrote {OUT_PATH} (full, gitignored)")
 
-    # Anonymised version for commit: strip names + emails, replace with stable
-    # pseudonyms derived from a sort-by-email-hash index. The UI stays fully
-    # functional — the waterfall picker + outlier table just show "Engineer NNN".
+    # Committed version: keeps plain lowercased emails so the server can
+    # join the model to the live headcount / ranking SSoT directly. The repo
+    # is private and every consumer page is leadership+-gated, so the JSON
+    # does not need to be anonymised.
     import copy
-    # email_hash is an HMAC-SHA256 with a secret key — not a plain SHA256 —
-    # so someone with only the committed JSON can't recover emails by hashing
-    # candidate strings from a company directory. The server re-hydrates real
-    # names at request time by recomputing the HMAC against current headcount.
-    hash_key = os.environ.get("IMPACT_MODEL_HASH_KEY")
-    if not hash_key:
-        raise SystemExit(
-            "IMPACT_MODEL_HASH_KEY must be set (Doppler: ceo-dashboard/dev or prd). "
-            "Without a shared secret, the hash is dictionary-reversible against known emails."
-        )
-    key_bytes = hash_key.encode()
-
-    def _hash(email: str) -> str:
-        return hmac.new(key_bytes, email.lower().encode(), hashlib.sha256).hexdigest()[:16]
-
     public = copy.deepcopy(output)
-    sorted_indices = sorted(
-        range(len(public["engineers"])),
-        key=lambda i: _hash(public["engineers"][i]["email"]),
-    )
-    rank_by_pos = {orig_i: rank + 1 for rank, orig_i in enumerate(sorted_indices)}
-    for i, e in enumerate(public["engineers"]):
-        rank = rank_by_pos[i]
-        email_hash = _hash(e["email"])
-        e["name"] = f"Engineer {rank:03d}"
-        e["email"] = f"anon-{rank:03d}"
-        e["email_hash"] = email_hash
+    for e in public["engineers"]:
+        e["email"] = (e.get("email") or "").lower()
     PUBLIC_OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     PUBLIC_OUT_PATH.write_text(json.dumps(public, indent=2))
-    print(f"Wrote {PUBLIC_OUT_PATH} (anonymised, committed)")
+    print(f"Wrote {PUBLIC_OUT_PATH} (committed)")
 
     print("\nTop 15 features by permutation importance:")
     for f in feats[:15]:

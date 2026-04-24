@@ -472,6 +472,18 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
+    // Locked: the page persists per-engineer scoring snapshots and is the
+    // CEO-only methodology artefact.
+    id: "engineering.ranking",
+    label: "Engineer Ranking",
+    description: "Methodology-first cohort-relative engineer ranking.",
+    href: "/dashboard/engineering/ranking",
+    groupLabel: "Team",
+    defaultRole: "ceo",
+    editable: false,
+    redirectTo: "/dashboard/engineering",
+  },
+  {
     id: "people.profile",
     label: "Person Profile",
     description: "Individual people profile drill-downs.",

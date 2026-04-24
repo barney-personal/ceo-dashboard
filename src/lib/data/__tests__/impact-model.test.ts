@@ -17,17 +17,14 @@ describe("getImpactModel (static snapshot loader)", () => {
     expect(model).toHaveProperty("categorical_effects");
   });
 
-  it("has a non-empty engineers array with no real names/emails", () => {
+  it("has a non-empty engineers array with plain lowercased emails", () => {
     expect(model.engineers.length).toBeGreaterThan(0);
     for (const e of model.engineers) {
-      // Catch accidental re-commit of real PII in the snapshot.
-      // (Real names get re-hydrated server-side at request time — see
-      //  src/lib/data/impact-model.server.ts.)
-      expect(e.name).toMatch(/^Engineer \d{3}$/);
-      expect(e.email).toMatch(/^anon-\d{3}$/);
-      expect(e.email).not.toContain("@");
-      // email_hash must exist so server-side hydration can join to headcount.
-      expect(e.email_hash).toMatch(/^[0-9a-f]{16}$/);
+      // Every engineer must carry a resolvable email so the server can join
+      // the model to the live headcount / ranking SSoT at request time.
+      expect(typeof e.email).toBe("string");
+      expect(e.email.length).toBeGreaterThan(0);
+      expect(e.email).toBe(e.email.toLowerCase());
     }
   });
 

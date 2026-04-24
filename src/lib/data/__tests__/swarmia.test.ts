@@ -98,6 +98,101 @@ describe("normalizeTeamName", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TEAM_ALIASES — Mode/HiBob squad labels that drift from Swarmia's. Every
+// entry is a regression risk: a typo silently routes one squad's delivery
+// metrics onto another squad's engineers on lens C. These tests lock each
+// documented drift pattern so a rename on either side surfaces in CI rather
+// than quietly distorting the ranking.
+// ---------------------------------------------------------------------------
+
+describe("normalizeTeamName TEAM_ALIASES", () => {
+  it("collapses Mode's 'Chat - *' prefix onto Swarmia's bare team names", () => {
+    expect(normalizeTeamName("Chat - Autopilot Adoption")).toBe(
+      "autopilot adoption",
+    );
+    expect(normalizeTeamName("Chat - Autopilot Retention")).toBe(
+      "autopilot retention",
+    );
+    expect(normalizeTeamName("Chat - Daily Plans")).toBe(
+      "autopilot daily plans",
+    );
+  });
+
+  it("resolves the known naming drifts between Mode and Swarmia", () => {
+    expect(normalizeTeamName("Chat Evaluations")).toBe("chat evals");
+    expect(normalizeTeamName("Transaction Enrichment Insights")).toBe(
+      "tx enrichment",
+    );
+    expect(normalizeTeamName("Identity & Access")).toBe("access and identity");
+    expect(normalizeTeamName("Pricing, Packaging, Conversion (PPC)")).toBe(
+      "pricing and packaging",
+    );
+    expect(normalizeTeamName("Platform (Backend & MLOps)")).toBe(
+      "platform backend",
+    );
+    expect(normalizeTeamName("User Financial Insights")).toBe("moneyiq");
+  });
+
+  it("collapses pillar-leadership umbrella labels onto their pillar team", () => {
+    expect(normalizeTeamName("New Bets Shared Resources")).toBe(
+      "new bets pillar",
+    );
+    expect(normalizeTeamName("New Bets Build")).toBe("new bets pillar");
+    expect(normalizeTeamName("New Bets Pillar Leads & Shared Resources")).toBe(
+      "new bets pillar",
+    );
+    expect(normalizeTeamName("Chat Pillar Leads")).toBe(
+      "chat pillar delivery",
+    );
+    expect(normalizeTeamName("Growth Pillar Leads")).toBe("growth pillar");
+    // "Growth Pillar Shared Team" → " team" stripped first, then aliased.
+    expect(normalizeTeamName("Growth Pillar Shared Team")).toBe(
+      "growth pillar",
+    );
+    expect(normalizeTeamName("EWA & Credit Product Pillar Leads")).toBe(
+      "ewa & credit products pillar",
+    );
+  });
+
+  it("collapses Payments variants onto the single Swarmia team", () => {
+    expect(normalizeTeamName("Payments Expansion")).toBe(
+      "payments infrastructure",
+    );
+  });
+
+  it("applies aliases case-insensitively", () => {
+    expect(normalizeTeamName("CHAT EVALUATIONS")).toBe("chat evals");
+    expect(normalizeTeamName("new bets shared resources")).toBe(
+      "new bets pillar",
+    );
+  });
+
+  it("is idempotent on alias targets — a terminal Swarmia name returns itself", () => {
+    // Regression guard: if an alias value itself got caught by a different
+    // alias, the lookup would loop. Verify each target is a terminal form.
+    expect(normalizeTeamName("autopilot adoption")).toBe("autopilot adoption");
+    expect(normalizeTeamName("chat evals")).toBe("chat evals");
+    expect(normalizeTeamName("new bets pillar")).toBe("new bets pillar");
+    expect(normalizeTeamName("growth pillar")).toBe("growth pillar");
+    expect(normalizeTeamName("payments infrastructure")).toBe(
+      "payments infrastructure",
+    );
+  });
+
+  it("leaves unknown labels alone after suffix stripping (no mysterious rewrites)", () => {
+    // Regression guard — a future alias with a too-broad key could eat
+    // unrelated squads. Pin a few that must keep their literal form.
+    expect(normalizeTeamName("Discovery")).toBe("discovery");
+    expect(normalizeTeamName("Frontend Platform")).toBe("frontend platform");
+    expect(normalizeTeamName("Growth Onboarding")).toBe("growth onboarding");
+    expect(normalizeTeamName("BNPL")).toBe("bnpl");
+    expect(normalizeTeamName("Geo Expansion Squad")).toBe("geo expansion");
+    expect(normalizeTeamName("Card Squad")).toBe("card");
+    expect(normalizeTeamName("EWA Core Squad")).toBe("ewa core");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // periodDaysToSwarmiaTimeframe — picker values don't all map 1:1.
 // ---------------------------------------------------------------------------
 

@@ -118,7 +118,7 @@ export function TeamView({
 
       <div className="space-y-3">
         {team.entries.map((entry) => {
-          const id = entry.engineer.email_hash;
+          const id = entry.engineer.email;
           const isOpen = expanded.has(id);
           return (
             <CoachingRow
