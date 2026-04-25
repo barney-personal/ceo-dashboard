@@ -89,7 +89,7 @@ export interface AnalyseRunOptions {
 }
 
 const DEFAULT_ANALYSIS_CONCURRENCY = 1;
-const MAX_ANALYSIS_CONCURRENCY = 8;
+const MAX_ANALYSIS_CONCURRENCY = 64;
 
 function getAnalysisConcurrency(override?: number): number {
   const raw = override ?? Number(process.env.CODE_REVIEW_ANALYSIS_CONCURRENCY ?? "");

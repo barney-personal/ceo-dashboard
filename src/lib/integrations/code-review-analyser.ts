@@ -28,6 +28,7 @@ const LLM_MAX_ATTEMPTS = 3;
 const OPENAI_DEFAULT_MODEL = "gpt-5.4";
 const OPENAI_DEFAULT_MAX_OUTPUT_TOKENS = 8000;
 const DEFAULT_PROVIDER_CONCURRENCY = 2;
+const MAX_PROVIDER_CONCURRENCY = 64;
 
 type ProviderKey = "anthropic" | "openai";
 
@@ -78,7 +79,7 @@ function getProviderConcurrency(provider: ProviderKey): number {
       : "CODE_REVIEW_OPENAI_CONCURRENCY";
   const parsed = Number(process.env[envName] ?? "");
   if (!Number.isFinite(parsed)) return DEFAULT_PROVIDER_CONCURRENCY;
-  return Math.max(1, Math.min(16, Math.trunc(parsed)));
+  return Math.max(1, Math.min(MAX_PROVIDER_CONCURRENCY, Math.trunc(parsed)));
 }
 
 function withProviderSlot<T>(
