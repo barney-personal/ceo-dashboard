@@ -38,35 +38,60 @@ interface EngineeringBRootProps {
    * is always true in production.
    */
   isCeoPreview?: boolean;
+  /**
+   * Email of the user the CEO is currently impersonating, if any. When set:
+   *   - The engineer persona looks up THIS email's composite row instead of
+   *     the CEO's own, and skips the CEO-preview layout fallback so the
+   *     rendering is the truthful engineer view for the impersonated user.
+   *   - The manager persona's directs-scope falls back to this email when no
+   *     explicit `managerEmail` was supplied.
+   */
+  impersonatedEmail?: string | null;
 }
 
 export function EngineeringBRoot({
   effectiveRole,
   managerEmail,
   isCeoPreview = false,
+  impersonatedEmail = null,
 }: EngineeringBRootProps) {
   const persona = resolvePersona(effectiveRole);
 
   if (persona === "manager") {
     const scope = resolveManagerScope(effectiveRole);
+    // Under impersonation the impersonated user's email becomes the manager
+    // identity for directs-scope; for org-scope ManagerView ignores the email
+    // anyway, so this is harmless in the CEO-impersonating-leadership case.
+    const resolvedManagerEmail =
+      managerEmail ?? impersonatedEmail ?? null;
     return (
       <div
         data-testid="engineering-b-root"
         data-persona="manager"
         data-scope={scope}
+        data-impersonated={impersonatedEmail ? "true" : undefined}
       >
-        <ManagerView scope={scope} managerEmail={managerEmail ?? null} />
+        <ManagerView scope={scope} managerEmail={resolvedManagerEmail} />
       </div>
     );
   }
+
+  // CEO preview banner only when the CEO is viewing their OWN identity. Under
+  // impersonation we want the truthful engineer view for the impersonated
+  // user — the orange "Viewing as X" banner already surfaces the context.
+  const showCeoPreview = isCeoPreview && !impersonatedEmail;
 
   return (
     <div
       data-testid="engineering-b-root"
       data-persona="engineer"
-      data-ceo-preview={isCeoPreview ? "true" : undefined}
+      data-ceo-preview={showCeoPreview ? "true" : undefined}
+      data-impersonated={impersonatedEmail ? "true" : undefined}
     >
-      <EngineerView isCeoPreview={isCeoPreview} />
+      <EngineerView
+        viewerEmail={impersonatedEmail ?? undefined}
+        isCeoPreview={showCeoPreview}
+      />
     </div>
   );
 }

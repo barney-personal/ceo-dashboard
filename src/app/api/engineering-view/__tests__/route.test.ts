@@ -41,6 +41,7 @@ describe("GET /api/engineering-view", () => {
       actualCeo: true,
       toggleOn: true,
       effectiveRole: "ceo",
+      impersonatedEmail: null,
     });
     const res = await GET();
     expect(res.status).toBe(200);
@@ -58,6 +59,7 @@ describe("GET /api/engineering-view", () => {
       actualCeo: false,
       toggleOn: false,
       effectiveRole: "everyone",
+      impersonatedEmail: null,
     });
     const res = await GET();
     const body = await res.json();
@@ -108,6 +110,7 @@ describe("POST /api/engineering-view", () => {
       actualCeo: true,
       toggleOn: true,
       effectiveRole: "ceo",
+      impersonatedEmail: null,
     });
 
     const res = await POST(makePost({ engineeringViewB: true }));
@@ -129,6 +132,7 @@ describe("POST /api/engineering-view", () => {
       actualCeo: true,
       toggleOn: false,
       effectiveRole: "ceo",
+      impersonatedEmail: null,
     });
 
     const res = await POST(makePost({ engineeringViewB: false }));

@@ -122,7 +122,11 @@ describe("B-side leakage audit (M13) — resolver", () => {
     role: string;
     engineeringViewB?: boolean;
   }) {
-    vi.mocked(getCurrentUserWithTimeout).mockResolvedValueOnce({
+    // Sticky for the duration of the test — getEngineeringViewResolution()
+    // can call getCurrentUserWithTimeout() more than once (the resolver itself
+    // plus getImpersonation() under the hood), and mockResolvedValueOnce
+    // would leak undefined into the second call.
+    vi.mocked(getCurrentUserWithTimeout).mockResolvedValue({
       status: "authenticated",
       user: {
         id: "user_test",
@@ -132,7 +136,7 @@ describe("B-side leakage audit (M13) — resolver", () => {
   }
 
   it("anonymous → a-side", async () => {
-    vi.mocked(getCurrentUserWithTimeout).mockResolvedValueOnce({
+    vi.mocked(getCurrentUserWithTimeout).mockResolvedValue({
       status: "unauthenticated",
     } as unknown as Awaited<ReturnType<typeof getCurrentUserWithTimeout>>);
     const r = await getEngineeringViewResolution();

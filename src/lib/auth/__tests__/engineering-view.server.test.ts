@@ -42,6 +42,32 @@ function withCookies(values: Record<string, string | undefined>) {
   >);
 }
 
+/**
+ * Wire up clerkClient.users.getUser to return a profile that
+ * `getImpersonation` and `getCurrentUserRole` will resolve from. Used by the
+ * impersonation tests, which need a live Clerk lookup of the impersonated
+ * user's role + primary email. Each call returns the supplied profile.
+ */
+function withImpersonatedClerkUser(profile: {
+  role: "everyone" | "manager" | "engineering_manager" | "leadership" | "ceo";
+  email: string;
+  firstName?: string;
+  lastName?: string;
+}) {
+  const getUser = vi.fn().mockResolvedValue({
+    publicMetadata: { role: profile.role },
+    primaryEmailAddress: { emailAddress: profile.email },
+    emailAddresses: [{ emailAddress: profile.email }],
+    firstName: profile.firstName ?? "Test",
+    lastName: profile.lastName ?? "User",
+    imageUrl: null,
+  });
+  mockClerkClient.mockResolvedValue({
+    users: { getUser },
+  } as unknown as Awaited<ReturnType<typeof clerkClient>>);
+  return getUser;
+}
+
 describe("getEngineeringViewResolution", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -60,6 +86,7 @@ describe("getEngineeringViewResolution", () => {
       actualCeo: false,
       toggleOn: false,
       effectiveRole: "everyone",
+      impersonatedEmail: null,
     });
   });
 
@@ -70,6 +97,7 @@ describe("getEngineeringViewResolution", () => {
     expect(result.actualCeo).toBe(true);
     expect(result.toggleOn).toBe(false);
     expect(result.effectiveRole).toBe("ceo");
+    expect(result.impersonatedEmail).toBeNull();
   });
 
   it("returns b-side for CEO with toggle ON and no preview", async () => {
@@ -81,6 +109,7 @@ describe("getEngineeringViewResolution", () => {
     expect(result.actualCeo).toBe(true);
     expect(result.toggleOn).toBe(true);
     expect(result.effectiveRole).toBe("ceo");
+    expect(result.impersonatedEmail).toBeNull();
   });
 
   it("returns a-side for CEO with toggle OFF explicitly", async () => {
@@ -133,6 +162,7 @@ describe("getEngineeringViewResolution", () => {
     expect(result.actualCeo).toBe(true);
     expect(result.toggleOn).toBe(true);
     expect(result.effectiveRole).toBe("everyone");
+    expect(result.impersonatedEmail).toBeNull();
   });
 
   it("keeps b-side when CEO role-previews as manager with toggle ON (engineer persona downstream)", async () => {
@@ -165,18 +195,79 @@ describe("getEngineeringViewResolution", () => {
     expect(result.effectiveRole).toBe("ceo");
   });
 
-  it("returns a-side when CEO is impersonating another user even with toggle ON", async () => {
+  it("keeps b-side when CEO impersonates an engineer with toggle ON, surfacing the impersonated email", async () => {
     withCookies({
       impersonate: encodeURIComponent(
-        JSON.stringify({ userId: "user_x", name: "X", role: "manager" }),
+        JSON.stringify({
+          userId: "user_arti",
+          name: "Arti Mathanda",
+          role: "everyone",
+        }),
       ),
+    });
+    withImpersonatedClerkUser({
+      role: "everyone",
+      email: "arti@meetcleo.com",
+      firstName: "Arti",
+      lastName: "Mathanda",
     });
     mockCurrentUser.mockResolvedValue(
       asCurrentUser({ role: "ceo", engineeringViewB: true }),
     );
     const result = await getEngineeringViewResolution();
-    expect(result.surface).toBe("a-side");
+    expect(result.surface).toBe("b-side");
     expect(result.actualCeo).toBe(true);
+    expect(result.toggleOn).toBe(true);
+    // The impersonated user's role drives the persona resolution downstream.
+    expect(result.effectiveRole).toBe("everyone");
+    // And the engineer view picks up the impersonated user's identity.
+    expect(result.impersonatedEmail).toBe("arti@meetcleo.com");
+  });
+
+  it("keeps b-side when CEO impersonates a leadership user (manager persona downstream)", async () => {
+    withCookies({
+      impersonate: encodeURIComponent(
+        JSON.stringify({
+          userId: "user_lead",
+          name: "Lead",
+          role: "leadership",
+        }),
+      ),
+    });
+    withImpersonatedClerkUser({
+      role: "leadership",
+      email: "lead@meetcleo.com",
+    });
+    mockCurrentUser.mockResolvedValue(
+      asCurrentUser({ role: "ceo", engineeringViewB: true }),
+    );
+    const result = await getEngineeringViewResolution();
+    expect(result.surface).toBe("b-side");
+    expect(result.effectiveRole).toBe("leadership");
+    expect(result.impersonatedEmail).toBe("lead@meetcleo.com");
+  });
+
+  it("impersonation takes precedence over a stale role-preview cookie", async () => {
+    withCookies({
+      "role-preview": "manager",
+      impersonate: encodeURIComponent(
+        JSON.stringify({
+          userId: "user_arti",
+          name: "Arti",
+          role: "everyone",
+        }),
+      ),
+    });
+    withImpersonatedClerkUser({
+      role: "everyone",
+      email: "arti@meetcleo.com",
+    });
+    mockCurrentUser.mockResolvedValue(
+      asCurrentUser({ role: "ceo", engineeringViewB: true }),
+    );
+    const result = await getEngineeringViewResolution();
+    expect(result.effectiveRole).toBe("everyone");
+    expect(result.impersonatedEmail).toBe("arti@meetcleo.com");
   });
 
   it("ignores engineeringViewB when the actual user is not CEO (manager auto-promotion scenario)", async () => {

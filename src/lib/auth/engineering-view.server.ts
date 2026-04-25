@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { clerkClient } from "@clerk/nextjs/server";
 import { getCurrentUserWithTimeout } from "./current-user.server";
 import { getUserRole, type Role } from "./roles";
-import { ROLE_PREVIEW_COOKIE, IMPERSONATE_COOKIE } from "./roles.server";
+import { ROLE_PREVIEW_COOKIE, getImpersonation } from "./roles.server";
 
 export type EngineeringSurface = "a-side" | "b-side";
 
@@ -16,6 +16,13 @@ export interface EngineeringViewResolution {
   toggleOn: boolean;
   /** Effective display role after role preview/impersonation are applied. */
   effectiveRole: Role;
+  /**
+   * Email of the impersonated user when the CEO is impersonating; null
+   * otherwise. The B-side engineer persona uses this email to look up the
+   * impersonated user's composite row instead of the CEO's own row, so
+   * "viewing as Arti" actually renders Arti's data on B-side.
+   */
+  impersonatedEmail: string | null;
 }
 
 const ANON_RESOLUTION: EngineeringViewResolution = {
@@ -23,6 +30,7 @@ const ANON_RESOLUTION: EngineeringViewResolution = {
   actualCeo: false,
   toggleOn: false,
   effectiveRole: "everyone",
+  impersonatedEmail: null,
 };
 
 function readBoolean(value: unknown): boolean {
@@ -35,14 +43,17 @@ function readBoolean(value: unknown): boolean {
  * The surface returns "b-side" ONLY when every condition holds:
  *   1. The real Clerk user has publicMetadata.role === "ceo".
  *   2. publicMetadata.engineeringViewB === true on that user.
- *   3. No impersonation cookie is active (impersonation routes the CEO into
- *      another user's view — that view is always A-side for now).
  *
- * The role-preview cookie does NOT route the CEO back to A-side any more —
- * instead it switches the B-side persona (manager when effectiveRole stays
- * `ceo` or `leadership`, engineer otherwise). This keeps the engineer-view
- * code path testable by the real CEO without compromising leakage: only
- * `actualCeo === true` users ever reach B-side.
+ * Neither role-preview nor impersonation routes the CEO back to A-side.
+ * Instead they switch the B-side persona by changing `effectiveRole`:
+ *   - role-preview cookie → effectiveRole becomes the previewed role.
+ *   - impersonation cookie → effectiveRole becomes the impersonated user's
+ *     real role (resolved live from Clerk), and `impersonatedEmail` carries
+ *     that user's primary email so the engineer persona can render their
+ *     actual composite row instead of falling back to the CEO-preview banner.
+ *
+ * Impersonation takes precedence over role-preview, mirroring
+ * `getCurrentUserRole`.
  *
  * Non-CEOs always resolve to A-side, even if their publicMetadata has been
  * hand-edited to set engineeringViewB true. Manager auto-promotion and the
@@ -61,41 +72,42 @@ export async function getEngineeringViewResolution(): Promise<EngineeringViewRes
   const toggleOn = actualCeo && readBoolean(metadata.engineeringViewB);
 
   let effectiveRole: Role = actualRole;
+  let impersonatedEmail: string | null = null;
 
   if (actualCeo) {
-    try {
-      const cookieStore = await cookies();
-      const impersonate = cookieStore.get(IMPERSONATE_COOKIE)?.value;
-      if (impersonate) {
-        return {
-          surface: "a-side",
-          actualCeo: true,
-          toggleOn,
-          effectiveRole,
-        };
+    // Impersonation takes precedence over role preview, mirroring
+    // getCurrentUserRole. We resolve the impersonated user's real role and
+    // primary email live from Clerk via getImpersonation(), so the cookie
+    // payload itself is never trusted.
+    const impersonation = await getImpersonation();
+    if (impersonation) {
+      effectiveRole = impersonation.role;
+      impersonatedEmail = impersonation.email;
+    } else {
+      try {
+        const cookieStore = await cookies();
+        const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as
+          | Role
+          | undefined;
+        if (
+          preview === "everyone" ||
+          preview === "manager" ||
+          preview === "engineering_manager" ||
+          preview === "leadership"
+        ) {
+          effectiveRole = preview;
+        }
+      } catch {
+        // cookies() unavailable (outside a request scope, e.g. some tests).
+        // Fall through with the default effectiveRole.
       }
-
-      const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as
-        | Role
-        | undefined;
-      if (
-        preview === "everyone" ||
-        preview === "manager" ||
-        preview === "engineering_manager" ||
-        preview === "leadership"
-      ) {
-        effectiveRole = preview;
-      }
-    } catch {
-      // cookies() unavailable (outside a request scope, e.g. some tests).
-      // Fall through with the default effectiveRole.
     }
   }
 
   const surface: EngineeringSurface =
     actualCeo && toggleOn ? "b-side" : "a-side";
 
-  return { surface, actualCeo, toggleOn, effectiveRole };
+  return { surface, actualCeo, toggleOn, effectiveRole, impersonatedEmail };
 }
 
 /** Convenience helper for route handlers and layouts. */
