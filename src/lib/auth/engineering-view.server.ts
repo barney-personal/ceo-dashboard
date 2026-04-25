@@ -1,0 +1,151 @@
+import { cookies } from "next/headers";
+import { clerkClient } from "@clerk/nextjs/server";
+import { getCurrentUserWithTimeout } from "./current-user.server";
+import { getUserRole, type Role } from "./roles";
+import { ROLE_PREVIEW_COOKIE, getImpersonation } from "./roles.server";
+
+export type EngineeringSurface = "a-side" | "b-side";
+
+export interface EngineeringViewResolution {
+  /** Which surface the current request should render. */
+  surface: EngineeringSurface;
+  /** True iff the real Clerk session user is CEO — not derived from preview,
+   * impersonation, manager auto-promotion, or role overrides. */
+  actualCeo: boolean;
+  /** Raw publicMetadata.engineeringViewB value on the actual CEO user. */
+  toggleOn: boolean;
+  /** Effective display role after role preview/impersonation are applied. */
+  effectiveRole: Role;
+  /**
+   * Email of the impersonated user when the CEO is impersonating; null
+   * otherwise. The B-side engineer persona uses this email to look up the
+   * impersonated user's composite row instead of the CEO's own row, so
+   * "viewing as Arti" actually renders Arti's data on B-side.
+   */
+  impersonatedEmail: string | null;
+}
+
+const ANON_RESOLUTION: EngineeringViewResolution = {
+  surface: "a-side",
+  actualCeo: false,
+  toggleOn: false,
+  effectiveRole: "everyone",
+  impersonatedEmail: null,
+};
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+/**
+ * Resolve which engineering surface the caller should see.
+ *
+ * The surface returns "b-side" ONLY when every condition holds:
+ *   1. The real Clerk user has publicMetadata.role === "ceo".
+ *   2. publicMetadata.engineeringViewB === true on that user.
+ *
+ * Neither role-preview nor impersonation routes the CEO back to A-side.
+ * Instead they switch the B-side persona by changing `effectiveRole`:
+ *   - role-preview cookie → effectiveRole becomes the previewed role.
+ *   - impersonation cookie → effectiveRole becomes the impersonated user's
+ *     real role (resolved live from Clerk), and `impersonatedEmail` carries
+ *     that user's primary email so the engineer persona can render their
+ *     actual composite row instead of falling back to the CEO-preview banner.
+ *
+ * Impersonation takes precedence over role-preview, mirroring
+ * `getCurrentUserRole`.
+ *
+ * Non-CEOs always resolve to A-side, even if their publicMetadata has been
+ * hand-edited to set engineeringViewB true. Manager auto-promotion and the
+ * `manager` role are non-CEO and therefore cannot reach B-side.
+ */
+export async function getEngineeringViewResolution(): Promise<EngineeringViewResolution> {
+  const result = await getCurrentUserWithTimeout();
+  if (result.status !== "authenticated") {
+    return ANON_RESOLUTION;
+  }
+
+  const metadata =
+    (result.user.publicMetadata as Record<string, unknown>) ?? {};
+  const actualRole = getUserRole(metadata);
+  const actualCeo = actualRole === "ceo";
+  const toggleOn = actualCeo && readBoolean(metadata.engineeringViewB);
+
+  let effectiveRole: Role = actualRole;
+  let impersonatedEmail: string | null = null;
+
+  if (actualCeo) {
+    // Impersonation takes precedence over role preview, mirroring
+    // getCurrentUserRole. We resolve the impersonated user's real role and
+    // primary email live from Clerk via getImpersonation(), so the cookie
+    // payload itself is never trusted.
+    const impersonation = await getImpersonation();
+    if (impersonation) {
+      effectiveRole = impersonation.role;
+      impersonatedEmail = impersonation.email;
+    } else {
+      try {
+        const cookieStore = await cookies();
+        const preview = cookieStore.get(ROLE_PREVIEW_COOKIE)?.value as
+          | Role
+          | undefined;
+        if (
+          preview === "everyone" ||
+          preview === "manager" ||
+          preview === "engineering_manager" ||
+          preview === "leadership"
+        ) {
+          effectiveRole = preview;
+        }
+      } catch {
+        // cookies() unavailable (outside a request scope, e.g. some tests).
+        // Fall through with the default effectiveRole.
+      }
+    }
+  }
+
+  const surface: EngineeringSurface =
+    actualCeo && toggleOn ? "b-side" : "a-side";
+
+  return { surface, actualCeo, toggleOn, effectiveRole, impersonatedEmail };
+}
+
+/** Convenience helper for route handlers and layouts. */
+export async function isEngineeringViewB(): Promise<boolean> {
+  const { surface } = await getEngineeringViewResolution();
+  return surface === "b-side";
+}
+
+export class EngineeringViewMutationError extends Error {
+  constructor(
+    message: string,
+    readonly status: 401 | 403,
+  ) {
+    super(message);
+    this.name = "EngineeringViewMutationError";
+  }
+}
+
+/**
+ * Persist the engineeringViewB toggle on the real CEO user's publicMetadata.
+ * Throws EngineeringViewMutationError for unauthenticated or non-CEO callers.
+ * Role preview and impersonation MUST NOT grant mutation rights — this helper
+ * reads the real session user from Clerk, not the effective role.
+ */
+export async function setEngineeringViewB(value: boolean): Promise<void> {
+  const result = await getCurrentUserWithTimeout();
+  if (result.status !== "authenticated") {
+    throw new EngineeringViewMutationError("Unauthorized", 401);
+  }
+
+  const metadata =
+    (result.user.publicMetadata as Record<string, unknown>) ?? {};
+  if (getUserRole(metadata) !== "ceo") {
+    throw new EngineeringViewMutationError("Forbidden", 403);
+  }
+
+  const client = await clerkClient();
+  await client.users.updateUser(result.user.id, {
+    publicMetadata: { ...metadata, engineeringViewB: !!value },
+  });
+}
