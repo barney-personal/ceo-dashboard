@@ -15,12 +15,13 @@
  * an unsealable gaming vector.
  *
  * Five signals, weights sum to 1.0, no single weight exceeds 30%
- * (velocity-leaning regime — velocity 55 / quality 35 / process 10):
+ * (velocity-leaning regime — velocity 60 / quality 30 / process 10):
  *
  *  - delivery (30%)          winsorized log(1 + prs), cohort-P90 cap
  *                            — sits at the single-signal cap
- *  - cycleTime (25%)         inverse of winsorized median time-to-merge
- *  - quality (20%)           rubric mean (execution/tests/risk/review),
+ *  - cycleTime (30%)         inverse of winsorized median time-to-merge
+ *                            — sits at the single-signal cap
+ *  - quality (15%)           rubric mean (execution/tests/risk/review),
  *                            difficulty-weighted, min 3 analysed PRs
  *  - reliability (15%)       1 - revertRate from rubric rows
  *  - reviewDiscipline (10%)  fraction of PRs with ≥1 review round
@@ -112,21 +113,24 @@ export const COMPOSITE_SIGNAL_KEYS = [
 
 /**
  * Velocity-leaning composite weights. Buckets:
- *   • Velocity:  delivery 30 + cycleTime 25 = 55%
- *   • Quality:   quality 20 + reliability 15 = 35%
+ *   • Velocity:  delivery 30 + cycleTime 30 = 60%
+ *   • Quality:   quality 15 + reliability 15 = 30%
  *   • Process:   reviewDiscipline 10 = 10%
  *
- * Delivery sits at COMPOSITE_MAX_SINGLE_WEIGHT (the anti-gaming cap) so
- * volume cannot dominate beyond 30% even after redistribution. The cap
- * remains the structural protection against any single signal becoming a
- * proxy for the rank.
+ * Both velocity signals (delivery and cycleTime) sit at
+ * COMPOSITE_MAX_SINGLE_WEIGHT — the anti-gaming cap — so neither volume nor
+ * speed alone can dominate beyond 30% of the rank. The cap is unchanged from
+ * the previous regime; this rebalance moves 5pt out of quality and into
+ * cycleTime to lift "ships fast" engineers whose rubric scores were
+ * disproportionately dragging them down. Anti-dominance protection is
+ * preserved by keeping the cap intact.
  */
 export const COMPOSITE_WEIGHTS: Record<CompositeSignalKey, number> = {
   delivery: 0.3,
-  quality: 0.2,
+  quality: 0.15,
   reliability: 0.15,
   reviewDiscipline: 0.1,
-  cycleTime: 0.25,
+  cycleTime: 0.3,
 };
 
 export const COMPOSITE_MAX_SINGLE_WEIGHT = 0.3 as const;
