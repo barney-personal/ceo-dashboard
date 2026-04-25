@@ -123,35 +123,35 @@ describe("getEngineeringViewResolution", () => {
     expect(result.actualCeo).toBe(false);
   });
 
-  it("returns a-side when CEO role-previews as everyone even with toggle ON", async () => {
+  it("keeps b-side when CEO role-previews as everyone with toggle ON (engineer persona downstream)", async () => {
     withCookies({ "role-preview": "everyone" });
     mockCurrentUser.mockResolvedValue(
       asCurrentUser({ role: "ceo", engineeringViewB: true }),
     );
     const result = await getEngineeringViewResolution();
-    expect(result.surface).toBe("a-side");
+    expect(result.surface).toBe("b-side");
     expect(result.actualCeo).toBe(true);
     expect(result.toggleOn).toBe(true);
     expect(result.effectiveRole).toBe("everyone");
   });
 
-  it("returns a-side when CEO role-previews as manager even with toggle ON", async () => {
+  it("keeps b-side when CEO role-previews as manager with toggle ON (engineer persona downstream)", async () => {
     withCookies({ "role-preview": "manager" });
     mockCurrentUser.mockResolvedValue(
       asCurrentUser({ role: "ceo", engineeringViewB: true }),
     );
     const result = await getEngineeringViewResolution();
-    expect(result.surface).toBe("a-side");
+    expect(result.surface).toBe("b-side");
     expect(result.effectiveRole).toBe("manager");
   });
 
-  it("returns a-side when CEO role-previews as leadership with toggle ON", async () => {
+  it("keeps b-side when CEO role-previews as leadership with toggle ON (manager persona downstream)", async () => {
     withCookies({ "role-preview": "leadership" });
     mockCurrentUser.mockResolvedValue(
       asCurrentUser({ role: "ceo", engineeringViewB: true }),
     );
     const result = await getEngineeringViewResolution();
-    expect(result.surface).toBe("a-side");
+    expect(result.surface).toBe("b-side");
     expect(result.effectiveRole).toBe("leadership");
   });
 

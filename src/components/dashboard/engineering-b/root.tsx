@@ -30,11 +30,20 @@ interface EngineeringBRootProps {
    * outside tests / controlled previews.
    */
   managerEmail?: string | null;
+  /**
+   * True when the actual Clerk session role is CEO — used by the engineer
+   * persona to render a layout preview (with a banner) instead of an empty
+   * MissingIdentityState when the CEO previews and their own email isn't in
+   * the GitHub mapping. Real non-CEO users never reach B-side, so this flag
+   * is always true in production.
+   */
+  isCeoPreview?: boolean;
 }
 
 export function EngineeringBRoot({
   effectiveRole,
   managerEmail,
+  isCeoPreview = false,
 }: EngineeringBRootProps) {
   const persona = resolvePersona(effectiveRole);
 
@@ -52,8 +61,12 @@ export function EngineeringBRoot({
   }
 
   return (
-    <div data-testid="engineering-b-root" data-persona="engineer">
-      <EngineerView />
+    <div
+      data-testid="engineering-b-root"
+      data-persona="engineer"
+      data-ceo-preview={isCeoPreview ? "true" : undefined}
+    >
+      <EngineerView isCeoPreview={isCeoPreview} />
     </div>
   );
 }

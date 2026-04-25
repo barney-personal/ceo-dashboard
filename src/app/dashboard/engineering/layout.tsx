@@ -78,7 +78,10 @@ export default async function EngineeringLayout({
 
       <div className="pt-2">
         {isBSide ? (
-          <EngineeringBRoot effectiveRole={engineeringView.effectiveRole} />
+          <EngineeringBRoot
+            effectiveRole={engineeringView.effectiveRole}
+            isCeoPreview={engineeringView.actualCeo}
+          />
         ) : (
           children
         )}

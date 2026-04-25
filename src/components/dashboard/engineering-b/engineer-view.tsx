@@ -26,6 +26,13 @@ interface EngineerViewProps {
   viewerEmailHash?: string | null;
   /** Optional override for tests to inject a pre-built bundle. */
   bundle?: CompositeBundle;
+  /**
+   * True when the CEO is previewing the engineer persona via the role-preview
+   * cookie. When set, a missing or unscored identity falls through to a
+   * banner-labelled layout preview using a representative scored engineer,
+   * so the CEO can validate the engineer view itself.
+   */
+  isCeoPreview?: boolean;
 }
 
 interface PercentileBand {
@@ -583,10 +590,46 @@ function UnscoredEngineerState({
   );
 }
 
+/**
+ * Pick a representative scored entry for CEO layout preview. Chooses the
+ * engineer closest to the median score so the rendered cards and takeaways
+ * reflect a realistic mid-cohort experience, not a top/bottom outlier.
+ */
+function pickPreviewEntry(bundle: CompositeBundle): CompositeEntry | null {
+  const scored = bundle.scored.filter(
+    (entry) => entry.score !== null && Number.isFinite(entry.score),
+  );
+  if (scored.length === 0) return null;
+  const sorted = [...scored].sort(
+    (a, b) => (a.score as number) - (b.score as number),
+  );
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function PreviewBanner({ engineerName }: { engineerName: string }) {
+  return (
+    <div
+      data-testid="engineering-b-engineer-preview-banner"
+      className="rounded-xl border border-warning/40 bg-warning/10 px-5 py-3 text-warning"
+    >
+      <div className="text-[11px] font-semibold uppercase tracking-[0.12em]">
+        CEO preview · layout demo only
+      </div>
+      <p className="mt-1 text-sm">
+        You aren&apos;t in the GitHub mapping, so the engineer view is rendered
+        for{" "}
+        <span className="font-medium text-foreground">{engineerName}</span> as
+        a layout demo. A real engineer only ever sees their own row.
+      </p>
+    </div>
+  );
+}
+
 export async function EngineerView({
   viewerEmail,
   viewerEmailHash,
   bundle: injectedBundle,
+  isCeoPreview = false,
 }: EngineerViewProps) {
   const bundle = injectedBundle ?? (await getEngineeringComposite());
   const emailHash = await resolveViewerEmailHash({
@@ -594,9 +637,19 @@ export async function EngineerView({
     viewerEmailHash,
   });
 
-  if (!emailHash) return <MissingIdentityState bundle={bundle} />;
+  let entry = emailHash
+    ? findEngineerInComposite(bundle, emailHash) ?? null
+    : null;
+  let isPreviewFallback = false;
 
-  const entry = findEngineerInComposite(bundle, emailHash);
+  if ((!entry || entry.score === null) && isCeoPreview) {
+    const preview = pickPreviewEntry(bundle);
+    if (preview) {
+      entry = preview;
+      isPreviewFallback = true;
+    }
+  }
+
   if (!entry) return <MissingIdentityState bundle={bundle} />;
 
   if (entry.score === null) {
@@ -621,8 +674,10 @@ export async function EngineerView({
   return (
     <section
       data-testid="engineering-b-engineer-view"
+      data-preview={isPreviewFallback ? "true" : undefined}
       className="space-y-6"
     >
+      {isPreviewFallback && <PreviewBanner engineerName={entry.displayName} />}
       <div className="rounded-xl border border-border/60 bg-card px-5 py-5 shadow-warm">
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Where do I stand?

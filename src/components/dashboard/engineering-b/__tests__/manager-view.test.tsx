@@ -94,6 +94,9 @@ describe("ManagerView", () => {
 
     expect(screen.getByTestId("engineering-b-manager-view")).toBeInTheDocument();
     expect(screen.getByTestId("engineering-b-methodology")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("engineering-b-confident-standouts"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("stack-rank-table")).toBeInTheDocument();
 
     expect(
@@ -204,5 +207,66 @@ describe("ManagerView", () => {
       expect(text).toContain(section.title);
       expect(text).toContain(section.body);
     }
+  });
+
+  it("renders the confident standouts panel with the correct empty/non-empty state", async () => {
+    const bundle = buildCohortBundle();
+    const element = await ManagerView({ scope: "org", bundle });
+    render(element);
+
+    const standouts = screen.getByTestId("engineering-b-confident-standouts");
+    expect(standouts).toBeInTheDocument();
+    // Panel data attribute must reflect whether the methodology produced any
+    // flag-eligible promote/PM candidates. Either branch is valid — we are
+    // asserting the panel is wired and the data state is exposed.
+    const flag = standouts.dataset.hasStandouts;
+    expect(["true", "false"]).toContain(flag);
+
+    if (flag === "false") {
+      expect(
+        screen.getByTestId("confident-standouts-empty"),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/No confident calls yet/i)).toBeInTheDocument();
+    } else {
+      // At least one of the two grouped lists must exist when has-standouts
+      // is true, so a manager has something to act on.
+      const promote = screen.queryByTestId("confident-promote-group");
+      const pm = screen.queryByTestId("confident-pm-group");
+      expect(promote || pm).not.toBeNull();
+    }
+  });
+
+  it("renders an unmapped engineers panel listing every unmapped row", async () => {
+    const bundle = buildComposite({
+      now: NOW,
+      engineers: [
+        engineer({ email: "be0@meetcleo.com", displayName: "BE 0", githubLogin: "be0" }),
+        engineer({ email: "be1@meetcleo.com", displayName: "BE 1", githubLogin: "be1" }),
+        engineer({ email: "be2@meetcleo.com", displayName: "BE 2", githubLogin: "be2" }),
+        engineer({
+          email: "unmapped@meetcleo.com",
+          displayName: "Unmapped Person",
+          githubLogin: null,
+        }),
+      ],
+    });
+    const element = await ManagerView({ scope: "org", bundle });
+    render(element);
+
+    expect(
+      screen.getByTestId("engineering-b-unmapped-engineers"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Unmapped engineers · 1/i)).toBeInTheDocument();
+    expect(screen.getByText("Unmapped Person")).toBeInTheDocument();
+  });
+
+  it("hides the unmapped engineers panel when every engineer is mapped", async () => {
+    const bundle = buildCohortBundle();
+    const element = await ManagerView({ scope: "org", bundle });
+    render(element);
+
+    expect(
+      screen.queryByTestId("engineering-b-unmapped-engineers"),
+    ).not.toBeInTheDocument();
   });
 });

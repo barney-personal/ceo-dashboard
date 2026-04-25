@@ -35,9 +35,14 @@ function readBoolean(value: unknown): boolean {
  * The surface returns "b-side" ONLY when every condition holds:
  *   1. The real Clerk user has publicMetadata.role === "ceo".
  *   2. publicMetadata.engineeringViewB === true on that user.
- *   3. No role-preview cookie is demoting the CEO to a non-CEO effective role.
- *   4. No impersonation cookie is active (impersonation routes the CEO into
+ *   3. No impersonation cookie is active (impersonation routes the CEO into
  *      another user's view — that view is always A-side for now).
+ *
+ * The role-preview cookie does NOT route the CEO back to A-side any more —
+ * instead it switches the B-side persona (manager when effectiveRole stays
+ * `ceo` or `leadership`, engineer otherwise). This keeps the engineer-view
+ * code path testable by the real CEO without compromising leakage: only
+ * `actualCeo === true` users ever reach B-side.
  *
  * Non-CEOs always resolve to A-side, even if their publicMetadata has been
  * hand-edited to set engineeringViewB true. Manager auto-promotion and the
@@ -88,7 +93,7 @@ export async function getEngineeringViewResolution(): Promise<EngineeringViewRes
   }
 
   const surface: EngineeringSurface =
-    actualCeo && toggleOn && effectiveRole === "ceo" ? "b-side" : "a-side";
+    actualCeo && toggleOn ? "b-side" : "a-side";
 
   return { surface, actualCeo, toggleOn, effectiveRole };
 }

@@ -117,33 +117,47 @@ function ConfidenceBandBar({ entry }: { entry: RankedCompositeEntry }) {
 function RankCell({
   entry,
   groupCounts,
+  withinTiePosition,
 }: {
   entry: RankedCompositeEntry;
   groupCounts: Map<number, number>;
+  withinTiePosition: number;
 }) {
   const tieSize = groupCounts.get(entry.tieGroupId) ?? 1;
   const tied = tieSize > 1;
   // Render competition-rank: every member of a tie group shows the same
   // displayRank (e.g. `#1, #1, #3`). Sequential `entry.rank` is intentionally
   // hidden from the UI because the confidence band says the order inside the
-  // tie group is not real.
+  // tie group is not real — but we surface a within-tie raw-score position
+  // ("2/106") so a manager can scan top-to-bottom inside a wide tie group
+  // without misreading the band-collapsed `#1` as a real ranking.
   return (
     <div
-      className="flex items-baseline gap-2"
+      className="flex flex-col gap-0.5"
       aria-label={
         tied
           ? `Tied at rank ${entry.displayRank} with ${tieSize - 1} other engineer${
               tieSize - 1 === 1 ? "" : "s"
-            }`
+            } — raw-score position ${withinTiePosition} of ${tieSize}`
           : `Rank ${entry.displayRank}`
       }
     >
-      <span className="font-display text-base italic tabular-nums text-foreground">
-        #{entry.displayRank}
-      </span>
+      <div className="flex items-baseline gap-2">
+        <span className="font-display text-base italic tabular-nums text-foreground">
+          #{entry.displayRank}
+        </span>
+        {tied && (
+          <span className="rounded-sm border border-warning/40 bg-warning/10 px-1 text-[10px] uppercase tracking-[0.12em] text-warning">
+            tied · {tieSize}
+          </span>
+        )}
+      </div>
       {tied && (
-        <span className="rounded-sm border border-warning/40 bg-warning/10 px-1 text-[10px] uppercase tracking-[0.12em] text-warning">
-          tied · {tieSize}
+        <span
+          className="text-[10px] tabular-nums text-muted-foreground"
+          data-testid={`within-tie-${entry.emailHash}`}
+        >
+          raw {withinTiePosition}/{tieSize}
         </span>
       )}
     </div>
@@ -294,6 +308,19 @@ export function StackRankTable({ ranked }: StackRankTableProps) {
     return counts;
   }, [ranked]);
 
+  // Position within tie group, ordered by raw score descending. Stable order
+  // matches the display order of `ranked` (which is already raw-score sorted).
+  const withinTiePosition = useMemo(() => {
+    const counters = new Map<number, number>();
+    const positions = new Map<string, number>();
+    for (const entry of ranked) {
+      const next = (counters.get(entry.tieGroupId) ?? 0) + 1;
+      counters.set(entry.tieGroupId, next);
+      positions.set(entry.emailHash, next);
+    }
+    return positions;
+  }, [ranked]);
+
   const toggle = (hash: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -360,7 +387,13 @@ export function StackRankTable({ ranked }: StackRankTableProps) {
                     </button>
                   </td>
                   <td className="py-3 pr-3">
-                    <RankCell entry={entry} groupCounts={groupCounts} />
+                    <RankCell
+                      entry={entry}
+                      groupCounts={groupCounts}
+                      withinTiePosition={
+                        withinTiePosition.get(entry.emailHash) ?? 1
+                      }
+                    />
                   </td>
                   <td className="py-3 pr-3">
                     <div className="font-medium text-foreground">

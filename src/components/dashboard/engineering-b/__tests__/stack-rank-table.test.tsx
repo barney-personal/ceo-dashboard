@@ -157,6 +157,81 @@ describe("StackRankTable", () => {
     }
   });
 
+  it("renders raw within-tie positions (1/N..N/N) so a manager can scan inside a wide tie", () => {
+    // Same 5-tie cohort. Each row should carry a raw-position marker that
+    // matches its order in the ranked list (the composite already returns
+    // raw-score-descending order).
+    const identicalInputs: EngineerCompositeInput[] = [];
+    for (let i = 0; i < 5; i++) {
+      const email = `wt${i}@meetcleo.com`;
+      identicalInputs.push(
+        engineer({
+          email,
+          displayName: `WT ${i}`,
+          githubLogin: `wt${i}`,
+          prCount: 12,
+          analysedPrCount: 10,
+          executionQualityMean: 3.5,
+          testAdequacyMean: 3.5,
+          riskHandlingMean: 3.5,
+          reviewabilityMean: 3.5,
+        }),
+      );
+    }
+    const bundle = buildComposite({ now: NOW, engineers: identicalInputs });
+    const ranked = rankWithConfidence(scopeComposite(bundle, {}));
+    render(<StackRankTable ranked={ranked} />);
+
+    ranked.forEach((entry, index) => {
+      const marker = screen.getByTestId(`within-tie-${entry.emailHash}`);
+      expect(marker).toHaveTextContent(`raw ${index + 1}/${ranked.length}`);
+    });
+  });
+
+  it("does not render a raw within-tie position for non-tied rows", () => {
+    // Two clearly separated engineers — one strong, one weak. Confidence
+    // bands won't overlap, so they each form their own tie group of one and
+    // no raw N/M marker should render.
+    const inputs: EngineerCompositeInput[] = [
+      engineer({
+        email: "strong@meetcleo.com",
+        displayName: "Strong",
+        githubLogin: "strong",
+        prCount: 80,
+        analysedPrCount: 70,
+        executionQualityMean: 4.8,
+        testAdequacyMean: 4.8,
+        riskHandlingMean: 4.8,
+        reviewabilityMean: 4.8,
+      }),
+    ];
+    for (let i = 0; i < 4; i++) {
+      inputs.push(
+        engineer({
+          email: `weak${i}@meetcleo.com`,
+          displayName: `WEAK ${i}`,
+          githubLogin: `weak${i}`,
+          prCount: 5,
+          analysedPrCount: 4,
+          executionQualityMean: 1.5 + i * 0.1,
+          testAdequacyMean: 1.5,
+          riskHandlingMean: 1.5,
+          reviewabilityMean: 1.5,
+        }),
+      );
+    }
+    const bundle = buildComposite({ now: NOW, engineers: inputs });
+    const ranked = rankWithConfidence(scopeComposite(bundle, {}));
+    render(<StackRankTable ranked={ranked} />);
+
+    // The strongest engineer is alone in their tie group — no raw position.
+    const top = ranked.find((e) => e.displayName === "Strong");
+    expect(top).toBeDefined();
+    expect(
+      screen.queryByTestId(`within-tie-${top!.emailHash}`),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the same competition-style rank label for every member of a tie group", () => {
     // Five engineers with overlapping confidence bands collapse into one tie
     // group. The visible rank must be the same for all five, not `#1, #2, #3,

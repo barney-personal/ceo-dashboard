@@ -263,6 +263,41 @@ describe("EngineerView", () => {
     expect(screen.queryByText("Bob")).not.toBeInTheDocument();
   });
 
+  it("renders a banner-labelled layout preview when isCeoPreview and the viewer is unmapped", async () => {
+    const bundle = buildEngineerBundle();
+    const element = await EngineerView({
+      viewerEmailHash: "deadbeef",
+      bundle,
+      isCeoPreview: true,
+    });
+    render(element);
+
+    const view = screen.getByTestId("engineering-b-engineer-view");
+    expect(view).toHaveAttribute("data-preview", "true");
+    const banner = screen.getByTestId("engineering-b-engineer-preview-banner");
+    expect(within(banner).getByText(/CEO preview/i)).toBeInTheDocument();
+    // The "Where do I stand?" header should still render with the chosen
+    // demo engineer's name — proving the layout renders rather than the
+    // empty MissingIdentityState that the non-preview path would show.
+    expect(screen.queryByText(/No engineer identity available/i)).not.toBeInTheDocument();
+  });
+
+  it("does not render the preview banner when the viewer matches a real composite row", async () => {
+    const bundle = buildEngineerBundle();
+    const element = await EngineerView({
+      viewerEmail: "alice@meetcleo.com",
+      bundle,
+      isCeoPreview: true,
+    });
+    render(element);
+
+    expect(
+      screen.queryByTestId("engineering-b-engineer-preview-banner"),
+    ).not.toBeInTheDocument();
+    const view = screen.getByTestId("engineering-b-engineer-view");
+    expect(view).not.toHaveAttribute("data-preview");
+  });
+
   it("renders the viewer's unscored reason without falling back to a cohort table", async () => {
     const bundle = buildComposite({
       now: NOW,
