@@ -387,6 +387,20 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     },
   },
   {
+    id: "admin.githubMapping",
+    label: "GitHub Mapping",
+    description:
+      "Match unmapped engineers to their GitHub accounts. Lowering this also allows those roles to edit the github_employee_map table.",
+    href: "/dashboard/admin/github-mapping",
+    groupLabel: "Admin",
+    defaultRole: "ceo",
+    nav: {
+      groupLabel: "Admin",
+      label: "GitHub Mapping",
+      icon: "git-pull-request",
+    },
+  },
+  {
     // Locked: this page also controls manual sync trigger authority.
     id: "admin.status",
     label: "Data Status",

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
+import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { db } from "@/lib/db";
 import { githubEmployeeMap } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
@@ -21,11 +21,8 @@ interface PutBody {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireRole("ceo");
-    const authError = authErrorResponse(auth);
-    if (authError) {
-      return authError;
-    }
+    const authError = await dashboardPermissionErrorResponse("admin.githubMapping");
+    if (authError) return authError;
 
     const body = (await request.json()) as PutBody;
     const login = typeof body.login === "string" ? body.login.trim() : "";
