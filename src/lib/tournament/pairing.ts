@@ -194,7 +194,7 @@ export function selectRandomPair(
       return { aEmail: a, bEmail: b };
     }
   }
-  let a = eligibleEmails[Math.floor(rng() * eligibleEmails.length)];
+  const a = eligibleEmails[Math.floor(rng() * eligibleEmails.length)];
   let b = eligibleEmails[Math.floor(rng() * eligibleEmails.length)];
   while (b === a) {
     b = eligibleEmails[Math.floor(rng() * eligibleEmails.length)];

@@ -227,18 +227,22 @@ async function computeAgreementRate(runId: number): Promise<number | null> {
     )
     .where(eq(engineerMatches.runId, runId));
 
-  const byMatch = new Map<number, Set<string>>();
+  // Track verdict count per match (not just unique values) — we need ≥ 2
+  // judgments to call it agreement. A single judgment trivially has
+  // verdicts.size === 1 but isn't agreement.
+  const verdictsByMatch = new Map<number, string[]>();
   for (const row of rows) {
-    if (!byMatch.has(row.matchId)) byMatch.set(row.matchId, new Set());
-    byMatch.get(row.matchId)!.add(row.verdict);
+    const list = verdictsByMatch.get(row.matchId) ?? [];
+    list.push(row.verdict);
+    verdictsByMatch.set(row.matchId, list);
   }
 
   let multiJudgeMatches = 0;
   let agreed = 0;
-  for (const verdicts of byMatch.values()) {
-    if (verdicts.size === 0) continue;
+  for (const verdicts of verdictsByMatch.values()) {
+    if (verdicts.length < 2) continue;
     multiJudgeMatches++;
-    if (verdicts.size === 1) agreed++;
+    if (new Set(verdicts).size === 1) agreed++;
   }
   return multiJudgeMatches > 0 ? agreed / multiJudgeMatches : null;
 }

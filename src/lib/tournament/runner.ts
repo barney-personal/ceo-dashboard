@@ -210,6 +210,12 @@ export async function runTournament(
             completedAt: new Date(),
           })
           .where(eq(engineerMatches.id, matchRow.id));
+        // matchesAttempted was incremented above; matchesCompleted is normally
+        // incremented inside the dispatch.then() callback. Skipping that path
+        // means the drain loop (matchesCompleted < matchesAttempted) waits
+        // forever. Increment here so a missing-dossier match doesn't strand
+        // the run.
+        counters.matchesCompleted++;
         continue;
       }
 
