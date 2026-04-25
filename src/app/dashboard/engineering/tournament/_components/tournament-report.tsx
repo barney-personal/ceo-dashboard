@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -336,7 +337,8 @@ function LeaderboardCard({ rankings }: { rankings: RankingRow[] }) {
       <div className="border-b border-border/50 px-5 py-3">
         <span className="text-sm font-semibold">Leaderboard</span>
         <span className="ml-2 text-xs text-muted-foreground">
-          {rankings.length} engineers ranked · sorted by rating
+          {rankings.length} engineers ranked · sorted by rating · click a row
+          for match-level reasoning
         </span>
       </div>
       <div className="overflow-x-auto">
@@ -345,6 +347,7 @@ function LeaderboardCard({ rankings }: { rankings: RankingRow[] }) {
             <tr className="border-b border-border/40 text-xs uppercase tracking-wide text-muted-foreground">
               <th className="px-5 py-2 text-left font-medium">#</th>
               <th className="px-5 py-2 text-left font-medium">Engineer</th>
+              <th className="px-5 py-2 text-left font-medium">Role</th>
               <th className="px-5 py-2 text-right font-medium">Rating</th>
               <th className="px-5 py-2 text-right font-medium">Δ</th>
               <th className="px-5 py-2 text-right font-medium">W–L–D</th>
@@ -356,18 +359,52 @@ function LeaderboardCard({ rankings }: { rankings: RankingRow[] }) {
             {rankings.map((row) => (
               <tr
                 key={row.engineerEmail}
-                className="border-b border-border/30 last:border-b-0 hover:bg-muted/20"
+                className="border-b border-border/30 last:border-b-0 transition-colors hover:bg-muted/20"
               >
                 <td className="px-5 py-2 font-medium tabular-nums text-muted-foreground">
                   {row.rank}
                 </td>
                 <td className="px-5 py-2">
-                  <div className="font-medium text-foreground">
-                    {row.displayName}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {row.engineerEmail}
-                  </div>
+                  <Link
+                    href={`/dashboard/engineering/tournament/${encodeURIComponent(row.engineerEmail)}`}
+                    className="flex items-center gap-3 hover:text-primary"
+                  >
+                    {row.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={row.avatarUrl}
+                        alt=""
+                        className="h-8 w-8 rounded-full bg-muted"
+                      />
+                    ) : (
+                      <div className="h-8 w-8 rounded-full bg-muted" />
+                    )}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground">
+                          {row.displayName}
+                        </span>
+                        {row.level && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            {row.level}
+                          </span>
+                        )}
+                        {row.tenureMonths != null && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {formatTenure(row.tenureMonths)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.githubLogin
+                          ? `@${row.githubLogin}`
+                          : row.engineerEmail}
+                      </div>
+                    </div>
+                  </Link>
+                </td>
+                <td className="px-5 py-2 text-xs text-muted-foreground">
+                  {row.jobTitle ?? "—"}
                 </td>
                 <td className="px-5 py-2 text-right font-semibold tabular-nums">
                   {Math.round(row.rating)}
@@ -501,4 +538,11 @@ function formatDays(start: Date, end: Date): number {
   return Math.round(
     (new Date(end).getTime() - new Date(start).getTime()) / 86_400_000,
   );
+}
+
+function formatTenure(months: number): string {
+  if (months < 12) return `${months}m`;
+  const years = Math.floor(months / 12);
+  const remainder = months % 12;
+  return remainder ? `${years}y ${remainder}m` : `${years}y`;
 }

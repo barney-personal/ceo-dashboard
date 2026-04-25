@@ -6,7 +6,7 @@ import {
   githubPrs,
   prReviewAnalyses,
 } from "@/lib/db/schema";
-import { getActiveEmployees, type Person } from "@/lib/data/people";
+import { getEligibleEngineers } from "@/lib/data/engineer-eligibility";
 import type { EngineerDossier } from "./types";
 
 const MIN_ANALYSED_PRS_FOR_ELIGIBILITY = 5;
@@ -29,8 +29,16 @@ export async function listEligibleEngineers(
   windowStart: Date,
   windowEnd: Date,
 ): Promise<EligibleEngineer[]> {
+  const windowDays = Math.max(
+    1,
+    Math.round((windowEnd.getTime() - windowStart.getTime()) / 86_400_000),
+  );
   const [people, mapRows] = await Promise.all([
-    getActiveEngineersSafe(),
+    // Standardised engineer eligibility: function === Engineering, has email,
+    // tenure ≥ window. The tenure floor matters because we judge engineers on
+    // their full-window dossier — short-tenure engineers would otherwise be
+    // unfairly penalised for a partial track record.
+    getEligibleEngineers({ windowDays }),
     db
       .select({
         githubLogin: githubEmployeeMap.githubLogin,
@@ -179,17 +187,6 @@ export async function buildEngineerDossier(
     windowEnd,
     rendered,
   };
-}
-
-async function getActiveEngineersSafe(): Promise<Person[]> {
-  try {
-    const { employees, unassigned } = await getActiveEmployees();
-    return [...employees, ...unassigned].filter(
-      (p) => p.function === "Engineering" && !!p.email,
-    );
-  } catch {
-    return [];
-  }
 }
 
 interface DossierInputs {
