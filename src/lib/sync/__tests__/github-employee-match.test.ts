@@ -621,14 +621,14 @@ describe("runGitHubEmployeeMapping — LLM fallback", () => {
     expect(sentryMock.captureMessage).toHaveBeenCalledWith(
       "LLM employee match hit max_tokens",
       expect.objectContaining({
-        level: "warning",
+        level: "info",
         tags: expect.objectContaining({ llm_truncated: "true" }),
       })
     );
     expect(sentryMock.captureMessage).toHaveBeenCalledWith(
       "Failed to parse LLM employee match response",
       expect.objectContaining({
-        level: "warning",
+        level: "info",
         extra: expect.objectContaining({ reason: "truncated_by_max_tokens" }),
       })
     );
@@ -653,7 +653,7 @@ describe("runGitHubEmployeeMapping — LLM fallback", () => {
     expect(result).toEqual({ mapped: 0, bots: 0, unmatched: 1, skipped: 0 });
     expect(sentryMock.captureMessage).toHaveBeenCalledWith(
       "Failed to parse LLM employee match response",
-      expect.objectContaining({ level: "warning" })
+      expect.objectContaining({ level: "info" })
     );
     const row = dbMock.insertedRows[0] as InsertedRow;
     expect(row.matchConfidence).toBe("low");
@@ -684,7 +684,7 @@ describe("runGitHubEmployeeMapping — LLM fallback", () => {
     expect(result).toEqual({ mapped: 0, bots: 0, unmatched: 1, skipped: 0 });
     expect(sentryMock.captureMessage).toHaveBeenCalledWith(
       "GitHub employee match LLM output failed validation",
-      expect.objectContaining({ level: "warning" })
+      expect.objectContaining({ level: "info" })
     );
   });
 
