@@ -67,7 +67,14 @@ export const usersInfoEnvelopeSchema = z
       .object({
         real_name: z.string().optional(),
         profile: z
-          .object({ display_name: z.string().optional() })
+          .object({
+            display_name: z.string().optional(),
+            // image_512 is the largest size Slack returns for non-Gravatar
+            // avatars. image_192 is fine to fall back on (admin row thumbnail).
+            image_512: z.string().url().optional(),
+            image_192: z.string().url().optional(),
+            image_72: z.string().url().optional(),
+          })
           .passthrough()
           .optional(),
       })

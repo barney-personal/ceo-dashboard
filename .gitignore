@@ -41,6 +41,9 @@ ml-impact/model.json
 # Local preview-server launch config (per-developer port + command)
 .claude/launch.json
 
+# Per-process scheduled-task lock file
+.claude/scheduled_tasks.lock
+
 # === OS junk ===
 .DS_Store
 Thumbs.db

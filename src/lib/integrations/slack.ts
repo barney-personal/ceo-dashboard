@@ -614,3 +614,36 @@ export async function getUserName(
     return userId;
   }
 }
+
+/**
+ * Fetch a user's profile avatar URL via `users.info`. Prefers `image_512`
+ * (largest) and falls back to `image_192` / `image_72` for older Gravatar-only
+ * accounts. Returns null on any error or when the user has no profile image.
+ */
+export async function getUserAvatarUrl(
+  userId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<string | null> {
+  try {
+    const raw = await slackApiRequest<unknown>(
+      "users.info",
+      { user: userId },
+      { signal: opts.signal },
+    );
+    const data: UsersInfoEnvelope = validateSlackEnvelope(
+      "users.info",
+      usersInfoEnvelopeSchema,
+      raw,
+    );
+    const profile = data.user.profile;
+    return (
+      profile?.image_512 ?? profile?.image_192 ?? profile?.image_72 ?? null
+    );
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      if (opts.signal.reason instanceof Error) throw opts.signal.reason;
+      throw error;
+    }
+    return null;
+  }
+}

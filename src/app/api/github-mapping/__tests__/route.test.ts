@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/sync/request-auth", () => ({
-  authErrorResponse: vi.fn(),
-  requireRole: vi.fn(),
+vi.mock("@/lib/auth/dashboard-permissions.api", () => ({
+  dashboardPermissionErrorResponse: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -17,12 +16,11 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
-import { authErrorResponse, requireRole } from "@/lib/sync/request-auth";
+import { dashboardPermissionErrorResponse } from "@/lib/auth/dashboard-permissions.api";
 import { db } from "@/lib/db";
 import { PUT } from "../route";
 
-const mockAuthErrorResponse = vi.mocked(authErrorResponse);
-const mockRequireRole = vi.mocked(requireRole);
+const mockPermissionGate = vi.mocked(dashboardPermissionErrorResponse);
 const mockDbInsert = vi.mocked(db.insert);
 
 function makeRequest(body: unknown) {
@@ -46,31 +44,13 @@ function mockInsertReturning(returned: unknown[]) {
 describe("PUT /api/github-mapping", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mockAuthErrorResponse.mockImplementation((auth) => {
-      if (auth.ok) return null;
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
-    });
+    mockPermissionGate.mockResolvedValue(null);
   });
 
-  it("returns 401 when not authenticated", async () => {
-    mockRequireRole.mockResolvedValue({
-      ok: false,
-      status: 401,
-      error: "Unauthorized",
-    });
-    const res = await PUT(
-      makeRequest({ login: "alice", employeeEmail: "a@b.com" })
+  it("returns 403 when permission gate denies", async () => {
+    mockPermissionGate.mockResolvedValue(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 })
     );
-    expect(res.status).toBe(401);
-    expect(mockDbInsert).not.toHaveBeenCalled();
-  });
-
-  it("returns 403 when user lacks CEO role", async () => {
-    mockRequireRole.mockResolvedValue({
-      ok: false,
-      status: 403,
-      error: "Forbidden",
-    });
     const res = await PUT(
       makeRequest({ login: "alice", employeeEmail: "a@b.com" })
     );
@@ -79,14 +59,12 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("returns 400 when login is missing", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const res = await PUT(makeRequest({ employeeEmail: "a@b.com" }));
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "login is required" });
   });
 
   it("returns 400 when login is blank", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const res = await PUT(
       makeRequest({ login: "  ", employeeEmail: "a@b.com" })
     );
@@ -94,7 +72,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("returns 400 when employeeEmail key is missing", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const res = await PUT(makeRequest({ login: "alice" }));
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({
@@ -103,7 +80,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("returns 400 when employeeEmail is a number", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const res = await PUT(
       makeRequest({ login: "alice", employeeEmail: 42 })
     );
@@ -114,7 +90,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("upserts mapping with manual high confidence when assigning an employee", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const { values, onConflictDoUpdate } = mockInsertReturning([
       {
         id: 1,
@@ -155,7 +130,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("clears mapping when employeeEmail is null", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const { values } = mockInsertReturning([
       {
         id: 1,
@@ -182,7 +156,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("treats empty string employeeEmail as clearing the mapping", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     const { values } = mockInsertReturning([
       {
         id: 1,
@@ -206,7 +179,6 @@ describe("PUT /api/github-mapping", () => {
   });
 
   it("returns 500 when DB insert throws", async () => {
-    mockRequireRole.mockResolvedValue({ ok: true });
     mockDbInsert.mockImplementation(() => {
       throw new Error("db down");
     });

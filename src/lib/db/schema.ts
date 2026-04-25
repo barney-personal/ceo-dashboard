@@ -150,6 +150,12 @@ export const slackEmployeeMap = pgTable("slack_employee_map", {
   slackUserId: text("slack_user_id").notNull().unique(),
   slackUsername: text("slack_username"),
   slackName: text("slack_name"),
+  // URL of this Slack user's profile picture (image_512 from users.info), or
+  // null if we haven't fetched it yet. Surfaced on the GitHub-mapping admin
+  // page next to each unmapped engineer so the CEO can eyeball-compare with
+  // GitHub avatars. Refreshed by `scripts/sync-slack-avatars.ts`.
+  slackImageUrl: text("slack_image_url"),
+  slackImageFetchedAt: timestamp("slack_image_fetched_at"),
   employeeEmail: text("employee_email"), // lowercased; joins to SSoT row->>'email'
   employeeName: text("employee_name"),
   matchMethod: text("match_method").notNull(), // 'auto_username' | 'auto_name' | 'manual' | 'external' | 'unmatched'
