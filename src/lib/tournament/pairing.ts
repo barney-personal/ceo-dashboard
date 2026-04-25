@@ -32,7 +32,16 @@ const DEFAULT_MIN_MATCHES = 5;
 const DEFAULT_SWISS_BAND = 4;
 const DEFAULT_MAX_RATING_GAP = 350;
 const DEFAULT_MAX_REMATCHES = 5;
-const DEFAULT_MAX_JUDGMENTS_PER_ENGINEER = 60;
+const DEFAULT_MAX_JUDGMENTS_PER_ENGINEER = parseIntEnv(
+  process.env.TOURNAMENT_MAX_JUDGMENTS_PER_ENGINEER,
+  100,
+);
+
+function parseIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const value = parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 /** Seen-count weight in the score. Lower = more willing to rematch close pairs
  *  rather than playing far-apart unseen ones. We keep this lower than the
  *  rating-gap signal so a 4× rematch of a close pair still beats an unseen

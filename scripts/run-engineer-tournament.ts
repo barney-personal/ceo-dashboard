@@ -19,6 +19,7 @@ interface Args {
   listEligible: boolean;
   dryRun: boolean;
   singleJudge: boolean;
+  continueFrom: number | null;
   verbose: boolean;
   notes: string | null;
 }
@@ -32,6 +33,7 @@ function parseArgs(argv: string[]): Args {
     listEligible: false,
     dryRun: false,
     singleJudge: false,
+    continueFrom: null,
     verbose: false,
     notes: null,
   };
@@ -61,6 +63,12 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--single-judge":
         args.singleJudge = true;
+        break;
+      case "--continue-from":
+        args.continueFrom = parseInt(argv[++i] ?? "0", 10);
+        if (!Number.isFinite(args.continueFrom) || args.continueFrom <= 0) {
+          throw new Error(`--continue-from requires a valid run ID`);
+        }
         break;
       case "--verbose":
       case "-v":
@@ -98,6 +106,9 @@ Options:
   --dry-run             Skip LLM calls, use mock verdicts
   --single-judge        One judge per match (Anthropic OR OpenAI, ~10/90 split)
                         instead of two — much faster, half the data per match
+  --continue-from N     Warm-start from a prior run's ratings + pair counts.
+                        Caps accumulate across runs so this run only schedules
+                        the marginal matches needed to reach the new cap.
   --verbose, -v         Print every judgment
   --notes "..."         Free-text note saved on the run row
 `);
@@ -167,6 +178,7 @@ async function main() {
     engineerAllowlist: args.engineers ?? undefined,
     dryRun: args.dryRun,
     singleJudge: args.singleJudge,
+    continueFromRunId: args.continueFrom ?? undefined,
     onProgress: (event) => {
       if (args.verbose && event.lastVerdict) {
         console.log(

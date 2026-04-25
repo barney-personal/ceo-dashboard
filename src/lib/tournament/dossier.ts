@@ -112,11 +112,22 @@ export async function listEligibleEngineers(
   return eligible.sort((a, b) => b.analysedPrCount - a.analysedPrCount);
 }
 
+export interface DossierExtras {
+  /** Review-churn residual for this engineer: actual review back-and-forth
+   *  minus the cohort-baseline expected churn for their PR mix. Positive
+   *  means more friction than peers shipping similar work; negative means
+   *  smoother review experience. Computed by code-review.ts and passed
+   *  through here so the LLM sees a normalised signal it couldn't infer
+   *  from the per-PR data alone. */
+  reviewChurnResidual?: number;
+}
+
 export async function buildEngineerDossier(
   email: string,
   windowStart: Date,
   windowEnd: Date,
   displayLabel: "A" | "B",
+  extras?: DossierExtras,
 ): Promise<EngineerDossier | null> {
   const mappingRows = await db
     .select({ githubLogin: githubEmployeeMap.githubLogin })
@@ -178,6 +189,7 @@ export async function buildEngineerDossier(
     analyses,
     allPrs,
     commitCount: commitStats[0]?.commitCount ?? 0,
+    reviewChurnResidual: extras?.reviewChurnResidual,
   });
 
   return {
@@ -194,6 +206,7 @@ interface DossierInputs {
   windowStart: Date;
   windowEnd: Date;
   analyses: Array<typeof prReviewAnalyses.$inferSelect>;
+  reviewChurnResidual?: number;
   allPrs: Array<{
     repo: string;
     additions: number;
@@ -297,6 +310,13 @@ function renderDossier(input: DossierInputs): string {
   lines.push(
     `- Commits after first review (rework signal): ${reviewChurn.commitsAfterFirstReview}`,
   );
+  if (input.reviewChurnResidual !== undefined) {
+    const r = input.reviewChurnResidual;
+    const label = r > 0.4 ? "well above peers" : r > 0.15 ? "above peers" : r < -0.4 ? "well below peers" : r < -0.15 ? "below peers" : "typical for the work mix";
+    lines.push(
+      `- Review-churn residual (vs peers shipping similar PR mix): ${r >= 0 ? "+" : ""}${r.toFixed(2)} (${label})`,
+    );
+  }
   if (Object.keys(standoutCounts).length > 0) {
     lines.push("- PR standouts:");
     for (const [flag, count] of sortByCount(standoutCounts)) {

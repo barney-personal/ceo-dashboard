@@ -9,6 +9,11 @@ import {
 } from "@/lib/sync/request-auth";
 import { runTournament } from "@/lib/tournament/runner";
 
+// maxDuration only bounds the HTTP response (which resolves in ≤15s once the
+// run row is inserted via onStart). The tournament itself executes on the
+// long-lived Render web process via fire-and-forget — this fits the current
+// hosting model. On a serverless host this pattern wouldn't work; the
+// background job would die at 30s.
 export const maxDuration = 30;
 
 const DEFAULT_MATCH_TARGET = 20;

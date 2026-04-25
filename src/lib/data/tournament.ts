@@ -9,6 +9,7 @@ import {
   githubPrs,
 } from "@/lib/db/schema";
 import { getEngineeringRankings } from "@/lib/data/engineering";
+import { STARTING_RATING } from "@/lib/tournament/config";
 
 export type ConfidenceBand = "low" | "medium" | "high";
 
@@ -55,8 +56,6 @@ export interface TournamentRunDetail {
   meanLatencyMs: number | null;
   agreementRate: number | null;
 }
-
-const STARTING_RATING = 1500;
 
 export async function getRecentTournamentRuns(
   limit: number = 10,

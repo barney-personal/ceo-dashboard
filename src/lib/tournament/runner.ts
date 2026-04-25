@@ -17,6 +17,7 @@ import { buildEngineerDossier, listEligibleEngineers } from "./dossier";
 import { applyEloUpdate } from "./elo";
 import { judgeWithAnthropic, judgeWithOpenAi } from "./judges";
 import { pairKey, selectNextPair } from "./pairing";
+import { getCodeReviewView } from "@/lib/data/code-review";
 import { Semaphore } from "./semaphore";
 import type {
   EngineerDossier,
@@ -41,6 +42,14 @@ export interface RunOptions {
    *  other — substantial wall-clock speedup at the cost of half the judgments
    *  per match. Each match is its own independent ELO update either way. */
   singleJudge?: boolean;
+  /** Warm-start from a prior run: load that run's per-engineer ratings,
+   *  per-engineer judgment counts, and per-pair counts into memory before
+   *  scheduling new matches. The new run accrues additional matches on top
+   *  of the prior state — useful for incremental "another N rounds"
+   *  follow-ups without re-running all the matches we already paid for.
+   *  Caps (max-judgments-per-engineer, max-rematches-per-pair) apply
+   *  cumulatively across runs in this mode. */
+  continueFromRunId?: number;
   signal?: AbortSignal;
   /** Progress callback fired after every judgment (success or failure). */
   onProgress?: (event: ProgressEvent) => void;
@@ -81,6 +90,15 @@ export async function runTournament(
     );
   }
 
+  // Pre-fetch the cohort-relative review-churn residual for each engineer so
+  // every dossier gets a "is this engineer's review back-and-forth abnormal
+  // for the type of work they ship" signal that can't be inferred from raw
+  // per-PR counts alone. One getCodeReviewView() call covers the full pool.
+  const churnResidualByEmail = await loadChurnResidualMap(
+    options.windowStart,
+    options.windowEnd,
+  );
+
   const [run] = await db
     .insert(engineerTournamentRuns)
     .values({
@@ -107,10 +125,27 @@ export async function runTournament(
     });
   }
 
-  await persistRatingsSnapshot(run.id, ratings);
-
   const dossierCache = new Map<string, EngineerDossier>();
   const pairCounts = new Map<string, number>();
+
+  // Warm-start from a prior run if requested — caps accumulate across runs.
+  if (options.continueFromRunId) {
+    const priorState = await loadPriorRunState(options.continueFromRunId);
+    for (const prior of priorState.ratings) {
+      const existing = ratings.get(prior.engineerEmail);
+      if (!existing) continue; // engineer fell out of pool since prior run
+      existing.rating = prior.rating;
+      existing.judgmentsPlayed = prior.judgmentsPlayed;
+      existing.wins = prior.wins;
+      existing.losses = prior.losses;
+      existing.draws = prior.draws;
+    }
+    for (const [key, count] of priorState.pairCounts) {
+      pairCounts.set(key, count);
+    }
+  }
+
+  await persistRatingsSnapshot(run.id, ratings);
   // Tracks judgments scheduled but not yet applied to in-memory ratings.
   // The runner can fan out tens of matches in flight before any rating update
   // completes, so a naive `ratings[email].judgmentsPlayed >= cap` check would
@@ -189,6 +224,7 @@ export async function runTournament(
           options.windowStart,
           options.windowEnd,
           "A",
+          churnResidualByEmail,
         ),
         getOrBuildDossier(
           dossierCache,
@@ -196,6 +232,7 @@ export async function runTournament(
           options.windowStart,
           options.windowEnd,
           "B",
+          churnResidualByEmail,
         ),
       ]);
 
@@ -261,7 +298,11 @@ export async function runTournament(
 
       // Don't await dispatch in the loop — let it run while we queue more.
       // But we DO need ratingChain to serialise rating updates.
+      // Wrapped in try/finally so a transient DB failure inside the callback
+      // (rating upsert, match-status write) can't strand the drain loop —
+      // matchesCompleted always increments exactly once per dispatched match.
       void dispatch.then(async (results) => {
+       try {
         for (const result of results) {
           // Each settled result (success or failure) clears one in-flight slot
           // for both engineers. Ratings update only on success below.
@@ -316,27 +357,35 @@ export async function runTournament(
         const completedThisMatch = results.filter(
           (r) => r.status === "fulfilled",
         ).length;
-        await db
-          .update(engineerMatches)
-          .set({
-            status: completedThisMatch > 0 ? "complete" : "failed",
-            completedAt: new Date(),
-            errorMessage:
-              completedThisMatch === 0
-                ? results
-                    .map((r) =>
-                      r.status === "rejected"
-                        ? r.reason instanceof Error
-                          ? r.reason.message
-                          : String(r.reason)
-                        : "",
-                    )
-                    .filter(Boolean)
-                    .join(" | ")
-                : null,
-          })
-          .where(eq(engineerMatches.id, matchRow.id));
+        try {
+          await db
+            .update(engineerMatches)
+            .set({
+              status: completedThisMatch > 0 ? "complete" : "failed",
+              completedAt: new Date(),
+              errorMessage:
+                completedThisMatch === 0
+                  ? results
+                      .map((r) =>
+                        r.status === "rejected"
+                          ? r.reason instanceof Error
+                            ? r.reason.message
+                            : String(r.reason)
+                          : "",
+                      )
+                      .filter(Boolean)
+                      .join(" | ")
+                  : null,
+            })
+            .where(eq(engineerMatches.id, matchRow.id));
+        } catch (err) {
+          // Status update failure shouldn't strand the run; the run row itself
+          // already records overall progress via judgmentsCompleted.
+          console.warn("Match status update failed", err);
+        }
+       } finally {
         counters.matchesCompleted++;
+       }
       });
 
       // Keep the in-flight pipe primed but don't let it run unbounded.
@@ -395,13 +444,94 @@ async function getOrBuildDossier(
   windowStart: Date,
   windowEnd: Date,
   label: "A" | "B",
+  churnResidualByEmail: Map<string, number>,
 ): Promise<EngineerDossier | null> {
   const cacheKey = `${email}|${label}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
-  const dossier = await buildEngineerDossier(email, windowStart, windowEnd, label);
+  const dossier = await buildEngineerDossier(email, windowStart, windowEnd, label, {
+    reviewChurnResidual: churnResidualByEmail.get(email.toLowerCase()),
+  });
   if (dossier) cache.set(cacheKey, dossier);
   return dossier;
+}
+
+interface PriorRunState {
+  ratings: Array<{
+    engineerEmail: string;
+    rating: number;
+    judgmentsPlayed: number;
+    wins: number;
+    losses: number;
+    draws: number;
+  }>;
+  pairCounts: Map<string, number>;
+}
+
+async function loadPriorRunState(runId: number): Promise<PriorRunState> {
+  const ratingRows = await db
+    .select({
+      engineerEmail: engineerRatings.engineerEmail,
+      rating: sql<number>`${engineerRatings.rating}::float`,
+      judgmentsPlayed: engineerRatings.judgmentsPlayed,
+      wins: engineerRatings.wins,
+      losses: engineerRatings.losses,
+      draws: engineerRatings.draws,
+    })
+    .from(engineerRatings)
+    .where(eq(engineerRatings.runId, runId));
+
+  const matchRows = await db
+    .select({
+      engineerAEmail: engineerMatches.engineerAEmail,
+      engineerBEmail: engineerMatches.engineerBEmail,
+    })
+    .from(engineerMatches)
+    .where(eq(engineerMatches.runId, runId));
+
+  const pairCounts = new Map<string, number>();
+  for (const row of matchRows) {
+    const key = pairKey(row.engineerAEmail, row.engineerBEmail);
+    pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+  }
+
+  return {
+    ratings: ratingRows.map((r) => ({
+      engineerEmail: r.engineerEmail,
+      rating: r.rating,
+      judgmentsPlayed: r.judgmentsPlayed,
+      wins: r.wins,
+      losses: r.losses,
+      draws: r.draws,
+    })),
+    pairCounts,
+  };
+}
+
+async function loadChurnResidualMap(
+  windowStart: Date,
+  windowEnd: Date,
+): Promise<Map<string, number>> {
+  try {
+    const windowDays = Math.max(
+      1,
+      Math.round((windowEnd.getTime() - windowStart.getTime()) / 86_400_000),
+    );
+    const view = await getCodeReviewView({ windowDays });
+    const out = new Map<string, number>();
+    for (const engineer of view.engineers) {
+      if (!engineer.employeeEmail) continue;
+      out.set(
+        engineer.employeeEmail.toLowerCase(),
+        engineer.reviewChurnResidual,
+      );
+    }
+    return out;
+  } catch {
+    // Best-effort: if the code-review view fails for any reason, just don't
+    // surface the residual. Dossiers fall back to the unannotated form.
+    return new Map();
+  }
 }
 
 async function applyJudgmentToRatings(
