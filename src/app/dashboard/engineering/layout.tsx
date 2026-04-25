@@ -72,6 +72,10 @@ export default async function EngineeringLayout({
               role,
               permissionRoles["engineering.ranking"],
             )}
+            showTournament={hasAccess(
+              role,
+              permissionRoles["engineering.tournament"],
+            )}
           />
         </Suspense>
       )}

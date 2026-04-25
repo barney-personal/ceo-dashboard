@@ -702,3 +702,100 @@ export const engineeringRankingSnapshots = pgTable(
     index("engineering_ranking_snapshots_email_hash_idx").on(table.emailHash),
   ]
 );
+
+// ---------------------------------------------------------------------------
+// Engineer tournament — pairwise LLM-judged ranking of engineers.
+// CEO-only feature on /dashboard/engineering. Each "run" tournaments a fresh
+// 90-day window, dispatches matches to two judges (Opus 4.7 + GPT-5.4), and
+// updates an ELO-style rating per engineer. Each judgment is an independent
+// rating update (Option C — see CLAUDE.md decisions log if added later).
+// ---------------------------------------------------------------------------
+
+export const engineerTournamentRuns = pgTable(
+  "engineer_tournament_runs",
+  {
+    id: serial("id").primaryKey(),
+    status: text("status").notNull().default("queued"), // 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+    windowStart: timestamp("window_start").notNull(),
+    windowEnd: timestamp("window_end").notNull(),
+    rubricVersion: text("rubric_version").notNull(),
+    matchTarget: integer("match_target").notNull(),
+    matchesCompleted: integer("matches_completed").notNull().default(0),
+    judgmentsCompleted: integer("judgments_completed").notNull().default(0),
+    triggeredBy: text("triggered_by").notNull(), // 'manual' | 'cron' | 'cli'
+    notes: text("notes"),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("engineer_tournament_runs_status_idx").on(table.status, table.startedAt),
+  ],
+);
+
+export const engineerMatches = pgTable(
+  "engineer_matches",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => engineerTournamentRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    engineerAEmail: text("engineer_a_email").notNull(), // lowercased
+    engineerBEmail: text("engineer_b_email").notNull(), // lowercased
+    rubricVersion: text("rubric_version").notNull(),
+    status: text("status").notNull().default("queued"), // 'queued' | 'judging' | 'complete' | 'failed'
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    index("engineer_matches_run_status_idx").on(table.runId, table.status),
+    index("engineer_matches_pair_idx").on(table.engineerAEmail, table.engineerBEmail),
+  ],
+);
+
+export const engineerMatchJudgments = pgTable(
+  "engineer_match_judgments",
+  {
+    id: serial("id").primaryKey(),
+    matchId: integer("match_id")
+      .references(() => engineerMatches.id, { onDelete: "cascade" })
+      .notNull(),
+    judgeProvider: text("judge_provider").notNull(), // 'anthropic' | 'openai'
+    judgeModel: text("judge_model").notNull(),
+    verdict: text("verdict").notNull(), // 'A' | 'B' | 'draw'
+    confidencePct: integer("confidence_pct"), // 0-100, optional self-rated by judge
+    reasoning: text("reasoning"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    thinkingTokens: integer("thinking_tokens"),
+    costUsd: numeric("cost_usd", { precision: 10, scale: 6 }),
+    latencyMs: integer("latency_ms"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("engineer_match_judgment_uniq").on(table.matchId, table.judgeModel),
+    index("engineer_match_judgments_match_idx").on(table.matchId),
+  ],
+);
+
+export const engineerRatings = pgTable(
+  "engineer_ratings",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => engineerTournamentRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    engineerEmail: text("engineer_email").notNull(), // lowercased
+    rating: numeric("rating", { precision: 8, scale: 2 }).notNull(),
+    judgmentsPlayed: integer("judgments_played").notNull().default(0),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    draws: integer("draws").notNull().default(0),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("engineer_rating_run_email_uniq").on(table.runId, table.engineerEmail),
+    index("engineer_ratings_run_rating_idx").on(table.runId, table.rating),
+  ],
+);
