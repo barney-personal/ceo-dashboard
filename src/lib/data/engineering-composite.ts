@@ -14,14 +14,16 @@
  * performance label, and the monotonic +1 constraint on AI-tooling spend is
  * an unsealable gaming vector.
  *
- * Five signals, weights sum to 1.0, no single weight exceeds 30%:
+ * Five signals, weights sum to 1.0, no single weight exceeds 30%
+ * (velocity-leaning regime — velocity 55 / quality 35 / process 10):
  *
- *  - delivery (20%)          winsorized log(1 + prs), cohort-P90 cap
- *  - quality (30%)           rubric mean (execution/tests/risk/review),
+ *  - delivery (30%)          winsorized log(1 + prs), cohort-P90 cap
+ *                            — sits at the single-signal cap
+ *  - cycleTime (25%)         inverse of winsorized median time-to-merge
+ *  - quality (20%)           rubric mean (execution/tests/risk/review),
  *                            difficulty-weighted, min 3 analysed PRs
- *  - reliability (20%)       1 - revertRate from rubric rows
- *  - reviewDiscipline (15%)  fraction of PRs with ≥1 review round
- *  - cycleTime (15%)         inverse of winsorized median time-to-merge
+ *  - reliability (15%)       1 - revertRate from rubric rows
+ *  - reviewDiscipline (10%)  fraction of PRs with ≥1 review round
  *
  * Normalisation: z-score within discipline cohort (BE vs FE), converted to a
  * percentile band. Tenure below the signal window (default 180 days) is
@@ -108,12 +110,23 @@ export const COMPOSITE_SIGNAL_KEYS = [
   "cycleTime",
 ] as const satisfies readonly CompositeSignalKey[];
 
+/**
+ * Velocity-leaning composite weights. Buckets:
+ *   • Velocity:  delivery 30 + cycleTime 25 = 55%
+ *   • Quality:   quality 20 + reliability 15 = 35%
+ *   • Process:   reviewDiscipline 10 = 10%
+ *
+ * Delivery sits at COMPOSITE_MAX_SINGLE_WEIGHT (the anti-gaming cap) so
+ * volume cannot dominate beyond 30% even after redistribution. The cap
+ * remains the structural protection against any single signal becoming a
+ * proxy for the rank.
+ */
 export const COMPOSITE_WEIGHTS: Record<CompositeSignalKey, number> = {
-  delivery: 0.2,
-  quality: 0.3,
-  reliability: 0.2,
-  reviewDiscipline: 0.15,
-  cycleTime: 0.15,
+  delivery: 0.3,
+  quality: 0.2,
+  reliability: 0.15,
+  reviewDiscipline: 0.1,
+  cycleTime: 0.25,
 };
 
 export const COMPOSITE_MAX_SINGLE_WEIGHT = 0.3 as const;
