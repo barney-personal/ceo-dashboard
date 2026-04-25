@@ -104,6 +104,19 @@ export function manualSyncRateLimitKey(
   return `user:${userId}`;
 }
 
+/**
+ * Whether the manual-sync rate limit is enforced for this process.
+ *
+ * The cap is a prod-only safety net. In development we want to be able to
+ * iterate freely on sync runners without 429s after ten "Sync now" clicks,
+ * so the limit only kicks in when `NODE_ENV === "production"`. Tests run
+ * with `NODE_ENV=test` and use the lower-level `createSlidingWindowRateLimiter`
+ * directly, so they are unaffected by this gate.
+ */
+export function isManualSyncRateLimitEnabled(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
 export function rateLimitErrorResponse(
   retryAfterSeconds: number,
   source: ManualLlmSyncSource

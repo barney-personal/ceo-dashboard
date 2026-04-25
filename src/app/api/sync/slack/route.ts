@@ -5,6 +5,7 @@ import {
   syncRequestAccessErrorResponse,
 } from "@/lib/sync/request-auth";
 import {
+  isManualSyncRateLimitEnabled,
   manualSyncRateLimitKey,
   manualSyncRateLimiter,
   rateLimitErrorResponse,
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
       return accessError;
     }
 
-    if (identity.access === "manual") {
+    if (identity.access === "manual" && isManualSyncRateLimitEnabled()) {
       const decision = manualSyncRateLimiter.check(
         manualSyncRateLimitKey("slack", identity.userId)
       );

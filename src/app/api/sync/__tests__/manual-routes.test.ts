@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sync/request-auth", () => ({
   authorizeSyncRequest: vi.fn(),
@@ -127,6 +127,10 @@ function makeRequest(url: string, body?: unknown) {
 
 describe("manual sync routes", () => {
   beforeEach(() => {
+    // The manual-sync rate limiter is gated on NODE_ENV === "production" so
+    // local dev iteration is not blocked. Force it on for these tests so the
+    // 429 / cron-exempt assertions actually exercise the limit code path.
+    vi.stubEnv("NODE_ENV", "production");
     vi.resetAllMocks();
     manualSyncRateLimiter.reset();
     mockCreateWorkerId.mockImplementation((label) => label);
@@ -156,6 +160,10 @@ describe("manual sync routes", () => {
 
       return null;
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it.each(routes)("returns 401 for unauthenticated $name requests", async ({ handler, url }) => {

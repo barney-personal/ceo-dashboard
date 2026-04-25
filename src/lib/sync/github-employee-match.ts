@@ -14,10 +14,6 @@ import {
   githubEmployeeMatchArraySchema,
   summarizeZodIssues,
 } from "@/lib/validation/llm-output";
-import {
-  assertWithinDailyBudget,
-  recordLlmUsage,
-} from "@/lib/integrations/llm-budget";
 
 // Match GitHub's bot account naming convention: "[bot]" suffix or known CI accounts
 const BOT_PATTERNS = ["[bot]", "circleci", "dependabot", "cursor", "github-actions"];
@@ -124,8 +120,6 @@ async function llmMatchEmployees(
 ): Promise<LlmMatch[]> {
   if (unmatched.length === 0 || employees.length === 0) return [];
 
-  await assertWithinDailyBudget("github-employee-match");
-
   const client = new Anthropic();
 
   const employeeList = employees
@@ -178,8 +172,6 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
       ]),
     }
   );
-
-  await recordLlmUsage("github-employee-match", response);
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";

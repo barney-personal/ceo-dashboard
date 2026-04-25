@@ -30,11 +30,6 @@ vi.mock("@anthropic-ai/sdk", () => {
 
 vi.mock("@sentry/nextjs", () => mockSentry);
 
-vi.mock("@/lib/integrations/llm-budget", () => ({
-  assertWithinDailyBudget: vi.fn().mockResolvedValue(undefined),
-  recordLlmUsage: vi.fn().mockResolvedValue(undefined),
-}));
-
 import { llmParseOkrUpdate, llmParseOkrUpdates } from "../llm-okr-parser";
 
 // ---------------------------------------------------------------------------
@@ -150,9 +145,8 @@ describe("llmParseOkrUpdate timeout", () => {
       "system prompt"
     );
 
-    // Two microtick flushes: one for assertWithinDailyBudget, one for the
-    // rejected messages.create promise to propagate into the retry catch block.
-    await Promise.resolve();
+    // Microtick flush so the rejected messages.create promise propagates
+    // into the retry catch block.
     await Promise.resolve();
     expect(mockMessages.create).toHaveBeenCalledTimes(1);
     expect(mockSentry.addBreadcrumb).toHaveBeenCalledWith(

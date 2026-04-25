@@ -5,10 +5,6 @@ import {
   financialExtractSchema,
   summarizeZodIssues,
 } from "@/lib/validation/llm-output";
-import {
-  assertWithinDailyBudget,
-  recordLlmUsage,
-} from "@/lib/integrations/llm-budget";
 
 // maxRetries: 1 — batch extraction rarely benefits from more retries, and extra
 // retries inflate wall-clock time before the AbortController timeout kicks in.
@@ -231,8 +227,6 @@ export async function parseManagementAccounts(
   const { sheetNames, sheets } = readExcelSheets(buffer);
   const sheetText = formatSheetsForLLM(sheets);
 
-  await assertWithinDailyBudget("excel-parser");
-
   const { signal, cleanup, timedOut } = composeAbortSignal(
     LLM_CALL_TIMEOUT_MS,
     opts.signal,
@@ -277,8 +271,6 @@ export async function parseManagementAccounts(
   } finally {
     cleanup();
   }
-
-  await recordLlmUsage("excel-parser", response);
 
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";

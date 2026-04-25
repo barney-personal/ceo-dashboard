@@ -13,10 +13,6 @@ import {
   parsedOkrKrSchema,
   summarizeZodIssues,
 } from "@/lib/validation/llm-output";
-import {
-  assertWithinDailyBudget,
-  recordLlmUsage,
-} from "@/lib/integrations/llm-budget";
 
 const client = new Anthropic();
 
@@ -448,8 +444,6 @@ async function requestOkrParse(
   opts: ParseOkrOptions = {},
   maxTokens = 2000
 ): Promise<string | null> {
-  await assertWithinDailyBudget("okr-parser");
-
   const { signal, cleanup, timedOut } = composeAbortSignal(
     LLM_CALL_TIMEOUT_MS,
     opts.signal,
@@ -483,8 +477,6 @@ async function requestOkrParse(
   } finally {
     cleanup();
   }
-
-  await recordLlmUsage("okr-parser", response);
 
   return normalizeResponseText(response);
 }

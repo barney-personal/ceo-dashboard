@@ -40,11 +40,6 @@ vi.mock("@anthropic-ai/sdk", () => ({
 
 vi.mock("@sentry/nextjs", () => sentryMock);
 
-vi.mock("@/lib/integrations/llm-budget", () => ({
-  assertWithinDailyBudget: vi.fn().mockResolvedValue(undefined),
-  recordLlmUsage: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("@/lib/db/schema", () => ({
   githubPrs: {
     authorLogin: "authorLogin",
