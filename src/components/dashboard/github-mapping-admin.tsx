@@ -98,6 +98,24 @@ export function GithubMappingAdmin({
     [unmappedEmployees]
   );
 
+  // Pre-rank the recent untagged pool against every unmapped engineer once,
+  // so the per-row "Other untagged GitHub accounts" grid doesn't re-run a
+  // full Jaro-Winkler pass on every unrelated state change (filter typing,
+  // expand/collapse, etc.).
+  const otherActiveByEmail = useMemo(() => {
+    const map = new Map<string, ScoredCandidate[]>();
+    for (const emp of unmappedEmployees) {
+      const topLogins = new Set(emp.candidates.map((c) => c.login));
+      map.set(
+        emp.email,
+        scoreCandidatesForEmployee(emp, recentCandidatePool).filter(
+          (c) => !topLogins.has(c.login)
+        )
+      );
+    }
+    return map;
+  }, [unmappedEmployees, recentCandidatePool]);
+
   const refreshSlackAvatars = async () => {
     setRefreshingAvatars(true);
     setError(null);
@@ -316,13 +334,7 @@ export function GithubMappingAdmin({
       <ul className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/60 bg-card shadow-warm">
         {visibleEmployees.map((emp) => {
           const isOpen = expanded === emp.email;
-          // Active untagged candidates ranked for this employee, with the
-          // top-N matches filtered out so we don't show the same card twice.
-          const topLogins = new Set(emp.candidates.map((c) => c.login));
-          const otherActive = scoreCandidatesForEmployee(
-            emp,
-            recentCandidatePool
-          ).filter((c) => !topLogins.has(c.login));
+          const otherActive = otherActiveByEmail.get(emp.email) ?? [];
 
           return (
             <li key={emp.email} className="bg-card">
