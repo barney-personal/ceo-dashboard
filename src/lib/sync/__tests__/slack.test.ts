@@ -385,7 +385,6 @@ describe("runSlackSync", () => {
 
     setChannelIds(channels.map((c) => c.id).join(","));
 
-    let callIndex = 0;
     slackMock.getChannelName.mockImplementation(async (id: string) => {
       return channels.find((c) => c.id === id)?.name ?? "unknown";
     });

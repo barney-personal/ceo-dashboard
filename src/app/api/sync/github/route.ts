@@ -21,7 +21,10 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    const identity = await authorizeSyncRequestWithIdentity(request);
+    const identity = await authorizeSyncRequestWithIdentity(
+      request,
+      "admin.status",
+    );
     const accessError = syncRequestAccessErrorResponse(identity.access);
     if (accessError) {
       return accessError;

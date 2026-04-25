@@ -147,8 +147,14 @@ function maybeNeutralizeObfuscatedUrl(url: string): string | null {
   return isDangerousAfterNormalization(normalized) ? BLOCKED_SCHEME : null;
 }
 
+// `data` covers `<object data="...">`, the src-equivalent attribute on
+// `<object>` (also accepted by some browsers as a navigable target). Without
+// it, an obfuscated `javascript:` payload inside `<object data="java&#115;cript:...">`
+// would skip the URL-attribute normalization pass and only fall through to
+// the literal JAVASCRIPT_SCHEME regex, which does not handle entity-encoded
+// schemes.
 const URL_ATTR_NAMES =
-  "href|src|xlink:href|formaction|action|background|poster|cite|manifest|ping";
+  "href|src|xlink:href|formaction|action|background|poster|cite|manifest|ping|data";
 
 // Double-quoted URL attribute values: href="..." etc.
 const URL_ATTR_DOUBLE_QUOTED = new RegExp(

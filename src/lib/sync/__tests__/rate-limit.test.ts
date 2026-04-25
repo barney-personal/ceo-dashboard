@@ -21,25 +21,33 @@ describe("createSlidingWindowRateLimiter", () => {
     });
   });
 
-  it("isolates counters by key", () => {
+  it("isolates counters per user but shares budget across sources", () => {
     const limiter = createSlidingWindowRateLimiter({
       maxRequests: 1,
       windowMs: 1_000,
       now: () => 100,
     });
 
+    // user_a's first slack request consumes their per-user budget
     expect(limiter.check(manualSyncRateLimitKey("slack", "user_a")).ok).toBe(
       true
     );
+    // user_a's second request — even on a different source — must hit the
+    // SAME bucket. This is the codex-bot finding: keying on (source, userId)
+    // would let user_a get 1 request per source, defeating the budget intent.
     expect(limiter.check(manualSyncRateLimitKey("slack", "user_a")).ok).toBe(
       false
     );
+    expect(
+      limiter.check(manualSyncRateLimitKey("management-accounts", "user_a")).ok
+    ).toBe(false);
+    expect(limiter.check(manualSyncRateLimitKey("github", "user_a")).ok).toBe(
+      false
+    );
+    // Different user → fresh bucket.
     expect(limiter.check(manualSyncRateLimitKey("slack", "user_b")).ok).toBe(
       true
     );
-    expect(
-      limiter.check(manualSyncRateLimitKey("management-accounts", "user_a")).ok
-    ).toBe(true);
   });
 
   it("expires hits after the sliding window elapses", () => {

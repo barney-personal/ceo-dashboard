@@ -1,7 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 import { sql } from "drizzle-orm";
 import { and, eq } from "drizzle-orm";
-import type { Message as AnthropicMessage } from "@anthropic-ai/sdk/resources/messages/messages";
 import { db as defaultDb } from "@/lib/db";
 import { llmUsage } from "@/lib/db/schema";
 import { normalizeDatabaseError } from "@/lib/db/errors";

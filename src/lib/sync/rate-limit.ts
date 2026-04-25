@@ -72,9 +72,17 @@ export function createSlidingWindowRateLimiter(
   };
 }
 
-// Default: 10 manual sync triggers per user per 60s.
-// Manual LLM-backed syncs are costly; this is generous for human operators
-// but blocks accidental loops or scripted abuse.
+// Default: 10 manual sync triggers per user per 60s, shared across ALL
+// LLM-backed sources (slack, management-accounts, github). Keying on userId
+// alone — and not (source, userId) — is deliberate: the goal is bounding
+// per-user Anthropic spend, not per-endpoint usability. Otherwise a caller
+// could rotate across all three sources for ~30 LLM-fanned-out requests per
+// minute, defeating the budget intent.
+//
+// Note: this limiter is in-memory and per-process. The current Render web
+// service is single-instance, so there is no cross-instance leakage. If the
+// service is ever horizontally scaled, swap to a shared store (Redis or a DB
+// table) before relying on this for budget enforcement.
 export const MANUAL_SYNC_RATE_LIMIT_MAX = 10;
 export const MANUAL_SYNC_RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -83,11 +91,17 @@ export const manualSyncRateLimiter = createSlidingWindowRateLimiter({
   windowMs: MANUAL_SYNC_RATE_LIMIT_WINDOW_MS,
 });
 
+/**
+ * Key for the shared per-user manual-sync budget. The `source` argument is
+ * accepted for callsite clarity (so each route names which source it is
+ * spending against) but is NOT part of the bucket key — see the comment on
+ * `manualSyncRateLimiter` above.
+ */
 export function manualSyncRateLimitKey(
-  source: ManualLlmSyncSource,
+  _source: ManualLlmSyncSource,
   userId: string
 ): string {
-  return `${source}:${userId}`;
+  return `user:${userId}`;
 }
 
 export function rateLimitErrorResponse(
