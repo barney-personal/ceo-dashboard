@@ -212,11 +212,13 @@ function ViewToggle({
 function Header({ view }: { view: CodeReviewView }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    setStatus(null);
+    setIsRefreshing(true);
+    setStatus("Reading PRs now… this can take a minute.");
     setError(null);
     try {
       const res = await fetch("/api/sync/code-review", { method: "POST" });
@@ -253,6 +255,8 @@ function Header({ view }: { view: CodeReviewView }) {
       startTransition(() => router.refresh());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRefreshing(false);
     }
   }
 
@@ -297,10 +301,10 @@ function Header({ view }: { view: CodeReviewView }) {
         <button
           type="button"
           onClick={refresh}
-          disabled={isPending}
+          disabled={isRefreshing || isPending}
           className="rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
         >
-          {isPending ? "Refreshing…" : "Refresh reading"}
+          {isRefreshing || isPending ? "Refreshing…" : "Refresh reading"}
         </button>
         {status && <span className="text-[11px] text-primary">{status}</span>}
         {error && <span className="text-[11px] text-rose-600">{error}</span>}
