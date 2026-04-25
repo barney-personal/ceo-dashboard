@@ -17,8 +17,15 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-const { mockAnalysePR, mockFetchPayload, mockCaptureException, mockCaptureMessage } = vi.hoisted(() => ({
+const {
+  mockAnalysePR,
+  mockAnalysePRWithExistingAnthropicReview,
+  mockFetchPayload,
+  mockCaptureException,
+  mockCaptureMessage,
+} = vi.hoisted(() => ({
   mockAnalysePR: vi.fn(),
+  mockAnalysePRWithExistingAnthropicReview: vi.fn(),
   mockFetchPayload: vi.fn(),
   mockCaptureException: vi.fn(),
   mockCaptureMessage: vi.fn(),
@@ -41,6 +48,7 @@ vi.mock("@/lib/integrations/code-review-analyser", async () => {
   return {
     ...actual,
     analysePR: mockAnalysePR,
+    analysePRWithExistingAnthropicReview: mockAnalysePRWithExistingAnthropicReview,
   };
 });
 
@@ -88,17 +96,19 @@ function stubPrsQuery(
   opts: {
     botLogins?: string[];
     existing?: Array<{ repo: string; prNumber: number }>;
+    previous?: unknown[];
     revertLookups?: unknown[][];
     includeExistingCall?: boolean;
   } = {},
 ) {
   const botRows = (opts.botLogins ?? []).map((login) => ({ githubLogin: login }));
-  stubSelectSequence([
-    prs,
-    botRows,
-    ...(opts.includeExistingCall === false ? [] : [opts.existing ?? []]),
-    ...(opts.revertLookups ?? prs.map(() => [])),
-  ]);
+  const sequence: unknown[][] = [prs, botRows];
+  if (opts.includeExistingCall !== false) {
+    sequence.push(opts.existing ?? []);
+    if (prs.length > 0) sequence.push(opts.previous ?? []);
+  }
+  sequence.push(...(opts.revertLookups ?? prs.map(() => [])));
+  stubSelectSequence(sequence);
 }
 
 function stubInsert() {
@@ -172,6 +182,7 @@ describe("runCodeReviewAnalysis", () => {
 
   beforeEach(() => {
     mockAnalysePR.mockReset();
+    mockAnalysePRWithExistingAnthropicReview.mockReset();
     mockFetchPayload.mockReset();
     stubInsert();
     delete process.env.CODE_REVIEW_EXCLUDED_REPOS;
@@ -197,6 +208,7 @@ describe("runCodeReviewAnalysis", () => {
     expect(result.analysed).toBe(2);
     expect(result.failed).toHaveLength(0);
     expect(mockAnalysePR).toHaveBeenCalledTimes(2);
+    expect(result.reusedClaudeReviews).toBe(0);
   });
 
   it("skips bot authors without hitting the LLM", async () => {
@@ -363,6 +375,7 @@ describe("runCodeReviewAnalysis", () => {
           { repo: "acme/api", prNumber: 2 },
         ],
         includeExistingCall: false,
+        previous: [],
       },
     );
     mockFetchPayload.mockResolvedValue(mockPayload());
@@ -371,6 +384,80 @@ describe("runCodeReviewAnalysis", () => {
     const result = await runCodeReviewAnalysis({ force: true });
     expect(result.analysed).toBe(2);
     expect(result.cached).toBe(0);
+  });
+
+  it("reuses older Claude rows and only runs GPT-5.4 for the ensemble backfill", async () => {
+    const mergedAt = new Date();
+    stubPrsQuery(
+      [
+        { repo: "acme/api", prNumber: 1, authorLogin: "alice", mergedAt },
+        { repo: "acme/api", prNumber: 2, authorLogin: "bob", mergedAt },
+      ],
+      {
+        previous: [
+          {
+            repo: "acme/api",
+            prNumber: 1,
+            reviewProvider: "anthropic",
+            reviewModel: "claude-opus-4-7",
+            technicalDifficulty: 4,
+            executionQuality: 4,
+            testAdequacy: 3,
+            riskHandling: 4,
+            reviewability: 4,
+            analysisConfidencePct: 82,
+            category: "feature",
+            summary: "Historical Claude read.",
+            caveats: [],
+            standout: null,
+            rawJson: {},
+          },
+          {
+            repo: "acme/api",
+            prNumber: 2,
+            reviewProvider: "anthropic",
+            reviewModel: "claude-opus-4-7",
+            technicalDifficulty: 3,
+            executionQuality: 3,
+            testAdequacy: 3,
+            riskHandling: 3,
+            reviewability: 3,
+            analysisConfidencePct: 80,
+            category: "bug_fix",
+            summary: "Another historical Claude read.",
+            caveats: [],
+            standout: null,
+            rawJson: {},
+          },
+        ],
+      },
+    );
+    mockFetchPayload.mockResolvedValue(mockPayload());
+    mockAnalysePRWithExistingAnthropicReview.mockResolvedValue(
+      mockAnalysis({
+        provider: "ensemble",
+        model: "claude-opus-4-7+gpt-5.4",
+        secondOpinionUsed: true,
+        rawModelReviews: [
+          { provider: "anthropic" },
+          { provider: "openai" },
+        ],
+      }),
+    );
+
+    const result = await runCodeReviewAnalysis({ concurrency: 2 });
+
+    expect(result.analysed).toBe(2);
+    expect(result.reusedClaudeReviews).toBe(2);
+    expect(mockAnalysePR).not.toHaveBeenCalled();
+    expect(mockAnalysePRWithExistingAnthropicReview).toHaveBeenCalledTimes(2);
+    expect(mockAnalysePRWithExistingAnthropicReview.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        summary: "Historical Claude read.",
+      }),
+    );
   });
 
   it("honours the limit parameter", async () => {

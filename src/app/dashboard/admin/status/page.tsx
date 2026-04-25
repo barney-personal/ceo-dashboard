@@ -264,13 +264,28 @@ export default async function DataStatusPage() {
       required: false,
     },
     {
-      key: "CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION",
-      label: "Code Review OpenAI Toggle",
+      key: "CODE_REVIEW_ANTHROPIC_CONCURRENCY",
+      label: "Code Review Anthropic Concurrency",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_CONCURRENCY",
+      label: "Code Review OpenAI Concurrency",
       required: false,
     },
     {
       key: "CODE_REVIEW_OPENAI_REASONING_EFFORT",
       label: "Code Review OpenAI Reasoning",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS",
+      label: "Code Review OpenAI Output Budget",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT",
+      label: "Code Review OpenAI Escalation Reasoning",
       required: false,
     },
     {

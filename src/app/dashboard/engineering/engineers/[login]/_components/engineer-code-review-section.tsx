@@ -20,6 +20,7 @@ const FLAG_LABEL: Record<DiagnosticFlag, string> = {
   review_churn_high: "Lots of review back-and-forth",
   has_concerning_pr: "PR worth a second look",
   reverted_pr: "Includes a revert",
+  model_disagreement: "Models disagreed",
 };
 
 const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
@@ -29,6 +30,7 @@ const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
   review_churn_high: "warn",
   has_concerning_pr: "warn",
   reverted_pr: "warn",
+  model_disagreement: "info",
 };
 
 const FLAG_HELP: Record<DiagnosticFlag, string> = {
@@ -44,6 +46,8 @@ const FLAG_HELP: Record<DiagnosticFlag, string> = {
     "One PR in the window is worth opening together — not necessarily a problem.",
   reverted_pr:
     "A merged PR was reverted within 14 days. Reverts happen — context usually explains it.",
+  model_disagreement:
+    "Claude and GPT-5.4 materially disagreed on at least one PR. Open it together and calibrate the rubric judgement.",
 };
 
 const CATEGORY_LABEL: Record<AnalysisCategory, string> = {
@@ -72,9 +76,9 @@ const STANDOUT_TONE: Record<AnalysisStandout, "good" | "warn"> = {
 
 const AGREEMENT_LABEL: Record<ModelAgreementLevel, string> = {
   single_model: "Single-model read",
-  confirmed: "Second opinion agreed",
-  minor_adjustment: "Second opinion nudged it",
-  material_adjustment: "Second opinion shifted it meaningfully",
+  confirmed: "Models agreed",
+  minor_adjustment: "Models differed slightly",
+  material_adjustment: "Models disagreed",
 };
 
 function pillClass(

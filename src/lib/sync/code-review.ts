@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
-import { and, desc, eq, gte, inArray, lte, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   githubCommits,
@@ -10,7 +10,9 @@ import {
 import {
   RUBRIC_VERSION,
   analysePR,
+  analysePRWithExistingAnthropicReview,
   type CodeReviewAnalysis,
+  type CodeReviewModelReview,
 } from "@/lib/integrations/code-review-analyser";
 import { fetchPRAnalysisPayload, GitHubApiError } from "@/lib/integrations/github";
 
@@ -51,6 +53,8 @@ export interface AnalyseRunResult {
   candidatesConsidered: number;
   cached: number;
   analysed: number;
+  singleModelFallbacks: number;
+  reusedClaudeReviews: number;
   failed: Array<{ repo: string; prNumber: number; reason: string }>;
   skipped: Array<{ repo: string; prNumber: number; reason: string }>;
   durationMs: number;
@@ -91,6 +95,75 @@ function getAnalysisConcurrency(override?: number): number {
   const raw = override ?? Number(process.env.CODE_REVIEW_ANALYSIS_CONCURRENCY ?? "");
   const parsed = Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_ANALYSIS_CONCURRENCY;
   return Math.max(1, Math.min(MAX_ANALYSIS_CONCURRENCY, parsed));
+}
+
+interface ReusableAnalysisRow {
+  reviewProvider: string | null;
+  reviewModel: string | null;
+  technicalDifficulty: number;
+  executionQuality: number;
+  testAdequacy: number;
+  riskHandling: number;
+  reviewability: number;
+  analysisConfidencePct: number;
+  category: string;
+  summary: string;
+  caveats: unknown;
+  standout: string | null;
+  rawJson: unknown;
+}
+
+function isReusableAnthropicReview(
+  value: unknown,
+): value is CodeReviewModelReview {
+  if (!value || typeof value !== "object") return false;
+  const review = value as Partial<CodeReviewModelReview>;
+  return (
+    review.provider === "anthropic" &&
+    typeof review.model === "string" &&
+    typeof review.technicalDifficulty === "number" &&
+    typeof review.executionQuality === "number" &&
+    typeof review.testAdequacy === "number" &&
+    typeof review.riskHandling === "number" &&
+    typeof review.reviewability === "number" &&
+    typeof review.analysisConfidencePct === "number" &&
+    typeof review.category === "string" &&
+    typeof review.summary === "string"
+  );
+}
+
+function reusableAnthropicReviewFrom(
+  row: ReusableAnalysisRow,
+): CodeReviewModelReview | null {
+  const raw = row.rawJson as { rawModelReviews?: unknown } | null | undefined;
+  const rawClaudeReview = Array.isArray(raw?.rawModelReviews)
+    ? raw.rawModelReviews.find(isReusableAnthropicReview)
+    : null;
+  if (rawClaudeReview) return rawClaudeReview;
+
+  if (
+    row.reviewProvider !== "anthropic" &&
+    !row.reviewModel?.toLowerCase().includes("claude")
+  ) {
+    return null;
+  }
+
+  return {
+    provider: "anthropic",
+    model: row.reviewModel || "claude-opus-4-7",
+    technicalDifficulty: row.technicalDifficulty,
+    executionQuality: row.executionQuality,
+    testAdequacy: row.testAdequacy,
+    riskHandling: row.riskHandling,
+    reviewability: row.reviewability,
+    analysisConfidencePct: row.analysisConfidencePct,
+    category: row.category as CodeReviewModelReview["category"],
+    summary: row.summary,
+    caveats: Array.isArray(row.caveats)
+      ? row.caveats.filter((c): c is string => typeof c === "string")
+      : [],
+    standout: row.standout as CodeReviewModelReview["standout"],
+  };
 }
 
 /**
@@ -140,6 +213,8 @@ export async function runCodeReviewAnalysis(
   const failed: AnalyseRunResult["failed"] = [];
   let cached = 0;
   let analysed = 0;
+  let singleModelFallbacks = 0;
+  let reusedClaudeReviews = 0;
 
   // Find which (repo, prNumber) pairs already have a current-rubric analysis —
   // batch lookup so we don't N+1 select.
@@ -154,6 +229,9 @@ export async function runCodeReviewAnalysis(
     }
     return true;
   });
+
+  const key = (r: { repo: string; prNumber: number }) => `${r.repo}#${r.prNumber}`;
+  const reusableClaudeByKey = new Map<string, CodeReviewModelReview>();
 
   if (!opts.force && eligible.length > 0) {
     const existing = await db
@@ -175,7 +253,6 @@ export async function runCodeReviewAnalysis(
           ),
         ),
       );
-    const key = (r: { repo: string; prNumber: number }) => `${r.repo}#${r.prNumber}`;
     const existingSet = new Set(existing.map(key));
     for (let i = eligible.length - 1; i >= 0; i--) {
       if (existingSet.has(key(eligible[i]))) {
@@ -186,6 +263,50 @@ export async function runCodeReviewAnalysis(
   }
 
   const toRun = eligible.slice(0, limit);
+
+  if (!opts.force && toRun.length > 0) {
+    const previousRows = await db
+      .select({
+        repo: prReviewAnalyses.repo,
+        prNumber: prReviewAnalyses.prNumber,
+        reviewProvider: prReviewAnalyses.reviewProvider,
+        reviewModel: prReviewAnalyses.reviewModel,
+        technicalDifficulty: prReviewAnalyses.technicalDifficulty,
+        executionQuality: prReviewAnalyses.executionQuality,
+        testAdequacy: prReviewAnalyses.testAdequacy,
+        riskHandling: prReviewAnalyses.riskHandling,
+        reviewability: prReviewAnalyses.reviewability,
+        analysisConfidencePct: prReviewAnalyses.analysisConfidencePct,
+        category: prReviewAnalyses.category,
+        summary: prReviewAnalyses.summary,
+        caveats: prReviewAnalyses.caveats,
+        standout: prReviewAnalyses.standout,
+        rawJson: prReviewAnalyses.rawJson,
+      })
+      .from(prReviewAnalyses)
+      .where(
+        and(
+          ne(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
+          or(
+            ...toRun.map((c) =>
+              and(
+                eq(prReviewAnalyses.repo, c.repo),
+                eq(prReviewAnalyses.prNumber, c.prNumber),
+              ),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(prReviewAnalyses.analysedAt));
+
+    for (const row of previousRows) {
+      const rowKey = key(row);
+      if (reusableClaudeByKey.has(rowKey)) continue;
+      const review = reusableAnthropicReviewFrom(row);
+      if (review) reusableClaudeByKey.set(rowKey, review);
+    }
+  }
+
   // githubPrs.repo is the bare repo name (e.g. "mobile-app") — the GitHub
   // sync drops the org to match its per-repo metric schema. We need the
   // full "owner/repo" for the API, so prefix with GITHUB_ORG here. Throw
@@ -236,9 +357,22 @@ export async function runCodeReviewAnalysis(
             payload.mergeSha,
             payload.title,
           );
-          const analysis = await analysePR(payload, { signal: opts.signal });
+          const reusableClaudeReview = reusableClaudeByKey.get(key(c));
+          const analysis = reusableClaudeReview
+            ? await analysePRWithExistingAnthropicReview(
+                payload,
+                reusableClaudeReview,
+                { signal: opts.signal },
+              )
+            : await analysePR(payload, { signal: opts.signal });
           await upsertAnalysis(c, payload, analysis);
           analysed++;
+          if (reusableClaudeReview) {
+            reusedClaudeReviews++;
+          }
+          if (analysis.rawModelReviews.length === 1) {
+            singleModelFallbacks++;
+          }
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
@@ -293,6 +427,8 @@ export async function runCodeReviewAnalysis(
     candidatesConsidered: candidates.length,
     cached,
     analysed,
+    singleModelFallbacks,
+    reusedClaudeReviews,
     failed,
     skipped,
     durationMs: Date.now() - start,

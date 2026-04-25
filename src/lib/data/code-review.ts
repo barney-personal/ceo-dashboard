@@ -6,6 +6,7 @@ import {
   RUBRIC_VERSION,
   type AnalysisCategory,
   type AnalysisStandout,
+  type CodeReviewModelReview,
   type CodeReviewSurface,
   type ModelAgreementLevel,
   type SecondOpinionReason,
@@ -60,6 +61,7 @@ export interface PrReviewEntry {
   recencyWeight: number;
   githubUrl: string;
   secondLookReasons: SecondLookReason[];
+  rawModelReviews: CodeReviewModelReview[];
 }
 
 export type DiagnosticFlag =
@@ -68,7 +70,8 @@ export type DiagnosticFlag =
   | "quality_variance_high"
   | "review_churn_high"
   | "has_concerning_pr"
-  | "reverted_pr";
+  | "reverted_pr"
+  | "model_disagreement";
 
 export interface EngineerRollup {
   authorLogin: string;
@@ -148,6 +151,7 @@ interface AnalysisRow {
   secondOpinionUsed?: boolean | null;
   agreementLevel?: string | null;
   secondOpinionReasons?: unknown;
+  rawJson?: unknown;
   analysedAt: Date;
 }
 
@@ -385,6 +389,9 @@ function computeFlags(
   if (prs.some((pr) => pr.revertWithin14d)) {
     flags.push("reverted_pr");
   }
+  if (prs.some((pr) => pr.agreementLevel === "material_adjustment")) {
+    flags.push("model_disagreement");
+  }
   if (effectivePrCount >= 2.5 && churnResidual >= 1.0) {
     flags.push("review_churn_high");
   }
@@ -392,6 +399,28 @@ function computeFlags(
     flags.push("quality_variance_high");
   }
   return flags;
+}
+
+function isModelReview(value: unknown): value is CodeReviewModelReview {
+  if (!value || typeof value !== "object") return false;
+  const review = value as Partial<CodeReviewModelReview>;
+  return (
+    typeof review.provider === "string" &&
+    typeof review.model === "string" &&
+    typeof review.technicalDifficulty === "number" &&
+    typeof review.executionQuality === "number" &&
+    typeof review.testAdequacy === "number" &&
+    typeof review.riskHandling === "number" &&
+    typeof review.reviewability === "number" &&
+    typeof review.analysisConfidencePct === "number" &&
+    typeof review.summary === "string"
+  );
+}
+
+function rawModelReviewsFrom(row: AnalysisRow): CodeReviewModelReview[] {
+  const raw = row.rawJson as { rawModelReviews?: unknown } | null | undefined;
+  if (!Array.isArray(raw?.rawModelReviews)) return [];
+  return raw.rawModelReviews.filter(isModelReview);
 }
 
 function bucketWeekly(prs: PrReviewEntry[], windowDays: number): number[] {
@@ -485,6 +514,7 @@ function normaliseRow(row: AnalysisRow): Omit<PrReviewEntry, "githubUrl"> {
     reviewHealthScore: 0,
     prScore: 0,
     recencyWeight: recency,
+    rawModelReviews: rawModelReviewsFrom(row),
   };
   const qualityScore = computeQualityScore(base);
   const reviewHealthScore = computeReviewHealthScore({
