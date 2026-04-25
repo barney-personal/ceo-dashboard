@@ -4,17 +4,31 @@ import { ManagerView, type ManagerScopeKind } from "./manager-view";
 
 export type EngineeringBPersona = "engineer" | "manager";
 
+/**
+ * Pick the persona for a given effective role. The role gate
+ * (`ENGINEERING_VIEW_B_MIN_ROLE` in engineering-view.server) keeps plain
+ * `manager` and `everyone` off B-side entirely — those values only reach
+ * resolvePersona via CEO role-preview (which deliberately routes them
+ * through the engineer persona for layout testing).
+ *
+ *   ceo, leadership          → manager persona, org-scope (see resolveManagerScope)
+ *   engineering_manager      → manager persona, directs-scope
+ *   manager, everyone        → engineer persona (only reachable via CEO preview)
+ */
 export function resolvePersona(effectiveRole: Role): EngineeringBPersona {
-  return effectiveRole === "ceo" || effectiveRole === "leadership"
+  return effectiveRole === "ceo" ||
+    effectiveRole === "leadership" ||
+    effectiveRole === "engineering_manager"
     ? "manager"
     : "engineer";
 }
 
 /**
  * For the manager persona, pick the scope kind from the effective role. CEO
- * and leadership see the full org stack rank. Any other effective role falling
- * into the manager persona (not reachable in first pass thanks to M4, but kept
- * consistent in code) would use direct-reports scoping.
+ * and leadership see the full org stack rank. Engineering managers see only
+ * their direct reports (directs-scope). Any other effective role falling
+ * into the manager persona (only reachable via CEO role-preview) defaults to
+ * directs-scope as a safe lower-leakage default.
  */
 export function resolveManagerScope(effectiveRole: Role): ManagerScopeKind {
   return effectiveRole === "ceo" || effectiveRole === "leadership"
@@ -59,11 +73,12 @@ export function EngineeringBRoot({
 
   if (persona === "manager") {
     const scope = resolveManagerScope(effectiveRole);
-    // Under impersonation the impersonated user's email becomes the manager
-    // identity for directs-scope; for org-scope ManagerView ignores the email
-    // anyway, so this is harmless in the CEO-impersonating-leadership case.
+    // Impersonation overrides the explicit managerEmail so the CEO impersonating
+    // an eng manager sees that manager's directs cohort, not the CEO's. For
+    // org-scope ManagerView ignores the email anyway, so this is harmless in
+    // the CEO-impersonating-leadership case.
     const resolvedManagerEmail =
-      managerEmail ?? impersonatedEmail ?? null;
+      impersonatedEmail ?? managerEmail ?? null;
     return (
       <div
         data-testid="engineering-b-root"

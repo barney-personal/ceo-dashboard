@@ -82,6 +82,7 @@ export default async function EngineeringLayout({
             effectiveRole={engineeringView.effectiveRole}
             isCeoPreview={engineeringView.actualCeo}
             impersonatedEmail={engineeringView.impersonatedEmail}
+            managerEmail={engineeringView.viewerEmail}
           />
         ) : (
           children

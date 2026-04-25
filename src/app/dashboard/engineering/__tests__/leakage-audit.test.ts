@@ -150,8 +150,12 @@ describe("B-side leakage audit (M13) — resolver", () => {
     ["engineering_manager"],
     ["leadership"],
   ])(
-    "non-CEO with engineeringViewB true → a-side (%s)",
+    "non-CEO cannot self-elevate by forging engineeringViewB on own metadata (%s)",
     async (role) => {
+      // The resolver reads the CEO user's flag, never the viewer's. With
+      // clerkClient mocked as a bare vi.fn() the CEO lookup fails closed and
+      // the global flag is treated as OFF — so even a forged metadata flag
+      // on a non-CEO viewer cannot push them to b-side.
       authedAs({ role, engineeringViewB: true });
       const r = await getEngineeringViewResolution();
       expect(r.surface).toBe("a-side");
