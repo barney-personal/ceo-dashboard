@@ -52,15 +52,15 @@ describe("resolvePersona", () => {
     expect(resolvePersona("leadership")).toBe("manager");
   });
 
-  it("maps manager role to engineer persona (non-CEO plain managers never reach B-side in first pass)", () => {
+  it("maps engineering_manager to manager persona (gated to directs scope)", () => {
+    expect(resolvePersona("engineering_manager")).toBe("manager");
+  });
+
+  it("maps plain manager to engineer persona (only reachable via CEO role-preview)", () => {
     expect(resolvePersona("manager")).toBe("engineer");
   });
 
-  it("maps engineering_manager to engineer persona", () => {
-    expect(resolvePersona("engineering_manager")).toBe("engineer");
-  });
-
-  it("maps everyone to engineer persona", () => {
+  it("maps everyone to engineer persona (only reachable via CEO role-preview)", () => {
     expect(resolvePersona("everyone")).toBe("engineer");
   });
 });
@@ -74,9 +74,12 @@ describe("resolveManagerScope", () => {
     expect(resolveManagerScope("leadership")).toBe("org");
   });
 
-  it("returns directs for any lower role (unreachable in first pass)", () => {
-    expect(resolveManagerScope("manager")).toBe("directs");
+  it("returns directs for engineering_manager — they only see their own reports", () => {
     expect(resolveManagerScope("engineering_manager")).toBe("directs");
+  });
+
+  it("returns directs for any lower role (only reachable via CEO role-preview)", () => {
+    expect(resolveManagerScope("manager")).toBe("directs");
     expect(resolveManagerScope("everyone")).toBe("directs");
   });
 });
@@ -105,10 +108,20 @@ describe("EngineeringBRoot", () => {
     expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
   });
 
-  it("does not leak manager content to engineering_manager persona", () => {
-    render(<EngineeringBRoot effectiveRole="engineering_manager" />);
-    expect(screen.queryByTestId("manager-view-stub")).not.toBeInTheDocument();
-    expect(screen.getByTestId("engineer-view-stub")).toBeInTheDocument();
+  it("renders the manager view with directs scope for engineering_manager", () => {
+    render(
+      <EngineeringBRoot
+        effectiveRole="engineering_manager"
+        managerEmail="em@meetcleo.com"
+      />,
+    );
+    const root = screen.getByTestId("engineering-b-root");
+    expect(root.getAttribute("data-persona")).toBe("manager");
+    expect(root.getAttribute("data-scope")).toBe("directs");
+    const view = screen.getByTestId("manager-view-stub");
+    expect(view.getAttribute("data-scope")).toBe("directs");
+    // The viewer's own email is what scopes the directs cohort.
+    expect(view.getAttribute("data-manager-email")).toBe("em@meetcleo.com");
   });
 
   it("threads impersonatedEmail to EngineerView and disables the CEO preview banner", () => {
@@ -172,5 +185,21 @@ describe("EngineeringBRoot", () => {
     expect(view.getAttribute("data-manager-email")).toBe(
       "lead@meetcleo.com",
     );
+  });
+
+  it("impersonatedEmail wins over managerEmail when CEO impersonates an engineering_manager", () => {
+    // The CEO is logged in (managerEmail = ceo@meetcleo.com) and impersonates
+    // an engineering manager. The directs-scope cohort must be the eng
+    // manager's reports, not the CEO's.
+    render(
+      <EngineeringBRoot
+        effectiveRole="engineering_manager"
+        managerEmail="ceo@meetcleo.com"
+        impersonatedEmail="em@meetcleo.com"
+      />,
+    );
+    const view = screen.getByTestId("manager-view-stub");
+    expect(view.getAttribute("data-scope")).toBe("directs");
+    expect(view.getAttribute("data-manager-email")).toBe("em@meetcleo.com");
   });
 });
