@@ -80,6 +80,15 @@ export const CONFIDENCE_MIN_HALF_WIDTH = 2 as const;
 export const CONFIDENCE_MAX_HALF_WIDTH = 25 as const;
 export const CONFIDENCE_TENURE_PENALTY_PER_UNIT = 3 as const;
 
+/**
+ * Absolute upper bound on the raw-score gap between two members of the same
+ * tie group. Even when the smaller band's half-width would permit a tie, a
+ * gap exceeding this cap is treated as too large for "statistically
+ * indistinguishable" — protecting the rank from collapsing huge spans of
+ * scores into one group when wide bands chain across the cohort.
+ */
+export const TIE_GROUP_MAX_SCORE_GAP = 4 as const;
+
 /** Minimum scored entries to assign quartile flags. Below this, flags are
  *  suppressed because quartile boundaries are not meaningful. */
 export const CONFIDENCE_MIN_ENTRIES_FOR_FLAGS = 4 as const;
@@ -258,7 +267,7 @@ export const COMPOSITE_METHODOLOGY_SECTIONS: readonly CompositeMethodologySectio
     },
     {
       title: "Tie-group rule",
-      body: "Adjacent engineers whose confidence bands overlap collapse into a shared tie group, transitive via overlap. Members of a tie group share a competition-style displayRank — internal positional rank is hidden from the UI because the band says the order inside the group is not real.",
+      body: `Tie groups are anchor-based, not transitive. Each engineer is compared to the ANCHOR (the highest-scored member of the current group), not to the previous row, and joins the group only when (a) their confidence bands overlap, (b) the score gap to the anchor is no larger than the smaller band's half-width, and (c) the score gap to the anchor is no larger than ${TIE_GROUP_MAX_SCORE_GAP} points absolute. The anchor rule prevents transitive chains where adjacent band-overlaps would otherwise collapse a wide score span into one group. Members of a tie group share a competition-style displayRank; a within-tie raw-score position is shown for scanning only — the order inside the group is not statistically real.`,
     },
     {
       title: "Flag eligibility",
@@ -1416,6 +1425,42 @@ function bandsOverlap(a: ConfidenceBand, b: ConfidenceBand): boolean {
 }
 
 /**
+ * Tie-group membership test. Used by the (non-transitive) anchor-based
+ * walker — `candidate` is a member of the tie group anchored at `anchor`
+ * iff:
+ *
+ *   (1) Their confidence bands overlap.
+ *   (2) Their score gap is no larger than the smaller of the two band
+ *       half-widths (statistical indistinguishability — if either side has
+ *       a narrow band, that side's precision sets the bar).
+ *   (3) Their score gap is no larger than `TIE_GROUP_MAX_SCORE_GAP` —
+ *       absolute hard cap, protecting against pathological cases where
+ *       both bands are wide and the gap is large in absolute terms.
+ *
+ * The walker compares each candidate to the group's ANCHOR (the first row
+ * that opened the group), not to the previous adjacent row. This is the
+ * key fix for transitive chaining: when N adjacent overlaps each touch but
+ * their cumulative score span is large, the previous-row test would lump
+ * them all together; the anchor test catches the gap to the start of the
+ * group and breaks the chain at the first member that is no longer
+ * statistically indistinguishable from the anchor.
+ */
+function tiedWithAnchor(
+  anchor: { score: number; confidenceBand: ConfidenceBand },
+  candidate: { score: number; confidenceBand: ConfidenceBand },
+): boolean {
+  if (!bandsOverlap(anchor.confidenceBand, candidate.confidenceBand))
+    return false;
+  const scoreGap = Math.abs(anchor.score - candidate.score);
+  if (scoreGap > TIE_GROUP_MAX_SCORE_GAP) return false;
+  const minHalfWidth = Math.min(
+    anchor.confidenceBand.halfWidth,
+    candidate.confidenceBand.halfWidth,
+  );
+  return scoreGap <= minHalfWidth;
+}
+
+/**
  * Rank a set of composite entries (expected to be pre-scoped via
  * `scopeComposite`) and assign tie groups + quartile flags.
  *
@@ -1454,15 +1499,21 @@ export function rankWithConfidence(
     return a.displayName.localeCompare(b.displayName);
   });
 
-  // --- Tie groups (adjacent overlapping bands) ---
+  // --- Tie groups (anchor-based, non-transitive) ---
+  // Each new entry is compared to the ANCHOR of the current tie group (the
+  // first row that opened it), not to the previous row. This breaks the
+  // transitive chain that previously collapsed wide score spans into one
+  // group when adjacent bands kept barely touching.
   const tieGroupIds: number[] = [0];
   let currentGroupId = 0;
+  let groupAnchor = sorted[0];
   for (let i = 1; i < sorted.length; i++) {
-    if (bandsOverlap(sorted[i - 1].confidenceBand, sorted[i].confidenceBand)) {
+    if (tiedWithAnchor(groupAnchor, sorted[i])) {
       tieGroupIds.push(currentGroupId);
     } else {
       currentGroupId++;
       tieGroupIds.push(currentGroupId);
+      groupAnchor = sorted[i];
     }
   }
 

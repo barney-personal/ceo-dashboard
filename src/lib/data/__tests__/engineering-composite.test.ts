@@ -23,6 +23,7 @@ import {
   CONFIDENCE_MAX_HALF_WIDTH,
   CONFIDENCE_TENURE_PENALTY_PER_UNIT,
   CONFIDENCE_MIN_ENTRIES_FOR_FLAGS,
+  TIE_GROUP_MAX_SCORE_GAP,
   buildComposite,
   computeConfidenceBand,
   findEngineerInComposite,
@@ -1267,15 +1268,21 @@ describe("rankWithConfidence", () => {
     expect(tieGroupIds.size).toBe(1);
   });
 
-  it("mixed overlaps: A-B overlap, B-C overlap → all in one group (transitive)", () => {
+  it("mixed overlaps: A-B tied with anchor but A-C gap exceeds the absolute cap → two groups (non-transitive)", () => {
     // A=60±5=[55,65], B=56±5=[51,61], C=52±5=[47,57]
-    // A-B overlap (55 < 61 and 51 < 65) ✓
-    // B-C overlap (51 < 57 and 47 < 61) ✓
-    // A-C don't directly overlap but B bridges them
+    // Old transitive rule: all three in one group because every adjacent
+    // pair of bands touches.
+    // New anchor-based rule: B is checked against A and tied (gap 4,
+    // within both the smaller half-width of 5 AND the absolute cap of 4).
+    // C is checked against the anchor A, NOT against B — gap 8, exceeds
+    // the absolute cap of 4 → C starts a new group. The transitive chain
+    // is broken even though every pair of adjacent bands still touches.
     const entries = buildBundleFromSpread([60, 56, 52], [5, 5, 5]);
     const ranked = rankWithConfidence(entries);
     const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
-    expect(tieGroupIds.size).toBe(1);
+    expect(tieGroupIds.size).toBe(2);
+    expect(ranked[0].tieGroupId).toBe(ranked[1].tieGroupId);
+    expect(ranked[2].tieGroupId).not.toBe(ranked[0].tieGroupId);
   });
 
   it("two separate clusters form two tie groups", () => {
@@ -1426,22 +1433,26 @@ describe("rankWithConfidence", () => {
     }
   });
 
-  it("single large tie group spanning all quartiles → no flags", () => {
-    // Everyone within overlapping distance
+  it("scores spanning a wide range with wide bands no longer collapse into one transitive tie group", () => {
+    // Old transitive rule: scores 55..41 with halfwidth 10 collapsed into
+    // one group because every adjacent pair overlaps. That's exactly the
+    // pathology the user complained about — a "stack rank" where 100% of
+    // the cohort is rank #1.
+    //
+    // New anchor-based rule splits the chain at the absolute cap of 4
+    // points: starting at 55 we tie 53, 51 (gaps 2, 4 — within cap), then
+    // 49 (gap 6 > 4) starts a new group anchored at 49, and so on. The
+    // 14-point span produces multiple groups instead of one.
     const entries = buildBundleFromSpread(
       [55, 53, 51, 49, 47, 45, 43, 41],
       [10, 10, 10, 10, 10, 10, 10, 10],
     );
     const ranked = rankWithConfidence(entries);
     const tieGroupIds = new Set(ranked.map((r) => r.tieGroupId));
-    // Should collapse into one or very few groups
-    expect(tieGroupIds.size).toBeLessThanOrEqual(2);
-    // Because the group straddles multiple quartiles, no flags
-    for (const entry of ranked) {
-      if (tieGroupIds.size === 1) {
-        expect(entry.quartileFlag).toBeNull();
-      }
-    }
+    expect(tieGroupIds.size).toBeGreaterThan(1);
+    // The cohort spans 14 points (well over the 4-point absolute cap), so
+    // the head and tail of the sorted list must be in different groups.
+    expect(ranked[0].tieGroupId).not.toBe(ranked[ranked.length - 1].tieGroupId);
   });
 
   it("empty input returns empty output", () => {
@@ -1761,6 +1772,7 @@ describe("methodology metadata cross-check (M13)", () => {
       CONFIDENCE_MAX_HALF_WIDTH,
       CONFIDENCE_TENURE_PENALTY_PER_UNIT,
       CONFIDENCE_MIN_ENTRIES_FOR_FLAGS,
+      TIE_GROUP_MAX_SCORE_GAP,
       // Allowed presentational constants — fractions inside formulas.
       0.5,
       1.0,
