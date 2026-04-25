@@ -234,6 +234,7 @@ export async function runCodeReviewAnalysis(
   const reusableClaudeByKey = new Map<string, CodeReviewModelReview>();
 
   if (!opts.force && eligible.length > 0) {
+    const eligibleKeys = new Set(eligible.map(key));
     const existing = await db
       .select({
         repo: prReviewAnalyses.repo,
@@ -243,17 +244,12 @@ export async function runCodeReviewAnalysis(
       .where(
         and(
           eq(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
-          or(
-            ...eligible.map((c) =>
-              and(
-                eq(prReviewAnalyses.repo, c.repo),
-                eq(prReviewAnalyses.prNumber, c.prNumber),
-              ),
-            ),
-          ),
+          gte(prReviewAnalyses.mergedAt, since),
         ),
       );
-    const existingSet = new Set(existing.map(key));
+    const existingSet = new Set(
+      existing.filter((row) => eligibleKeys.has(key(row))).map(key),
+    );
     for (let i = eligible.length - 1; i >= 0; i--) {
       if (existingSet.has(key(eligible[i]))) {
         cached++;
