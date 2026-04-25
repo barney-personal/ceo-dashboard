@@ -1,6 +1,12 @@
 import * as Sentry from "@sentry/nextjs";
 import type { CodeReviewSurface } from "./code-review-rubric";
 
+import {
+  parseRateLimitResetMs,
+  parseRetryAfterMs,
+  resolveRateLimitDelay,
+} from "./http-retry";
+
 export class GitHubApiError extends Error {
   status: number;
   path: string;
@@ -57,6 +63,29 @@ function getRetryDelayMs(attempt: number): number {
   return 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
 }
 
+function getGitHubRateLimitDelay(input: {
+  headers: Headers;
+  attempt: number;
+}): {
+  waitMs: number;
+  source: "retry-after" | "x-ratelimit-reset" | "backoff";
+} {
+  return resolveRateLimitDelay({
+    headers: input.headers,
+    attempt: input.attempt,
+    minimumRateLimitResetDelayMs: 1000,
+    fallbackDelayMs: getRetryDelayMs,
+  });
+}
+
+function hasGitHubRateLimitSignal(headers: Headers): boolean {
+  return (
+    parseRetryAfterMs(headers.get("retry-after")) !== null ||
+    headers.get("x-ratelimit-remaining") === "0" ||
+    parseRateLimitResetMs(headers.get("x-ratelimit-reset")) !== null
+  );
+}
+
 async function githubRequest<T>(
   path: string,
   options: { signal?: AbortSignal; timeoutMs?: number } = {}
@@ -91,15 +120,10 @@ async function githubRequest<T>(
 
       if (!res.ok) {
         const body = await res.text();
-        const retryAfter = res.headers.get("retry-after");
-
         // Determine if this is a rate limit response (429 or 403 with rate limit info)
-        const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
-        const rateLimitReset = res.headers.get("x-ratelimit-reset");
         const isRateLimit =
           res.status === 429 ||
-          (res.status === 403 &&
-            (retryAfter || rateLimitRemaining === "0"));
+          (res.status === 403 && hasGitHubRateLimitSignal(res.headers));
 
         // Only treat 401 and non-rate-limit 403 as auth errors
         if (res.status === 401 || (res.status === 403 && !isRateLimit)) {
@@ -121,21 +145,15 @@ async function githubRequest<T>(
         ) {
           lastError = error;
           if (isRateLimit) {
-            let waitMs: number;
-            if (retryAfter) {
-              waitMs = parseInt(retryAfter, 10) * 1000;
-            } else if (rateLimitReset) {
-              waitMs = Math.max(
-                1000,
-                parseInt(rateLimitReset, 10) * 1000 - Date.now()
-              );
-            } else {
-              waitMs = getRetryDelayMs(attempt);
-            }
+            const { waitMs, source } = getGitHubRateLimitDelay({
+              headers: res.headers,
+              attempt,
+            });
             Sentry.addBreadcrumb({
               category: "github.rate_limit",
               level: "warning",
               message: `Rate limited (${res.status}) on ${path}, waiting ${Math.round(waitMs / 1000)}s`,
+              data: { path, status: res.status, attempt, source, waitMs },
             });
             await sleep(waitMs);
           } else {
@@ -892,18 +910,27 @@ async function graphqlRequest<T>(
         const body = await res.text();
         const error = new Error(`GitHub GraphQL error ${res.status}: ${body}`);
 
-        // Retry on server errors and rate limits
+        const isRateLimit =
+          res.status === 429 ||
+          (res.status === 403 && hasGitHubRateLimitSignal(res.headers));
+
         if (
           attempt < GITHUB_MAX_RETRIES &&
-          (res.status >= 500 || res.status === 429)
+          (isRateLimit || res.status >= 500)
         ) {
           lastError = error;
+          const delayMs = isRateLimit
+            ? getGitHubRateLimitDelay({
+                headers: res.headers,
+                attempt,
+              }).waitMs
+            : getRetryDelayMs(attempt);
           Sentry.addBreadcrumb({
             category: "github.graphql",
             level: "warning",
             message: `GraphQL ${res.status} on attempt ${attempt}, retrying`,
           });
-          await sleep(getRetryDelayMs(attempt));
+          await sleep(delayMs);
           continue;
         }
 

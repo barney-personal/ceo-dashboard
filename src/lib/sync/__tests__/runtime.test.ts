@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   isSyncRunCancelled: vi.fn(),
   markSyncRunsFailed: vi.fn(),
   startSyncHeartbeat: vi.fn(),
+  touchSyncHeartbeat: vi.fn(),
   runSlackSync: vi.fn(),
   runModeSync: vi.fn(),
   runManagementAccountsSync: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("../coordinator", () => ({
   isSyncRunCancelled: mocks.isSyncRunCancelled,
   markSyncRunsFailed: mocks.markSyncRunsFailed,
   startSyncHeartbeat: mocks.startSyncHeartbeat,
+  touchSyncHeartbeat: mocks.touchSyncHeartbeat,
 }));
 
 vi.mock("../slack", () => ({
@@ -74,11 +76,13 @@ describe("sync runtime resilience", () => {
     mocks.runModeSync.mockReset();
     mocks.runManagementAccountsSync.mockReset();
     mocks.startSyncHeartbeat.mockReset();
+    mocks.touchSyncHeartbeat.mockReset();
     mocks.expireAbandonedSyncRuns.mockResolvedValue([]);
     mocks.expireStaleSyncRuns.mockResolvedValue([]);
     mocks.finalizeSyncRun.mockResolvedValue({ finalized: true });
     mocks.isSyncRunCancelled.mockResolvedValue(false);
     mocks.startSyncHeartbeat.mockReturnValue(async () => {});
+    mocks.touchSyncHeartbeat.mockResolvedValue(undefined);
   });
 
   afterEach(() => {

@@ -8,6 +8,7 @@ import {
   isSyncRunCancelled,
   markSyncRunsFailed,
   startSyncHeartbeat,
+  touchSyncHeartbeat,
   type SyncLogRow,
 } from "./coordinator";
 import { runModeSync } from "./mode";
@@ -335,6 +336,22 @@ export async function runClaimedSync(
     cancelledByDb ? "cancelled" : execution.control.stopReason?.();
 
   const stopHeartbeat = startSyncHeartbeat(run);
+  // Page-boundary heartbeat — must NOT propagate DB errors. The interval-based
+  // startSyncHeartbeat above swallows touchSyncHeartbeat failures via .catch()
+  // so a transient DB hiccup doesn't kill the run; this checkpoint heartbeat
+  // is a thin convenience wrapper for runners that touch the heartbeat at
+  // natural progress markers, and it must give the same guarantee. A
+  // lease-extension failure is a Sentry breadcrumb, not a sync abort.
+  const touchHeartbeat = async () => {
+    try {
+      await touchSyncHeartbeat(run);
+    } catch (err) {
+      Sentry.captureException(err, {
+        level: "warning",
+        tags: { sync_source: run.source, area: "heartbeat" },
+      });
+    }
+  };
 
   try {
     const runner = RUNNERS[run.source as SyncSource];
@@ -342,6 +359,7 @@ export async function runClaimedSync(
       ...execution.control,
       shouldStop: combinedShouldStop,
       stopReason: combinedStopReason,
+      touchHeartbeat,
     });
     if (execution.exceededBudget() && result.status !== "cancelled") {
       const timeoutMessage = getExecutionBudgetMessage(

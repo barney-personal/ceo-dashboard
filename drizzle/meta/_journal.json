@@ -1,167 +1,167 @@
 {
-  "version": "7",
-  "dialect": "postgresql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1775649600000,
-      "tag": "0000_sync_hardening_render",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1775712917204,
-      "tag": "0001_worried_hairball",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1775715794678,
-      "tag": "0002_dusty_starhawk",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1775725808237,
-      "tag": "0003_lively_enchantress",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1775734774204,
-      "tag": "0004_bumpy_mastermind",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1775823887148,
-      "tag": "0005_awesome_switch",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1775828335312,
-      "tag": "0006_futuristic_mongu",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1775828400000,
-      "tag": "0007_lying_eternals",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1776166530528,
-      "tag": "0008_equal_toro",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1776168593196,
-      "tag": "0009_massive_nebula",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1776173298394,
-      "tag": "0010_fantastic_gateway",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "7",
-      "when": 1776167956896,
-      "tag": "0011_last_rhodey",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "7",
-      "when": 1776170835936,
-      "tag": "0012_fine_dorian_gray",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "7",
-      "when": 1776441600000,
-      "tag": "0013_clerk_user_id_migration",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "7",
-      "when": 1776580808095,
-      "tag": "0014_regular_mercury",
-      "breakpoints": true
-    },
-    {
-      "idx": 15,
-      "version": "7",
-      "when": 1776582593937,
-      "tag": "0015_slimy_lady_ursula",
-      "breakpoints": true
-    },
-    {
-      "idx": 16,
-      "version": "7",
-      "when": 1776589705682,
-      "tag": "0016_add_enps",
-      "breakpoints": true
-    },
-    {
-      "idx": 17,
-      "version": "7",
-      "when": 1776955667739,
-      "tag": "0017_add_pr_review_analyses",
-      "breakpoints": true
-    },
-    {
-      "idx": 18,
-      "version": "7",
-      "when": 1776961925641,
-      "tag": "0018_add_headcount_forecast_snapshots",
-      "breakpoints": true
-    },
-    {
-      "idx": 19,
-      "version": "7",
-      "when": 1776980340822,
-      "tag": "0019_code_review_v2",
-      "breakpoints": true
-    },
-    {
-      "idx": 20,
-      "version": "7",
-      "when": 1776984660527,
-      "tag": "0020_add_user_briefings",
-      "breakpoints": true
-    },
-    {
-      "idx": 21,
-      "version": "7",
-      "when": 1777014275465,
-      "tag": "0021_dashboard_permissions",
-      "breakpoints": true
-    },
-    {
-      "idx": 22,
-      "version": "7",
-      "when": 1777021569108,
-      "tag": "0022_engineering_ranking_snapshots",
-      "breakpoints": true
-    }
-  ]
+	"version": "7",
+	"dialect": "postgresql",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "7",
+			"when": 1775649600000,
+			"tag": "0000_sync_hardening_render",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "7",
+			"when": 1775712917204,
+			"tag": "0001_worried_hairball",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1775715794678,
+			"tag": "0002_dusty_starhawk",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "7",
+			"when": 1775725808237,
+			"tag": "0003_lively_enchantress",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1775734774204,
+			"tag": "0004_bumpy_mastermind",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "7",
+			"when": 1775823887148,
+			"tag": "0005_awesome_switch",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "7",
+			"when": 1775828335312,
+			"tag": "0006_futuristic_mongu",
+			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "7",
+			"when": 1775828400000,
+			"tag": "0007_lying_eternals",
+			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1776166530528,
+			"tag": "0008_equal_toro",
+			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1776168593196,
+			"tag": "0009_massive_nebula",
+			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "7",
+			"when": 1776173298394,
+			"tag": "0010_fantastic_gateway",
+			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "7",
+			"when": 1776167956896,
+			"tag": "0011_last_rhodey",
+			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "7",
+			"when": 1776170835936,
+			"tag": "0012_fine_dorian_gray",
+			"breakpoints": true
+		},
+		{
+			"idx": 13,
+			"version": "7",
+			"when": 1776441600000,
+			"tag": "0013_clerk_user_id_migration",
+			"breakpoints": true
+		},
+		{
+			"idx": 14,
+			"version": "7",
+			"when": 1776580808095,
+			"tag": "0014_regular_mercury",
+			"breakpoints": true
+		},
+		{
+			"idx": 15,
+			"version": "7",
+			"when": 1776582593937,
+			"tag": "0015_slimy_lady_ursula",
+			"breakpoints": true
+		},
+		{
+			"idx": 16,
+			"version": "7",
+			"when": 1776589705682,
+			"tag": "0016_add_enps",
+			"breakpoints": true
+		},
+		{
+			"idx": 17,
+			"version": "7",
+			"when": 1776955667739,
+			"tag": "0017_add_pr_review_analyses",
+			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "7",
+			"when": 1776961925641,
+			"tag": "0018_add_headcount_forecast_snapshots",
+			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "7",
+			"when": 1776980340822,
+			"tag": "0019_code_review_v2",
+			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "7",
+			"when": 1776984660527,
+			"tag": "0020_add_user_briefings",
+			"breakpoints": true
+		},
+		{
+			"idx": 21,
+			"version": "7",
+			"when": 1777014275465,
+			"tag": "0021_dashboard_permissions",
+			"breakpoints": true
+		},
+		{
+			"idx": 22,
+			"version": "7",
+			"when": 1777021569108,
+			"tag": "0022_engineering_ranking_snapshots",
+			"breakpoints": true
+		}
+	]
 }

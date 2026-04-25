@@ -6,6 +6,7 @@ import {
   modeQueryRunsEnvelopeSchema,
   modeReportRunsEnvelopeSchema,
 } from "@/lib/validation/mode-envelope";
+import { exponentialBackoffMs, parseRetryAfterMs } from "./http-retry";
 import type { ModeRowAggregator } from "./mode-config";
 
 const MODE_BASE_URL = "https://app.mode.com/api";
@@ -168,7 +169,7 @@ async function modeRequest<T>(
             });
             await sleep(waitMs);
           } else {
-            await sleep(getRetryDelayMs(attempt));
+            await sleep(exponentialBackoffMs(attempt));
           }
           continue;
         }
@@ -197,7 +198,7 @@ async function modeRequest<T>(
       const retryable = isRetryableModeError(message);
       if (attempt < MODE_MAX_RETRIES && retryable) {
         lastError = error instanceof Error ? error : new Error(message);
-        await sleep(getRetryDelayMs(attempt));
+        await sleep(exponentialBackoffMs(attempt));
         continue;
       }
       Sentry.captureException(error, {
@@ -229,30 +230,15 @@ function isRetryableModeError(message: string): boolean {
   );
 }
 
-function getRetryDelayMs(attempt: number): number {
-  const baseMs = 500 * 2 ** (attempt - 1);
-  return baseMs + Math.floor(Math.random() * 250);
-}
-
-function parseRetryAfterDelayMs(headerValue: string | null): number | null {
-  const retryAfterSeconds = Number(headerValue);
-  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
-    return null;
-  }
-
-  return retryAfterSeconds * 1000;
-}
 
 function getModeRateLimitDelay(input: {
   headers: Headers;
   attempt: number;
   path: string;
 }): { waitMs: number; source: "retry-after" | "backoff" } {
-  const retryAfterDelayMs = parseRetryAfterDelayMs(
-    input.headers.get("retry-after"),
-  );
-  const waitMs = retryAfterDelayMs ?? getRetryDelayMs(input.attempt);
-  const source = retryAfterDelayMs === null ? "backoff" : "retry-after";
+  const retryAfterMs = parseRetryAfterMs(input.headers.get("retry-after"));
+  const waitMs = retryAfterMs ?? exponentialBackoffMs(input.attempt);
+  const source = retryAfterMs === null ? "backoff" : "retry-after";
 
   Sentry.addBreadcrumb({
     category: "rate_limit.mode",
@@ -366,7 +352,7 @@ async function modeRequestJson<T>(
             });
             await sleep(waitMs);
           } else {
-            await sleep(getRetryDelayMs(attempt));
+            await sleep(exponentialBackoffMs(attempt));
           }
           continue;
         }
@@ -395,7 +381,7 @@ async function modeRequestJson<T>(
       const retryable = isRetryableModeError(message);
       if (attempt < MODE_MAX_RETRIES && retryable) {
         lastError = error instanceof Error ? error : new Error(message);
-        await sleep(getRetryDelayMs(attempt));
+        await sleep(exponentialBackoffMs(attempt));
         continue;
       }
       Sentry.captureException(error, {
@@ -757,7 +743,7 @@ export async function streamQueryResultAndAggregate<TState>(
             });
             await sleep(waitMs);
           } else {
-            await sleep(getRetryDelayMs(attempt));
+            await sleep(exponentialBackoffMs(attempt));
           }
           continue;
         }
@@ -830,7 +816,7 @@ export async function streamQueryResultAndAggregate<TState>(
       const retryable = isRetryableModeError(message);
       if (attempt < MODE_MAX_RETRIES && retryable) {
         lastError = error instanceof Error ? error : new Error(message);
-        await sleep(getRetryDelayMs(attempt));
+        await sleep(exponentialBackoffMs(attempt));
         continue;
       }
       Sentry.captureException(error, {

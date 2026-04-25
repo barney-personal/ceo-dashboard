@@ -10,6 +10,7 @@ import {
   type ConversationsInfoEnvelope,
   type UsersInfoEnvelope,
 } from "@/lib/validation/slack-envelope";
+import { exponentialBackoffMs, resolveRateLimitDelay } from "./http-retry";
 import { acquireSlackRateLimitToken } from "./slack-rate-limit";
 
 export const SLACK_API = "https://slack.com/api";
@@ -47,42 +48,6 @@ function getToken(): string {
   return token;
 }
 
-function getRetryDelayMs(attempt: number): number {
-  const baseMs = 500 * 2 ** (attempt - 1);
-  return baseMs + Math.floor(Math.random() * 250);
-}
-
-function parseRetryAfterDelayMs(headerValue: string | null): number | null {
-  const retryAfterSeconds = Number(headerValue);
-  if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
-    return null;
-  }
-
-  return retryAfterSeconds * 1000;
-}
-
-function getSlackRateLimitDelay(input: { headers: Headers; attempt: number }): {
-  waitMs: number;
-  source: "retry-after" | "x-ratelimit-reset" | "backoff";
-} {
-  const retryAfterDelayMs = parseRetryAfterDelayMs(
-    input.headers.get("retry-after"),
-  );
-  if (retryAfterDelayMs !== null) {
-    return { waitMs: retryAfterDelayMs, source: "retry-after" };
-  }
-
-  const resetHeader = input.headers.get("x-ratelimit-reset");
-  const resetAtSeconds = resetHeader != null ? Number(resetHeader) : NaN;
-  if (Number.isFinite(resetAtSeconds) && resetAtSeconds > 0) {
-    return {
-      waitMs: Math.max(0, resetAtSeconds * 1000 - Date.now()),
-      source: "x-ratelimit-reset",
-    };
-  }
-
-  return { waitMs: getRetryDelayMs(input.attempt), source: "backoff" };
-}
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -247,9 +212,9 @@ async function slackFetch(
       }
 
       if (isRetryableSlackStatus(res.status) && attempt < maxRetries) {
-        let delayMs = getRetryDelayMs(attempt);
+        let delayMs = exponentialBackoffMs(attempt);
         if (res.status === 429) {
-          const { waitMs, source } = getSlackRateLimitDelay({
+          const { waitMs, source } = resolveRateLimitDelay({
             headers: res.headers,
             attempt,
           });
@@ -295,7 +260,7 @@ async function slackFetch(
 
       if (retryable && attempt < maxRetries) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        await sleep(getRetryDelayMs(attempt));
+        await sleep(exponentialBackoffMs(attempt));
         continue;
       }
 
@@ -403,7 +368,7 @@ export async function slackApiRequest<T>(
       });
       if (isRetryableSlackEnvelope(data) && attempt < maxRetries) {
         lastEnvelopeError = error;
-        await sleep(getRetryDelayMs(attempt));
+        await sleep(exponentialBackoffMs(attempt));
         continue;
       }
       if (!suppressedCodes.has(data.error ?? "")) {

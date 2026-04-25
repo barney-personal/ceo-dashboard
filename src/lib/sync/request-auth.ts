@@ -59,14 +59,31 @@ export async function authorizeSyncRequest(
   request: NextRequest,
   manualPermissionId?: DashboardPermissionId,
 ): Promise<SyncRequestAccess> {
+  const identity = await authorizeSyncRequestWithIdentity(
+    request,
+    manualPermissionId,
+  );
+  return identity.access;
+}
+
+export type SyncRequestIdentity =
+  | { access: "cron" }
+  | { access: "manual"; userId: string }
+  | { access: "unauthenticated" }
+  | { access: "forbidden" };
+
+export async function authorizeSyncRequestWithIdentity(
+  request: NextRequest,
+  manualPermissionId?: DashboardPermissionId,
+): Promise<SyncRequestIdentity> {
   if (await isCronRequest(request)) {
-    return "cron";
+    return { access: "cron" };
   }
 
   const result = await getCurrentUserWithTimeout();
 
   if (result.status !== "authenticated") {
-    return "unauthenticated";
+    return { access: "unauthenticated" };
   }
 
   const role = getUserRole(
@@ -82,7 +99,11 @@ export async function authorizeSyncRequest(
         : await getRequiredRoleForDashboardPermission(manualPermissionId);
   }
 
-  return hasAccess(role, requiredRole) ? "manual" : "forbidden";
+  if (!hasAccess(role, requiredRole)) {
+    return { access: "forbidden" };
+  }
+
+  return { access: "manual", userId: result.user.id };
 }
 
 export function syncRequestAccessErrorResponse(
