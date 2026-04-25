@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { githubEmployeeMap, prReviewAnalyses, squads } from "@/lib/db/schema";
+import { getEligibleEngineerEmails } from "@/lib/data/engineer-eligibility";
 import { getReportData } from "@/lib/data/mode";
 import {
   RUBRIC_VERSION,
@@ -856,9 +857,29 @@ export async function getCodeReviewView(
     employeeMap.map((entry) => [entry.githubLogin.toLowerCase(), entry]),
   );
 
-  const engineers = buildRollupSet(rows as AnalysisRow[], employeeByLogin, windowDays);
+  const allEngineers = buildRollupSet(rows as AnalysisRow[], employeeByLogin, windowDays);
+
+  // Restrict to the BE+FE product-engineer cohort — same eligibility rule
+  // used by /engineering/engineers, /engineering/ranking, and /engineering/
+  // tournament so all four ranking surfaces include the same people.
+  // Engineers without an SSoT-linked email (no github_employee_map row)
+  // can't be classified by discipline so we leave the existing behaviour
+  // (include them) — they're typically newly-onboarded or contractor
+  // accounts the auto-mapper hasn't caught up with yet.
+  const eligibleEmails = await getEligibleEngineerEmails({
+    windowDays,
+    productEngineerOnly: true,
+  });
+  const passesEligibility = (email: string | null): boolean => {
+    if (!email) return true;
+    return eligibleEmails.has(email.toLowerCase());
+  };
+  const engineers = allEngineers.filter((e) => passesEligibility(e.employeeEmail));
+
   const prevRollups = opts.includePrevious
-    ? buildRollupSet(prevRows as AnalysisRow[], employeeByLogin, windowDays)
+    ? buildRollupSet(prevRows as AnalysisRow[], employeeByLogin, windowDays).filter(
+        (e) => passesEligibility(e.employeeEmail),
+      )
     : [];
   const prevByAuthor = new Map(
     prevRollups.map((rollup) => [rollup.authorLogin.toLowerCase(), rollup.finalScore]),

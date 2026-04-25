@@ -10,6 +10,20 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+// The code-review rollup now restricts to BE+FE product engineers via the
+// shared eligibility helper. The unit tests construct synthetic engineers
+// without going through Mode SSoT, so we let everyone through here — the
+// helper itself has its own focused tests.
+vi.mock("@/lib/data/engineer-eligibility", () => ({
+  getEligibleEngineerEmails: vi.fn(
+    async () =>
+      ({
+        has: () => true,
+        size: Infinity,
+      }) as unknown as Set<string>,
+  ),
+}));
+
 import {
   getCodeReviewView,
   rollupSquadsFromEngineers,
