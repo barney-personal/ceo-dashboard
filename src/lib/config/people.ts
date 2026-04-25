@@ -2,6 +2,62 @@
 export const DAYS_PER_MONTH = 30.44;
 
 // ---------------------------------------------------------------------------
+// Engineer discipline categorisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Coarse discipline buckets for an engineer based on their normalised job
+ * title. Used both for filter UI on the engineers page and for "is this
+ * person a product engineer we want to rank" decisions across the
+ * engineering rankings (engineers / squads / pillars / code-review /
+ * tournament).
+ *
+ * Single source of truth so the regex doesn't drift between filter chips
+ * and server-side eligibility checks.
+ */
+export type EngineerDiscipline =
+  | "backend"
+  | "frontend"
+  | "mobile"
+  | "data"
+  | "manager"
+  | "qa"
+  | "platform"
+  | "other";
+
+export function categorizeEngineerDiscipline(
+  jobTitle: string | null,
+): EngineerDiscipline {
+  if (!jobTitle) return "other";
+  const lc = jobTitle.toLowerCase();
+  if (/backend/.test(lc)) return "backend";
+  if (/frontend/.test(lc)) return "frontend";
+  if (/mobile|ios|android/.test(lc)) return "mobile";
+  if (/data|machine learning|ml engineer|analytics/.test(lc)) return "data";
+  if (/engineering manager|eng manager|head of/.test(lc)) return "manager";
+  if (/\bqa\b|quality/.test(lc)) return "qa";
+  if (/platform/.test(lc)) return "platform";
+  return "other";
+}
+
+/**
+ * Disciplines treated as "product engineers" for ranking purposes — only
+ * engineers shipping product surface area against the same rubric. QA,
+ * platform, ML, managers etc. do real work but get judged differently and
+ * shouldn't compete head-to-head on the same leaderboard.
+ */
+export const PRODUCT_ENGINEER_DISCIPLINES: ReadonlyArray<EngineerDiscipline> = [
+  "backend",
+  "frontend",
+];
+
+export function isProductEngineer(jobTitle: string | null): boolean {
+  return PRODUCT_ENGINEER_DISCIPLINES.includes(
+    categorizeEngineerDiscipline(jobTitle),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Job-title normalisation
 // ---------------------------------------------------------------------------
 
