@@ -138,11 +138,7 @@ function JudgmentRow({ entry }: { entry: JudgmentEntry }) {
             : "Draw"}
         </span>
         <span className="text-xs text-muted-foreground">vs</span>
-        <Link
-          href={`/dashboard/engineering/tournament/${encodeURIComponent(entry.opponentEmail)}`}
-          className="flex items-center gap-2 text-sm font-medium text-foreground hover:text-primary"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <span className="flex items-center gap-2 text-sm font-medium text-foreground">
           {entry.opponentAvatarUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -152,7 +148,7 @@ function JudgmentRow({ entry }: { entry: JudgmentEntry }) {
             />
           ) : null}
           {entry.opponentDisplayName}
-        </Link>
+        </span>
         {entry.opponentRating !== null && (
           <span className="text-xs tabular-nums text-muted-foreground">
             ({Math.round(entry.opponentRating)})
@@ -182,7 +178,7 @@ function JudgmentRow({ entry }: { entry: JudgmentEntry }) {
             No reasoning recorded for this judgment.
           </p>
         )}
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
           <span>Match #{entry.matchId}</span>
           <span>{new Date(entry.createdAt).toLocaleString()}</span>
           {entry.latencyMs != null && (
@@ -191,6 +187,12 @@ function JudgmentRow({ entry }: { entry: JudgmentEntry }) {
           {entry.costUsd != null && entry.costUsd > 0 && (
             <span>${entry.costUsd.toFixed(4)}</span>
           )}
+          <Link
+            href={`/dashboard/engineering/tournament/${encodeURIComponent(entry.opponentEmail)}`}
+            className="ml-auto text-xs font-medium text-primary hover:underline"
+          >
+            View opponent profile →
+          </Link>
         </div>
       </div>
     </details>

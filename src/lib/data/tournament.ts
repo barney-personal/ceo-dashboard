@@ -6,6 +6,7 @@ import {
   engineerRatings,
   engineerTournamentRuns,
   githubEmployeeMap,
+  githubPrs,
 } from "@/lib/db/schema";
 import { getEngineeringRankings } from "@/lib/data/engineering";
 
@@ -278,11 +279,15 @@ export interface EngineerTournamentDetail {
 
 /** Per-engineer drill-down for the most recent run. Returns the engineer's
  *  ranking + every judgment they were part of, with the LLM's full reasoning
- *  and which way the verdict went for them. */
+ *  and which way the verdict went for them. Tighter than getTournamentRunDetail —
+ *  only loads the engineer's own row, their judgments, and opponent metadata
+ *  needed for rendering. Avoids the expensive full-pool getEngineeringRankings
+ *  call by querying github_employee_map directly for opponent names. */
 export async function getEngineerTournamentDetail(
   engineerEmail: string,
   runId?: number,
 ): Promise<EngineerTournamentDetail | null> {
+  const lcEmail = engineerEmail.toLowerCase();
   const targetRunId =
     runId ??
     (
@@ -294,13 +299,56 @@ export async function getEngineerTournamentDetail(
     )[0]?.id;
   if (!targetRunId) return null;
 
-  const detail = await getTournamentRunDetail(targetRunId);
-  if (!detail) return null;
+  // Pull all ratings for the run in one go — needed for rank computation +
+  // opponent rating lookup. ~129 rows of cheap scalar columns, no joins.
+  const allRatings = await db
+    .select({
+      engineerEmail: engineerRatings.engineerEmail,
+      rating: sql<number>`${engineerRatings.rating}::float`,
+      wins: engineerRatings.wins,
+      losses: engineerRatings.losses,
+      draws: engineerRatings.draws,
+      judgmentsPlayed: engineerRatings.judgmentsPlayed,
+    })
+    .from(engineerRatings)
+    .where(eq(engineerRatings.runId, targetRunId))
+    .orderBy(desc(engineerRatings.rating));
 
-  const ranking =
-    detail.rankings.find(
-      (r) => r.engineerEmail.toLowerCase() === engineerEmail.toLowerCase(),
-    ) ?? null;
+  const rankingByEmail = new Map<
+    string,
+    { rating: number; rank: number; wins: number; losses: number; draws: number; judgmentsPlayed: number }
+  >();
+  let rankCursor = 0;
+  for (const row of allRatings) {
+    if (row.judgmentsPlayed > 0) {
+      rankCursor++;
+      rankingByEmail.set(row.engineerEmail.toLowerCase(), {
+        rating: row.rating,
+        rank: rankCursor,
+        wins: row.wins,
+        losses: row.losses,
+        draws: row.draws,
+        judgmentsPlayed: row.judgmentsPlayed,
+      });
+    }
+  }
+
+  const selfRating = rankingByEmail.get(lcEmail) ?? null;
+
+  // Resolve display names (deduped across multiple GitHub logins per engineer).
+  const nameByEmail = await resolveDisplayNames(
+    [...rankingByEmail.keys(), lcEmail],
+  );
+
+  // Avatars + GitHub login: pull the FIRST github_employee_map row per email.
+  const avatarByEmail = await resolveAvatarsAndLogins(
+    [...rankingByEmail.keys(), lcEmail],
+  );
+
+  // Profile metadata for the focal engineer (level/tenure/role) — only one
+  // person to look up, so we pull from active employees and filter in memory
+  // rather than the heavyweight getEngineeringRankings.
+  const selfProfile = await loadSinglePersonProfile(lcEmail);
 
   const matchRows = await db
     .select({
@@ -327,29 +375,18 @@ export async function getEngineerTournamentDetail(
       and(
         eq(engineerMatches.runId, targetRunId),
         or(
-          eq(
-            sql`lower(${engineerMatches.engineerAEmail})`,
-            engineerEmail.toLowerCase(),
-          ),
-          eq(
-            sql`lower(${engineerMatches.engineerBEmail})`,
-            engineerEmail.toLowerCase(),
-          ),
+          eq(sql`lower(${engineerMatches.engineerAEmail})`, lcEmail),
+          eq(sql`lower(${engineerMatches.engineerBEmail})`, lcEmail),
         ),
       ),
     )
     .orderBy(desc(engineerMatchJudgments.createdAt));
 
-  // Build a lookup so we can attach opponent name/avatar/rating per row.
-  const rankingByEmail = new Map(
-    detail.rankings.map((r) => [r.engineerEmail.toLowerCase(), r]),
-  );
-
   const judgments: JudgmentEntry[] = matchRows.map((row) => {
-    const isA =
-      row.engineerAEmail.toLowerCase() === engineerEmail.toLowerCase();
+    const isA = row.engineerAEmail.toLowerCase() === lcEmail;
     const opponentEmail = isA ? row.engineerBEmail : row.engineerAEmail;
-    const opponent = rankingByEmail.get(opponentEmail.toLowerCase());
+    const opponentLc = opponentEmail.toLowerCase();
+    const opponentRating = rankingByEmail.get(opponentLc)?.rating ?? null;
     const rawVerdict = row.verdict as "A" | "B" | "draw";
     const selfLabel = isA ? "A" : "B";
     const verdict: "win" | "loss" | "draw" =
@@ -364,9 +401,9 @@ export async function getEngineerTournamentDetail(
       selfLabel,
       opponentEmail,
       opponentDisplayName:
-        opponent?.displayName ?? displayFromEmail(opponentEmail),
-      opponentAvatarUrl: opponent?.avatarUrl ?? null,
-      opponentRating: opponent?.rating ?? null,
+        nameByEmail.get(opponentLc) ?? displayFromEmail(opponentEmail),
+      opponentAvatarUrl: avatarByEmail.get(opponentLc)?.avatarUrl ?? null,
+      opponentRating,
       judgeProvider: row.judgeProvider,
       judgeModel: row.judgeModel,
       verdict,
@@ -379,20 +416,136 @@ export async function getEngineerTournamentDetail(
     };
   });
 
+  const selfDisplayName =
+    selfProfile?.employeeName ??
+    nameByEmail.get(lcEmail) ??
+    displayFromEmail(engineerEmail);
+
+  const ranking: RankingRow | null = selfRating
+    ? {
+        rank: selfRating.rank,
+        engineerEmail,
+        displayName: selfDisplayName,
+        rating: selfRating.rating,
+        delta: selfRating.rating - STARTING_RATING,
+        wins: selfRating.wins,
+        losses: selfRating.losses,
+        draws: selfRating.draws,
+        judgmentsPlayed: selfRating.judgmentsPlayed,
+        confidence: confidenceFor(selfRating.judgmentsPlayed),
+        avatarUrl: avatarByEmail.get(lcEmail)?.avatarUrl ?? null,
+        githubLogin: avatarByEmail.get(lcEmail)?.githubLogin ?? null,
+        jobTitle: selfProfile?.jobTitle ?? null,
+        level: selfProfile?.level ?? null,
+        tenureMonths: selfProfile?.tenureMonths ?? null,
+        squad: selfProfile?.squad ?? null,
+        pillar: selfProfile?.pillar ?? null,
+      }
+    : null;
+
   return {
-    engineerEmail: ranking?.engineerEmail ?? engineerEmail,
-    displayName: ranking?.displayName ?? displayFromEmail(engineerEmail),
-    avatarUrl: ranking?.avatarUrl ?? null,
-    jobTitle: ranking?.jobTitle ?? null,
-    level: ranking?.level ?? null,
-    tenureMonths: ranking?.tenureMonths ?? null,
-    githubLogin: ranking?.githubLogin ?? null,
-    squad: ranking?.squad ?? null,
-    pillar: ranking?.pillar ?? null,
+    engineerEmail,
+    displayName: selfDisplayName,
+    avatarUrl: avatarByEmail.get(lcEmail)?.avatarUrl ?? null,
+    jobTitle: selfProfile?.jobTitle ?? null,
+    level: selfProfile?.level ?? null,
+    tenureMonths: selfProfile?.tenureMonths ?? null,
+    githubLogin: avatarByEmail.get(lcEmail)?.githubLogin ?? null,
+    squad: selfProfile?.squad ?? null,
+    pillar: selfProfile?.pillar ?? null,
     ranking,
     runId: targetRunId,
     judgments,
   };
+}
+
+async function resolveAvatarsAndLogins(
+  emails: string[],
+): Promise<Map<string, { avatarUrl: string | null; githubLogin: string }>> {
+  if (emails.length === 0) return new Map();
+  const lc = emails.map((e) => e.toLowerCase());
+
+  const mapRows = await db
+    .select({
+      email: githubEmployeeMap.employeeEmail,
+      login: githubEmployeeMap.githubLogin,
+    })
+    .from(githubEmployeeMap)
+    .where(inArray(sql`lower(${githubEmployeeMap.employeeEmail})`, lc));
+
+  const out = new Map<
+    string,
+    { avatarUrl: string | null; githubLogin: string }
+  >();
+  for (const row of mapRows) {
+    if (!row.email) continue;
+    const key = row.email.toLowerCase();
+    // Keep the first login per email (stable across multiple-account engineers).
+    if (!out.has(key)) {
+      out.set(key, { avatarUrl: null, githubLogin: row.login });
+    }
+  }
+
+  // Avatars come from githubPrs (via authorAvatarUrl). Pull recent PRs for
+  // each login and take the latest avatar — most-recent merged PR has the
+  // freshest avatar a GitHub user has uploaded.
+  const logins = [...out.values()].map((v) => v.githubLogin);
+  if (logins.length === 0) return out;
+  const lcLogins = logins.map((l) => l.toLowerCase());
+
+  const avatarRows = await db
+    .select({
+      login: githubPrs.authorLogin,
+      avatarUrl: githubPrs.authorAvatarUrl,
+    })
+    .from(githubPrs)
+    .where(inArray(sql`lower(${githubPrs.authorLogin})`, lcLogins))
+    .orderBy(desc(githubPrs.mergedAt));
+
+  const avatarByLogin = new Map<string, string | null>();
+  for (const row of avatarRows) {
+    const key = row.login.toLowerCase();
+    if (!avatarByLogin.has(key)) avatarByLogin.set(key, row.avatarUrl);
+  }
+
+  for (const [email, info] of out) {
+    out.set(email, {
+      ...info,
+      avatarUrl: avatarByLogin.get(info.githubLogin.toLowerCase()) ?? null,
+    });
+  }
+  return out;
+}
+
+interface SinglePersonProfile {
+  employeeName: string | null;
+  jobTitle: string | null;
+  level: string | null;
+  tenureMonths: number | null;
+  squad: string | null;
+  pillar: string | null;
+}
+
+async function loadSinglePersonProfile(
+  email: string,
+): Promise<SinglePersonProfile | null> {
+  try {
+    const { getActiveEmployees } = await import("@/lib/data/people");
+    const { employees, unassigned } = await getActiveEmployees();
+    const all = [...employees, ...unassigned];
+    const match = all.find((p) => p.email.toLowerCase() === email);
+    if (!match) return null;
+    return {
+      employeeName: match.name,
+      jobTitle: match.jobTitle,
+      level: match.level,
+      tenureMonths: match.tenureMonths,
+      squad: match.squad,
+      pillar: match.pillar,
+    };
+  } catch {
+    return null;
+  }
 }
 
 interface ProfileSummary {
