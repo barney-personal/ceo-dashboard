@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks so factories can see them
@@ -167,7 +166,6 @@ import {
   syncAllGranolaNotes,
   syncGranolaNotes,
 } from "../meetings";
-import { encryptUserIntegrationToken } from "@/lib/security/user-integration-tokens.server";
 import {
   SyncCancelledError,
   SyncDeadlineExceededError,
@@ -175,7 +173,6 @@ import {
 } from "../errors";
 import type { PhaseTracker } from "../phase-tracker";
 
-const VALID_KEY = randomBytes(32).toString("base64");
 
 function mkTracker(): PhaseTracker {
   return phaseTrackerMock as unknown as PhaseTracker;
@@ -218,160 +215,19 @@ function resetAllMocks() {
 }
 
 // ---------------------------------------------------------------------------
-
-describe("syncAllGranolaNotes personal-token handling", () => {
-  beforeEach(() => {
-    process.env.USER_INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
-    delete process.env.GRANOLA_API_TOKEN;
-    resetAllMocks();
-  });
-
-  afterEach(() => {
-    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
-  });
-
-  it("decrypts a v1 envelope and drives Granola sync for that user", async () => {
-    const envelope = encryptUserIntegrationToken("grn_real_token");
-
-    // 1st select: userIntegrations rows
-    // 2nd select: existing meetingNotes rows for the returned Granola notes
-    queueSelectResults([{ clerkUserId: "user_good", apiKey: envelope }], []);
-
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([
-      { id: "note_1", title: "t", updated_at: "2026-04-01T00:00:00Z" },
-    ]);
-    granolaMock.getNote.mockResolvedValueOnce({
-      id: "note_1",
-      title: "t",
-      summary_markdown: "s",
-      summary_text: null,
-      transcript: null,
-      attendees: [],
-      created_at: "2026-04-01T00:00:00Z",
-      calendar_event: null,
-    });
-
-    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
-
-    expect(granolaMock.getAllNotesSince).toHaveBeenCalledTimes(1);
-    // The decrypted plaintext — NOT the envelope — is handed to Granola.
-    expect(granolaMock.getAllNotesSince.mock.calls[0][1]).toMatchObject({
-      token: "grn_real_token",
-    });
-    expect(result.count).toBe(1);
-    expect(result.errors).toEqual([]);
-  });
-
-  it("skips a user whose row is plaintext (no v1 envelope) without calling Granola", async () => {
-    queueSelectResults([{ clerkUserId: "user_plaintext", apiKey: "grn_raw_plaintext" }]);
-
-    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
-
-    expect(granolaMock.getAllNotesSince).not.toHaveBeenCalled();
-    expect(result.count).toBe(0);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/token envelope failed decryption/);
-    expect(result.errors[0]).toContain("intext"); // last 6 of "user_plaintext"
-
-    // The phase for that user should be ended with status: "error".
-    expect(phaseTrackerMock.endPhase).toHaveBeenCalledWith(
-      1,
-      expect.objectContaining({ status: "error" })
-    );
-  });
-
-  it("skips a user whose envelope was tampered with and still syncs later users", async () => {
-    const good = encryptUserIntegrationToken("grn_real_token");
-    const [prefix, iv, ct, tag] = good.split(":");
-    const buf = Buffer.from(ct, "base64");
-    buf[0] = buf[0] ^ 0x01;
-    const tampered = [prefix, iv, buf.toString("base64"), tag].join(":");
-
-    queueSelectResults(
-      [
-        { clerkUserId: "user_tampered", apiKey: tampered },
-        { clerkUserId: "user_valid___", apiKey: good },
-      ],
-      [] // existing meetingNotes for the good user's notes
-    );
-
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([]);
-
-    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
-
-    // Granola should only be called for the good user.
-    expect(granolaMock.getAllNotesSince).toHaveBeenCalledTimes(1);
-    expect(granolaMock.getAllNotesSince.mock.calls[0][1]).toMatchObject({
-      token: "grn_real_token",
-    });
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("mpered"); // last 6 of "user_tampered"
-    expect(result.errors[0]).toMatch(/token envelope failed decryption/);
-  });
-
-  it("classifies a missing-key failure without crashing the whole loop", async () => {
-    // Intentionally erase the key to trigger UserIntegrationTokenKeyError
-    // when decryptUserIntegrationToken calls getKey().
-    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
-
-    const envelopeShape =
-      "v1:" +
-      Buffer.alloc(12).toString("base64") +
-      ":" +
-      Buffer.alloc(16).toString("base64") +
-      ":" +
-      Buffer.alloc(16).toString("base64");
-
-    queueSelectResults([{ clerkUserId: "user_nokey__", apiKey: envelopeShape }]);
-
-    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
-
-    expect(granolaMock.getAllNotesSince).not.toHaveBeenCalled();
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(
-      /encryption key misconfigured|token envelope failed decryption/
-    );
-  });
-
-  it("skips malformed-envelope rows and keeps syncing later users", async () => {
-    const good = encryptUserIntegrationToken("grn_real");
-    const malformed = "v1:only-one-part"; // fails isEncryptedToken → classified skip
-
-    queueSelectResults(
-      [
-        { clerkUserId: "user_broken_", apiKey: malformed },
-        { clerkUserId: "user_good___", apiKey: good },
-      ],
-      []
-    );
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([]);
-
-    const result = await syncAllGranolaNotes(new Date(0), mkTracker(), {});
-
-    expect(granolaMock.getAllNotesSince).toHaveBeenCalledTimes(1);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("roken_"); // last 6 of "user_broken_"
-  });
-});
-
-// ---------------------------------------------------------------------------
 // M2 / M15 / M16 / M17: Summary sanitization — Granola summary_markdown /
 // summary_text must be sanitized before it is persisted to meetingNotes.summary.
 // ---------------------------------------------------------------------------
 
 describe("syncAllGranolaNotes summary sanitization", () => {
   beforeEach(() => {
-    process.env.USER_INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
     delete process.env.GRANOLA_API_TOKEN;
     resetAllMocks();
   });
 
-  afterEach(() => {
-    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
-  });
 
   async function runWithSummary(summaryMarkdown: string | null, summaryText: string | null) {
-    const envelope = encryptUserIntegrationToken("grn_real_token");
+    const envelope = "grn_real_token";
     queueSelectResults([{ clerkUserId: "user_san__", apiKey: envelope }], []);
 
     granolaMock.getAllNotesSince.mockResolvedValueOnce([
@@ -562,62 +418,6 @@ describe("syncGranolaNotes (per-token loop)", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("reprocesses notes whose syncedByUserId is _pending (migration backfill)", async () => {
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([
-      { id: "note_pending", title: "p", updated_at: "2026-04-02T00:00:00Z" },
-    ]);
-    queueSelectResults([
-      {
-        granolaMeetingId: "note_pending",
-        syncedAt: new Date("2026-04-01T01:00:00Z"),
-        syncedByUserId: "_pending",
-      },
-    ]);
-
-    const result = await syncGranolaNotes(new Date(0), {
-      token: "tok",
-      syncedByUserId: "user_owner",
-    });
-
-    // _pending rows must NOT call getNote (the loop fetches only items in
-    // newNotes; _pending rows are backfilled via UPDATE without an API call).
-    expect(granolaMock.getNote).not.toHaveBeenCalled();
-    expect(insertSpy.values).not.toHaveBeenCalled();
-
-    // The bulk ownership UPDATE must run with the new owner stamped.
-    expect(updateSpy.set).toHaveBeenCalledTimes(1);
-    expect(updateSpy.set.mock.calls[0][0]).toMatchObject({
-      syncedByUserId: "user_owner",
-    });
-    expect(result.count).toBe(1);
-    expect(result.errors).toEqual([]);
-  });
-
-  it("reprocesses null-owner rows when a syncedByUserId is provided", async () => {
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([
-      { id: "note_orphan", title: "o", updated_at: "2026-04-02T00:00:00Z" },
-    ]);
-    queueSelectResults([
-      {
-        granolaMeetingId: "note_orphan",
-        syncedAt: new Date("2026-04-01T00:00:00Z"),
-        syncedByUserId: null,
-      },
-    ]);
-
-    const result = await syncGranolaNotes(new Date(0), {
-      token: "tok",
-      syncedByUserId: "user_new_owner",
-    });
-
-    expect(granolaMock.getNote).not.toHaveBeenCalled();
-    expect(updateSpy.set).toHaveBeenCalledTimes(1);
-    expect(updateSpy.set.mock.calls[0][0]).toMatchObject({
-      syncedByUserId: "user_new_owner",
-    });
-    expect(result.count).toBe(1);
-  });
-
   it("does NOT backfill ownership when enterprise sync (syncedByUserId=null) and existing row has null owner", async () => {
     granolaMock.getAllNotesSince.mockResolvedValueOnce([
       { id: "note_orphan", title: "o", updated_at: "2026-04-02T00:00:00Z" },
@@ -785,45 +585,20 @@ describe("syncGranolaNotes (per-token loop)", () => {
     expect(granolaMock.getNote).not.toHaveBeenCalled();
   });
 
-  it("captures backfill UPDATE errors without failing the whole sync", async () => {
-    granolaMock.getAllNotesSince.mockResolvedValueOnce([
-      { id: "note_pending", title: "p", updated_at: "2026-04-02T00:00:00Z" },
-    ]);
-    queueSelectResults([
-      {
-        granolaMeetingId: "note_pending",
-        syncedAt: new Date("2026-04-01T00:00:00Z"),
-        syncedByUserId: "_pending",
-      },
-    ]);
-
-    updateSpy.where.mockImplementationOnce(() => Promise.reject(new Error("db down")));
-
-    const result = await syncGranolaNotes(new Date(0), {
-      token: "tok",
-      syncedByUserId: "user_owner",
-    });
-
-    expect(result.count).toBe(0);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/Failed to backfill ownership on 1 notes/);
-  });
 });
 
 // ---------------------------------------------------------------------------
 // M6: syncAllGranolaNotes enterprise-token path. The personal path is already
-// covered by the decryption-handling and sanitization blocks above.
+// covered by the sanitization blocks above.
 // ---------------------------------------------------------------------------
 
 describe("syncAllGranolaNotes enterprise-token path", () => {
   beforeEach(() => {
-    process.env.USER_INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
     process.env.GRANOLA_API_TOKEN = "enterprise_grn_token";
     resetAllMocks();
   });
 
   afterEach(() => {
-    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
     delete process.env.GRANOLA_API_TOKEN;
   });
 
@@ -872,7 +647,7 @@ describe("syncAllGranolaNotes enterprise-token path", () => {
   });
 
   it("captures enterprise fetch failure as an error phase but still attempts personal users", async () => {
-    const personalEnvelope = encryptUserIntegrationToken("personal_token");
+    const personalEnvelope = "personal_token";
     queueSelectResults(
       [{ clerkUserId: "user_personal", apiKey: personalEnvelope }],
       [] // existing notes for personal user (none)
@@ -894,33 +669,13 @@ describe("syncAllGranolaNotes enterprise-token path", () => {
     });
 
     // Error array contains enterprise failure but personal sync still ran.
-    expect(result.errors.some((e) => e.includes("enterprise 500"))).toBe(true);
-  });
-
-  it("re-throws SyncCancelledError raised by enterprise sync after marking phase skipped", async () => {
-    queueSelectResults();
-
-    granolaMock.getAllNotesSince.mockRejectedValueOnce(
-      new SyncCancelledError("enterprise cancelled")
-    );
-
-    await expect(
-      syncAllGranolaNotes(new Date(0), mkTracker(), {})
-    ).rejects.toBeInstanceOf(SyncCancelledError);
-
-    expect(phaseTrackerMock.endPhase).toHaveBeenCalledWith(
-      1,
-      expect.objectContaining({
-        status: "skipped",
-        errorMessage: "enterprise cancelled",
-      })
-    );
+    expect(result.errors.some((e: string) => e.includes("enterprise 500"))).toBe(true);
   });
 
   it("stops between enterprise and personal users when control flag flips", async () => {
     granolaMock.getAllNotesSince.mockResolvedValueOnce([]);
     queueSelectResults([
-      { clerkUserId: "user_a", apiKey: encryptUserIntegrationToken("tok") },
+      { clerkUserId: "user_a", apiKey: "tok" },
     ]);
 
     let calls = 0;
@@ -951,14 +706,12 @@ describe("runMeetingsSync orchestration", () => {
   const RUN = { id: 99 };
 
   beforeEach(() => {
-    process.env.USER_INTEGRATIONS_ENCRYPTION_KEY = VALID_KEY;
     delete process.env.GRANOLA_API_TOKEN;
     delete process.env.SLACK_PRE_READS_CHANNEL_ID;
     resetAllMocks();
   });
 
   afterEach(() => {
-    delete process.env.USER_INTEGRATIONS_ENCRYPTION_KEY;
     delete process.env.SLACK_PRE_READS_CHANNEL_ID;
   });
 

@@ -15,12 +15,6 @@ import {
   throwIfSyncShouldStop,
 } from "./errors";
 import { determineSyncStatus, formatSyncError } from "./coordinator";
-import {
-  UserIntegrationTokenDecryptError,
-  UserIntegrationTokenKeyError,
-  decryptUserIntegrationToken,
-  isEncryptedToken,
-} from "@/lib/security/user-integration-tokens.server";
 import { sanitizeSummaryHtml } from "@/lib/validation/sanitize-html";
 
 type MeetingsSyncResult = {
@@ -68,10 +62,6 @@ export async function syncGranolaNotes(
       signal: opts.signal,
     });
   } catch (error) {
-    if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
-      throw error;
-    }
-
     return {
       count: 0,
       errors: [`Failed to fetch Granola notes: ${formatSyncError(error)}`],
@@ -80,8 +70,7 @@ export async function syncGranolaNotes(
 
   // Skip notes already in the DB that haven't been updated since last sync.
   // This avoids expensive getNote() calls (with transcript) for unchanged notes.
-  // Notes without syncedByUserId are backfilled via UPDATE without refetching
-  // the full transcript, so unchanged rows stay cheap to process.
+  // Notes without syncedByUserId are always re-processed to backfill ownership.
   const existingIds = new Set<string>();
   const needsOwnerBackfill = new Set<string>();
   if (noteList.length > 0) {
@@ -98,11 +87,9 @@ export async function syncGranolaNotes(
       if (row.syncedByUserId === "_pending") {
         // Migration-era note — must backfill with correct owner (or null for enterprise)
         needsOwnerBackfill.add(row.granolaMeetingId);
-        existingIds.add(row.granolaMeetingId);
       } else if (row.syncedByUserId === null && opts.syncedByUserId) {
-        // Existing note missing ownership — stamp owner without refetching details.
+        // Existing note missing ownership — must re-process to stamp owner
         needsOwnerBackfill.add(row.granolaMeetingId);
-        existingIds.add(row.granolaMeetingId);
       } else {
         existingIds.add(row.granolaMeetingId);
       }
@@ -173,10 +160,6 @@ export async function syncGranolaNotes(
         });
       count++;
     } catch (error) {
-      if (error instanceof SyncCancelledError || error instanceof SyncDeadlineExceededError) {
-        throw error;
-      }
-
       errors.push(`Failed to store Granola note ${note.id}: ${formatSyncError(error)}`);
     }
   }
@@ -199,7 +182,9 @@ export async function syncGranolaNotes(
 
 /**
  * Sync Granola notes from all sources: enterprise env var + all personal user keys.
- * Exported so meetings-runner tests can exercise the per-user decrypt/classify loop.
+ *
+ * Exported so the meetings sync runner can be unit-tested in isolation from
+ * the surrounding `runMeetingsSync` orchestration.
  */
 export async function syncAllGranolaNotes(
   sinceDate: Date,
@@ -237,7 +222,7 @@ export async function syncAllGranolaNotes(
     }
   }
 
-  // Personal keys from userIntegrations (stored as encrypted envelopes).
+  // Personal keys from userIntegrations
   const userKeys = await db
     .select({ clerkUserId: userIntegrations.clerkUserId, apiKey: userIntegrations.apiKey })
     .from(userIntegrations)
@@ -253,36 +238,8 @@ export async function syncAllGranolaNotes(
       `sync_granola:user_${clerkUserId.slice(-6)}`,
       `Syncing Granola notes (personal)`
     );
-
-    let token: string;
     try {
-      // The `apiKey` column must always hold a v1 encrypted envelope after the
-      // reencrypt migration has run. Plaintext, malformed, or tampered values
-      // must be treated as decryption failures so a raw DB token never leaves
-      // the DB layer — even if the migration was missed on a given row.
-      if (!isEncryptedToken(apiKey)) {
-        throw new UserIntegrationTokenDecryptError(
-          "user_integrations.api_key is not in v1 envelope format — run scripts/reencrypt-user-integration-tokens.ts"
-        );
-      }
-      token = decryptUserIntegrationToken(apiKey);
-    } catch (error) {
-      // Per-user decrypt failure must not crash the whole meetings sync.
-      // Classify, record, and skip this user so other users still sync.
-      const classifier =
-        error instanceof UserIntegrationTokenKeyError
-          ? "encryption key misconfigured"
-          : error instanceof UserIntegrationTokenDecryptError
-            ? "token envelope failed decryption"
-            : "unknown decrypt error";
-      const message = `Personal Granola sync skipped for user ${clerkUserId.slice(-6)}: ${classifier}`;
-      allErrors.push(message);
-      await tracker.endPhase(phaseId, { status: "error", errorMessage: message });
-      continue;
-    }
-
-    try {
-      const result = await syncGranolaNotes(sinceDate, { ...opts, token, syncedByUserId: clerkUserId });
+      const result = await syncGranolaNotes(sinceDate, { ...opts, token: apiKey, syncedByUserId: clerkUserId });
       totalCount += result.count;
       allErrors.push(...result.errors);
       await tracker.endPhase(phaseId, {
