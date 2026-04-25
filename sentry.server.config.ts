@@ -10,6 +10,14 @@ Sentry.init({
   environment: process.env.NODE_ENV || "development",
   release: process.env.RENDER_GIT_COMMIT || process.env.VERCEL_GIT_COMMIT_SHA || "local",
 
+  // Only report from production deployments. Local `make dev` runs would
+  // otherwise flood the prod Sentry with hot-reload glitches, stale Turbopack
+  // chunks, and missing-migration errors from unmigrated local DBs. Opt in
+  // locally by setting SENTRY_FORCE_ENABLE=true.
+  enabled:
+    process.env.NODE_ENV === "production" ||
+    process.env.SENTRY_FORCE_ENABLE === "true",
+
   // Sample 10% of traces to avoid burning quota in production.
   tracesSampleRate: 0.1,
 

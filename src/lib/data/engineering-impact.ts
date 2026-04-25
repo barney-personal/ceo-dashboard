@@ -31,7 +31,8 @@ const MS_PER_DAY = 86_400_000;
 export const BUCKET_DAYS = 30;
 
 export type LevelTrack = "IC" | "EM" | "QA" | "Other" | "unknown";
-export type Discipline = "BE" | "FE" | "EM" | "QA" | "ML" | "Ops" | "Other";
+export type { Discipline } from "./disciplines";
+import { classifyDiscipline, type Discipline } from "./disciplines";
 
 export interface ImpactEngineer {
   email: string;
@@ -137,47 +138,6 @@ function classifyLevel(raw: string | null): {
   return { track: "IC", num, label: `L${num}` };
 }
 
-// `rp_specialisation` is the authoritative signal post-April-2026 standardisation.
-// Values are canonical role names ("Backend Engineer", "Machine Learning Engineer",
-// etc.) with no seniority prefix, so exact matches are cheap and reliable. The
-// substring fallback catches anyone whose `rp_specialisation` is still blank
-// during the HiBob rollout.
-const DISCIPLINE_BY_SPECIALISATION: Record<string, Discipline> = {
-  "backend engineer": "BE",
-  "python engineer": "BE",
-  "frontend engineer": "FE",
-  "engineering manager": "EM",
-  "qa engineer": "QA",
-  "machine learning engineer": "ML",
-  "ml ops engineer": "ML",
-  "head of machine learning": "ML",
-  "machine learning engineering manager": "ML",
-  "technical operations": "Ops",
-};
-
-function classifyDiscipline(
-  spec: string | null,
-  jobTitle: string | null,
-): Discipline {
-  const s = (spec ?? "").trim().toLowerCase();
-  const exact = DISCIPLINE_BY_SPECIALISATION[s];
-  if (exact) return exact;
-
-  const j = (jobTitle ?? "").toLowerCase();
-  if (s.includes("backend") || j.includes("backend")) return "BE";
-  if (s.includes("frontend") || j.includes("frontend")) return "FE";
-  if (s.includes("engineering manager") || j.includes("engineering manager")) {
-    return "EM";
-  }
-  if (s.includes("qa") || j.includes("qa")) return "QA";
-  if (s.includes("machine learning") || s.includes("ml ") || j.includes("ml ")) {
-    return "ML";
-  }
-  if (s.includes("python")) return "BE";
-  if (s.includes("technical operations")) return "Ops";
-  return "Other";
-}
-
 function cleanPillar(deptName: string | null): string {
   if (!deptName) return "Unknown";
   return deptName.replace(/\s+Pillar$/i, "").trim();
@@ -212,10 +172,19 @@ export async function getImpactAnalysis(): Promise<ImpactAnalysis> {
   };
 
   const activeEngineers = (headcountQuery.rows as RawEmployee[]).filter(
-    (e) =>
-      !e.termination_date &&
-      (e.hb_function ?? "").toLowerCase().includes("engineer") &&
-      e.start_date,
+    (e) => {
+      if (e.termination_date) return false;
+      if (!(e.hb_function ?? "").toLowerCase().includes("engineer")) return false;
+      if (!e.start_date) return false;
+      // Narrow to IC shipping roles (BE / FE) — drop EMs, QA, Platform, Data,
+      // ML, etc. so the impact analysis describes a homogeneous cohort and
+      // matches the engineer-ranking page's definition of "engineer".
+      const discipline = classifyDiscipline(
+        e.rp_specialisation ?? null,
+        e.job_title ?? null,
+      );
+      return discipline === "BE" || discipline === "FE";
+    },
   );
 
   const mapRows = await db

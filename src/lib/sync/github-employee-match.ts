@@ -176,11 +176,17 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
+  // The three LLM output-shape misses below are all self-healing — the sync
+  // returns [] and the next run retries. Capture them at `info` with stable
+  // fingerprints so Sentry groups them into one low-priority issue each,
+  // rather than surfacing new warnings on every cron tick.
+
   // Surface truncation even when the partial output happens to parse as valid
   // JSON — the returned matches would silently be a prefix of the real set.
   if (response.stop_reason === "max_tokens") {
     Sentry.captureMessage("LLM employee match hit max_tokens", {
-      level: "warning",
+      level: "info",
+      fingerprint: ["llm-employee-match", "max-tokens"],
       tags: { integration: "github", llm_truncated: "true" },
       extra: {
         operation: "llmMatchEmployees",
@@ -196,7 +202,8 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
     rawParsed = JSON.parse(jsonStr);
   } catch {
     Sentry.captureMessage("Failed to parse LLM employee match response", {
-      level: "warning",
+      level: "info",
+      fingerprint: ["llm-employee-match", "invalid-json"],
       tags: { integration: "github", llm_parse_invalid: "true" },
       extra: {
         operation: "llmMatchEmployees",
@@ -214,7 +221,8 @@ If you cannot confidently match a login, omit it. Respond ONLY with the JSON arr
   const validation = githubEmployeeMatchArraySchema.safeParse(rawParsed);
   if (!validation.success) {
     Sentry.captureMessage("GitHub employee match LLM output failed validation", {
-      level: "warning",
+      level: "info",
+      fingerprint: ["llm-employee-match", "schema-invalid"],
       tags: { integration: "github", llm_parse_invalid: "true" },
       extra: {
         operation: "llmMatchEmployees",

@@ -13,9 +13,9 @@ import { runCodeReviewAnalysis } from "@/lib/sync/code-review";
  *   - CEO manual trigger (Clerk session)
  *   - Cron (Bearer CRON_SECRET)
  *
- * Behaviour: idempotent. Only PRs without a current-rubric analysis get
- * sent to Claude; cached analyses are counted and returned so a re-run
- * with no new PRs is cheap.
+ * Behaviour: idempotent. PRs with an older Claude-only analysis are enriched
+ * with GPT-5.4 only; brand-new PRs get both providers; current-rubric rows
+ * are counted as cached so a re-run with no new PRs is cheap.
  */
 
 // Opus per-PR latency is ~4–5s. The Render default Next.js route timeout

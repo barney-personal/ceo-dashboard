@@ -1,5 +1,5 @@
 import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
-import { getCodeReviewView } from "@/lib/data/code-review";
+import { getCodeReviewPageData } from "@/lib/data/code-review";
 import { CodeReviewReport } from "./_components/code-review-report";
 
 export const metadata = {
@@ -13,6 +13,8 @@ export const dynamic = "force-dynamic";
 export default async function CodeReviewPage() {
   await requireDashboardPermission("engineering.codeReview");
 
-  const view = await getCodeReviewView({ includePrevious: true });
-  return <CodeReviewReport view={view} />;
+  const { view, squadView } = await getCodeReviewPageData({
+    includePrevious: true,
+  });
+  return <CodeReviewReport view={view} squadView={squadView} />;
 }

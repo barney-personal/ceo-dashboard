@@ -2,6 +2,7 @@ import { clerkMiddleware, createRouteMatcher, clerkClient } from "@clerk/nextjs/
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { getUserRole } from "@/lib/auth/roles";
+import { isDevPreviewEnabled } from "@/lib/auth/dev-preview";
 
 const ALLOWED_DOMAIN = "meetcleo.com";
 
@@ -11,6 +12,10 @@ const isApiRoute = createRouteMatcher(["/api/(.*)"]);
 export default clerkMiddleware(async (auth, request) => {
   // API routes handle their own auth (cron secret, Clerk currentUser, etc.)
   if (isApiRoute(request)) return;
+
+  // Dev-only: skip Clerk's redirect-to-sign-in. The page-level auth path
+  // (getCurrentUserWithTimeout) hydrates the user from DEV_PREVIEW_USER_EMAIL.
+  if (!isPublicRoute(request) && isDevPreviewEnabled()) return;
 
   if (!isPublicRoute(request)) {
     const { userId } = await auth.protect();

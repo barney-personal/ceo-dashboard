@@ -64,13 +64,11 @@ export async function syncSlackAvatars(
         signal: opts.signal,
       });
       if (url === null) {
-        // Even on failure, mark fetched_at so we don't hammer the same dud
-        // userId on every refresh. Failure here usually means the user is
-        // deactivated or has no profile picture set.
-        await db
-          .update(slackEmployeeMap)
-          .set({ slackImageFetchedAt: sql`now()` })
-          .where(eq(slackEmployeeMap.slackUserId, row.slackUserId));
+        // Don't advance fetched_at on failure: a transient Slack outage
+        // would otherwise lock the affected rows out of the next 30 days
+        // of refreshes. The cost is one extra users.info call per failing
+        // user per refresh, which is bounded by Slack's tier-4 limit and
+        // only paid when the CEO clicks "Refresh".
         result.failed++;
         continue;
       }

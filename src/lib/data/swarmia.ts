@@ -10,6 +10,7 @@ import {
   getPullRequestMetrics,
   getPullRequestMetricsForRange,
   isSwarmiaConfigured,
+  SwarmiaApiError,
   type SwarmiaDora,
   type SwarmiaTimeframe,
 } from "@/lib/integrations/swarmia";
@@ -33,10 +34,23 @@ async function safeLoad<T>(
     const data = await fn();
     return { status: "ok", data };
   } catch (err) {
-    // Send the full exception (including any upstream response body) to
-    // Sentry, but return a generic message to the caller — we don't want
-    // raw API responses bleeding into UI text.
-    Sentry.captureException(err, { tags: { loader: `swarmia:${label}` } });
+    // Swarmia upstream returns transient 5xx during report regeneration.
+    // After one client-level retry (see integrations/swarmia.ts), those are
+    // handled with a UI fallback — group them under a single warning-level
+    // Sentry issue rather than paging on every user view. Non-5xx (auth
+    // failures, parse errors, network errors) keep full exception capture.
+    const is5xx =
+      err instanceof SwarmiaApiError && err.status >= 500 && err.status < 600;
+    if (is5xx) {
+      Sentry.captureMessage(`Swarmia ${label} returned ${err.status}`, {
+        level: "warning",
+        fingerprint: ["swarmia", "upstream-5xx", label],
+        tags: { loader: `swarmia:${label}`, swarmia_status: String(err.status) },
+        extra: { endpoint: err.endpoint, message: err.message },
+      });
+    } else {
+      Sentry.captureException(err, { tags: { loader: `swarmia:${label}` } });
+    }
     return { status: "error", data: null, errorMessage: `${label} unavailable` };
   }
 }
@@ -421,13 +435,52 @@ export interface SquadPillarLookup {
   pillars: Record<string, TeamSwarmiaMetrics>;
 }
 
+/**
+ * Explicit aliases from Mode/HiBob squad labels → the Swarmia team name they
+ * correspond to, both in their post-suffix-strip lowercased form. These
+ * cover drifts where the two systems chose different names for the same
+ * squad (e.g. "Chat Evaluations" in Mode vs "Chat Evals" in Swarmia) and
+ * umbrella labels where Mode assigns individuals to a "Pillar Leads" /
+ * "Shared Resources" bucket that Swarmia tracks as the pillar-level team.
+ *
+ * Only add an entry when you have confirmed the two labels refer to the
+ * same group of engineers — an accidental alias here silently pulls one
+ * team's delivery metrics onto another team's engineers on lens C.
+ */
+const TEAM_ALIASES: Record<string, string> = {
+  // Chat "Autopilot" family: Mode prefixes with "Chat - ", Swarmia doesn't.
+  "chat - autopilot adoption": "autopilot adoption",
+  "chat - autopilot retention": "autopilot retention",
+  "chat - daily plans": "autopilot daily plans",
+  // Naming drift between the two sources.
+  "chat evaluations": "chat evals",
+  "transaction enrichment insights": "tx enrichment",
+  "identity & access": "access and identity",
+  "pricing, packaging, conversion (ppc)": "pricing and packaging",
+  "platform (backend & mlops)": "platform backend",
+  "user financial insights": "moneyiq",
+  // Umbrella / pillar-leadership roles collapse to the pillar-level team.
+  "new bets shared resources": "new bets pillar",
+  "new bets build": "new bets pillar",
+  "new bets pillar leads & shared resources": "new bets pillar",
+  "chat pillar leads": "chat pillar delivery",
+  "growth pillar leads": "growth pillar",
+  "growth pillar shared": "growth pillar", // after " team" strip from "Growth Pillar Shared Team"
+  "ewa & credit product pillar leads": "ewa & credit products pillar",
+  // Payments has two Mode labels mapping onto the single Swarmia team.
+  "payments expansion": "payments infrastructure",
+};
+
 export function normalizeTeamName(name: string | null | undefined): string {
   // HiBob appends " Squad" / " Team" to some squads (Bills Squad, Savings Squad,
-  // Card Squad) where Swarmia uses the bare name. Strip the suffix so they match.
-  return (name ?? "")
+  // Card Squad) where Swarmia uses the bare name. Strip the suffix so they
+  // match, then apply `TEAM_ALIASES` to cover genuine naming drifts between
+  // the HR (Mode/HiBob) and engineering (Swarmia) sources.
+  const base = (name ?? "")
     .trim()
     .toLowerCase()
     .replace(/ (squad|team)$/, "");
+  return TEAM_ALIASES[base] ?? base;
 }
 
 /**

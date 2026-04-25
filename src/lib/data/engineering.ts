@@ -8,6 +8,10 @@ import {
   getAiUsageData,
   type AiUsageUserSummary,
 } from "./ai-usage";
+import {
+  classifyDiscipline,
+  isRankableDiscipline,
+} from "./engineering-ranking";
 
 export interface EngineerRanking {
   login: string;
@@ -136,6 +140,13 @@ export async function getEngineeringRankings(
       // verbatim for anything already spelt "Engineering".
       if (person.function !== "Engineering") continue;
       if (!person.email) continue;
+      // Narrow to IC shipping disciplines (BE / FE) — Person.jobTitle already
+      // carries the resolved specialisation (via resolveEngineerDiscipline),
+      // so classifyDiscipline reads it as the specialisation argument and
+      // catches the "(M)" manager suffix, QA, platform, data, ML, etc.
+      if (!isRankableDiscipline(classifyDiscipline(person.jobTitle, undefined))) {
+        continue;
+      }
 
       const githubLogin = loginByEmail.get(person.email.toLowerCase()) ?? null;
       const pr = githubLogin ? prByLogin.get(githubLogin) : undefined;

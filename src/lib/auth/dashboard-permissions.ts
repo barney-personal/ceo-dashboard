@@ -458,10 +458,11 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
   {
     id: "engineering.impact",
     label: "Engineering Impact",
-    description: "Leadership-only engineering impact report.",
+    description:
+      "Engineering impact report. Aggregate charts (distributions, ramp-up, pillar, AI tooling) are visible to everyone; individual-level drilldowns (Cleveland dots, per-engineer trajectories, watchlist) render only for leadership+.",
     href: "/dashboard/engineering/impact",
     groupLabel: "Team",
-    defaultRole: "leadership",
+    defaultRole: "everyone",
     redirectTo: "/dashboard/engineering",
   },
   {
@@ -474,16 +475,32 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     redirectTo: "/dashboard/engineering",
   },
   {
-    // Locked: the page includes a manual analysis trigger — engineering managers
-    // and above can see the report and re-run the analysis.
     id: "engineering.codeReview",
     label: "Code Review",
     description: "LLM-reviewed PR analysis for engineering quality.",
     href: "/dashboard/engineering/code-review",
     groupLabel: "Team",
     defaultRole: "engineering_manager",
-    editable: false,
     redirectTo: "/dashboard/engineering",
+  },
+  {
+    id: "engineering.ranking",
+    label: "Engineer Ranking",
+    description: "Methodology-first cohort-relative engineer ranking.",
+    href: "/dashboard/engineering/ranking",
+    groupLabel: "Team",
+    defaultRole: "engineering_manager",
+    redirectTo: "/dashboard/engineering",
+  },
+  {
+    id: "engineering.ranking.hr",
+    label: "Engineer Ranking — HR Review",
+    description:
+      "Per-engineer evidence pack for the bottom-ranked engineers. Surfaces concerns, confounders, and a conservative PIP-worthiness verdict alongside an explicit framing: decision support for a manager-calibration conversation, never a basis for dismissal on its own. Default engineering_manager — editable via the admin permissions page; raise to leadership/ceo if the evidence content is ever widened.",
+    href: "/dashboard/engineering/ranking/hr-review",
+    groupLabel: "Team",
+    defaultRole: "engineering_manager",
+    redirectTo: "/dashboard/engineering/ranking",
   },
   {
     id: "people.profile",

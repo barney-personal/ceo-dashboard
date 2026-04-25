@@ -83,27 +83,34 @@ export default async function DashboardOverview() {
   // Use the impersonated user's ID when active, otherwise the real user
   const effectiveUserId = impersonation?.userId ?? realUserId;
 
-  const accessToken = effectiveUserId
-    ? await getUserGoogleAccessToken(effectiveUserId)
+  // Today's Meetings is always the *viewer's* calendar — an impersonated
+  // employee rarely has Google connected, and even if they do, showing their
+  // private day to the CEO isn't the intent. The rest of the page (briefing,
+  // role gating) still swaps to the impersonated identity.
+  const accessToken = realUserId
+    ? await getUserGoogleAccessToken(realUserId)
     : null;
 
-  const currentUserLookup = await getCurrentUserWithTimeout();
-  // Briefing is always the real viewer's briefing — impersonation is for UI
-  // role-gating, not identity takeover. Pass the full email set so a user
-  // whose company address is a secondary Clerk email still matches SSoT.
-  const briefingEmails: string[] =
-    currentUserLookup.status === "authenticated"
-      ? (() => {
-          const primary =
-            currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null;
-          const all = (currentUserLookup.user.emailAddresses ?? []).map(
-            (e) => e.emailAddress,
-          );
-          // Keep primary first (it's the cache key), then other unique addresses.
-          const ordered = primary ? [primary, ...all.filter((e) => e !== primary)] : all;
-          return ordered.filter((e): e is string => !!e);
-        })()
-      : [];
+  // When impersonating, swap to the target user's identity so the briefing
+  // matches the "View as" banner. Primary email stays first because it's the
+  // per-day cache key.
+  let briefingEmails: string[] = [];
+  if (impersonation) {
+    briefingEmails = impersonation.emails;
+  } else {
+    const currentUserLookup = await getCurrentUserWithTimeout();
+    if (currentUserLookup.status === "authenticated") {
+      const primary =
+        currentUserLookup.user.primaryEmailAddress?.emailAddress ?? null;
+      const all = (currentUserLookup.user.emailAddresses ?? []).map(
+        (e) => e.emailAddress,
+      );
+      const ordered = primary
+        ? [primary, ...all.filter((e) => e !== primary)]
+        : all;
+      briefingEmails = ordered.filter((e): e is string => !!e);
+    }
+  }
 
   // Today's date range for meetings
   const now = new Date();
@@ -127,7 +134,7 @@ export default async function DashboardOverview() {
       () =>
         getMeetingsForRange(todayStart, todayEnd, {
           accessToken: accessToken ?? undefined,
-          userId: effectiveUserId ?? undefined,
+          userId: realUserId ?? undefined,
         }),
       { days: [], calendarAuthExpired: false },
     ),
@@ -187,10 +194,7 @@ export default async function DashboardOverview() {
         <DailyBriefing
           emails={briefingEmails}
           role={role}
-          // Real Clerk user ID — not effectiveUserId — so the briefing
-          // resolves the *real viewer's* Google token for meetings even
-          // during an impersonation session.
-          userId={realUserId}
+          userId={effectiveUserId}
         />
       </Suspense>
 

@@ -40,6 +40,52 @@ export interface BriefingPerson {
   directReportCount: number;
 }
 
+export interface BriefingShip {
+  repo: string;
+  title: string;
+  authorName: string;
+  mergedAtIso: string;
+}
+
+export interface BriefingShipsBlock {
+  windowDays: number;
+  squadName: string;
+  prCount: number;
+  authorCount: number;
+  /** Most recent ships first, capped. May be empty when the squad shipped
+   * nothing in the window. */
+  top: BriefingShip[];
+}
+
+/** Candidate flag row — direct report, ranking position, confidence bound. */
+export interface BriefingManagerFlag {
+  name: string;
+  rank: number | null;
+  /** `adjustedPercentile` from the persisted ranking snapshot (0–100). */
+  percentile: number | null;
+  /** Upper bound of the 80% CI in composite-percentile space (0–100). */
+  confidenceHigh: number | null;
+  squad: string | null;
+  snapshotDate: string;
+}
+
+export interface BriefingManagerFlagsBlock {
+  snapshotDate: string;
+  /** How many direct reports had a row in the latest snapshot slice. */
+  totalReportsChecked: number;
+  /** Reports worth investigating. Empty means "none cleared the threshold." */
+  flagged: BriefingManagerFlag[];
+}
+
+/**
+ * Percentile ceiling for the "worth a look" flag. Confidence-bound <= this
+ * value means even the upper band of the CI still sits in the bottom third —
+ * a noisy bottom-decile engineer with a CI reaching mid-cohort won't fire.
+ */
+export const MANAGER_FLAG_PERCENTILE_CEILING = 20;
+export const MANAGER_FLAG_CI_HIGH_CEILING = 35;
+const MAX_MANAGER_FLAGS = 3;
+
 const OKR_WINDOW_DAYS = 14;
 const MAX_PILLAR_OKR_ENTRIES = 8;
 const MAX_SQUAD_OKR_ENTRIES = 10;
@@ -221,4 +267,51 @@ export function relevantSectionsFor(
 
   sections.add("OKRs");
   return [...sections];
+}
+
+/**
+ * Reduce a list of squad ships to the most recent N, preferring one PR per
+ * author so a single prolific committer doesn't crowd out other contributors.
+ * When fewer than `limit` unique authors exist in the window, remaining slots
+ * fill with additional recent ships by already-represented authors.
+ */
+export function pickTopShips(
+  ships: BriefingShip[],
+  limit: number,
+): BriefingShip[] {
+  const sorted = [...ships].sort(
+    (a, b) => new Date(b.mergedAtIso).getTime() - new Date(a.mergedAtIso).getTime(),
+  );
+  const seenAuthors = new Set<string>();
+  const primary: BriefingShip[] = [];
+  const secondary: BriefingShip[] = [];
+  for (const s of sorted) {
+    if (seenAuthors.has(s.authorName)) {
+      secondary.push(s);
+    } else {
+      seenAuthors.add(s.authorName);
+      primary.push(s);
+    }
+  }
+  return [...primary, ...secondary].slice(0, limit);
+}
+
+/**
+ * Apply the confidence-aware threshold to manager-flag candidates and return
+ * the top N sorted by severity (lowest percentile first). Pure so the test
+ * suite can exercise it without a DB fixture.
+ */
+export function applyManagerFlagThreshold(
+  candidates: BriefingManagerFlag[],
+): BriefingManagerFlag[] {
+  return candidates
+    .filter(
+      (c) =>
+        c.percentile !== null &&
+        c.percentile <= MANAGER_FLAG_PERCENTILE_CEILING &&
+        c.confidenceHigh !== null &&
+        c.confidenceHigh <= MANAGER_FLAG_CI_HIGH_CEILING,
+    )
+    .sort((a, b) => (a.percentile ?? 0) - (b.percentile ?? 0))
+    .slice(0, MAX_MANAGER_FLAGS);
 }

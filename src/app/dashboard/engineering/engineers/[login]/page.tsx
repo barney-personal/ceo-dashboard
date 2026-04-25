@@ -7,6 +7,7 @@ import { EngineerOkrCard } from "@/components/dashboard/engineer-okr-card";
 import { EngineerPerformanceCard } from "@/components/dashboard/engineer-performance-card";
 import { EngineerAiUsageCard } from "@/components/dashboard/engineer-ai-usage-card";
 import { EditMappingDialog } from "@/components/dashboard/edit-mapping-dialog";
+import { EngineerCodeReviewSection } from "./_components/engineer-code-review-section";
 import {
   getEngineerProfile,
   getEngineerTimeSeries,
@@ -15,10 +16,13 @@ import {
   getEmployeeOptions,
   getEngineerAiUsage,
 } from "@/lib/data/engineer-profile";
+import { getEngineerCodeReview } from "@/lib/data/code-review";
 import { PERIOD_OPTIONS, type PeriodDays } from "@/lib/data/engineering";
 import { getCurrentUserRole } from "@/lib/auth/roles.server";
 import { hasAccess } from "@/lib/auth/roles";
 import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
+import { getCurrentUserWithTimeout } from "@/lib/auth/current-user.server";
+import { resolveViewerEmail } from "@/lib/data/managers";
 
 function formatTenure(months: number): string {
   const y = Math.floor(months / 12);
@@ -48,57 +52,84 @@ export default async function EngineerProfilePage({
   const profile = await getEngineerProfile(login);
   if (!profile) notFound();
 
-  // CEO role check is non-critical for rendering. Other pages
+  // Role check is non-critical for rendering. Other pages
   // (e.g. /dashboard/people/performance) `redirect()` on auth failure
   // because the entire page is role-gated — there's nothing to show
-  // without a role. Here the role only controls one supplementary
-  // section, so on a Clerk hiccup we prefer degrading to "no
-  // Performance section" over a broken profile for the whole team.
+  // without a role. Here the role only controls supplementary sections,
+  // so on a Clerk hiccup we prefer degrading to "missing sections" over
+  // a broken profile for the whole team.
   let isCeo = false;
+  let canSeeCodeReview = false;
   try {
     const role = await getCurrentUserRole();
     isCeo = hasAccess(role, "ceo");
+    const isEngManager = hasAccess(role, "engineering_manager");
+    let isSelf = false;
+    if (!isEngManager && profile.employeeEmail) {
+      const viewer = await getCurrentUserWithTimeout();
+      if (viewer.status === "authenticated") {
+        const viewerEmail = await resolveViewerEmail(
+          (viewer.user.emailAddresses ?? []).map((e) => e.emailAddress),
+        );
+        isSelf =
+          viewerEmail !== null &&
+          viewerEmail === profile.employeeEmail.toLowerCase();
+      }
+    }
+    // Engineering managers+ see every engineer's code review section.
+    // Anyone else only sees it on their own profile — a growth-focused
+    // self-view, not a peer leaderboard.
+    canSeeCodeReview = isEngManager || isSelf;
   } catch (err) {
     console.error("[engineer profile] role lookup failed", err);
   }
 
-  const [timeSeries, squadOkrs, performance, employeeOptions, aiUsage] =
-    await Promise.all([
-      getEngineerTimeSeries(login, periodDays).catch((err) => {
-        console.error("[engineer profile] time series failed", err);
-        return {
-          prSeries: [],
-          commitSeries: [],
-          additionsSeries: [],
-          deletionsSeries: [],
-        };
-      }),
-      profile.squad
-        ? getSquadOkrs(profile.squad).catch((err) => {
-            console.error("[engineer profile] squad OKRs failed", err);
-            return [];
-          })
-        : Promise.resolve([]),
-      isCeo
-        ? getEngineerPerformanceRatings(profile.employeeEmail).catch((err) => {
-            console.error(
-              "[engineer profile] performance ratings failed",
-              err
-            );
-            return null;
-          })
-        : Promise.resolve(null),
-      isCeo
-        ? getEmployeeOptions().catch((err) => {
-            console.error("[engineer profile] employee options failed", err);
-            return [];
-          })
-        : Promise.resolve([]),
-      getEngineerAiUsage(profile.employeeEmail).catch((err) => {
-        console.error("[engineer profile] ai usage failed", err);
-        return null;
-      }),
-    ]);
+  const [
+    timeSeries,
+    squadOkrs,
+    performance,
+    employeeOptions,
+    aiUsage,
+    codeReview,
+  ] = await Promise.all([
+    getEngineerTimeSeries(login, periodDays).catch((err) => {
+      console.error("[engineer profile] time series failed", err);
+      return {
+        prSeries: [],
+        commitSeries: [],
+        additionsSeries: [],
+        deletionsSeries: [],
+      };
+    }),
+    profile.squad
+      ? getSquadOkrs(profile.squad).catch((err) => {
+          console.error("[engineer profile] squad OKRs failed", err);
+          return [];
+        })
+      : Promise.resolve([]),
+    isCeo
+      ? getEngineerPerformanceRatings(profile.employeeEmail).catch((err) => {
+          console.error("[engineer profile] performance ratings failed", err);
+          return null;
+        })
+      : Promise.resolve(null),
+    isCeo
+      ? getEmployeeOptions().catch((err) => {
+          console.error("[engineer profile] employee options failed", err);
+          return [];
+        })
+      : Promise.resolve([]),
+    getEngineerAiUsage(profile.employeeEmail).catch((err) => {
+      console.error("[engineer profile] ai usage failed", err);
+      return null;
+    }),
+    canSeeCodeReview
+      ? getEngineerCodeReview(login).catch((err) => {
+          console.error("[engineer profile] code review failed", err);
+          return null;
+        })
+      : Promise.resolve(null),
+  ]);
 
   const displayName = profile.employeeName ?? login;
 
@@ -205,6 +236,17 @@ export default async function EngineerProfilePage({
           deletionsSeries={timeSeries.deletionsSeries}
         />
       </section>
+
+      {/* Code review — engineering manager+ */}
+      {canSeeCodeReview && codeReview && (
+        <section className="space-y-4">
+          <SectionDivider
+            title="Code review"
+            subtitle={`LLM-reviewed PRs merged in the last ${codeReview.windowDays} days, with rubric scores and peer-relative percentiles`}
+          />
+          <EngineerCodeReviewSection view={codeReview} />
+        </section>
+      )}
 
       {/* AI usage */}
       {aiUsage && (

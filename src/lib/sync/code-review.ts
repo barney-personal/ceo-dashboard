@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
-import { and, desc, eq, gte, inArray, lte, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   githubCommits,
@@ -10,9 +10,11 @@ import {
 import {
   RUBRIC_VERSION,
   analysePR,
+  analysePRWithExistingAnthropicReview,
   type CodeReviewAnalysis,
+  type CodeReviewModelReview,
 } from "@/lib/integrations/code-review-analyser";
-import { fetchPRAnalysisPayload } from "@/lib/integrations/github";
+import { fetchPRAnalysisPayload, GitHubApiError } from "@/lib/integrations/github";
 
 /**
  * How far back the page looks. 90 days gives enough evidence for a shrunk,
@@ -51,9 +53,26 @@ export interface AnalyseRunResult {
   candidatesConsidered: number;
   cached: number;
   analysed: number;
+  singleModelFallbacks: number;
+  reusedClaudeReviews: number;
   failed: Array<{ repo: string; prNumber: number; reason: string }>;
   skipped: Array<{ repo: string; prNumber: number; reason: string }>;
   durationMs: number;
+}
+
+export interface CodeReviewBackfillStatus {
+  windowDays: number;
+  rubricVersion: string;
+  candidatesConsidered: number;
+  eligibleTotal: number;
+  analysedCount: number;
+  remainingCount: number;
+  progressPct: number;
+  skippedBotCount: number;
+  skippedExcludedCount: number;
+  latestAnalysedAt: Date | null;
+  oldestRemainingMergedAt: Date | null;
+  newestRemainingMergedAt: Date | null;
 }
 
 export interface AnalyseRunOptions {
@@ -76,6 +95,75 @@ function getAnalysisConcurrency(override?: number): number {
   const raw = override ?? Number(process.env.CODE_REVIEW_ANALYSIS_CONCURRENCY ?? "");
   const parsed = Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_ANALYSIS_CONCURRENCY;
   return Math.max(1, Math.min(MAX_ANALYSIS_CONCURRENCY, parsed));
+}
+
+interface ReusableAnalysisRow {
+  reviewProvider: string | null;
+  reviewModel: string | null;
+  technicalDifficulty: number;
+  executionQuality: number;
+  testAdequacy: number;
+  riskHandling: number;
+  reviewability: number;
+  analysisConfidencePct: number;
+  category: string;
+  summary: string;
+  caveats: unknown;
+  standout: string | null;
+  rawJson: unknown;
+}
+
+function isReusableAnthropicReview(
+  value: unknown,
+): value is CodeReviewModelReview {
+  if (!value || typeof value !== "object") return false;
+  const review = value as Partial<CodeReviewModelReview>;
+  return (
+    review.provider === "anthropic" &&
+    typeof review.model === "string" &&
+    typeof review.technicalDifficulty === "number" &&
+    typeof review.executionQuality === "number" &&
+    typeof review.testAdequacy === "number" &&
+    typeof review.riskHandling === "number" &&
+    typeof review.reviewability === "number" &&
+    typeof review.analysisConfidencePct === "number" &&
+    typeof review.category === "string" &&
+    typeof review.summary === "string"
+  );
+}
+
+function reusableAnthropicReviewFrom(
+  row: ReusableAnalysisRow,
+): CodeReviewModelReview | null {
+  const raw = row.rawJson as { rawModelReviews?: unknown } | null | undefined;
+  const rawClaudeReview = Array.isArray(raw?.rawModelReviews)
+    ? raw.rawModelReviews.find(isReusableAnthropicReview)
+    : null;
+  if (rawClaudeReview) return rawClaudeReview;
+
+  if (
+    row.reviewProvider !== "anthropic" &&
+    !row.reviewModel?.toLowerCase().includes("claude")
+  ) {
+    return null;
+  }
+
+  return {
+    provider: "anthropic",
+    model: row.reviewModel || "claude-opus-4-7",
+    technicalDifficulty: row.technicalDifficulty,
+    executionQuality: row.executionQuality,
+    testAdequacy: row.testAdequacy,
+    riskHandling: row.riskHandling,
+    reviewability: row.reviewability,
+    analysisConfidencePct: row.analysisConfidencePct,
+    category: row.category as CodeReviewModelReview["category"],
+    summary: row.summary,
+    caveats: Array.isArray(row.caveats)
+      ? row.caveats.filter((c): c is string => typeof c === "string")
+      : [],
+    standout: row.standout as CodeReviewModelReview["standout"],
+  };
 }
 
 /**
@@ -125,6 +213,8 @@ export async function runCodeReviewAnalysis(
   const failed: AnalyseRunResult["failed"] = [];
   let cached = 0;
   let analysed = 0;
+  let singleModelFallbacks = 0;
+  let reusedClaudeReviews = 0;
 
   // Find which (repo, prNumber) pairs already have a current-rubric analysis —
   // batch lookup so we don't N+1 select.
@@ -139,6 +229,9 @@ export async function runCodeReviewAnalysis(
     }
     return true;
   });
+
+  const key = (r: { repo: string; prNumber: number }) => `${r.repo}#${r.prNumber}`;
+  const reusableClaudeByKey = new Map<string, CodeReviewModelReview>();
 
   if (!opts.force && eligible.length > 0) {
     const existing = await db
@@ -160,7 +253,6 @@ export async function runCodeReviewAnalysis(
           ),
         ),
       );
-    const key = (r: { repo: string; prNumber: number }) => `${r.repo}#${r.prNumber}`;
     const existingSet = new Set(existing.map(key));
     for (let i = eligible.length - 1; i >= 0; i--) {
       if (existingSet.has(key(eligible[i]))) {
@@ -171,6 +263,50 @@ export async function runCodeReviewAnalysis(
   }
 
   const toRun = eligible.slice(0, limit);
+
+  if (!opts.force && toRun.length > 0) {
+    const previousRows = await db
+      .select({
+        repo: prReviewAnalyses.repo,
+        prNumber: prReviewAnalyses.prNumber,
+        reviewProvider: prReviewAnalyses.reviewProvider,
+        reviewModel: prReviewAnalyses.reviewModel,
+        technicalDifficulty: prReviewAnalyses.technicalDifficulty,
+        executionQuality: prReviewAnalyses.executionQuality,
+        testAdequacy: prReviewAnalyses.testAdequacy,
+        riskHandling: prReviewAnalyses.riskHandling,
+        reviewability: prReviewAnalyses.reviewability,
+        analysisConfidencePct: prReviewAnalyses.analysisConfidencePct,
+        category: prReviewAnalyses.category,
+        summary: prReviewAnalyses.summary,
+        caveats: prReviewAnalyses.caveats,
+        standout: prReviewAnalyses.standout,
+        rawJson: prReviewAnalyses.rawJson,
+      })
+      .from(prReviewAnalyses)
+      .where(
+        and(
+          ne(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
+          or(
+            ...toRun.map((c) =>
+              and(
+                eq(prReviewAnalyses.repo, c.repo),
+                eq(prReviewAnalyses.prNumber, c.prNumber),
+              ),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(prReviewAnalyses.analysedAt));
+
+    for (const row of previousRows) {
+      const rowKey = key(row);
+      if (reusableClaudeByKey.has(rowKey)) continue;
+      const review = reusableAnthropicReviewFrom(row);
+      if (review) reusableClaudeByKey.set(rowKey, review);
+    }
+  }
+
   // githubPrs.repo is the bare repo name (e.g. "mobile-app") — the GitHub
   // sync drops the org to match its per-repo metric schema. We need the
   // full "owner/repo" for the API, so prefix with GITHUB_ORG here. Throw
@@ -188,12 +324,27 @@ export async function runCodeReviewAnalysis(
   }
   let nextIndex = 0;
   const workerCount = Math.min(concurrency, toRun.length);
+  // Track attempts and 404s per repo so we can distinguish a one-off
+  // deleted PR (quiet info) from a token that has lost access to a whole
+  // repo (loud exception). GitHub returns 404 — not 403 — for private
+  // resources the token can't see, so a single 404 is ambiguous; a
+  // repo-wide 404 pattern is the unambiguous access-regression signal.
+  const perRepoStats = new Map<string, { total: number; notFound: number }>();
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (!opts.signal?.aborted) {
         const index = nextIndex++;
         const c = toRun[index];
         if (!c) return;
+
+        const stats =
+          perRepoStats.get(c.repo) ??
+          (() => {
+            const fresh = { total: 0, notFound: 0 };
+            perRepoStats.set(c.repo, fresh);
+            return fresh;
+          })();
+        stats.total += 1;
 
         try {
           const payload = await fetchPRAnalysisPayload(fullName(c.repo), c.prNumber, {
@@ -206,27 +357,202 @@ export async function runCodeReviewAnalysis(
             payload.mergeSha,
             payload.title,
           );
-          const analysis = await analysePR(payload, { signal: opts.signal });
+          const reusableClaudeReview = reusableClaudeByKey.get(key(c));
+          const analysis = reusableClaudeReview
+            ? await analysePRWithExistingAnthropicReview(
+                payload,
+                reusableClaudeReview,
+                { signal: opts.signal },
+              )
+            : await analysePR(payload, { signal: opts.signal });
           await upsertAnalysis(c, payload, analysis);
           analysed++;
+          if (reusableClaudeReview) {
+            reusedClaudeReviews++;
+          }
+          if (analysis.rawModelReviews.length === 1) {
+            singleModelFallbacks++;
+          }
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           failed.push({ repo: c.repo, prNumber: c.prNumber, reason });
-          Sentry.captureException(err, {
-            tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
-          });
+          const is404 = err instanceof GitHubApiError && err.status === 404;
+          if (is404) {
+            stats.notFound += 1;
+            // Individual 404 = PR was deleted / renamed upstream (data
+            // cleanup, not a bug). Repo-wide escalation happens after
+            // the worker pool drains.
+            Sentry.captureMessage("Code review PR fetch returned 404", {
+              level: "info",
+              fingerprint: ["code-review", "pr-fetch-404"],
+              tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
+              extra: { path: err.path },
+            });
+          } else {
+            Sentry.captureException(err, {
+              tags: { feature: "code-review", repo: c.repo, pr: String(c.prNumber) },
+            });
+          }
         }
       }
     }),
   );
 
+  // Access-regression detector: if every attempt against a repo 404'd and
+  // there were at least 3 attempts, the token probably lost access to that
+  // repo (token rotation, private-repo permission removed, repo renamed
+  // without updating `githubPrs.repo`, etc). Emit a distinct exception so
+  // Sentry actually pages on it, separate from the per-PR info stream.
+  for (const [repo, stats] of perRepoStats) {
+    if (stats.total >= 3 && stats.notFound === stats.total) {
+      Sentry.captureException(
+        new Error(
+          `Code review: ${stats.notFound}/${stats.total} PRs returned 404 for ${repo} — possible token access regression`,
+        ),
+        {
+          level: "error",
+          fingerprint: ["code-review", "repo-access-regression", repo],
+          tags: {
+            feature: "code-review",
+            repo,
+            access_regression_suspected: "true",
+          },
+          extra: { repo, total: stats.total, notFound: stats.notFound },
+        },
+      );
+    }
+  }
+
   return {
     candidatesConsidered: candidates.length,
     cached,
     analysed,
+    singleModelFallbacks,
+    reusedClaudeReviews,
     failed,
     skipped,
     durationMs: Date.now() - start,
+  };
+}
+
+export async function getCodeReviewBackfillStatus(
+  windowDays = CODE_REVIEW_WINDOW_DAYS,
+): Promise<CodeReviewBackfillStatus> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const excluded = getExcludedRepos();
+
+  const [candidates, botRows, analyses] = await Promise.all([
+    db
+      .select({
+        repo: githubPrs.repo,
+        prNumber: githubPrs.prNumber,
+        authorLogin: githubPrs.authorLogin,
+        mergedAt: githubPrs.mergedAt,
+      })
+      .from(githubPrs)
+      .where(gte(githubPrs.mergedAt, since))
+      .orderBy(desc(githubPrs.mergedAt)),
+    db
+      .select({ githubLogin: githubEmployeeMap.githubLogin })
+      .from(githubEmployeeMap)
+      .where(eq(githubEmployeeMap.isBot, true)),
+    db
+      .select({
+        repo: prReviewAnalyses.repo,
+        prNumber: prReviewAnalyses.prNumber,
+        analysedAt: prReviewAnalyses.analysedAt,
+      })
+      .from(prReviewAnalyses)
+      .where(
+        and(
+          eq(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
+          gte(prReviewAnalyses.mergedAt, since),
+        ),
+      ),
+  ]);
+
+  const botLogins = new Set(
+    botRows.map((row) => row.githubLogin.toLowerCase()),
+  );
+  const eligibleByKey = new Map<
+    string,
+    {
+      mergedAt: Date;
+    }
+  >();
+
+  let skippedBotCount = 0;
+  let skippedExcludedCount = 0;
+
+  for (const candidate of candidates) {
+    if (
+      isBotAuthor(candidate.authorLogin) ||
+      botLogins.has(candidate.authorLogin.toLowerCase())
+    ) {
+      skippedBotCount++;
+      continue;
+    }
+
+    if (excluded.has(candidate.repo.toLowerCase())) {
+      skippedExcludedCount++;
+      continue;
+    }
+
+    eligibleByKey.set(`${candidate.repo}#${candidate.prNumber}`, {
+      mergedAt: candidate.mergedAt,
+    });
+  }
+
+  const analysedKeys = new Set<string>();
+  let latestAnalysedAt: Date | null = null;
+
+  for (const analysis of analyses) {
+    const key = `${analysis.repo}#${analysis.prNumber}`;
+    if (!eligibleByKey.has(key)) continue;
+    analysedKeys.add(key);
+    if (latestAnalysedAt === null || analysis.analysedAt > latestAnalysedAt) {
+      latestAnalysedAt = analysis.analysedAt;
+    }
+  }
+
+  let oldestRemainingMergedAt: Date | null = null;
+  let newestRemainingMergedAt: Date | null = null;
+
+  for (const [key, candidate] of eligibleByKey) {
+    if (analysedKeys.has(key)) continue;
+    if (
+      oldestRemainingMergedAt === null ||
+      candidate.mergedAt < oldestRemainingMergedAt
+    ) {
+      oldestRemainingMergedAt = candidate.mergedAt;
+    }
+    if (
+      newestRemainingMergedAt === null ||
+      candidate.mergedAt > newestRemainingMergedAt
+    ) {
+      newestRemainingMergedAt = candidate.mergedAt;
+    }
+  }
+
+  const eligibleTotal = eligibleByKey.size;
+  const analysedCount = analysedKeys.size;
+  const remainingCount = Math.max(0, eligibleTotal - analysedCount);
+  const progressPct =
+    eligibleTotal === 0 ? 100 : (analysedCount / eligibleTotal) * 100;
+
+  return {
+    windowDays,
+    rubricVersion: RUBRIC_VERSION,
+    candidatesConsidered: candidates.length,
+    eligibleTotal,
+    analysedCount,
+    remainingCount,
+    progressPct,
+    skippedBotCount,
+    skippedExcludedCount,
+    latestAnalysedAt,
+    oldestRemainingMergedAt,
+    newestRemainingMergedAt,
   };
 }
 

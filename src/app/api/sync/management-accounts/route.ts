@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueSyncRun } from "@/lib/sync/coordinator";
 import {
-  authorizeSyncRequest,
+  authorizeSyncRequestWithIdentity,
   syncRequestAccessErrorResponse,
 } from "@/lib/sync/request-auth";
+import {
+  isManualSyncRateLimitEnabled,
+  manualSyncRateLimitKey,
+  manualSyncRateLimiter,
+  rateLimitErrorResponse,
+} from "@/lib/sync/rate-limit";
 import {
   serializeEnqueueSyncResult,
   unexpectedSyncRouteErrorResponse,
@@ -16,12 +22,28 @@ import {
 
 export async function POST(request: NextRequest) {
   try {
-    const access = await authorizeSyncRequest(request, "admin.status");
-    const accessError = syncRequestAccessErrorResponse(access);
+    const identity = await authorizeSyncRequestWithIdentity(
+      request,
+      "admin.status",
+    );
+    const accessError = syncRequestAccessErrorResponse(identity.access);
     if (accessError) {
       return accessError;
     }
-    const trigger = access === "cron" ? "cron" : "manual";
+
+    if (identity.access === "manual" && isManualSyncRateLimitEnabled()) {
+      const decision = manualSyncRateLimiter.check(
+        manualSyncRateLimitKey("management-accounts", identity.userId)
+      );
+      if (!decision.ok) {
+        return rateLimitErrorResponse(
+          decision.retryAfterSeconds,
+          "management-accounts"
+        );
+      }
+    }
+
+    const trigger = identity.access === "cron" ? "cron" : "manual";
 
     const force = request.nextUrl.searchParams.get("force") === "1";
     const result = await enqueueSyncRun("management-accounts", {
@@ -36,7 +58,7 @@ export async function POST(request: NextRequest) {
       const { started } = startBackgroundSyncDrain(workerId, {
         source: "management-accounts",
         runIds: result.runId != null ? [result.runId] : [],
-        triggerLabel: `${access} management-accounts sync request`,
+        triggerLabel: `${identity.access} management-accounts sync request`,
       });
       const drainState = await awaitDrainStarted(started);
       if (drainState === "failed") {

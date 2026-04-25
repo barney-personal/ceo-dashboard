@@ -13,6 +13,7 @@ import { getRequiredRoleForDashboardPermission } from "@/lib/auth/dashboard-perm
 import { CURRENT_USER_TIMEOUT_MS } from "@/lib/auth/current-user.server";
 import {
   authorizeSyncRequest,
+  authorizeSyncRequestWithIdentity,
   isCronRequest,
   requireRole,
 } from "@/lib/sync/request-auth";
@@ -22,8 +23,9 @@ const mockGetRequiredRoleForDashboardPermission = vi.mocked(
   getRequiredRoleForDashboardPermission,
 );
 
-function asCurrentUser(publicMetadata: Record<string, unknown>) {
+function asCurrentUser(publicMetadata: Record<string, unknown>, id = "user_123") {
   return {
+    id,
     publicMetadata,
   } as unknown as ReturnType<typeof currentUser> extends Promise<infer U>
     ? U
@@ -192,6 +194,69 @@ describe("authorizeSyncRequest", () => {
     await vi.advanceTimersByTimeAsync(CURRENT_USER_TIMEOUT_MS);
 
     await expect(resultPromise).resolves.toBe("unauthenticated");
+  });
+});
+
+describe("authorizeSyncRequestWithIdentity", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    delete process.env.CRON_SECRET;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns cron identity when bearer token matches CRON_SECRET", async () => {
+    process.env.CRON_SECRET = "test-secret";
+
+    const result = await authorizeSyncRequestWithIdentity(
+      makeRequest("Bearer test-secret")
+    );
+
+    expect(result).toEqual({ access: "cron" });
+    expect(mockCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it("returns unauthenticated identity when no user and no cron token", async () => {
+    mockCurrentUser.mockResolvedValue(null);
+
+    const result = await authorizeSyncRequestWithIdentity(makeRequest());
+
+    expect(result).toEqual({ access: "unauthenticated" });
+  });
+
+  it("returns forbidden identity when the user lacks CEO role", async () => {
+    mockCurrentUser.mockResolvedValue(asCurrentUser({ role: "leadership" }));
+
+    const result = await authorizeSyncRequestWithIdentity(makeRequest());
+
+    expect(result).toEqual({ access: "forbidden" });
+  });
+
+  it("returns manual identity with the Clerk user id for CEO users", async () => {
+    mockCurrentUser.mockResolvedValue(
+      asCurrentUser({ role: "ceo" }, "user_ceo_456")
+    );
+
+    const result = await authorizeSyncRequestWithIdentity(makeRequest());
+
+    expect(result).toEqual({ access: "manual", userId: "user_ceo_456" });
+  });
+
+  it("returns unauthenticated identity when Clerk lookup times out", async () => {
+    vi.useFakeTimers();
+    mockCurrentUser.mockImplementation(
+      () => new Promise<Awaited<ReturnType<typeof currentUser>>>(() => {})
+    );
+
+    const resultPromise = authorizeSyncRequestWithIdentity(makeRequest());
+
+    await vi.advanceTimersByTimeAsync(CURRENT_USER_TIMEOUT_MS);
+
+    await expect(resultPromise).resolves.toEqual({
+      access: "unauthenticated",
+    });
   });
 });
 

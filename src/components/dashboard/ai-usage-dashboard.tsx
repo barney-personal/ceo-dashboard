@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { StackedAreaChart } from "@/components/charts/stacked-area-chart";
 import { SmallMultiplesTimeSeries } from "@/components/charts/small-multiples-time-series";
 import { Sparkline } from "@/components/charts/sparkline";
+import { LorenzCurve } from "@/components/charts/lorenz-curve";
 
 interface WeeklyCategoryRow {
   weekStart: string;
@@ -46,6 +47,27 @@ interface ModelTrendPanel {
   trend: Array<{ monthStart: string; cost: number; tokens: number }>;
   latestCost: number;
   priorCost: number;
+}
+
+interface MonthlyModelMix {
+  months: string[];
+  /** `key` is a stable composite ("category::modelName") — reading
+   *  `row[model.key]` avoids silent merges when the same modelName appears
+   *  under multiple tool categories. */
+  models: Array<{
+    key: string;
+    modelName: string;
+    category: string;
+    totalCost: number;
+  }>;
+  rows: Array<{ monthStart: string; [key: string]: string | number }>;
+}
+
+interface LorenzPayload {
+  points: Array<{ x: number; y: number }>;
+  gini: number;
+  userCount: number;
+  totalSpend: number;
 }
 
 interface PersonLookup {
@@ -125,8 +147,12 @@ export function AiUsageDashboard({
   monthlyByUser,
   userTrends,
   modelTrends,
+  monthlyModelMix,
+  lorenz,
   people,
   claudeDataStart,
+  currentWeekStart,
+  currentMonthStart,
   canViewProfiles = false,
 }: {
   weeklyByCategory: WeeklyCategoryRow[];
@@ -134,21 +160,31 @@ export function AiUsageDashboard({
   monthlyByUser: MonthlyUserRow[];
   userTrends: Record<string, UserMonthlyTrendEntry[]>;
   modelTrends: ModelTrendPanel[];
+  monthlyModelMix?: MonthlyModelMix;
+  lorenz?: LorenzPayload;
   people: PersonLookup[];
   /** ISO date for the vertical annotation on the weekly area chart. */
   claudeDataStart?: string;
+  /** Monday of the current (in-progress) week, so the latest bar is marked
+   *  as partial — Cairo's truthful-chart rule. */
+  currentWeekStart?: string;
+  /** First day of the current (in-progress) month — same rationale for the
+   *  model-mix chart's latest column. */
+  currentMonthStart?: string;
   /** When true, render user names as links to `/dashboard/people/${slug}`.
    *  That route is manager-gated, so non-managers see plain names and no
    *  dead-end link. */
   canViewProfiles?: boolean;
 }) {
+  const [weeklyMetric, setWeeklyMetric] = useState<"cost" | "tokens">("cost");
   const peopleByEmail = useMemo(
     () => new Map(people.map((p) => [p.email, p])),
     [people],
   );
 
   // Build the stacked-area data shape: one row per week with one column
-  // per category. Weeks with no data for a category get 0.
+  // per category. Weeks with no data for a category get 0. The `metric`
+  // toggle swaps the measured field — cost ($) or tokens (count).
   const stackedWeekly = useMemo(() => {
     const weeks = [
       ...new Set(weeklyByCategory.map((r) => r.weekStart)),
@@ -168,7 +204,8 @@ export function AiUsageDashboard({
     for (const row of weeklyByCategory) {
       const target = rowByWeek.get(row.weekStart);
       if (!target) continue;
-      target[row.category] = row.totalCost;
+      target[row.category] =
+        weeklyMetric === "cost" ? row.totalCost : row.totalTokens;
     }
     return {
       rows,
@@ -178,7 +215,7 @@ export function AiUsageDashboard({
         color: CATEGORY_COLORS[c] ?? "#6b7280",
       })),
     };
-  }, [weeklyByCategory]);
+  }, [weeklyByCategory, weeklyMetric]);
 
   // Latest month model breakdown with MoM delta + top-10 cap + "other" row.
   const modelBreakdown = useMemo(() => {
@@ -354,25 +391,70 @@ export function AiUsageDashboard({
           .filter((u) => u.pillar === pillarFilter)
           .slice(0, leaderboardLimit);
 
-  const maxUserCost = userLeaderboard.rows[0]?.cost ?? 0;
-  const medianSharePct = maxUserCost
-    ? (userLeaderboard.medianCost / maxUserCost) * 100
-    : 0;
 
   return (
     <div className="space-y-8">
       {stackedWeekly.rows.length > 1 && (
-        <StackedAreaChart
-          title="Weekly AI spend"
-          subtitle="Claude + Cursor, stacked so the top line is the company total"
-          data={stackedWeekly.rows}
-          series={stackedWeekly.series}
-          yFormatType="currency"
-          annotations={
-            claudeDataStart
-              ? [{ date: claudeDataStart, label: "Claude data begins" }]
-              : []
-          }
+        <div className="relative">
+          <StackedAreaChart
+            title={
+              weeklyMetric === "cost" ? "Weekly AI spend" : "Weekly AI tokens"
+            }
+            subtitle={
+              weeklyMetric === "cost"
+                ? "Claude + Cursor, stacked so the top line is the company total"
+                : "Total tokens consumed per week, stacked by tool"
+            }
+            data={stackedWeekly.rows}
+            series={stackedWeekly.series}
+            yFormatType={weeklyMetric === "cost" ? "currency" : "tokens"}
+            annotations={[
+              ...(claudeDataStart
+                ? [{ date: claudeDataStart, label: "Claude data begins" }]
+                : []),
+              ...(currentWeekStart
+                ? [{ date: currentWeekStart, label: "Partial week — WTD" }]
+                : []),
+            ]}
+          />
+          <div
+            className="absolute right-5 top-3 inline-flex rounded-md border border-border/60 bg-background p-0.5 text-[11px]"
+            role="tablist"
+            aria-label="Weekly chart metric"
+          >
+            {(["cost", "tokens"] as const).map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={weeklyMetric === m}
+                onClick={() => setWeeklyMetric(m)}
+                className={`rounded px-2 py-0.5 capitalize transition-colors ${
+                  weeklyMetric === m
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {m === "cost" ? "$ cost" : "Tokens"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {monthlyModelMix && monthlyModelMix.rows.length > 1 && (
+        <MonthlyModelMixChart
+          mix={monthlyModelMix}
+          currentMonthStart={currentMonthStart}
+        />
+      )}
+
+      {lorenz && lorenz.userCount >= 3 && (
+        <LorenzCurve
+          points={lorenz.points}
+          gini={lorenz.gini}
+          userCount={lorenz.userCount}
+          totalSpend={lorenz.totalSpend}
+          subtitle="Latest month, one point per active user"
         />
       )}
 
@@ -485,8 +567,8 @@ export function AiUsageDashboard({
                 Who&apos;s spending the most
               </h3>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Median peer: {formatCurrency(userLeaderboard.medianCost)} · grey
-                marker on share bars
+                Median peer this month:{" "}
+                {formatCurrency(userLeaderboard.medianCost)}
               </p>
             </div>
             <div className="flex gap-2 text-xs">
@@ -541,16 +623,10 @@ export function AiUsageDashboard({
                     $/day
                   </th>
                   <th className="px-5 py-2.5 text-right">Tokens</th>
-                  <th className="px-5 py-2.5 text-left w-48 hidden xl:table-cell">
-                    Share
-                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredUsers.map((user, i) => {
-                  const share = maxUserCost
-                    ? (user.cost / maxUserCost) * 100
-                    : 0;
                   const delta = deltaBadge(user.cost, user.priorCost);
                   return (
                     <tr
@@ -619,28 +695,13 @@ export function AiUsageDashboard({
                       <td className="px-5 py-2.5 text-right tabular-nums text-muted-foreground">
                         {formatTokens(user.tokens)}
                       </td>
-                      <td className="px-5 py-2.5 hidden xl:table-cell">
-                        <div className="relative h-1.5 w-40 rounded-full bg-muted/40">
-                          <div
-                            className="absolute inset-y-0 left-0 rounded-full bg-primary/70"
-                            style={{ width: `${Math.max(share, 1)}%` }}
-                          />
-                          {medianSharePct > 0 && (
-                            <div
-                              className="absolute top-[-3px] h-3.5 w-px bg-foreground/50"
-                              style={{ left: `${medianSharePct}%` }}
-                              title={`Median peer: ${formatCurrency(userLeaderboard.medianCost)}`}
-                            />
-                          )}
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}
                 {filteredUsers.length === 0 && (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={10}
                       className="px-5 py-8 text-center text-xs text-muted-foreground"
                     >
                       No users match the current filter.
@@ -653,5 +714,295 @@ export function AiUsageDashboard({
         </section>
       )}
     </div>
+  );
+}
+
+/**
+ * Monthly model mix — one stacked column per month, segments sized by model
+ * spend. Defaults to "share %" because Cleveland warns that stacked-bar
+ * baselines beyond the bottom series are hard to compare; fixing the top
+ * at 100% resolves that for composition questions. Toggle to absolute $
+ * when the reader's question is magnitude, not mix.
+ */
+function MonthlyModelMixChart({
+  mix,
+  currentMonthStart,
+}: {
+  mix: MonthlyModelMix;
+  currentMonthStart?: string;
+}) {
+  const [mode, setMode] = useState<"absolute" | "share">("share");
+
+  interface HoverState {
+    monthStart: string;
+    modelKey: string;
+    modelName: string;
+    category: string;
+    cost: number;
+    sharePct: number;
+    momDeltaPct: number | null;
+    color: string;
+    // Pixel offset within the chart-area container so the tooltip lands
+    // near the cursor without stealing pointer events.
+    x: number;
+    y: number;
+  }
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const chartAreaRef = useRef<HTMLDivElement>(null);
+
+  const totals = useMemo(() => {
+    return mix.rows.map((row) => {
+      let total = 0;
+      for (const m of mix.models) {
+        total += Number(row[m.key] ?? 0);
+      }
+      return total;
+    });
+  }, [mix]);
+
+  const maxTotal = Math.max(1, ...totals);
+
+  return (
+    <section className="rounded-xl border border-border/60 bg-card shadow-warm">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border/60 px-5 py-4">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            Monthly model mix
+          </p>
+          <h3 className="font-display text-lg italic text-foreground">
+            How spend is split by model, over time
+          </h3>
+        </div>
+        <div
+          className="inline-flex rounded-md border border-border/60 bg-background p-0.5 text-[11px]"
+          role="tablist"
+          aria-label="Model mix scale"
+        >
+          {(["absolute", "share"] as const).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              className={`rounded px-2 py-0.5 capitalize transition-colors ${
+                mode === m
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {m === "absolute" ? "Absolute $" : "Share %"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        ref={chartAreaRef}
+        className="relative overflow-x-auto px-5 py-4"
+      >
+        <div
+          className="flex items-end gap-2"
+          style={{ minWidth: `${Math.max(mix.rows.length * 48, 320)}px` }}
+        >
+          {mix.rows.map((row, i) => {
+            const total = totals[i] ?? 0;
+            const priorTotal = i > 0 ? (totals[i - 1] ?? 0) : 0;
+            const priorRow = i > 0 ? mix.rows[i - 1] : null;
+            // Tall bars (~440px) are the point: with ~13 models in the
+            // legend, a 220px stack crushes small-share segments into
+            // unreadable slivers. A taller y-axis gives each band room.
+            const barHeightPx = 440;
+            const scale = mode === "share" ? 1 : total / maxTotal;
+            const isPartial = row.monthStart === currentMonthStart;
+            const isHoveredMonth = hover?.monthStart === row.monthStart;
+            return (
+              <div
+                key={row.monthStart}
+                className={`flex flex-1 min-w-[32px] flex-col items-center gap-1 transition-opacity ${
+                  hover && !isHoveredMonth ? "opacity-60" : "opacity-100"
+                }`}
+              >
+                <div className="text-[10px] tabular-nums text-muted-foreground/80">
+                  {formatCurrencyCompact(total)}
+                </div>
+                <div
+                  className={`relative flex w-full flex-col overflow-hidden rounded-sm border ${
+                    isPartial
+                      ? "border-dashed border-muted-foreground/40 bg-muted/5"
+                      : "border-border/40 bg-muted/10"
+                  }`}
+                  style={{ height: `${barHeightPx}px` }}
+                >
+                  <div
+                    className="absolute bottom-0 left-0 right-0 flex flex-col-reverse"
+                    style={{
+                      height: `${Math.max(scale * 100, 1)}%`,
+                      opacity: isPartial ? 0.55 : 1,
+                    }}
+                  >
+                    {mix.models.map((model, mi) => {
+                      const value = Number(row[model.key] ?? 0);
+                      if (value <= 0) return null;
+                      const pct = total > 0 ? (value / total) * 100 : 0;
+                      const color =
+                        model.category === "other"
+                          ? "#9ca3af"
+                          : MODEL_PALETTE[mi % MODEL_PALETTE.length];
+                      const priorValue = priorRow
+                        ? Number(priorRow[model.key] ?? 0)
+                        : 0;
+                      const momDeltaPct =
+                        priorValue > 0
+                          ? ((value - priorValue) / priorValue) * 100
+                          : null;
+                      const isHoveredSegment =
+                        hover?.monthStart === row.monthStart &&
+                        hover.modelKey === model.key;
+                      return (
+                        <div
+                          key={model.key}
+                          style={{
+                            height: `${pct}%`,
+                            backgroundColor: color,
+                            opacity: isHoveredSegment
+                              ? 1
+                              : hover && !isHoveredSegment
+                                ? 0.55
+                                : 0.9,
+                            outline: isHoveredSegment
+                              ? "1.5px solid rgba(17,24,39,0.85)"
+                              : "none",
+                            outlineOffset: "-1px",
+                            cursor: "pointer",
+                            transition: "opacity 120ms",
+                          }}
+                          onMouseMove={(e) => {
+                            const rect =
+                              chartAreaRef.current?.getBoundingClientRect();
+                            if (!rect) return;
+                            const TOOLTIP_WIDTH = 200;
+                            const rawX = e.clientX - rect.left;
+                            const clampedX = Math.min(
+                              rawX + 14,
+                              Math.max(rect.width - TOOLTIP_WIDTH, 8),
+                            );
+                            const clampedY = Math.max(
+                              e.clientY - rect.top - 48,
+                              8,
+                            );
+                            setHover({
+                              monthStart: row.monthStart,
+                              modelKey: model.key,
+                              modelName: model.modelName,
+                              category: model.category,
+                              cost: value,
+                              sharePct: pct,
+                              momDeltaPct,
+                              color,
+                              x: clampedX,
+                              y: clampedY,
+                            });
+                          }}
+                          onMouseLeave={() => setHover(null)}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+                <div
+                  className={`whitespace-nowrap text-[10px] ${
+                    isPartial
+                      ? "italic text-muted-foreground/70"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {formatMonth(row.monthStart)}
+                  {isPartial && " · MTD"}
+                  {isHoveredMonth && priorTotal > 0 && (
+                    <span className="ml-1 text-muted-foreground/70 tabular-nums">
+                      · MoM{" "}
+                      {(((total - priorTotal) / priorTotal) * 100 >= 0
+                        ? "+"
+                        : "") +
+                        (((total - priorTotal) / priorTotal) * 100).toFixed(0)}
+                      %
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {hover && (
+          <div
+            className="pointer-events-none absolute z-10 min-w-[180px] rounded-md border border-border/60 bg-card/95 px-3 py-2 text-xs shadow-warm backdrop-blur"
+            style={{ left: hover.x, top: hover.y }}
+            role="tooltip"
+          >
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-sm"
+                style={{ backgroundColor: hover.color }}
+              />
+              <span className="font-medium text-foreground">
+                {hover.modelName}
+              </span>
+              <span className="text-muted-foreground/70">
+                · {hover.category}
+              </span>
+            </div>
+            <div className="mt-1 flex items-baseline gap-2 tabular-nums">
+              <span className="text-base font-display text-foreground">
+                {formatCurrency(hover.cost)}
+              </span>
+              <span className="text-muted-foreground">
+                {hover.sharePct.toFixed(1)}% of {formatMonth(hover.monthStart)}
+              </span>
+            </div>
+            {hover.momDeltaPct != null && (
+              <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                MoM{" "}
+                <span
+                  className={
+                    Math.abs(hover.momDeltaPct) < 3
+                      ? "text-muted-foreground"
+                      : hover.momDeltaPct > 0
+                        ? "text-foreground"
+                        : "text-foreground"
+                  }
+                >
+                  {hover.momDeltaPct > 0 ? "+" : ""}
+                  {hover.momDeltaPct.toFixed(0)}%
+                </span>
+                {" vs prior month"}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <ul className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border/40 px-5 py-3 text-[11px]">
+        {mix.models.map((m, i) => (
+          <li key={m.key} className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2 w-2 rounded-sm"
+              style={{
+                backgroundColor:
+                  m.category === "other"
+                    ? "#9ca3af"
+                    : MODEL_PALETTE[i % MODEL_PALETTE.length],
+              }}
+            />
+            <span className="text-foreground">{m.modelName}</span>
+            {m.category !== "other" && (
+              <span className="text-muted-foreground/70">
+                · {m.category}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

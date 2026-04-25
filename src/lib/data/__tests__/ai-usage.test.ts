@@ -15,8 +15,12 @@ vi.mock("../mode", async (importOriginal) => {
 
 import {
   aggregateLatestMonthByUser,
+  buildMonthlyModelMix,
   buildTopModelTrends,
   buildUserMonthlyTrends,
+  computeLorenzCurve,
+  currentMonthStartIso,
+  currentWeekStartIso,
   getAiUsageData,
   getLatestMonthPeerSpend,
   getTrailingWeeklyTotals,
@@ -386,5 +390,209 @@ describe("getTrailingWeeklyTotals", () => {
       "2026-04-13",
     ]);
     expect(weekly.map((w) => w.cost)).toEqual([1200, 5200]);
+  });
+});
+
+describe("currentWeekStartIso", () => {
+  it("returns the Monday of the given week in UTC", () => {
+    // 2026-04-24 is a Friday; Monday of that week is 2026-04-20.
+    expect(currentWeekStartIso(new Date("2026-04-24T10:00:00Z"))).toBe(
+      "2026-04-20",
+    );
+    // Monday itself stays put.
+    expect(currentWeekStartIso(new Date("2026-04-20T00:00:00Z"))).toBe(
+      "2026-04-20",
+    );
+    // Sunday rolls back 6 days.
+    expect(currentWeekStartIso(new Date("2026-04-26T23:59:00Z"))).toBe(
+      "2026-04-20",
+    );
+  });
+});
+
+describe("currentMonthStartIso", () => {
+  it("returns the first of the month in UTC", () => {
+    expect(currentMonthStartIso(new Date("2026-04-24T10:00:00Z"))).toBe(
+      "2026-04-01",
+    );
+    expect(currentMonthStartIso(new Date("2026-01-01T00:00:00Z"))).toBe(
+      "2026-01-01",
+    );
+  });
+});
+
+describe("computeLorenzCurve", () => {
+  it("produces a curve, user count, and Gini bounded to [0, 1]", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const lorenz = computeLorenzCurve(data);
+
+    // 2 active users in latest month (alice + bob).
+    expect(lorenz.userCount).toBe(2);
+    // Total spend = alice (500+120) + bob (45) = 665.
+    expect(lorenz.totalSpend).toBe(665);
+    // First + last point always anchor at (0,0) and (1,1).
+    expect(lorenz.points[0]).toEqual({ x: 0, y: 0 });
+    expect(lorenz.points.at(-1)).toEqual({ x: 1, y: 1 });
+    expect(lorenz.gini).toBeGreaterThanOrEqual(0);
+    expect(lorenz.gini).toBeLessThanOrEqual(1);
+    // bob < alice, so curve should sit below the diagonal → gini > 0.
+    expect(lorenz.gini).toBeGreaterThan(0);
+  });
+
+  it("returns a flat equality line when there is no spend", async () => {
+    getReportDataMock.mockResolvedValueOnce(
+      makeReportData().map((entry) =>
+        entry.queryName === "Query 3" ? { ...entry, rows: [] } : entry,
+      ),
+    );
+    const data = await getAiUsageData();
+    const lorenz = computeLorenzCurve(data);
+    expect(lorenz.userCount).toBe(0);
+    expect(lorenz.totalSpend).toBe(0);
+    expect(lorenz.gini).toBe(0);
+    expect(lorenz.points).toEqual([
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+    ]);
+  });
+});
+
+describe("buildMonthlyModelMix", () => {
+  it("excludes ALL MODELS rollup rows and produces one row per month", async () => {
+    getReportDataMock.mockResolvedValueOnce(makeReportData());
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 9);
+
+    // Only one real (non-ALL MODELS) row in MoM Usage: Claude Sonnet 4.6 in April.
+    expect(mix.models.map((m) => m.modelName)).toEqual(["Claude Sonnet 4.6"]);
+    expect(mix.models[0].key).toBe("claude::Claude Sonnet 4.6");
+    expect(mix.months).toEqual(["2026-04-01"]);
+    expect(mix.rows).toHaveLength(1);
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "claude::Claude Sonnet 4.6": 2000,
+    });
+  });
+
+  it("rolls overflow models beyond topN into an Other bucket", async () => {
+    // Synthesise extra monthlyByModel rows so topN=1 pushes the rest to Other.
+    getReportDataMock.mockResolvedValueOnce([
+      ...makeReportData().filter((r) => r.queryName !== "MoM Usage"),
+      {
+        reportName: "AI Model Usage Dashboard",
+        section: "people",
+        category: "ai-usage",
+        queryName: "MoM Usage",
+        columns: [],
+        rows: [
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 5000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Opus 4.5",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 3000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "cursor",
+            model_name: "gpt-5",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 1000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+        ],
+        rowCount: 3,
+        syncedAt: new Date("2026-04-22T06:00:00Z"),
+      },
+    ]);
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 1);
+
+    expect(mix.models.map((m) => m.modelName)).toEqual([
+      "Claude Sonnet 4.6",
+      "Other",
+    ]);
+    expect(mix.models.map((m) => m.key)).toEqual([
+      "claude::Claude Sonnet 4.6",
+      "other::other",
+    ]);
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "claude::Claude Sonnet 4.6": 5000,
+      // 3000 (Opus) + 1000 (gpt-5)
+      "other::other": 4000,
+    });
+  });
+
+  it("keeps same-named models separate when they appear under multiple categories", async () => {
+    // Regression for the "Claude Sonnet 4.6 used via Claude AND Cursor"
+    // case that would previously collapse into one segment with arbitrary
+    // category attribution.
+    getReportDataMock.mockResolvedValueOnce([
+      ...makeReportData().filter((r) => r.queryName !== "MoM Usage"),
+      {
+        reportName: "AI Model Usage Dashboard",
+        section: "people",
+        category: "ai-usage",
+        queryName: "MoM Usage",
+        columns: [],
+        rows: [
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "claude",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 10,
+            n_days: 20,
+            total_cost: 1000,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+          {
+            month_: "2026-04-01T00:00:00.000Z",
+            category: "cursor",
+            model_name: "Claude Sonnet 4.6",
+            distinct_users: 20,
+            n_days: 20,
+            total_cost: 2500,
+            total_tokens: 1,
+            n_rows: 1,
+          },
+        ],
+        rowCount: 2,
+        syncedAt: new Date("2026-04-22T06:00:00Z"),
+      },
+    ]);
+    const data = await getAiUsageData();
+    const mix = buildMonthlyModelMix(data, 9);
+
+    // Two distinct segments, not one merged segment.
+    expect(mix.models).toHaveLength(2);
+    const byCat = Object.fromEntries(
+      mix.models.map((m) => [m.category, m.totalCost]),
+    );
+    expect(byCat).toEqual({ claude: 1000, cursor: 2500 });
+
+    // Row carries both composite keys and preserves the category-level split.
+    expect(mix.rows[0]).toEqual({
+      monthStart: "2026-04-01",
+      "claude::Claude Sonnet 4.6": 1000,
+      "cursor::Claude Sonnet 4.6": 2500,
+    });
   });
 });

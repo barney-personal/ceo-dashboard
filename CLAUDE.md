@@ -189,8 +189,10 @@ Authoritative config lives in `src/components/dashboard/sidebar.tsx` (`NAV_GROUP
 | `/dashboard/people/[slug]` | manager | Unified person profile — rating panel additionally gated to CEO / self / direct-manager |
 | `/dashboard/managers` | manager | Team performance + alerts for the viewer's direct reports (leadership+ can inspect any manager via `?manager=`) |
 | `/dashboard/engineering` | everyone | GitHub PRs / commits / Mode engineering |
+| `/dashboard/engineering/impact` | everyone | Engineering impact report. Aggregate charts (histogram, ramp-up curves, pillar curves, AI adoption cohorts) visible to everyone; individual-level drilldowns (Cleveland dots, spaghetti trajectories, pillar box jitter, Section D watchlist, AI spend scatter) render only for leadership+. Gated via `canSeeIndividuals` prop in [src/app/dashboard/engineering/impact/_components/impact-report.tsx](src/app/dashboard/engineering/impact/_components/impact-report.tsx). |
 | `/dashboard/engineering/impact-model` | manager | SHAP impact model + manager team coaching (team-scoped for plain managers; leadership+ gets a manager picker) |
-| `/dashboard/engineering/code-review` | ceo | LLM-reviewed merged PRs with multi-axis rubric scoring, GitHub review-process signals, and a confidence-aware cohort-relative ranking. CEO-only — model judgements of individual engineers' code. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). |
+| `/dashboard/engineering/code-review` | engineering_manager | LLM-reviewed merged PRs with multi-axis rubric scoring, GitHub review-process signals, and a confidence-aware cohort-relative ranking. Trigger a re-run via the "Re-run analysis" button (calls `/api/sync/code-review`). The per-engineer section also renders on `/dashboard/engineering/engineers/[login]` for engineering_manager+, or for the authenticated engineer on their own profile (self-view). |
+| `/dashboard/engineering/ranking` | engineering_manager | Methodology-first cohort-relative engineer ranking. Snapshot persistence remains CEO-only via `POST /api/engineering-ranking/snapshot`. |
 | `/dashboard/slack` | leadership | Workspace engagement, tenure-normalised |
 | `/dashboard/settings` | everyone | Per-user integrations |
 | `/dashboard/admin/users` | ceo | Clerk user admin |
@@ -327,8 +329,7 @@ web service via `fromService:` refs — also no Doppler entry needed.
 - `MODE_API_TOKEN` / `MODE_API_SECRET` / `MODE_WORKSPACE` — Mode Analytics
 - `SLACK_BOT_TOKEN` / `SLACK_OKR_CHANNEL_IDS` / `SLACK_PRE_READS_CHANNEL_ID` — Slack API
 - `ANTHROPIC_API_KEY` — Claude API for OKR and Excel parsing
-- `IMPACT_MODEL_HASH_KEY` — HMAC-SHA256 key linking `src/data/impact-model.json` engineer hashes to real names at request time. **Rotation:** if this key changes, `ml-impact/train.py` must re-run (or the rehash migration) so committed hashes match the live key. Otherwise the Engineering → Impact Model page silently degrades to "Engineer NNN" pseudonyms.
-- `CODE_REVIEW_EXCLUDED_REPOS` / `OPENAI_API_KEY` / `CODE_REVIEW_OPENAI_MODEL` / `CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION` / `CODE_REVIEW_OPENAI_REASONING_EFFORT` / `CODE_REVIEW_ANALYSIS_CONCURRENCY` — Code review analysis controls. `CODE_REVIEW_EXCLUDED_REPOS` is an optional comma-separated list of `owner/repo` pairs the Engineering → Code review page skips when analysing merged PRs (e.g. infra-only or security-sensitive repos). Empty = analyse everything `githubPrs` knows about. Bumping `RUBRIC_VERSION` in `src/lib/integrations/code-review-analyser.ts` forces a full re-analysis (cache key is `(repo, prNumber, rubricVersion)`). `OPENAI_API_KEY` stays server-side only and enables the optional second-opinion path. `CODE_REVIEW_ANALYSIS_CONCURRENCY` defaults to `1` and can be raised carefully in prod to accelerate large backfills.
+- `CODE_REVIEW_EXCLUDED_REPOS` / `OPENAI_API_KEY` / `CODE_REVIEW_OPENAI_MODEL` / `CODE_REVIEW_OPENAI_REASONING_EFFORT` / `CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS` / `CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT` / `CODE_REVIEW_ANALYSIS_CONCURRENCY` / `CODE_REVIEW_ANTHROPIC_CONCURRENCY` / `CODE_REVIEW_OPENAI_CONCURRENCY` — Code review analysis controls. `CODE_REVIEW_EXCLUDED_REPOS` is an optional comma-separated list of `owner/repo` pairs the Engineering → Code review page skips when analysing merged PRs (e.g. infra-only or security-sensitive repos). Empty = analyse everything `githubPrs` knows about. Bumping `RUBRIC_VERSION` in `src/lib/integrations/code-review-rubric.ts` forces a full re-analysis (cache key is `(repo, prNumber, rubricVersion)`). `OPENAI_API_KEY` stays server-side only and enables GPT-5.4 as the parallel OpenAI reviewer. `CODE_REVIEW_OPENAI_MODEL` defaults to `gpt-5.4`, `CODE_REVIEW_OPENAI_REASONING_EFFORT` defaults to `medium`, `CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS` defaults to `8000`, optional `CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT=high` adds one GPT-5.4 escalation pass on material model disagreement, and provider concurrency defaults to `2` per provider. When a PR has an older Claude-only rubric row but no current ensemble row, sync reuses that Claude read and runs only GPT-5.4 before writing the new ensemble row; brand-new PRs still run both providers in parallel. For a fast historical enrichment run, raise `CODE_REVIEW_ANALYSIS_CONCURRENCY` and `CODE_REVIEW_OPENAI_CONCURRENCY` together within rate limits.
 - `GITHUB_API_TOKEN` / `GITHUB_ORG` / `GITHUB_REPOS` — GitHub engineering metrics
 - `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` / `GOOGLE_CALENDAR_ID` — Google Calendar
 - `GRANOLA_API_TOKEN` — Granola meeting transcripts
@@ -348,6 +349,47 @@ web service via `fromService:` refs — also no Doppler entry needed.
 3. Reference it in code via `process.env.NEW_KEY`
 4. Run `doppler run -- make sync-render-env` to push to Render
 5. Optionally update the "Active integrations" list above if it's a new system
+
+## Pulling production data to dev
+
+To reproduce an issue against real data, mirror prod Postgres into your local
+database:
+
+```bash
+make db-pull-prod          # interactive confirm (recommended first time)
+make db-pull-prod ARGS=-y  # skip confirmation
+```
+
+The target wraps `scripts/pull-prod-db.sh`, which runs `pg_dump -Fc` against
+prod, drops the local `ceo_dashboard` DB, and `pg_restore`s the dump. The
+script refuses to run unless `DATABASE_URL` points at localhost.
+
+**One-time setup:**
+
+1. Install Postgres client tools: `brew install postgresql@18` (then add
+   `/opt/homebrew/opt/postgresql@18/bin` to PATH). The major version must
+   match or exceed the prod server.
+2. Grab the prod **External Database URL** from Render → `ceo-dashboard`
+   Postgres → Connect → External.
+3. Save it to Doppler `dev`:
+   ```bash
+   doppler secrets set PROD_DATABASE_URL="postgres://...?sslmode=require" \
+     --project ceo-dashboard --config dev
+   ```
+
+After that, `make db-pull-prod` just works every time.
+
+**Caveats:**
+
+- Prod contains real employee PII (PR authors, meeting notes, performance
+  data). The dump is written to `$TMPDIR` and deleted on exit — don't commit
+  dump files.
+- Clerk `userId`s are per-environment, so impersonation rows and other
+  Clerk-keyed tables (`userIntegrations`, `githubEmployeeMap`) reference prod
+  user IDs that don't exist in dev Clerk. Most pages still render; per-user
+  features (Google token lookup, etc.) come up empty for the dev user.
+- After pulling, you may need to run `make db-migrate` if dev code has
+  migrations that haven't been deployed to prod yet.
 
 ## Testing
 
@@ -374,6 +416,7 @@ Intentional tradeoffs that an agent might otherwise "helpfully" fix. If you beli
 - **LLM cost / budget caps.** Timeouts and retries are bounded (`src/lib/integrations/llm-okr-parser.ts`, `excel-parser.ts`), but there is no per-day token budget or short-circuit when a batch exceeds N inputs. Treat cost controls as a separate backlog item, not a resilience gap.
 - **`okrUpdates.squadName` is denormalized** rather than a foreign key into `squads`. This is deliberate — it preserves the squad label that came through Slack at the time of the update, even if the canonical squad is later renamed.
 - **Frozen historical scorecards** (the old `SCORECARD.md`, `ARCHITECTURE-SCORECARD.md`, `RESILIENCE-SCORECARD.md`) were removed on 2026-04-18 because they captured point-in-time milestone work whose fixes are now in the code. `git log -- SCORECARD.md` retrieves the full history if an audit trail is needed. `scripts/doc-status.sh` prints current live metrics.
+- **`src/data/impact-model.json` carries plain lowercased employee emails** (not HMAC hashes). The HMAC layer was dropped in April 2026 because the two hash schemes between `impact-model.server.ts` and `engineering-ranking.ts` never aligned — the B-lens was silently null in prod. Plain emails are acceptable **because this repo is private and every page that consumes the model is leadership-or-CEO-gated**. If this repo ever open-sources, forks publicly, or is copied outside the private org, the emails must be scrubbed before the commit lands publicly (rehash with a fresh HMAC, or replace with opaque IDs generated from Clerk user IDs). `ml-impact/train.py` also writes plain emails.
 
 ## Git Workflow (MUST follow -- enforced by hooks)
 

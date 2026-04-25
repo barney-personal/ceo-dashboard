@@ -262,6 +262,59 @@ describe("enqueueSyncRun", () => {
     );
   });
 
+  it("converts a Postgres unique_violation on insert into already-running", async () => {
+    const { evaluateQueueDecision } = await import("@/lib/sync/config");
+    vi.mocked(evaluateQueueDecision).mockReturnValue({
+      shouldQueue: true,
+      outcome: "queued",
+      reason: null,
+      nextEligibleAt: null,
+    });
+    mockLimit
+      .mockResolvedValueOnce([]) // expireStaleSyncRuns
+      .mockResolvedValueOnce([]) // findActiveSyncRun (pre-insert)
+      .mockResolvedValueOnce([]) // getLatestCompletedSyncRun
+      .mockResolvedValueOnce([
+        { id: 77, status: "running", source: "mode", scope: null },
+      ]); // findActiveSyncRun (post-collision lookup)
+
+    const uniqueViolation = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+    });
+    mockInsertReturning.mockRejectedValueOnce(uniqueViolation);
+
+    const result = await enqueueSyncRun("mode", { trigger: "manual" });
+
+    expect(result).toEqual({
+      outcome: "already-running",
+      runId: 77,
+      reason: "active_run_exists",
+      nextEligibleAt: null,
+      activeScopeDescription: "all Mode reports",
+    });
+  });
+
+  it("rethrows non-unique-violation insert errors", async () => {
+    const { evaluateQueueDecision } = await import("@/lib/sync/config");
+    vi.mocked(evaluateQueueDecision).mockReturnValue({
+      shouldQueue: true,
+      outcome: "queued",
+      reason: null,
+      nextEligibleAt: null,
+    });
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const otherError = Object.assign(new Error("disk full"), { code: "53100" });
+    mockInsertReturning.mockRejectedValueOnce(otherError);
+
+    await expect(
+      enqueueSyncRun("mode", { trigger: "manual" })
+    ).rejects.toBe(otherError);
+  });
+
   it("reports whether the conflicting Mode run is full-source or scoped", async () => {
     mockLimit
       .mockResolvedValueOnce([])

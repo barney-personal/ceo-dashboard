@@ -37,8 +37,31 @@ WITH active_engineers AS (
   CROSS JOIN LATERAL jsonb_array_elements(d.data) AS row
   WHERE r.section = 'people' AND d.query_name = 'headcount'
     AND row->>'headcount_label' = 'FTE'
-    AND (row->>'termination_date' IS NULL OR row->>'termination_date' = '')
+    -- Treat `termination_date` as "left the company" only when it is on or
+    -- after the current `start_date`. A termination_date that predates
+    -- `start_date` is stale from a prior stint (re-hire) and must not
+    -- exclude the engineer — otherwise returning employees silently
+    -- disappear from the impact model even though they are currently active.
+    AND (
+      row->>'termination_date' IS NULL
+      OR row->>'termination_date' = ''
+      OR (row->>'start_date' IS NOT NULL
+          AND row->>'termination_date' < row->>'start_date')
+    )
     AND lower(COALESCE(row->>'hb_function', '')) LIKE '%engineer%'
+    -- Narrow to IC shipping disciplines (Backend / Frontend) only. Drops
+    -- EMs (marker is "(M)" suffix on rp_specialisation), QA engineers,
+    -- platform / data / ML roles, and any other non-product-code-shipping
+    -- specialisation. Matches the engineer-ranking page's definition of
+    -- "engineer" so the impact model's cohort is the same set of people
+    -- the ranking scores — otherwise the two surfaces disagree on
+    -- who's-an-engineer.
+    AND (
+      lower(COALESCE(row->>'rp_specialisation', '')) LIKE '%backend%'
+      OR lower(COALESCE(row->>'rp_specialisation', '')) LIKE '%frontend%'
+      OR lower(COALESCE(row->>'rp_specialisation', '')) = 'python engineer'
+    )
+    AND COALESCE(row->>'rp_specialisation', '') NOT LIKE '%(M)%'
     AND row->>'start_date' IS NOT NULL
     AND row->>'start_date' <= to_char(NOW(), 'YYYY-MM-DD')
 ),

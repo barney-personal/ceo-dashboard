@@ -11,6 +11,8 @@ export interface SyncControl {
   shouldStop?: () => boolean;
   stopReason?: () => SyncStopReason | undefined;
   signal?: AbortSignal;
+  /** Called at safe batch/item boundaries to keep the sync lease alive. */
+  touchHeartbeat?: () => Promise<void>;
 }
 
 export class SyncDeadlineExceededError extends Error {

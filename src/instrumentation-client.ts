@@ -10,6 +10,13 @@ Sentry.init({
   environment: process.env.NODE_ENV || "development",
   release: process.env.NEXT_PUBLIC_SENTRY_RELEASE || "local",
 
+  // Prod-only by default — avoids local dev hot-reload errors (stale Turbopack
+  // chunks, transient compile failures, missing-migration DB errors) flooding
+  // the prod Sentry. Opt in locally with NEXT_PUBLIC_SENTRY_FORCE_ENABLE=true.
+  enabled:
+    process.env.NODE_ENV === "production" ||
+    process.env.NEXT_PUBLIC_SENTRY_FORCE_ENABLE === "true",
+
   // Add optional integrations for additional features
   integrations: [Sentry.replayIntegration()],
 

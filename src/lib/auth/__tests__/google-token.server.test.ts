@@ -1,22 +1,44 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetUserOauthAccessToken } = vi.hoisted(() => ({
-  mockGetUserOauthAccessToken: vi.fn(),
-}));
+// The real Clerk SDK method relies on `this.requireId(userId)` internally.
+// The mock mirrors that: if called without the `users` object as `this`
+// (e.g. via a detached `const fn = users.getUserOauthAccessToken`), it
+// throws the same shape Clerk throws — so any regression that strips the
+// `this` binding fails every test in this file.
+const { mockGetUserOauthAccessToken, usersObject } = vi.hoisted(() => {
+  const mock = vi.fn();
+  const users = {
+    requireId(id: unknown) {
+      if (!id) throw new Error("requireId: id is required");
+    },
+    getUserOauthAccessToken(this: { requireId: (id: unknown) => void }, userId: string, provider: string) {
+      // Same internal call Clerk makes — verifies `this` is bound.
+      this.requireId(userId);
+      return mock(userId, provider);
+    },
+  };
+  return { mockGetUserOauthAccessToken: mock, usersObject: users };
+});
 
 vi.mock("@clerk/nextjs/server", () => ({
-  clerkClient: vi.fn(async () => ({
-    users: {
-      getUserOauthAccessToken: mockGetUserOauthAccessToken,
-    },
-  })),
+  clerkClient: vi.fn(async () => ({ users: usersObject })),
 }));
 
 import { getUserGoogleAccessToken, GOOGLE_CALENDAR_READONLY_SCOPE } from "@/lib/auth/google-token.server";
 
 describe("getUserGoogleAccessToken", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.resetAllMocks();
+    // Silence structured diagnostic warns emitted on null returns so they
+    // don't clutter test output. Individual tests re-spy if they want to
+    // assert call shape.
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
   });
 
   it("uses the current Clerk google provider id", async () => {
@@ -104,5 +126,33 @@ describe("getUserGoogleAccessToken", () => {
       .mockResolvedValueOnce({ data: [{ token: null }] });
 
     await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+  });
+
+  it("logs diagnostic context when a probe throws so prod failures are debuggable", async () => {
+    mockGetUserOauthAccessToken
+      .mockRejectedValueOnce(new Error("provider not found"))
+      .mockResolvedValueOnce({ data: [] });
+
+    await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[google-token] returning null for user",
+      expect.objectContaining({
+        userId: "user_123",
+        sawAnyToken: false,
+        sawAnyScoped: false,
+        probeErrors: expect.objectContaining({
+          google: "provider not found",
+        }),
+      }),
+    );
+  });
+
+  it("stays quiet when the user simply hasn't connected Google", async () => {
+    // Both providers return empty, no errors — this is the boring "no
+    // Google account" case and shouldn't spam logs on every overview load.
+    mockGetUserOauthAccessToken.mockResolvedValue({ data: [] });
+
+    await expect(getUserGoogleAccessToken("user_123")).resolves.toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

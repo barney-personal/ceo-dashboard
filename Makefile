@@ -1,4 +1,4 @@
-.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio probe probe-all sync-render-env
+.PHONY: dev build start lint type-check test setup deps ensure-doppler db-generate db-migrate db-studio db-pull-prod probe probe-all sync-render-env
 
 setup:
 	./scripts/setup.sh
@@ -43,6 +43,14 @@ db-migrate: ensure-doppler
 
 db-studio: ensure-doppler
 	doppler run -- npx drizzle-kit studio
+
+# Mirror production Postgres into the local dev database.
+# One-time setup: store the prod External Database URL in Doppler dev as
+# PROD_DATABASE_URL. See scripts/pull-prod-db.sh for details.
+#   make db-pull-prod          # interactive confirm
+#   make db-pull-prod ARGS=-y  # skip confirmation
+db-pull-prod: ensure-doppler
+	doppler run -- ./scripts/pull-prod-db.sh $(ARGS)
 
 # Push Doppler `prd` secrets to Render (web + sync-worker). Requires a Render
 # API key — pass via env or grab from Doppler if you've stored it there:

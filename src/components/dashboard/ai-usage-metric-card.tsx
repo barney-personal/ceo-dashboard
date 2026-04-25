@@ -14,6 +14,14 @@ interface AiUsageMetricCardProps {
    * where going up is bad.
    */
   higherIsBetter?: boolean;
+  /**
+   * When true, both directions render in muted foreground. Use for metrics
+   * where direction is not inherently good or bad (e.g. AI spend under an
+   * adoption mandate — up means more engineers on Claude, which is the
+   * business goal; down could mean either savings or disengagement). The
+   * arrow still flips so direction is visible without encoding a judgment.
+   */
+  neutralDelta?: boolean;
   modeUrl?: string;
   /** Recent window sparkline. Skipped if < 2 points. */
   sparkline?: number[];
@@ -35,6 +43,7 @@ export function AiUsageMetricCard({
   subtitle,
   deltaPct,
   higherIsBetter = false,
+  neutralDelta = false,
   modeUrl,
   sparkline,
   sparklineColor = "#4f46e5",
@@ -52,8 +61,9 @@ export function AiUsageMetricCard({
     deltaTone === "up" ? TrendingUp : deltaTone === "down" ? TrendingDown : Minus;
   const goodColor = "text-positive";
   const badColor = "text-amber-700";
-  const deltaColor =
-    deltaTone === "flat"
+  const deltaColor = neutralDelta
+    ? "text-muted-foreground"
+    : deltaTone === "flat"
       ? "text-muted-foreground/70"
       : deltaTone === "up"
         ? higherIsBetter

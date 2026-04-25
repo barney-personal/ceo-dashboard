@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireDashboardPermission } from "@/lib/auth/dashboard-permissions.server";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { SectionCard } from "@/components/dashboard/section-card";
@@ -20,6 +21,10 @@ import { desc, count, inArray } from "drizzle-orm";
 import { getEffectiveSyncState } from "@/lib/sync/config";
 import { getSourceHealth, type SourceHealth } from "@/lib/sync/health";
 import {
+  getCodeReviewBackfillStatus,
+  type CodeReviewBackfillStatus,
+} from "@/lib/sync/code-review";
+import {
   getSyncEnabledModeReportControls,
   getModeReportNamesByToken,
 } from "@/lib/integrations/mode-config";
@@ -35,15 +40,25 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
+// If no analysis has completed within this window, stop polling so the
+// admin page does not refresh forever on a stale tab.
+const CODE_REVIEW_RECENT_ACTIVITY_MS = 15 * 60 * 1000;
+
 export default async function DataStatusPage() {
   await requireDashboardPermission("admin.status");
 
   const warnings: string[] = [];
+  const addWarning = (warning: string) => {
+    if (!warnings.includes(warning)) {
+      warnings.push(warning);
+    }
+  };
 
   let recentRuns: (typeof syncLog.$inferSelect)[] = [];
   let phases: (typeof syncPhases.$inferSelect)[] = [];
   let modeSyncReports: (typeof modeReports.$inferSelect)[] = [];
   let sourceHealths: SourceHealth[] = [];
+  let codeReviewBackfill: CodeReviewBackfillStatus | null = null;
   const slackSyncStatus = await getSlackSyncStatus().catch(() => null);
 
   try {
@@ -76,7 +91,17 @@ export default async function DataStatusPage() {
       throw error;
     }
 
-    warnings.push(getSchemaCompatibilityMessage(error));
+    addWarning(getSchemaCompatibilityMessage(error));
+  }
+
+  try {
+    codeReviewBackfill = await getCodeReviewBackfillStatus();
+  } catch (error) {
+    if (!isSchemaCompatibilityError(error)) {
+      throw error;
+    }
+
+    addWarning(getSchemaCompatibilityMessage(error));
   }
 
   // Group phases by run
@@ -156,6 +181,12 @@ export default async function DataStatusPage() {
     const effectiveState = getEffectiveSyncState(run, now);
     return effectiveState === "queued" || effectiveState === "running";
   });
+  const isCodeReviewBackfillRunning =
+    codeReviewBackfill !== null &&
+    codeReviewBackfill.remainingCount > 0 &&
+    codeReviewBackfill.latestAnalysedAt !== null &&
+    now.getTime() - codeReviewBackfill.latestAnalysedAt.getTime() <
+      CODE_REVIEW_RECENT_ACTIVITY_MS;
   const activeModeRun = recentRuns.find((run) => {
     if (run.source !== "mode") {
       return false;
@@ -214,7 +245,7 @@ export default async function DataStatusPage() {
       throw error;
     }
 
-    warnings.push(getSchemaCompatibilityMessage(error));
+    addWarning(getSchemaCompatibilityMessage(error));
   }
 
   const envChecks = [
@@ -233,13 +264,28 @@ export default async function DataStatusPage() {
       required: false,
     },
     {
-      key: "CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION",
-      label: "Code Review OpenAI Toggle",
+      key: "CODE_REVIEW_ANTHROPIC_CONCURRENCY",
+      label: "Code Review Anthropic Concurrency",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_CONCURRENCY",
+      label: "Code Review OpenAI Concurrency",
       required: false,
     },
     {
       key: "CODE_REVIEW_OPENAI_REASONING_EFFORT",
       label: "Code Review OpenAI Reasoning",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS",
+      label: "Code Review OpenAI Output Budget",
+      required: false,
+    },
+    {
+      key: "CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT",
+      label: "Code Review OpenAI Escalation Reasoning",
       required: false,
     },
     {
@@ -255,7 +301,9 @@ export default async function DataStatusPage() {
 
   return (
     <div className="mx-auto min-w-0 max-w-7xl space-y-8 2xl:max-w-[96rem]">
-      {hasRunning && <AutoRefresh intervalMs={5000} />}
+      {(hasRunning || isCodeReviewBackfillRunning) && (
+        <AutoRefresh intervalMs={5000} />
+      )}
 
       <PageHeader
         title="Data Status"
@@ -281,6 +329,12 @@ export default async function DataStatusPage() {
       )}
 
       <SourceHealthSection healths={sourceHealths} />
+
+      <CodeReviewBackfillSection
+        status={codeReviewBackfill}
+        now={now}
+        isBackfillRunning={isCodeReviewBackfillRunning}
+      />
 
       {slackSyncStatus && <SlackMembersSyncCard status={slackSyncStatus} />}
 
@@ -317,7 +371,7 @@ export default async function DataStatusPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <Database className="h-3.5 w-3.5 text-muted-foreground/50" />
-                  <span className="text-sm font-mono font-medium tabular-nums">{table.count.toLocaleString()}</span>
+                  <span className="text-sm font-mono font-medium tabular-nums">{formatInteger(table.count)}</span>
                 </div>
               </div>
             ))}
@@ -371,6 +425,164 @@ function successRateTone(rate: number | null): string {
   if (rate >= 0.95) return "text-positive";
   if (rate >= 0.8) return "text-warning";
   return "text-destructive";
+}
+
+function formatInteger(value: number): string {
+  return value.toLocaleString("en-GB");
+}
+
+function CodeReviewBackfillSection({
+  status,
+  now,
+  isBackfillRunning,
+}: {
+  status: CodeReviewBackfillStatus | null;
+  now: Date;
+  isBackfillRunning: boolean;
+}) {
+  if (!status) {
+    return null;
+  }
+
+  const skippedTotal =
+    status.skippedBotCount + status.skippedExcludedCount;
+  const statusTone =
+    status.remainingCount === 0
+      ? "border-positive/25 bg-positive/10 text-positive"
+      : isBackfillRunning
+        ? "border-warning/25 bg-warning/10 text-warning"
+        : "border-border/60 bg-muted/30 text-muted-foreground";
+  const statusLabel =
+    status.remainingCount === 0
+      ? "Current"
+      : isBackfillRunning
+        ? "Backfill running"
+        : "Backlog pending";
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+        Code Review
+      </h3>
+      <SectionCard
+        title="Backfill Coverage"
+        description={`Current-rubric coverage of merged PRs in the last ${status.windowDays} days`}
+        action={
+          <Link
+            href="/dashboard/engineering/code-review"
+            className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Open report
+          </Link>
+        }
+      >
+        <div className="space-y-5">
+          <div className="space-y-2">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="space-y-1">
+                <div className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">
+                  {status.progressPct.toFixed(1)}%
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {formatInteger(status.analysedCount)} of{" "}
+                  {formatInteger(status.eligibleTotal)} eligible PRs analysed
+                </div>
+              </div>
+              <div
+                className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-medium ${statusTone}`}
+              >
+                {statusLabel}
+              </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-muted/60">
+              <div
+                className="h-full rounded-full bg-primary transition-[width]"
+                style={{ width: `${Math.min(100, Math.max(0, status.progressPct))}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{formatInteger(status.remainingCount)} remaining</span>
+              <span>{formatInteger(skippedTotal)} skipped</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <MetricTile
+              label="Analysed"
+              value={formatInteger(status.analysedCount)}
+              detail="Current rubric"
+            />
+            <MetricTile
+              label="Remaining"
+              value={formatInteger(status.remainingCount)}
+              detail="Still missing"
+            />
+            <MetricTile
+              label="Eligible"
+              value={formatInteger(status.eligibleTotal)}
+              detail="Human-authored PRs"
+            />
+            <MetricTile
+              label="Skipped"
+              value={formatInteger(skippedTotal)}
+              detail={`${formatInteger(status.skippedBotCount)} bots, ${formatInteger(status.skippedExcludedCount)} excluded`}
+            />
+          </div>
+
+          <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-border/30 px-3 py-2">
+              <LastSyncedAt at={status.latestAnalysedAt} now={now} prefix="Last analysis" />
+            </div>
+            <div className="rounded-lg border border-border/30 px-3 py-2">
+              <LastSyncedAt
+                at={status.oldestRemainingMergedAt}
+                now={now}
+                prefix="Oldest missing merged"
+              />
+            </div>
+            <div className="rounded-lg border border-border/30 px-3 py-2">
+              <LastSyncedAt
+                at={status.newestRemainingMergedAt}
+                now={now}
+                prefix="Newest missing merged"
+              />
+            </div>
+            <div className="rounded-lg border border-border/30 px-3 py-2">
+              <span className="font-medium text-foreground">Rubric</span>{" "}
+              <span className="font-mono">{status.rubricVersion}</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            This is a rolling window, so the totals can move while new PRs land
+            and older PRs age out of scope.
+          </p>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/30 bg-muted/20 px-3 py-3">
+      <div className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
+        {value}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
+    </div>
+  );
 }
 
 function SourceHealthSection({ healths }: { healths: SourceHealth[] }) {

@@ -1,5 +1,4 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { createHmac } from "node:crypto";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockGetReportData } = vi.hoisted(() => ({
   mockGetReportData: vi.fn(),
@@ -10,15 +9,6 @@ vi.mock("../mode", () => ({
   rowStr: (row: Record<string, unknown>, key: string) =>
     typeof row[key] === "string" ? row[key] : row[key] != null ? String(row[key]) : "",
 }));
-
-const TEST_KEY = "test-key-do-not-use-in-prod";
-
-function hash(email: string): string {
-  return createHmac("sha256", TEST_KEY)
-    .update(email.toLowerCase())
-    .digest("hex")
-    .slice(0, 16);
-}
 
 const { mockGetImpactModel } = vi.hoisted(() => ({
   mockGetImpactModel: vi.fn(),
@@ -38,37 +28,26 @@ vi.mock("../managers", () => ({
 
 import { buildTeamView, getImpactModelHydrated } from "../impact-model.server";
 
-const ALICE_HASH = hash("alice@example.com");
-const BOB_HASH = hash("BOB@example.com"); // uppercase source — should still match
-
 function makeModel() {
   return {
     generated_at: "2026-01-01",
-    n_engineers: 2,
+    n_engineers: 3,
     n_features: 1,
     engineers: [
-      { name: "Engineer 001", email: "anon-001", email_hash: ALICE_HASH },
-      { name: "Engineer 002", email: "anon-002", email_hash: BOB_HASH },
-      { name: "Engineer 003", email: "anon-003", email_hash: "deadbeefdeadbeef" },
+      { name: "Engineer 001", email: "alice@example.com" },
+      { name: "Engineer 002", email: "bob@example.com" },
+      { name: "Engineer 003", email: "nobody@example.com" },
     ],
   } as unknown as ReturnType<typeof mockGetImpactModel>;
 }
 
 describe("getImpactModelHydrated", () => {
-  const originalKey = process.env.IMPACT_MODEL_HASH_KEY;
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetImpactModel.mockReturnValue(makeModel());
-    process.env.IMPACT_MODEL_HASH_KEY = TEST_KEY;
   });
 
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.IMPACT_MODEL_HASH_KEY;
-    else process.env.IMPACT_MODEL_HASH_KEY = originalKey;
-  });
-
-  it("hydrates real names when hashes match, preserves pseudonym otherwise", async () => {
+  it("hydrates real names when emails match, preserves JSON-name otherwise", async () => {
     mockGetReportData.mockResolvedValue([
       {
         queryName: "headcount",
@@ -83,7 +62,8 @@ describe("getImpactModelHydrated", () => {
     const model = await getImpactModelHydrated();
     expect(model.engineers[0].name).toBe("Alice");
     expect(model.engineers[1].name).toBe("Bob");
-    expect(model.engineers[2].name).toBe("Engineer 003"); // unmatched hash → fallback
+    // No match in headcount → fallback to whatever the JSON already has.
+    expect(model.engineers[2].name).toBe("Engineer 003");
   });
 
   it("is case-insensitive — uppercase headcount emails still match", async () => {
@@ -100,29 +80,7 @@ describe("getImpactModelHydrated", () => {
     expect(model.engineers[0].name).toBe("Alice Capital");
   });
 
-  it("does not populate real email addresses onto the engineers array", async () => {
-    mockGetReportData.mockResolvedValue([
-      {
-        queryName: "headcount",
-        rows: [{ email: "alice@example.com", preferred_name: "Alice" }],
-      },
-    ]);
-
-    const model = await getImpactModelHydrated();
-    for (const e of model.engineers) {
-      expect(e.email).toMatch(/^anon-\d{3}$/);
-      expect(e.email).not.toContain("@");
-    }
-  });
-
-  it("falls back to anonymised when IMPACT_MODEL_HASH_KEY is not set", async () => {
-    delete process.env.IMPACT_MODEL_HASH_KEY;
-    const model = await getImpactModelHydrated();
-    expect(mockGetReportData).not.toHaveBeenCalled();
-    expect(model.engineers[0].name).toBe("Engineer 001");
-  });
-
-  it("falls back to anonymised when the DB lookup throws", async () => {
+  it("falls back to JSON-name when the DB lookup throws", async () => {
     mockGetReportData.mockRejectedValue(new Error("db down"));
     const model = await getImpactModelHydrated();
     expect(model.engineers[0].name).toBe("Engineer 001");
@@ -144,47 +102,13 @@ describe("getImpactModelHydrated", () => {
     expect(model.engineers[0].name).toBe("Alice Formal");
     expect(model.engineers[1].name).toBe("bob@example.com");
   });
-
-  it("warns loudly when 0/many hashes match a populated headcount (key rotation signal)", async () => {
-    // Simulates the key-rotation failure mode: JSON was hashed with an old
-    // key, so none of the committed hashes match anything in the current
-    // headcount. The page still degrades gracefully but on-call gets a
-    // clear log line telling them what happened.
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockGetImpactModel.mockReturnValue({
-      ...makeModel(),
-      // All-mismatched hashes — simulates a post-rotation JSON
-      engineers: Array.from({ length: 12 }).map((_, i) => ({
-        name: `Engineer ${i}`,
-        email: `anon-${i}`,
-        email_hash: `ffff${i.toString().padStart(12, "0")}`,
-      })),
-    } as unknown as ReturnType<typeof mockGetImpactModel>);
-    mockGetReportData.mockResolvedValue([
-      {
-        queryName: "headcount",
-        rows: Array.from({ length: 15 }).map((_, i) => ({
-          email: `person${i}@example.com`,
-          preferred_name: `Person ${i}`,
-        })),
-      },
-    ]);
-
-    await getImpactModelHydrated();
-
-    const matched = warnSpy.mock.calls.find((args) =>
-      String(args[0]).includes("IMPACT_MODEL_HASH_KEY was rotated"),
-    );
-    expect(matched).toBeDefined();
-    warnSpy.mockRestore();
-  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// buildTeamView — hash-join between manager's reports and the model, plus
-// sort / null-key / reportsNotInModel handling. This is the centrepiece of
-// the manager team-coaching view so worth direct coverage rather than only
-// testing through the React component.
+// buildTeamView — email-join between manager's reports and the model, plus
+// sort / reportsNotInModel handling. This is the centrepiece of the manager
+// team-coaching view so worth direct coverage rather than only testing
+// through the React component.
 // ─────────────────────────────────────────────────────────────────────────
 
 function makeReport(email: string, name: string) {
@@ -200,11 +124,10 @@ function makeReport(email: string, name: string) {
   };
 }
 
-function makeEngineerForHash(email: string, predicted: number, actual: number) {
+function makeEngineerForEmail(email: string, predicted: number, actual: number) {
   return {
     name: "Engineer 000",
-    email: "anon-000",
-    email_hash: hash(email),
+    email,
     discipline: "Engineering",
     pillar: "Core",
     level_label: "L4",
@@ -221,31 +144,16 @@ function makeEngineerForHash(email: string, predicted: number, actual: number) {
 }
 
 describe("buildTeamView", () => {
-  const originalKey = process.env.IMPACT_MODEL_HASH_KEY;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.IMPACT_MODEL_HASH_KEY = TEST_KEY;
   });
 
-  afterEach(() => {
-    if (originalKey === undefined) delete process.env.IMPACT_MODEL_HASH_KEY;
-    else process.env.IMPACT_MODEL_HASH_KEY = originalKey;
-  });
-
-  function fakeModel(engineers: ReturnType<typeof makeEngineerForHash>[]) {
+  function fakeModel(engineers: ReturnType<typeof makeEngineerForEmail>[]) {
     return {
       engineers,
       shap: { expected_impact: 500, expected_log: 6 },
     } as unknown as Parameters<typeof buildTeamView>[0];
   }
-
-  it("returns null when IMPACT_MODEL_HASH_KEY is unset", async () => {
-    delete process.env.IMPACT_MODEL_HASH_KEY;
-    const result = await buildTeamView(fakeModel([]), "mgr@example.com");
-    expect(result).toBeNull();
-    expect(mockGetDirectReports).not.toHaveBeenCalled();
-  });
 
   it("returns null when manager has no direct reports", async () => {
     mockGetDirectReports.mockResolvedValue([]);
@@ -253,7 +161,7 @@ describe("buildTeamView", () => {
     expect(result).toBeNull();
   });
 
-  it("joins reports to engineers via hash, sorts by predicted desc, and separates missing reports", async () => {
+  it("joins reports to engineers by email, sorts by predicted desc, and separates missing reports", async () => {
     mockGetDirectReports.mockResolvedValue([
       makeReport("alice@example.com", "Alice"),
       makeReport("bob@example.com", "Bob"),
@@ -261,9 +169,9 @@ describe("buildTeamView", () => {
     ]);
 
     const model = fakeModel([
-      makeEngineerForHash("alice@example.com", /* predicted */ 900, 950),
-      makeEngineerForHash("bob@example.com", /* predicted */ 1400, 1200),
-      makeEngineerForHash("nobody@example.com", 700, 700), // not on team
+      makeEngineerForEmail("alice@example.com", /* predicted */ 900, 950),
+      makeEngineerForEmail("bob@example.com", /* predicted */ 1400, 1200),
+      makeEngineerForEmail("nobody@example.com", 700, 700), // not on team
     ]);
 
     const team = await buildTeamView(model, "mgr@example.com", "Manager Manny");
@@ -281,12 +189,12 @@ describe("buildTeamView", () => {
     expect(team!.expectedImpact).toBe(500);
   });
 
-  it("is case-insensitive on report emails", async () => {
+  it("is case-insensitive on both sides (report email and model email)", async () => {
     mockGetDirectReports.mockResolvedValue([
       makeReport("ALICE@example.com", "Alice Capital"),
     ]);
     const model = fakeModel([
-      makeEngineerForHash("alice@example.com", 900, 1000),
+      makeEngineerForEmail("alice@example.com", 900, 1000),
     ]);
     const team = await buildTeamView(model, "mgr@example.com");
     expect(team!.entries.length).toBe(1);
@@ -296,7 +204,7 @@ describe("buildTeamView", () => {
   it("coaching card is attached to each matched entry", async () => {
     mockGetDirectReports.mockResolvedValue([makeReport("alice@example.com", "Alice")]);
     const model = fakeModel([
-      makeEngineerForHash("alice@example.com", 1000, 1100),
+      makeEngineerForEmail("alice@example.com", 1000, 1100),
     ]);
     const team = await buildTeamView(model, "mgr@example.com");
     expect(team!.entries[0].coaching).toBeDefined();

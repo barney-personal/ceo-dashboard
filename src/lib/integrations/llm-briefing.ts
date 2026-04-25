@@ -112,7 +112,7 @@ Your reader has just opened the internal CEO dashboard. Your job is to ground th
 Tone & style:
 - Warm, direct, specific. Write like a trusted chief of staff, not a press release.
 - Address the person by first name in the opening line.
-- 120–180 words. Flowing prose, not bullet points. Markdown allowed for **bold** emphasis on a metric, KR, or section name.
+- 140–220 words. Flowing prose, not bullet points. Markdown allowed for **bold** emphasis on a metric, KR, or section name.
 - Never invent numbers, squad names, KRs, or meeting titles. Use only what's in the context JSON.
 - If a data point is missing ("null"), gracefully skip it — do not say "data unavailable" or acknowledge gaps.
 - Past tense for what happened, present tense for current state, no filler ("Hope you're well").
@@ -124,8 +124,10 @@ Content priority (include what's relevant, skip what isn't):
    - LTV:Paid CAC ratio (3x guardrail) for commercial, growth, marketing, finance, leadership
    - MAU for product, engineering, chat/wealth/credit squads
    - Headcount / ARR for People & Talent, Ops, Leadership
-4. **Close with what to watch today.** One specific thing tied to their role. You may reference dashboard sections by name — the context JSON lists the ones relevant to this reader under "relevantDashboardSections" (e.g. "Unit Economics", "Engineering", "OKRs"). Refer to them by those exact names. Do not invent URLs.
-5. If "meetings" is present and non-zero, you may reference the number of meetings today, and optionally the first upcoming meeting's title. Keep this to one sentence at most — it's colour, not the point.
+4. **What shipped.** If "squadShips" is present, weave in a one-sentence recap of what the reader's squad shipped in the last N days — prefer naming one or two concrete PR titles ("shipped the new referral flow and tightened the onboarding skeleton"). If squadShips is non-null but "prCount" is 0, a brief "quiet two weeks on shipping" is fine — do not invent ships. Skip the line entirely when squadShips is null.
+5. **Manager flag.** If "managerFlags" is present and "flagged" contains entries, include one sentence directly addressing the reader as a manager, naming at most two reports worth a check-in this week. Frame it as "worth a quick 1:1 with X" or "X's composite has slid into the bottom quintile — worth a conversation", never as "X is a low performer". Always point them to the Engineering → Ranking page for the full picture. If "flagged" is empty or "managerFlags" is null, say nothing about reports.
+6. **Close with what to watch today.** One specific thing tied to their role. You may reference dashboard sections by name — the context JSON lists the ones relevant to this reader under "relevantDashboardSections" (e.g. "Unit Economics", "Engineering", "OKRs"). Refer to them by those exact names. Do not invent URLs.
+7. If "meetings" is present and non-zero, you may reference the number of meetings today, and optionally the first upcoming meeting's title. Keep this to one sentence at most — it's colour, not the point.
 
 Return only the briefing prose. No preamble, no sign-off, no "Here's your briefing:" header.`;
 
@@ -202,6 +204,33 @@ function formatContextJson(ctx: BriefingContext): string {
         postedDate: o.postedAtIso.slice(0, 10),
       })),
     },
+    squadShips: ctx.squadShips
+      ? {
+          windowDays: ctx.squadShips.windowDays,
+          squad: ctx.squadShips.squadName,
+          prCount: ctx.squadShips.prCount,
+          authorCount: ctx.squadShips.authorCount,
+          topTitles: ctx.squadShips.top.map((s) => ({
+            title: s.title,
+            author: s.authorName,
+            repo: s.repo,
+            mergedDate: s.mergedAtIso.slice(0, 10),
+          })),
+        }
+      : null,
+    managerFlags: ctx.managerFlags
+      ? {
+          snapshotDate: ctx.managerFlags.snapshotDate,
+          totalReportsChecked: ctx.managerFlags.totalReportsChecked,
+          flagged: ctx.managerFlags.flagged.map((f) => ({
+            name: f.name,
+            rank: f.rank,
+            percentile: f.percentile,
+            confidenceHigh: f.confidenceHigh,
+            squad: f.squad,
+          })),
+        }
+      : null,
     meetings: ctx.meetings
       ? {
           todayCount: ctx.meetings.todayCount,

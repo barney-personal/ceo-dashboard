@@ -74,6 +74,34 @@ function makeContext() {
         },
       ],
     },
+    squadShips: {
+      windowDays: 14,
+      squadName: "Chat",
+      prCount: 12,
+      authorCount: 4,
+      top: [
+        {
+          repo: "cleo/app",
+          title: "feat: referral flow v2",
+          authorName: "Alice Example",
+          mergedAtIso: "2026-04-22T12:00:00.000Z",
+        },
+      ],
+    },
+    managerFlags: {
+      snapshotDate: "2026-04-22",
+      totalReportsChecked: 3,
+      flagged: [
+        {
+          name: "Direct Report",
+          rank: 40,
+          percentile: 8,
+          confidenceHigh: 22,
+          squad: "Chat",
+          snapshotDate: "2026-04-22",
+        },
+      ],
+    },
     meetings: {
       todayCount: 2,
       firstTitle: "Daily standup",

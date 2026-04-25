@@ -14,8 +14,7 @@ function makeEngineer(
 ): ImpactEngineerPrediction {
   return {
     name: "Alice Ng",
-    email: "anon-001",
-    email_hash: "aaaa1",
+    email: "a1@meetcleo.com",
     discipline: "Engineering",
     pillar: "Core",
     level_label: "L4",

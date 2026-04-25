@@ -10,6 +10,7 @@ import {
   lt,
   sql,
 } from "drizzle-orm";
+import { isUniqueViolation } from "@/lib/db/errors";
 import {
   evaluateQueueDecision,
   getSyncSourceConfig,
@@ -56,15 +57,6 @@ function getSyncRunScopeDescription(
   }
 
   return "all Mode reports";
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "23505"
-  );
 }
 
 export function formatSyncError(error: unknown): string {
@@ -409,21 +401,28 @@ export async function claimQueuedSyncRun(
   return null;
 }
 
-export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
+/**
+ * One-shot heartbeat touch: extends the lease by the source's configured
+ * leaseMs and updates heartbeatAt. The WHERE clause guards against no-op
+ * writes when the run is already cancelled or finalized.
+ */
+export async function touchSyncHeartbeat(
+  run: Pick<SyncLogRow, "id" | "source">
+): Promise<void> {
   const config = getSyncSourceConfig(run.source as SyncSource);
-  const tick = async () => {
-    const now = new Date();
-    await db
-      .update(syncLog)
-      .set({
-        heartbeatAt: now,
-        leaseExpiresAt: new Date(now.getTime() + config.leaseMs),
-      })
-      .where(and(eq(syncLog.id, run.id), eq(syncLog.status, "running")));
-  };
+  const now = new Date();
+  await db
+    .update(syncLog)
+    .set({
+      heartbeatAt: now,
+      leaseExpiresAt: new Date(now.getTime() + config.leaseMs),
+    })
+    .where(and(eq(syncLog.id, run.id), eq(syncLog.status, "running")));
+}
 
+export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
   const intervalId = setInterval(() => {
-    void tick().catch((error) => {
+    void touchSyncHeartbeat(run).catch((error) => {
       Sentry.captureException(error, {
         tags: { sync_source: run.source },
         extra: { runId: run.id },
@@ -438,7 +437,7 @@ export function startSyncHeartbeat(run: SyncLogRow): () => Promise<void> {
 
   return async () => {
     clearInterval(intervalId);
-    await tick();
+    await touchSyncHeartbeat(run);
   };
 }
 
