@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
+import { classifyDiscipline, type Discipline } from "@/lib/data/disciplines";
 
 export interface EngineeringFilterState {
   roles: Set<string>;
@@ -17,21 +18,24 @@ export const EMPTY_FILTERS: EngineeringFilterState = {
   tenureBuckets: new Set(),
 };
 
-const ROLE_CATEGORIES: { label: string; match: (title: string) => boolean }[] =
-  [
-    { label: "Backend", match: (t) => /backend/i.test(t) },
-    { label: "Frontend", match: (t) => /frontend/i.test(t) },
-    { label: "Mobile", match: (t) => /mobile|ios|android/i.test(t) },
-    { label: "Data/ML", match: (t) => /data|machine learning|ml|analytics/i.test(t) },
-    { label: "EM", match: (t) => /engineering manager|eng manager/i.test(t) },
-  ];
+// Display labels for the shared `Discipline` enum from disciplines.ts.
+// Single source of truth so the chip labels here don't drift from the
+// server-side eligibility filter.
+const DISCIPLINE_LABEL: Record<Discipline, string> = {
+  BE: "Backend",
+  FE: "Frontend",
+  EM: "EM",
+  QA: "QA",
+  ML: "ML",
+  Ops: "Ops",
+  Other: "Other",
+};
 
 function categorizeRole(jobTitle: string | null): string {
-  if (!jobTitle) return "Other";
-  for (const cat of ROLE_CATEGORIES) {
-    if (cat.match(jobTitle)) return cat.label;
-  }
-  return "Other";
+  // jobTitle preserves the rp_specialisation "(M)" suffix where present,
+  // so we pass it as the rpSpecialisation argument for accurate manager
+  // detection — same convention as src/lib/data/engineering.ts.
+  return DISCIPLINE_LABEL[classifyDiscipline(jobTitle, undefined)];
 }
 
 const TENURE_BUCKETS = [

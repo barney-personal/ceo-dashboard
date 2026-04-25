@@ -18,6 +18,7 @@ export type NavIconKey =
   | "settings"
   | "shield"
   | "sparkles"
+  | "swords"
   | "target"
   | "trending-up"
   | "user-plus"
@@ -501,6 +502,23 @@ export const DASHBOARD_PERMISSION_DEFINITIONS = [
     groupLabel: "Team",
     defaultRole: "engineering_manager",
     redirectTo: "/dashboard/engineering/ranking",
+  },
+  {
+    // CEO-only: pairwise LLM-judged engineer rankings. The output is a model
+    // ranking of individual people; not appropriate for wider audiences.
+    id: "engineering.tournament",
+    label: "Tournament",
+    description: "Pairwise LLM-judged engineer ranking (Opus 4.7 + GPT-5.4).",
+    href: "/dashboard/engineering/tournament",
+    groupLabel: "Team",
+    defaultRole: "ceo",
+    editable: false,
+    redirectTo: "/dashboard/engineering",
+    nav: {
+      groupLabel: "Team",
+      label: "Tournament",
+      icon: "swords",
+    },
   },
   {
     id: "people.profile",
