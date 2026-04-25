@@ -207,7 +207,7 @@ describe("getCodeReviewView", () => {
   });
 
   it("returns neutral percentiles when cohort members have identical scores", async () => {
-    const mergedAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const mergedAt = new Date("2026-04-20T10:00:00Z");
     mockChain(
       [
         row({ authorLogin: "alice", prNumber: 500, mergedAt }),
