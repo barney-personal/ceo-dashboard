@@ -262,7 +262,9 @@ export async function runCodeReviewAnalysis(
     }
   }
 
-  if (!opts.force && eligible.length > 0) {
+  const toRun = eligible.slice(0, limit);
+
+  if (!opts.force && toRun.length > 0) {
     const previousRows = await db
       .select({
         repo: prReviewAnalyses.repo,
@@ -286,7 +288,7 @@ export async function runCodeReviewAnalysis(
         and(
           ne(prReviewAnalyses.rubricVersion, RUBRIC_VERSION),
           or(
-            ...eligible.map((c) =>
+            ...toRun.map((c) =>
               and(
                 eq(prReviewAnalyses.repo, c.repo),
                 eq(prReviewAnalyses.prNumber, c.prNumber),
@@ -305,7 +307,6 @@ export async function runCodeReviewAnalysis(
     }
   }
 
-  const toRun = eligible.slice(0, limit);
   // githubPrs.repo is the bare repo name (e.g. "mobile-app") — the GitHub
   // sync drops the org to match its per-repo metric schema. We need the
   // full "owner/repo" for the API, so prefix with GITHUB_ORG here. Throw
