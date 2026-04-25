@@ -1975,7 +1975,7 @@ const LENS_DEFINITIONS: readonly LensDefinition[] = [
       { name: "Revert-within-14d penalty (inverted)", weight: 0.05 },
     ],
     limitation:
-      "Rubric is LLM-generated and therefore gameable by writing highly polished PRs; the dual-review rubric (`" +
+      "Rubric is LLM-generated and therefore gameable by writing highly polished PRs; the ensemble rubric (`" +
       RANKING_QUALITY_RUBRIC_VERSION +
       "`) mitigates naive gaming but does not eliminate it. Coverage depends on `prReviewAnalyses` being populated — engineers with merged PRs outside the analysed set (e.g. repos excluded via `CODE_REVIEW_EXCLUDED_REPOS`) will have a lower analysed-PR count than their raw PR count suggests.",
   },
@@ -5743,7 +5743,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     mitigation:
       "The `" +
       RANKING_QUALITY_RUBRIC_VERSION +
-      "` rubric is dual-reviewed (Opus + optional second opinion), which raises the bar for naive polishing. Per-PR contribution is weighted up by `technical_difficulty` — a high execution_quality on a difficulty-1 PR counts far less than on a difficulty-5 PR. Lens D weight is 30%; composite-median cap leaves effective share at ~6%.",
+      "` rubric is reviewed by Claude 4.7 and GPT-5.4 in parallel, which raises the bar for naive polishing. Per-PR contribution is weighted up by `technical_difficulty` — a high execution_quality on a difficulty-1 PR counts far less than on a difficulty-5 PR. Lens D weight is 30%; composite-median cap leaves effective share at ~6%.",
     residualWeakness:
       "An engineer who consistently writes easy, polished PRs can still drift the mean up even with the difficulty weighting. The methodology panel flags this residual risk alongside the rubric version.",
     downweightStatus: "down_weighted",
@@ -5753,7 +5753,7 @@ export const RANKING_ANTI_GAMING_ROWS: readonly AntiGamingRow[] = [
     gamingPath:
       "Writing shallow tests that inflate coverage narratives without exercising real behaviour.",
     mitigation:
-      "The rubric reviewer evaluates test adequacy qualitatively, not just by coverage-line count; dual-review gates naive keyword-matching. Lens D weight 25%; effective share ~5%.",
+      "The ensemble reviewers evaluate test adequacy qualitatively, not just by coverage-line count; cross-model review gates naive keyword-matching. Lens D weight 25%; effective share ~5%.",
     residualWeakness:
       "The rubric cannot detect integration-vs-unit vs snapshot-heavy test shapes reliably; some gaming surface remains.",
     downweightStatus: "down_weighted",

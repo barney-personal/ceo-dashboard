@@ -1,6 +1,6 @@
 import type { PRAnalysisPayload } from "./github";
 
-export const RUBRIC_VERSION = "v2.0-dual-review";
+export const RUBRIC_VERSION = "v3.0-claude47-gpt54-ensemble";
 
 export const ANALYSIS_CATEGORIES = [
   "bug_fix",
@@ -49,7 +49,7 @@ export const SECOND_OPINION_REASONS = [
 ] as const;
 export type SecondOpinionReason = (typeof SECOND_OPINION_REASONS)[number];
 
-export type ReviewProvider = "anthropic" | "openai";
+export type ReviewProvider = "anthropic" | "openai" | "ensemble";
 
 export interface CodeReviewModelReview {
   provider: ReviewProvider;

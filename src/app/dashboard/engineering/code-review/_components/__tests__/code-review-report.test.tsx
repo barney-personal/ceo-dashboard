@@ -85,6 +85,36 @@ function makeRollup(overrides: Partial<EngineerRollup> = {}): EngineerRollup {
         recencyWeight: 0.9,
         githubUrl: "https://github.com/acme/api/pull/42",
         secondLookReasons: [],
+        rawModelReviews: [
+          {
+            provider: "anthropic",
+            model: "claude-opus-4-7",
+            technicalDifficulty: 4,
+            executionQuality: 4,
+            testAdequacy: 4,
+            riskHandling: 4,
+            reviewability: 4,
+            analysisConfidencePct: 82,
+            category: "feature",
+            summary: "Claude read this as a strong feature change.",
+            caveats: [],
+            standout: "notably_high_quality",
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.4",
+            technicalDifficulty: 4,
+            executionQuality: 4,
+            testAdequacy: 4,
+            riskHandling: 4,
+            reviewability: 4,
+            analysisConfidencePct: 80,
+            category: "feature",
+            summary: "GPT read this as a strong feature change.",
+            caveats: [],
+            standout: "notably_high_quality",
+          },
+        ],
       },
     ],
     prevFinalScore: 48,
@@ -97,7 +127,7 @@ function makeRollup(overrides: Partial<EngineerRollup> = {}): EngineerRollup {
 function makeView(engineers: EngineerRollup[]): CodeReviewView {
   return {
     windowDays: 90,
-    rubricVersion: "v2.0-dual-review",
+    rubricVersion: "v3.0-claude47-gpt54-ensemble",
     analysedAtLatest: new Date("2026-04-23T12:00:00Z"),
     engineers,
     totalPrs: engineers.reduce((sum, engineer) => sum + engineer.prCount, 0),
@@ -107,7 +137,7 @@ function makeView(engineers: EngineerRollup[]): CodeReviewView {
 function makeSquadView(squads: SquadRollup[] = []): SquadCodeReviewView {
   return {
     windowDays: 90,
-    rubricVersion: "v2.0-dual-review",
+    rubricVersion: "v3.0-claude47-gpt54-ensemble",
     analysedAtLatest: new Date("2026-04-23T12:00:00Z"),
     squads,
     totalPrs: squads.reduce((sum, squad) => sum + squad.prCount, 0),
@@ -187,7 +217,9 @@ describe("<CodeReviewReport />", () => {
     fireEvent.click(screen.getByText("Alice A"));
     expect(screen.getAllByText(/Add the feature foo/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Primarily test file changes/)).toBeInTheDocument();
-    expect(screen.getByText(/Second opinion agreed/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Models agreed/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Claude 4.7/)).toBeInTheDocument();
+    expect(screen.getByText(/GPT-5.4/)).toBeInTheDocument();
     expect(screen.getByText(/Worth celebrating/)).toBeInTheDocument();
   });
 
@@ -226,6 +258,31 @@ describe("<CodeReviewReport />", () => {
     );
     expect(screen.queryByText("Bob B")).not.toBeInTheDocument();
     expect(screen.getByText("Alice A")).toBeInTheDocument();
+  });
+
+  it("surfaces model disagreement as a conversation starter", () => {
+    render(
+      <CodeReviewReport
+        view={makeView([
+          makeRollup({
+            flags: ["model_disagreement"],
+            prs: [
+              {
+                ...makeRollup().prs[0],
+                agreementLevel: "material_adjustment",
+              },
+            ],
+          }),
+        ])}
+        squadView={makeSquadView()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Models disagreed/ }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Alice A"));
+    expect(screen.getAllByText(/Models disagreed/).length).toBeGreaterThan(0);
   });
 
   it("switches to the squad view and opens a squad drawer on click", () => {

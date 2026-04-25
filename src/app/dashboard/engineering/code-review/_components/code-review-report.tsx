@@ -14,6 +14,7 @@ import type {
 import type {
   AnalysisCategory,
   AnalysisStandout,
+  CodeReviewModelReview,
   ModelAgreementLevel,
   SecondOpinionReason,
 } from "@/lib/integrations/code-review-analyser";
@@ -27,6 +28,7 @@ const FLAG_LABEL: Record<DiagnosticFlag, string> = {
   review_churn_high: "Lots of review back-and-forth",
   has_concerning_pr: "PR worth a second look",
   reverted_pr: "Includes a revert",
+  model_disagreement: "Models disagreed",
 };
 
 const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
@@ -36,6 +38,7 @@ const FLAG_TONE: Record<DiagnosticFlag, "warn" | "info" | "neutral"> = {
   review_churn_high: "warn",
   has_concerning_pr: "warn",
   reverted_pr: "warn",
+  model_disagreement: "info",
 };
 
 const FLAG_HELP: Record<DiagnosticFlag, string> = {
@@ -51,6 +54,8 @@ const FLAG_HELP: Record<DiagnosticFlag, string> = {
     "At least one PR is worth opening together — either the model flagged it, or review signals did (heavy change requests, post-review churn, a revert). Not necessarily a problem.",
   reverted_pr:
     "A merged PR was reverted within 14 days. Reverts happen — context usually explains it.",
+  model_disagreement:
+    "Claude and GPT-5.4 reached materially different rubric scores. Open the PR drawer and use the disagreement as a prompt for human calibration.",
 };
 
 const SECOND_LOOK_LABEL: Record<SecondLookReason, string> = {
@@ -88,9 +93,9 @@ const STANDOUT_TONE: Record<AnalysisStandout, "good" | "warn"> = {
 
 const AGREEMENT_LABEL: Record<ModelAgreementLevel, string> = {
   single_model: "Single-model read",
-  confirmed: "Second opinion agreed",
-  minor_adjustment: "Second opinion nudged it",
-  material_adjustment: "Second opinion shifted it meaningfully",
+  confirmed: "Models agreed",
+  minor_adjustment: "Models differed slightly",
+  material_adjustment: "Models disagreed",
 };
 
 const SECOND_OPINION_LABEL: Record<SecondOpinionReason, string> = {
@@ -232,6 +237,12 @@ function Header({ view }: { view: CodeReviewView }) {
         `Read ${body.analysed} new PRs`,
         `re-used ${body.cached} prior reads`,
       ];
+      if ((body.singleModelFallbacks ?? 0) > 0) {
+        parts.push(`${body.singleModelFallbacks} single-model fallback`);
+      }
+      if ((body.reusedClaudeReviews ?? 0) > 0) {
+        parts.push(`${body.reusedClaudeReviews} reused Claude reads`);
+      }
       if (failedCount > 0) parts.push(`${failedCount} failed`);
       if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
       const suffix =
@@ -909,6 +920,62 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
+function modelLabel(review: CodeReviewModelReview): string {
+  if (review.provider === "anthropic") return "Claude 4.7";
+  if (review.provider === "openai" && review.model.includes("escalation")) {
+    return "GPT-5.4 escalation";
+  }
+  if (review.provider === "openai") return "GPT-5.4";
+  return "Ensemble";
+}
+
+function ModelReadout({ pr }: { pr: PrReviewEntry }) {
+  if (pr.rawModelReviews.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-md border border-border/40 bg-background/60 p-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground/80">
+          Model reads
+        </p>
+        <span className={pillClass(false, pr.agreementLevel === "material_adjustment" ? "info" : "neutral")}>
+          {AGREEMENT_LABEL[pr.agreementLevel]}
+        </span>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {pr.rawModelReviews.map((review, index) => (
+          <div
+            key={`${review.provider}-${review.model}-${index}`}
+            className="rounded-md border border-border/30 bg-muted/5 px-2 py-1.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                {modelLabel(review)}
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {review.analysisConfidencePct}% conf.
+              </span>
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-foreground">
+              D{review.technicalDifficulty} · E{review.executionQuality} · T
+              {review.testAdequacy} · R{review.riskHandling} · V
+              {review.reviewability}
+            </div>
+            <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+              {review.summary}
+            </p>
+          </div>
+        ))}
+      </div>
+      {pr.rawModelReviews.length === 1 && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Only one provider completed, so this PR used a single-model fallback.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function PrCard({ pr }: { pr: PrReviewEntry }) {
   const mergedAt = new Date(pr.mergedAt).toLocaleDateString("en-GB", {
     day: "numeric",
@@ -953,6 +1020,8 @@ function PrCard({ pr }: { pr: PrReviewEntry }) {
         <Stat label="Commits post-review" value={String(pr.commitsAfterFirstReview)} />
         <Stat label="Comments" value={String(pr.reviewCommentCount + pr.conversationCommentCount)} />
       </dl>
+
+      <ModelReadout pr={pr} />
 
       <div className="mt-3 flex flex-wrap gap-1">
         {pr.standout && (

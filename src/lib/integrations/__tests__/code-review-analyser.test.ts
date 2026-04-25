@@ -17,7 +17,11 @@ vi.mock("openai", () => ({
   },
 }));
 
-import { analysePR, computeOutcomeScore } from "../code-review-analyser";
+import {
+  analysePR,
+  analysePRWithExistingAnthropicReview,
+  computeOutcomeScore,
+} from "../code-review-analyser";
 import type { PRAnalysisPayload } from "../github";
 
 function makePayload(
@@ -77,21 +81,60 @@ function mockAnthropicToolUse(input: Record<string, unknown>) {
   });
 }
 
+function mockOpenAiReview(input: Record<string, unknown>) {
+  openaiCreate.mockResolvedValueOnce({
+    output_text: JSON.stringify(input),
+  });
+}
+
 describe("analysePR", () => {
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalAnthropicConcurrency = process.env.CODE_REVIEW_ANTHROPIC_CONCURRENCY;
+  const originalOpenAiConcurrency = process.env.CODE_REVIEW_OPENAI_CONCURRENCY;
+  const originalReasoningEffort = process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT;
+  const originalMaxOutputTokens = process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS;
+  const originalEscalationEffort =
+    process.env.CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT;
 
   beforeEach(() => {
     anthropicCreate.mockReset();
     openaiCreate.mockReset();
     delete process.env.OPENAI_API_KEY;
+    delete process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS;
   });
 
   afterEach(() => {
     if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalOpenAiKey;
+    if (originalAnthropicConcurrency === undefined) {
+      delete process.env.CODE_REVIEW_ANTHROPIC_CONCURRENCY;
+    } else {
+      process.env.CODE_REVIEW_ANTHROPIC_CONCURRENCY = originalAnthropicConcurrency;
+    }
+    if (originalOpenAiConcurrency === undefined) {
+      delete process.env.CODE_REVIEW_OPENAI_CONCURRENCY;
+    } else {
+      process.env.CODE_REVIEW_OPENAI_CONCURRENCY = originalOpenAiConcurrency;
+    }
+    if (originalReasoningEffort === undefined) {
+      delete process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT;
+    } else {
+      process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT = originalReasoningEffort;
+    }
+    if (originalMaxOutputTokens === undefined) {
+      delete process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS;
+    } else {
+      process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS = originalMaxOutputTokens;
+    }
+    if (originalEscalationEffort === undefined) {
+      delete process.env.CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT;
+    } else {
+      process.env.CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT =
+        originalEscalationEffort;
+    }
   });
 
-  it("returns the primary Anthropic review when no OpenAI second opinion is configured", async () => {
+  it("returns the Anthropic review when OpenAI is not configured", async () => {
     mockAnthropicToolUse({
       technicalDifficulty: 3,
       executionQuality: 4,
@@ -115,7 +158,7 @@ describe("analysePR", () => {
     expect(result.outcomeScore).toBeGreaterThan(0);
   });
 
-  it("uses OpenAI as an adjudicator when the primary review is low-confidence", async () => {
+  it("blends Anthropic and GPT-5.4 when both model reviews succeed", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     mockAnthropicToolUse({
       technicalDifficulty: 4,
@@ -129,19 +172,17 @@ describe("analysePR", () => {
       caveats: ["Diff was truncated"],
       standout: "concerning",
     });
-    openaiCreate.mockResolvedValueOnce({
-      output_text: JSON.stringify({
-        technicalDifficulty: 4,
-        executionQuality: 3,
-        testAdequacy: 3,
-        riskHandling: 3,
-        reviewability: 3,
-        analysisConfidencePct: 74,
-        category: "feature",
-        summary: "Adds a feature with some rough edges but acceptable execution.",
-        caveats: ["Primary review looked overly harsh on partial evidence"],
-        standout: null,
-      }),
+    mockOpenAiReview({
+      technicalDifficulty: 4,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 74,
+      category: "feature",
+      summary: "Adds a feature with some rough edges but acceptable execution.",
+      caveats: ["Primary review looked overly harsh on partial evidence"],
+      standout: null,
     });
 
     const result = await analysePR(
@@ -161,14 +202,24 @@ describe("analysePR", () => {
     );
 
     expect(result.secondOpinionUsed).toBe(true);
-    expect(result.secondOpinionReasons).toContain("truncated_diff");
+    expect(result.secondOpinionReasons).toEqual([]);
+    expect(result.provider).toBe("ensemble");
+    expect(result.model).toBe("claude-opus-4-7+gpt-5.4");
     expect(result.executionQuality).toBe(3);
-    expect(result.agreementLevel).not.toBe("single_model");
+    expect(result.agreementLevel).toBe("material_adjustment");
+    expect(result.rawModelReviews).toHaveLength(2);
+    expect(openaiCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.4",
+        reasoning: { effort: "medium" },
+        max_output_tokens: 8000,
+      }),
+      expect.any(Object),
+    );
   });
 
-  it("falls back to the primary review when OpenAI adjudication fails", async () => {
+  it("falls back to Claude when GPT-5.4 fails", async () => {
     process.env.OPENAI_API_KEY = "test-key";
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     mockAnthropicToolUse({
       technicalDifficulty: 4,
@@ -182,7 +233,7 @@ describe("analysePR", () => {
       caveats: ["Diff was truncated"],
       standout: "concerning",
     });
-    openaiCreate.mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }));
+    openaiCreate.mockRejectedValue(Object.assign(new Error("rate limited"), { status: 429 }));
 
     const result = await analysePR(
       makePayload({
@@ -201,12 +252,213 @@ describe("analysePR", () => {
     );
 
     expect(result.secondOpinionUsed).toBe(false);
-    expect(result.secondOpinionReasons).toContain("truncated_diff");
+    expect(result.secondOpinionReasons).toEqual([]);
     expect(result.executionQuality).toBe(2);
     expect(result.agreementLevel).toBe("single_model");
     expect(result.rawModelReviews).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(result.provider).toBe("anthropic");
+  });
+
+  it("optionally escalates material disagreement with a high-reasoning GPT-5.4 pass", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT = "high";
+    mockAnthropicToolUse({
+      technicalDifficulty: 4,
+      executionQuality: 2,
+      testAdequacy: 2,
+      riskHandling: 2,
+      reviewability: 2,
+      analysisConfidencePct: 40,
+      category: "feature",
+      summary: "Adds a feature under low-confidence evidence.",
+      caveats: ["Diff was truncated"],
+      standout: "concerning",
+    });
+    mockOpenAiReview({
+      technicalDifficulty: 4,
+      executionQuality: 4,
+      testAdequacy: 4,
+      riskHandling: 4,
+      reviewability: 4,
+      analysisConfidencePct: 74,
+      category: "feature",
+      summary: "GPT saw a solid feature change.",
+      caveats: [],
+      standout: null,
+    });
+    mockOpenAiReview({
+      technicalDifficulty: 4,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 88,
+      category: "feature",
+      summary: "High-reasoning escalation lands between the two reads.",
+      caveats: [],
+      standout: null,
+    });
+
+    const result = await analysePR(makePayload());
+
+    expect(result.agreementLevel).toBe("material_adjustment");
+    expect(result.rawModelReviews).toHaveLength(3);
+    expect(result.rawModelReviews[2].model).toBe("gpt-5.4 (high escalation)");
+    expect(openaiCreate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        model: "gpt-5.4",
+        reasoning: { effort: "high" },
+        max_output_tokens: 8000,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows a larger GPT-5.4 output budget through env configuration", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS = "16000";
+    mockAnthropicToolUse({
+      technicalDifficulty: 3,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 80,
+      category: "feature",
+      summary: "Solid change.",
+      caveats: [],
+      standout: null,
+    });
+    mockOpenAiReview({
+      technicalDifficulty: 3,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 80,
+      category: "feature",
+      summary: "Solid change.",
+      caveats: [],
+      standout: null,
+    });
+
+    await analysePR(makePayload());
+
+    expect(openaiCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        max_output_tokens: 16000,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("enriches an existing Claude review by running only GPT-5.4", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    mockOpenAiReview({
+      technicalDifficulty: 4,
+      executionQuality: 4,
+      testAdequacy: 4,
+      riskHandling: 4,
+      reviewability: 4,
+      analysisConfidencePct: 86,
+      category: "feature",
+      summary: "GPT agrees this was a strong feature change.",
+      caveats: [],
+      standout: "notably_high_quality",
+    });
+
+    const result = await analysePRWithExistingAnthropicReview(makePayload(), {
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      technicalDifficulty: 4,
+      executionQuality: 4,
+      testAdequacy: 3,
+      riskHandling: 4,
+      reviewability: 4,
+      analysisConfidencePct: 82,
+      category: "feature",
+      summary: "Historical Claude read.",
+      caveats: [],
+      standout: "notably_high_quality",
+    });
+
+    expect(anthropicCreate).not.toHaveBeenCalled();
+    expect(openaiCreate).toHaveBeenCalledTimes(1);
+    expect(result.provider).toBe("ensemble");
+    expect(result.model).toBe("claude-opus-4-7+gpt-5.4");
+    expect(result.rawModelReviews).toHaveLength(2);
+    expect(result.rawModelReviews[0].provider).toBe("anthropic");
+    expect(result.rawModelReviews[1].provider).toBe("openai");
+  });
+
+  it("uses medium for the main GPT-5.4 pass even when a stale high-effort env is present", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT = "xhigh";
+    mockAnthropicToolUse({
+      technicalDifficulty: 3,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 80,
+      category: "feature",
+      summary: "Solid change.",
+      caveats: [],
+      standout: null,
+    });
+    mockOpenAiReview({
+      technicalDifficulty: 3,
+      executionQuality: 3,
+      testAdequacy: 3,
+      riskHandling: 3,
+      reviewability: 3,
+      analysisConfidencePct: 80,
+      category: "feature",
+      summary: "Solid change.",
+      caveats: [],
+      standout: null,
+    });
+
+    await analysePR(makePayload());
+
+    expect(openaiCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reasoning: { effort: "medium" },
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("falls back to GPT-5.4 when Claude fails", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    anthropicCreate.mockRejectedValue(new Error("Claude down"));
+    mockOpenAiReview({
+      technicalDifficulty: 3,
+      executionQuality: 4,
+      testAdequacy: 4,
+      riskHandling: 4,
+      reviewability: 4,
+      analysisConfidencePct: 82,
+      category: "feature",
+      summary: "Adds a well-tested feature.",
+      caveats: [],
+      standout: null,
+    });
+
+    const result = await analysePR(makePayload());
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4");
+    expect(result.secondOpinionUsed).toBe(false);
+    expect(result.rawModelReviews).toHaveLength(1);
+  });
+
+  it("throws only when both model providers fail", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    anthropicCreate.mockRejectedValue(new Error("Claude down"));
+    openaiCreate.mockRejectedValue(new Error("GPT down"));
+
+    await expect(analysePR(makePayload())).rejects.toThrow(/All code-review model calls failed/);
   });
 
   it("throws when Claude omits the required tool call", async () => {
@@ -215,6 +467,76 @@ describe("analysePR", () => {
       content: [{ type: "text", text: "I don't want to score this." }],
     });
     await expect(analysePR(makePayload())).rejects.toThrow(/submit_review/);
+  });
+
+  it("honours provider-specific concurrency gates", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.CODE_REVIEW_ANTHROPIC_CONCURRENCY = "1";
+    process.env.CODE_REVIEW_OPENAI_CONCURRENCY = "1";
+    let activeAnthropic = 0;
+    let maxAnthropic = 0;
+    let activeOpenAi = 0;
+    let maxOpenAi = 0;
+    const delay = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    anthropicCreate.mockImplementation(async () => {
+      activeAnthropic++;
+      maxAnthropic = Math.max(maxAnthropic, activeAnthropic);
+      await delay();
+      activeAnthropic--;
+      return {
+        stop_reason: "tool_use",
+        content: [
+          {
+            type: "tool_use",
+            name: "submit_review",
+            id: "tu_1",
+            input: {
+              technicalDifficulty: 3,
+              executionQuality: 3,
+              testAdequacy: 3,
+              riskHandling: 3,
+              reviewability: 3,
+              analysisConfidencePct: 80,
+              category: "feature",
+              summary: "Solid change.",
+              caveats: [],
+              standout: null,
+            },
+          },
+        ],
+      };
+    });
+    openaiCreate.mockImplementation(async () => {
+      activeOpenAi++;
+      maxOpenAi = Math.max(maxOpenAi, activeOpenAi);
+      await delay();
+      activeOpenAi--;
+      return {
+        output_text: JSON.stringify({
+          technicalDifficulty: 3,
+          executionQuality: 3,
+          testAdequacy: 3,
+          riskHandling: 3,
+          reviewability: 3,
+          analysisConfidencePct: 80,
+          category: "feature",
+          summary: "Solid change.",
+          caveats: [],
+          standout: null,
+        }),
+      };
+    });
+
+    await Promise.all([
+      analysePR(makePayload({ prNumber: 1 })),
+      analysePR(makePayload({ prNumber: 2 })),
+    ]);
+
+    expect(maxAnthropic).toBe(1);
+    expect(maxOpenAi).toBe(1);
+    delete process.env.CODE_REVIEW_ANTHROPIC_CONCURRENCY;
+    delete process.env.CODE_REVIEW_OPENAI_CONCURRENCY;
   });
 
   it("returns a neutral outcome score when review signals are absent", () => {

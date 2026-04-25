@@ -3,13 +3,11 @@ import OpenAI from "openai";
 import type { ReasoningEffort } from "openai/resources/shared";
 import type { PRAnalysisPayload } from "./github";
 import {
-  ADJUDICATION_SYSTEM_PROMPT,
   PRIMARY_REVIEW_SYSTEM_PROMPT,
   REVIEW_OUTPUT_JSON_SCHEMA,
   type CodeReviewAnalysis,
   type CodeReviewModelReview,
   type ModelAgreementLevel,
-  type SecondOpinionReason,
   normalizeModelReview,
   renderReviewPayload,
 } from "./code-review-rubric";
@@ -28,6 +26,74 @@ export type {
 const LLM_CALL_TIMEOUT_MS = 90_000;
 const LLM_MAX_ATTEMPTS = 3;
 const OPENAI_DEFAULT_MODEL = "gpt-5.4";
+const OPENAI_DEFAULT_MAX_OUTPUT_TOKENS = 8000;
+const DEFAULT_PROVIDER_CONCURRENCY = 2;
+
+type ProviderKey = "anthropic" | "openai";
+
+class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+
+  private acquire(): Promise<void> {
+    if (this.active < this.limit) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.waiters.push(() => {
+        this.active++;
+        resolve();
+      });
+    });
+  }
+
+  private release(): void {
+    this.active--;
+    const next = this.waiters.shift();
+    if (next) next();
+  }
+}
+
+const providerSemaphores = new Map<
+  ProviderKey,
+  { limit: number; semaphore: Semaphore }
+>();
+
+function getProviderConcurrency(provider: ProviderKey): number {
+  const envName =
+    provider === "anthropic"
+      ? "CODE_REVIEW_ANTHROPIC_CONCURRENCY"
+      : "CODE_REVIEW_OPENAI_CONCURRENCY";
+  const parsed = Number(process.env[envName] ?? "");
+  if (!Number.isFinite(parsed)) return DEFAULT_PROVIDER_CONCURRENCY;
+  return Math.max(1, Math.min(16, Math.trunc(parsed)));
+}
+
+function withProviderSlot<T>(
+  provider: ProviderKey,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const limit = getProviderConcurrency(provider);
+  const cached = providerSemaphores.get(provider);
+  if (!cached || cached.limit !== limit) {
+    const fresh = { limit, semaphore: new Semaphore(limit) };
+    providerSemaphores.set(provider, fresh);
+    return fresh.semaphore.run(fn);
+  }
+  return cached.semaphore.run(fn);
+}
 
 const ANTHROPIC_TOOL = {
   name: "submit_review",
@@ -214,19 +280,22 @@ async function reviewWithAnthropic(
     : new Error(`Anthropic review failed: ${String(lastError)}`);
 }
 
-function hasOpenAiSecondOpinion(): boolean {
-  return (
-    process.env.CODE_REVIEW_ENABLE_OPENAI_SECOND_OPINION !== "0" &&
-    !!process.env.OPENAI_API_KEY
-  );
-}
-
 function getOpenAiModel(): string {
   return process.env.CODE_REVIEW_OPENAI_MODEL?.trim() || OPENAI_DEFAULT_MODEL;
 }
 
-function getOpenAiReasoningEffort(): ReasoningEffort {
-  const raw = process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT?.trim();
+function getOpenAiMaxOutputTokens(): number {
+  const raw = process.env.CODE_REVIEW_OPENAI_MAX_OUTPUT_TOKENS?.trim();
+  if (!raw) return OPENAI_DEFAULT_MAX_OUTPUT_TOKENS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return OPENAI_DEFAULT_MAX_OUTPUT_TOKENS;
+  return Math.max(2000, Math.min(32_000, Math.trunc(parsed)));
+}
+
+function parseReasoningEffort(
+  raw: string | undefined,
+  fallback: ReasoningEffort,
+): ReasoningEffort {
   switch (raw) {
     case "none":
     case "minimal":
@@ -236,21 +305,48 @@ function getOpenAiReasoningEffort(): ReasoningEffort {
     case "xhigh":
       return raw;
     default:
-      return "xhigh";
+      return fallback;
   }
 }
 
-async function adjudicateWithOpenAi(
+function getOpenAiReasoningEffort(): ReasoningEffort {
+  const raw = process.env.CODE_REVIEW_OPENAI_REASONING_EFFORT?.trim();
+  switch (raw) {
+    case "none":
+    case "minimal":
+    case "low":
+    case "medium":
+      return raw;
+    default:
+      return "medium";
+  }
+}
+
+function getOpenAiEscalationReasoningEffort(): ReasoningEffort | null {
+  const raw = process.env.CODE_REVIEW_OPENAI_ESCALATION_REASONING_EFFORT?.trim();
+  if (!raw) return null;
+  return parseReasoningEffort(raw, "high");
+}
+
+async function reviewWithOpenAi(
   payload: PRAnalysisPayload,
-  primary: CodeReviewModelReview,
-  opts: { signal?: AbortSignal } = {},
+  opts: {
+    signal?: AbortSignal;
+    reasoningEffort?: ReasoningEffort;
+    reviewRole?: "primary" | "escalation";
+  } = {},
 ): Promise<CodeReviewModelReview> {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
   const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
     maxRetries: 0,
   });
   const model = getOpenAiModel();
-  const content = renderReviewPayload(payload, { primaryReview: primary });
+  const effort = opts.reasoningEffort ?? getOpenAiReasoningEffort();
+  const content = renderReviewPayload(payload);
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
@@ -264,14 +360,30 @@ async function adjudicateWithOpenAi(
       const response = await client.responses.create(
         {
           model,
-          instructions: ADJUDICATION_SYSTEM_PROMPT,
+          instructions: PRIMARY_REVIEW_SYSTEM_PROMPT,
           input: content,
-          reasoning: { effort: getOpenAiReasoningEffort() },
+          reasoning: { effort },
+          max_output_tokens: getOpenAiMaxOutputTokens(),
+          text: {
+            format: {
+              type: "json_schema",
+              name: "code_review",
+              schema: REVIEW_OUTPUT_JSON_SCHEMA,
+              strict: true,
+            },
+            verbosity: "low",
+          },
         },
         { signal },
       );
       const raw = parseJsonObject(response.output_text);
-      return normalizeModelReview("openai", model, raw);
+      return normalizeModelReview(
+        "openai",
+        opts.reviewRole === "escalation"
+          ? `${model} (${effort} escalation)`
+          : model,
+        raw,
+      );
     } catch (error) {
       lastError = error;
       if (signal.aborted) {
@@ -288,38 +400,7 @@ async function adjudicateWithOpenAi(
 
   throw lastError instanceof Error
     ? lastError
-    : new Error(`OpenAI adjudication failed: ${String(lastError)}`);
-}
-
-function getSecondOpinionReasons(
-  payload: PRAnalysisPayload,
-  primary: CodeReviewModelReview,
-): SecondOpinionReason[] {
-  if (!hasOpenAiSecondOpinion()) return [];
-
-  const reasons: SecondOpinionReason[] = [];
-  if (payload.files.some((file) => file.truncated)) reasons.push("truncated_diff");
-  if (
-    payload.changedFiles >= 20 ||
-    payload.additions + payload.deletions >= 2000 ||
-    payload.review.commitCount >= 12
-  ) {
-    reasons.push("large_pr");
-  }
-  if (primary.analysisConfidencePct < 72) reasons.push("low_confidence");
-  if (primary.standout === "concerning" || primary.executionQuality <= 2) {
-    reasons.push("concerning_flag");
-  }
-  if (
-    payload.review.changeRequestCount >= 2 ||
-    payload.review.reviewRounds >= 3 ||
-    payload.review.commitsAfterFirstReview >= 3
-  ) {
-    reasons.push("review_churn");
-  }
-  if (payload.review.revertWithin14d) reasons.push("revert_signal");
-
-  return [...new Set(reasons)];
+    : new Error(`OpenAI review failed: ${String(lastError)}`);
 }
 
 function measureDisagreement(
@@ -339,19 +420,6 @@ function measureDisagreement(
   return numericMean + categoryPenalty + standoutPenalty;
 }
 
-function mergeConfirmedConfidence(
-  primary: CodeReviewModelReview,
-  adjudicated: CodeReviewModelReview,
-): CodeReviewModelReview {
-  return {
-    ...primary,
-    analysisConfidencePct: Math.min(
-      100,
-      Math.round((primary.analysisConfidencePct + adjudicated.analysisConfidencePct) / 2),
-    ),
-  };
-}
-
 function deriveAgreementLevel(
   primary: CodeReviewModelReview,
   adjudicated: CodeReviewModelReview,
@@ -360,6 +428,109 @@ function deriveAgreementLevel(
   if (disagreement <= 0.4) return "confirmed";
   if (disagreement <= 1.2) return "minor_adjustment";
   return "material_adjustment";
+}
+
+async function maybeEscalateMaterialDisagreement(
+  payload: PRAnalysisPayload,
+  rawModelReviews: CodeReviewModelReview[],
+  agreementLevel: ModelAgreementLevel,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const escalationEffort = getOpenAiEscalationReasoningEffort();
+  if (agreementLevel !== "material_adjustment" || escalationEffort === null) {
+    return;
+  }
+
+  try {
+    const escalation = await withProviderSlot("openai", () =>
+      reviewWithOpenAi(payload, {
+        ...opts,
+        reasoningEffort: escalationEffort,
+        reviewRole: "escalation",
+      }),
+    );
+    rawModelReviews.push(escalation);
+  } catch {
+    // The initial two-model ensemble is still usable; escalation is an
+    // optional refinement only when material disagreement is detected.
+  }
+}
+
+function confidenceWeight(review: CodeReviewModelReview): number {
+  return Math.max(1, review.analysisConfidencePct);
+}
+
+function weightedRubricScore(
+  reviews: CodeReviewModelReview[],
+  key:
+    | "technicalDifficulty"
+    | "executionQuality"
+    | "testAdequacy"
+    | "riskHandling"
+    | "reviewability",
+): number {
+  const totalWeight = reviews.reduce(
+    (sum, review) => sum + confidenceWeight(review),
+    0,
+  );
+  const weighted = reviews.reduce(
+    (sum, review) => sum + review[key] * confidenceWeight(review),
+    0,
+  );
+  return Math.max(1, Math.min(5, Math.round(weighted / totalWeight)));
+}
+
+function highestConfidenceReview(
+  reviews: CodeReviewModelReview[],
+): CodeReviewModelReview {
+  return [...reviews].sort(
+    (a, b) => b.analysisConfidencePct - a.analysisConfidencePct,
+  )[0];
+}
+
+function combineCaveats(reviews: CodeReviewModelReview[]): string[] {
+  const caveats: string[] = [];
+  for (const review of reviews) {
+    const label =
+      review.provider === "anthropic"
+        ? "Claude"
+        : review.provider === "openai"
+          ? "GPT-5.4"
+          : "Ensemble";
+    for (const caveat of review.caveats) {
+      const labelled = `${label}: ${caveat}`;
+      if (!caveats.includes(labelled)) caveats.push(labelled);
+      if (caveats.length >= 8) return caveats;
+    }
+  }
+  return caveats;
+}
+
+function blendModelReviews(
+  reviews: CodeReviewModelReview[],
+): CodeReviewModelReview {
+  if (reviews.length === 1) return reviews[0];
+
+  const representative = highestConfidenceReview(reviews);
+  const confidence = Math.round(
+    reviews.reduce((sum, review) => sum + review.analysisConfidencePct, 0) /
+      reviews.length,
+  );
+
+  return {
+    provider: "ensemble",
+    model: reviews.map((review) => review.model).join("+"),
+    technicalDifficulty: weightedRubricScore(reviews, "technicalDifficulty"),
+    executionQuality: weightedRubricScore(reviews, "executionQuality"),
+    testAdequacy: weightedRubricScore(reviews, "testAdequacy"),
+    riskHandling: weightedRubricScore(reviews, "riskHandling"),
+    reviewability: weightedRubricScore(reviews, "reviewability"),
+    analysisConfidencePct: confidence,
+    category: representative.category,
+    summary: representative.summary,
+    caveats: combineCaveats(reviews),
+    standout: representative.standout,
+  };
 }
 
 export function computeOutcomeScore(payload: PRAnalysisPayload): number {
@@ -377,34 +548,57 @@ export function computeOutcomeScore(payload: PRAnalysisPayload): number {
 }
 
 /**
- * Run the primary Anthropic review, then optionally invoke OpenAI as a
- * selective adjudicator when the PR looks ambiguous, truncated, or otherwise
- * high-impact enough to justify a second opinion.
+ * Run Claude and GPT-5.4 as independent reviewers. The canonical row stores a
+ * confidence-weighted ensemble score; individual model reads stay in rawJson.
  */
 export async function analysePR(
   payload: PRAnalysisPayload,
   opts: { signal?: AbortSignal } = {},
 ): Promise<CodeReviewAnalysis> {
-  const primary = await reviewWithAnthropic(payload, opts);
-  const secondOpinionReasons = getSecondOpinionReasons(payload, primary);
+  const [anthropicResult, openAiResult] = await Promise.allSettled([
+    withProviderSlot("anthropic", () => reviewWithAnthropic(payload, opts)),
+    withProviderSlot("openai", () => reviewWithOpenAi(payload, opts)),
+  ]);
 
-  let finalReview = primary;
-  let agreementLevel: ModelAgreementLevel = "single_model";
-  const rawModelReviews: CodeReviewModelReview[] = [primary];
+  const rawModelReviews: CodeReviewModelReview[] = [];
+  const failures: string[] = [];
 
-  if (secondOpinionReasons.length > 0) {
-    try {
-      const adjudicated = await adjudicateWithOpenAi(payload, primary, opts);
-      rawModelReviews.push(adjudicated);
-      agreementLevel = deriveAgreementLevel(primary, adjudicated);
-      finalReview =
-        agreementLevel === "confirmed"
-          ? mergeConfirmedConfidence(primary, adjudicated)
-          : adjudicated;
-    } catch (error) {
-      console.warn("OpenAI adjudication failed; using primary review", error);
-    }
+  if (anthropicResult.status === "fulfilled") {
+    rawModelReviews.push(anthropicResult.value);
+  } else {
+    failures.push(
+      anthropicResult.reason instanceof Error
+        ? anthropicResult.reason.message
+        : String(anthropicResult.reason),
+    );
   }
+
+  if (openAiResult.status === "fulfilled") {
+    rawModelReviews.push(openAiResult.value);
+  } else {
+    failures.push(
+      openAiResult.reason instanceof Error
+        ? openAiResult.reason.message
+        : String(openAiResult.reason),
+    );
+  }
+
+  if (rawModelReviews.length === 0) {
+    throw new Error(`All code-review model calls failed: ${failures.join("; ")}`);
+  }
+
+  let agreementLevel: ModelAgreementLevel = "single_model";
+  if (rawModelReviews.length >= 2) {
+    agreementLevel = deriveAgreementLevel(rawModelReviews[0], rawModelReviews[1]);
+    await maybeEscalateMaterialDisagreement(
+      payload,
+      rawModelReviews,
+      agreementLevel,
+      opts,
+    );
+  }
+
+  const finalReview = blendModelReviews(rawModelReviews);
 
   return {
     ...finalReview,
@@ -412,7 +606,51 @@ export async function analysePR(
     quality: finalReview.executionQuality,
     primarySurface: payload.primarySurface,
     secondOpinionUsed: rawModelReviews.length > 1,
-    secondOpinionReasons,
+    secondOpinionReasons: [],
+    agreementLevel,
+    outcomeScore: computeOutcomeScore(payload),
+    rawModelReviews,
+  };
+}
+
+/**
+ * Enrich a previously stored Claude-only review with a fresh GPT-5.4 read.
+ * Used when a historical 4.7 backfill already exists; OpenAI must succeed so
+ * the new rubric row really is an ensemble rather than a recached old result.
+ */
+export async function analysePRWithExistingAnthropicReview(
+  payload: PRAnalysisPayload,
+  existingAnthropicReview: CodeReviewModelReview,
+  opts: { signal?: AbortSignal } = {},
+): Promise<CodeReviewAnalysis> {
+  const anthropicReview = {
+    ...existingAnthropicReview,
+    provider: "anthropic" as const,
+    model: existingAnthropicReview.model || "claude-opus-4-7",
+  };
+  const openAiReview = await withProviderSlot("openai", () =>
+    reviewWithOpenAi(payload, opts),
+  );
+  const rawModelReviews: CodeReviewModelReview[] = [
+    anthropicReview,
+    openAiReview,
+  ];
+  const agreementLevel = deriveAgreementLevel(anthropicReview, openAiReview);
+  await maybeEscalateMaterialDisagreement(
+    payload,
+    rawModelReviews,
+    agreementLevel,
+    opts,
+  );
+  const finalReview = blendModelReviews(rawModelReviews);
+
+  return {
+    ...finalReview,
+    complexity: finalReview.technicalDifficulty,
+    quality: finalReview.executionQuality,
+    primarySurface: payload.primarySurface,
+    secondOpinionUsed: true,
+    secondOpinionReasons: [],
     agreementLevel,
     outcomeScore: computeOutcomeScore(payload),
     rawModelReviews,

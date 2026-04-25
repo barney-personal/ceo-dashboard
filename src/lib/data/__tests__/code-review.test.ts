@@ -49,6 +49,7 @@ interface FakeAnalysisRow {
   secondOpinionUsed: boolean;
   agreementLevel: string;
   secondOpinionReasons: string[];
+  rawJson?: unknown;
   rubricVersion: string;
   analysedAt: Date;
 }
@@ -256,6 +257,57 @@ describe("getCodeReviewView", () => {
     expect(gary.flags).toContain("has_concerning_pr");
     const flagged = gary.prs.find((pr) => pr.prNumber === 702);
     expect(flagged?.secondLookReasons).toContain("heavy_change_requests");
+  });
+
+  it("flags material model disagreement and carries raw model reads", async () => {
+    mockChain(
+      [
+        row({
+          authorLogin: "maria",
+          prNumber: 710,
+          agreementLevel: "material_adjustment",
+          rawJson: {
+            rawModelReviews: [
+              {
+                provider: "anthropic",
+                model: "claude-opus-4-7",
+                technicalDifficulty: 4,
+                executionQuality: 2,
+                testAdequacy: 2,
+                riskHandling: 2,
+                reviewability: 2,
+                analysisConfidencePct: 70,
+                category: "feature",
+                summary: "Claude was concerned.",
+                caveats: [],
+                standout: "concerning",
+              },
+              {
+                provider: "openai",
+                model: "gpt-5.4",
+                technicalDifficulty: 4,
+                executionQuality: 4,
+                testAdequacy: 4,
+                riskHandling: 4,
+                reviewability: 4,
+                analysisConfidencePct: 80,
+                category: "feature",
+                summary: "GPT saw a solid change.",
+                caveats: [],
+                standout: null,
+              },
+            ],
+          },
+        }),
+        row({ authorLogin: "maria", prNumber: 711 }),
+        row({ authorLogin: "maria", prNumber: 712 }),
+      ],
+      [],
+    );
+
+    const view = await getCodeReviewView();
+    expect(view.engineers[0].flags).toContain("model_disagreement");
+    expect(view.engineers[0].prs[0].rawModelReviews).toHaveLength(2);
   });
 
   it("does not flag review_churn_high when churn matches similar-work peers", async () => {
