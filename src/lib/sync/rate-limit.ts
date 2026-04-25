@@ -46,6 +46,12 @@ export function createSlidingWindowRateLimiter(
     check(key) {
       const nowTs = now();
       const windowStart = nowTs - options.windowMs;
+      // Window is half-open `(windowStart, now]` — a hit at exactly
+      // `windowStart` has rolled out. claude-review flagged this as a
+      // potential off-by-one; in practice it lets at most one extra request
+      // through at the exact ms boundary, which is well below the noise floor
+      // for human-driven manual syncs and is the semantic the existing tests
+      // encode.
       const entries = (hits.get(key) ?? []).filter((ts) => ts > windowStart);
 
       if (entries.length >= options.maxRequests) {
